@@ -1,0 +1,42 @@
+# Secrets & credentials
+shipping-perfomance-review-*.json
+*_settings.json
+*_shopify_settings.json
+config.yaml
+
+# Data files
+*.csv
+*.xlsx
+*.pdf
+RMFG_*/
+Invoices/
+Shipments/
+snapshots/
+output/
+
+# Build artifacts
+dist/
+build/
+*.exe
+*.spec
+__pycache__/
+*.pyc
+
+# Backups
+backups/
+
+# Large/reference images
+123.svg
+image 1.svg
+stock-vector-*
+
+# Nested git repos
+GelPackCalculator/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

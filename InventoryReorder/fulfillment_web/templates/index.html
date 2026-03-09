@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fulfillment Planner</title>
+    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css?v=24">
+</head>
+<body>
+
+<canvas id="bg-canvas"></canvas>
+
+<div id="app">
+
+    <!-- Toolbar -->
+    <div id="toolbar">
+        <span class="title">Fulfillment Planner</span>
+        <button class="btn btn-green" onclick="runAll()">&#9654; Run All</button>
+        <div class="toolbar-sep"></div>
+        <!-- View toggles -->
+        <button class="btn btn-accent view-btn active" id="view-dashboard" onclick="switchView('dashboard')">&#128202; Dashboard</button>
+        <button class="btn btn-accent view-btn" id="view-calendar" onclick="switchView('calendar')">&#128197; Calendar</button>
+        <div class="toolbar-sep"></div>
+        <button class="btn btn-green" onclick="syncDropbox()">&#9729; Dropbox</button>
+        <button class="btn btn-green" onclick="syncRecharge()">&#128176; Recharge</button>
+        <button class="btn btn-green" onclick="syncShopify()">&#128722; Shopify</button>
+        <button class="btn btn-blue" onclick="loadFolder()">&#128194; Load Folder</button>
+        <button class="btn btn-blue" onclick="calculateRMFG()">&#128202; Calculate</button>
+        <button class="btn btn-accent" onclick="autoAssign()">&#9889; Auto-Assign</button>
+        <button class="btn btn-red" onclick="showSubstitutions()">&#128260; Substitutes</button>
+        <button class="btn btn-yellow" onclick="wedPO()">&#128230; Wed PO</button>
+        <button class="btn btn-orange" onclick="showOrderList()">&#128203; Order List</button>
+        <button class="btn btn-dim" onclick="varietyCheck()">&#128270; Variety</button>
+        <div class="toolbar-sep"></div>
+        <button class="btn btn-blue" onclick="importCSV()">&#8681; Import</button>
+        <button class="btn btn-blue" onclick="exportCSV()">&#8682; Export</button>
+        <input type="file" id="csv-input" accept=".csv" style="display:none"
+               onchange="handleCSVFile(this)">
+        <span id="score"></span>
+        <span id="last-sync"></span>
+    </div>
+
+    <!-- Banner -->
+    <div id="banner">ALL CLEAR -- No shortages! LEVEL COMPLETE!</div>
+
+    <!-- Main content -->
+    <div id="content">
+
+        <!-- Left column -->
+        <div id="left-col">
+
+            <!-- Assignment grid -->
+            <div class="panel" id="assign-panel">
+                <div class="panel-header">
+                    <span class="icon">&#128203;</span>
+                    Assignments
+                </div>
+                <div class="panel-body">
+                    <table class="assign-table" id="assign-table">
+                        <thead>
+                            <tr>
+                                <th>Cur</th>
+                                <th>PR-CJAM</th>
+                                <th>Qty</th>
+                                <th>CEX-EC</th>
+                                <th>Qty</th>
+                                <th>Split</th>
+                                <th>+/-2</th>
+                            </tr>
+                        </thead>
+                        <tbody id="assign-body"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Global Extras -->
+            <div class="panel" id="extras-panel">
+                <div class="panel-header">
+                    <span class="icon">&#127919;</span>
+                    Extras
+                    <button class="btn btn-accent btn-sm" onclick="autoAssignExtras()"
+                            style="margin-left:auto">&#9889; Auto</button>
+                </div>
+                <div class="panel-body">
+                    <table class="assign-table" id="extras-table">
+                        <thead><tr>
+                            <th>Slot</th><th>Type</th><th>SKU</th><th>Qty</th>
+                        </tr></thead>
+                        <tbody id="extras-body"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Shelf life -->
+            <div class="panel" id="shelf-panel">
+                <div class="panel-header">
+                    <span class="icon">&#9200;</span>
+                    Shelf Life
+                </div>
+                <div class="panel-body">
+                    <table class="shelf-table" id="shelf-table">
+                        <thead>
+                            <tr><th>SKU</th><th>Days</th><th>Qty</th><th>Action</th></tr>
+                        </thead>
+                        <tbody id="shelf-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right column -->
+        <div id="right-col">
+
+            <!-- Summary widgets -->
+            <div id="summary-bar">
+                <div class="stat-widget">
+                    <div class="stat-icon icon-skus">&#128230;</div>
+                    <div class="stat-info">
+                        <div class="stat-label">SKUs</div>
+                        <div class="stat-value" id="stat-skus">--</div>
+                    </div>
+                </div>
+                <div class="stat-widget">
+                    <div class="stat-icon icon-units">&#128230;</div>
+                    <div class="stat-info">
+                        <div class="stat-label">Total Units</div>
+                        <div class="stat-value" id="stat-units">--</div>
+                    </div>
+                </div>
+                <div class="stat-widget">
+                    <div class="stat-icon icon-shortages">&#9888;</div>
+                    <div class="stat-info">
+                        <div class="stat-label">Shortages</div>
+                        <div class="stat-value" id="stat-shortages">--</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Shortage resolution progress -->
+            <div class="panel" id="progress-panel">
+                <div class="progress-header">
+                    <span class="progress-label">Shortage Resolution</span>
+                    <span class="progress-value" id="progress-value">--</span>
+                </div>
+                <div class="progress-track">
+                    <div class="progress-fill" id="progress-fill" style="width:0%"></div>
+                </div>
+                <div class="progress-detail" id="progress-detail"></div>
+            </div>
+
+            <!-- NET panel with 4 week tabs -->
+            <div class="panel" id="net-panel">
+                <div class="tab-bar">
+                    <button class="tab-btn active" onclick="switchTab('sat', this)">This Sat</button>
+                    <button class="tab-btn" onclick="switchTab('w2', this)">Tuesday</button>
+                    <button class="tab-btn" onclick="switchTab('w3', this)">Next Sat</button>
+                    <button class="tab-btn" onclick="switchTab('w4', this)">Sat +3</button>
+                    <button class="tab-btn" onclick="switchTab('w5', this)">Sat +4</button>
+                </div>
+
+                <!-- This Saturday tab -->
+                <div class="tab-content active" id="tab-sat">
+                    <div class="filter-bar">
+                        <label for="filter-select">Filter:</label>
+                        <select class="filter-select" id="filter-select" onchange="applyFilter()">
+                            <option value="CH-*">CH-*</option>
+                            <option value="All">All</option>
+                            <option value="Shortages">Shortages</option>
+                            <option value="Tight">Tight</option>
+                            <option value="Surplus">Surplus</option>
+                        </select>
+                    </div>
+                    <div class="net-table-wrap">
+                        <table class="net-table" id="net-table">
+                            <thead>
+                                <tr>
+                                    <th onclick="sortTable('sku')" data-col="sku">SKU</th>
+                                    <th onclick="sortTable('available')" data-col="available" class="num">Avail</th>
+                                    <th onclick="sortTable('direct')" data-col="direct" class="num">Direct</th>
+                                    <th onclick="sortTable('prcjam')" data-col="prcjam" class="num">PRCJAM</th>
+                                    <th onclick="sortTable('cexec')" data-col="cexec" class="num">CEXEC</th>
+                                    <th onclick="sortTable('exec')" data-col="exec" class="num">EXEC</th>
+                                    <th onclick="sortTable('total_demand')" data-col="total_demand" class="num">Total</th>
+                                    <th onclick="sortTable('net')" data-col="net" class="num">NET</th>
+                                    <th>Headroom</th>
+                                    <th onclick="sortTable('status')" data-col="status">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="net-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Week 2-4 tabs -->
+                <div class="tab-content" id="tab-w2">
+                    <div class="net-table-wrap">
+                        <table class="net-table"><thead><tr>
+                            <th>SKU</th><th class="num">Carry</th><th class="num">Demand</th><th class="num">NET</th><th>Status</th>
+                        </tr></thead><tbody id="week-2-body"></tbody></table>
+                    </div>
+                </div>
+                <div class="tab-content" id="tab-w3">
+                    <div class="net-table-wrap">
+                        <table class="net-table"><thead><tr>
+                            <th>SKU</th><th class="num">Carry</th><th class="num">Demand</th><th class="num">NET</th><th>Status</th>
+                        </tr></thead><tbody id="week-3-body"></tbody></table>
+                    </div>
+                </div>
+                <div class="tab-content" id="tab-w4">
+                    <div class="net-table-wrap">
+                        <table class="net-table"><thead><tr>
+                            <th>SKU</th><th class="num">Carry</th><th class="num">Demand</th><th class="num">NET</th><th>Status</th>
+                        </tr></thead><tbody id="week-4-body"></tbody></table>
+                    </div>
+                </div>
+                <div class="tab-content" id="tab-w5">
+                    <div class="net-table-wrap">
+                        <table class="net-table"><thead><tr>
+                            <th>SKU</th><th class="num">Carry</th><th class="num">Demand</th><th class="num">NET</th><th>Status</th>
+                        </tr></thead><tbody id="week-5-body"></tbody></table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Activity log -->
+            <div class="panel" id="log-panel">
+                <div class="panel-header">
+                    <span class="icon">&#128221;</span>
+                    Activity
+                </div>
+                <div class="panel-body" id="log"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ══ Calendar View ══ (hidden by default) -->
+    <div id="calendar-view" style="display:none">
+        <div id="calendar-header">
+            <div class="cal-summary">
+                <div class="cal-summary-item">
+                    <span class="cal-summary-label">Weeks Shown</span>
+                    <span class="cal-summary-value" id="cal-weeks-count">4</span>
+                </div>
+                <div class="cal-summary-item">
+                    <span class="cal-summary-label">Total PO Lines</span>
+                    <span class="cal-summary-value" id="cal-po-count">--</span>
+                </div>
+                <div class="cal-summary-item">
+                    <span class="cal-summary-label">MFG Orders</span>
+                    <span class="cal-summary-value" id="cal-mfg-count">--</span>
+                </div>
+                <div class="cal-summary-item">
+                    <span class="cal-summary-label">Total Shortages</span>
+                    <span class="cal-summary-value" id="cal-shortage-count">--</span>
+                </div>
+            </div>
+        </div>
+        <div id="calendar-grid"></div>
+
+        <!-- PO Detail Drawer -->
+        <div id="po-drawer" class="cal-drawer">
+            <div class="cal-drawer-header">
+                <span class="cal-drawer-title" id="po-drawer-title">PO Details</span>
+                <button class="btn btn-dim btn-sm" onclick="closeDrawer('po-drawer')">Close</button>
+            </div>
+            <div class="cal-drawer-body" id="po-drawer-body"></div>
+        </div>
+
+        <!-- MFG Detail Drawer -->
+        <div id="mfg-drawer" class="cal-drawer">
+            <div class="cal-drawer-header">
+                <span class="cal-drawer-title" id="mfg-drawer-title">MFG Details</span>
+                <button class="btn btn-dim btn-sm" onclick="closeDrawer('mfg-drawer')">Close</button>
+            </div>
+            <div class="cal-drawer-body" id="mfg-drawer-body"></div>
+        </div>
+
+        <!-- Order List Drawer -->
+        <div id="order-drawer" class="cal-drawer">
+            <div class="cal-drawer-header">
+                <span class="cal-drawer-title">Consolidated Order List</span>
+                <div>
+                    <button class="btn btn-green btn-sm" onclick="exportOrderCSV()">Export CSV</button>
+                    <button class="btn btn-dim btn-sm" onclick="closeDrawer('order-drawer')">Close</button>
+                </div>
+            </div>
+            <div class="cal-drawer-body" id="order-drawer-body"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Free-roaming mascot — "Wedge" — kawaii cheese character -->
+<svg id="mascot" viewBox="0 0 220 210">
+  <defs>
+    <linearGradient id="bodyMain" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFD54F"/>
+      <stop offset="100%" stop-color="#F0B020"/>
+    </linearGradient>
+    <linearGradient id="bodySide" x1="0" y1="0" x2="1" y2="0.5">
+      <stop offset="0%" stop-color="#E8A818"/>
+      <stop offset="100%" stop-color="#D09010"/>
+    </linearGradient>
+    <linearGradient id="bodyTop" x1="0" y1="1" x2="0.5" y2="0">
+      <stop offset="0%" stop-color="#FFE082"/>
+      <stop offset="100%" stop-color="#FFF3B0"/>
+    </linearGradient>
+    <radialGradient id="eyeW" cx="0.45" cy="0.38" r="0.6">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#EEEEF5"/>
+    </radialGradient>
+    <radialGradient id="heartG" cx="0.4" cy="0.3" r="0.65">
+      <stop offset="0%" stop-color="#FF4070"/>
+      <stop offset="100%" stop-color="#D02548"/>
+    </radialGradient>
+    <radialGradient id="mouthG" cx="0.5" cy="0.4" r="0.55">
+      <stop offset="0%" stop-color="#6B2020"/>
+      <stop offset="100%" stop-color="#3D1515"/>
+    </radialGradient>
+    <radialGradient id="footG" cx="0.4" cy="0.35" r="0.6">
+      <stop offset="0%" stop-color="#D09818"/>
+      <stop offset="100%" stop-color="#B08010"/>
+    </radialGradient>
+    <filter id="cheddy-shadow" x="-8%" y="-5%" width="118%" height="118%">
+      <feDropShadow dx="1" dy="2" stdDeviation="2" flood-color="#2A1A0540"/>
+    </filter>
+    <filter id="blurBlush" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="3.5"/>
+    </filter>
+  </defs>
+
+  <g id="mascot-body-group">
+
+    <!-- Legs (small stubby legs from torso) -->
+    <g id="leg-l">
+      <rect x="88" y="178" width="14" height="14" rx="5"
+            fill="#E8A818" stroke="#3D2B0A" stroke-width="3"/>
+      <ellipse cx="95" cy="195" rx="12" ry="6"
+               fill="url(#footG)" stroke="#3D2B0A" stroke-width="3"/>
+    </g>
+    <g id="leg-r">
+      <rect x="118" y="178" width="14" height="14" rx="5"
+            fill="#E8A818" stroke="#3D2B0A" stroke-width="3"/>
+      <ellipse cx="125" cy="195" rx="12" ry="6"
+               fill="url(#footG)" stroke="#3D2B0A" stroke-width="3"/>
+    </g>
+
+    <!-- Small torso (connects head to legs) -->
+    <rect x="88" y="152" width="44" height="30" rx="8"
+          fill="#F0C030" stroke="#3D2B0A" stroke-width="3"/>
+
+    <!-- Cheese wedge head -->
+    <g filter="url(#cheddy-shadow)">
+      <!-- Right side face (3D depth) -->
+      <path d="M162,30 L170,34 L165,148 L158,150 Z"
+            fill="url(#bodySide)" stroke="#3D2B0A" stroke-width="3" stroke-linejoin="round"/>
+
+      <!-- Top face -->
+      <path d="M78,14 L170,34 L162,30 L72,18 Z"
+            fill="url(#bodyTop)" stroke="#3D2B0A" stroke-width="3" stroke-linejoin="round"/>
+
+      <!-- Front face: rounded kawaii wedge -->
+      <path d="M72,18
+               Q65,22 55,50
+               Q42,90 38,130
+               Q36,145 42,152
+               L158,152
+               Q164,148 162,135
+               L162,30
+               Q158,22 72,18 Z"
+            fill="url(#bodyMain)" stroke="#3D2B0A" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+
+      <!-- Cheese holes (orange filled circles — kawaii style) -->
+      <circle cx="68" cy="45" r="9" fill="#E8960E" stroke="#D08508" stroke-width="1.5"/>
+      <circle cx="148" cy="50" r="7" fill="#E8960E" stroke="#D08508" stroke-width="1.5"/>
+      <circle cx="100" cy="38" r="5" fill="#E8960E" stroke="#D08508" stroke-width="1.5"/>
+      <circle cx="55" cy="80" r="6" fill="#E8960E" stroke="#D08508" stroke-width="1.5"/>
+      <circle cx="145" cy="85" r="8" fill="#E8960E" stroke="#D08508" stroke-width="1.5"/>
+      <circle cx="65" cy="120" r="7" fill="#E8960E" stroke="#D08508" stroke-width="1.5"/>
+      <circle cx="140" cy="125" r="5.5" fill="#E8960E" stroke="#D08508" stroke-width="1.5"/>
+      <circle cx="85" cy="140" r="4" fill="#E8960E" stroke="#D08508" stroke-width="1.5"/>
+      <circle cx="120" cy="42" r="4" fill="#E8960E" stroke="#D08508" stroke-width="1.5"/>
+      <circle cx="160" cy="110" r="4" fill="#D88808" stroke="#C07808" stroke-width="1"/>
+
+      <!-- Highlight -->
+      <path d="M74,20 Q68,28 60,48 Q55,60 52,72"
+            fill="none" stroke="white" stroke-width="2" opacity="0.2" stroke-linecap="round"/>
+    </g>
+
+    <!-- Arms (small nubs from torso) -->
+    <path id="mascot-arm-l" d="M88,158 Q75,160 70,168 Q68,174 72,175 Q76,176 78,170 Q80,164 88,160"
+          fill="#E8A818" stroke="#3D2B0A" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <path id="mascot-arm-r" d="M132,158 Q145,160 150,168 Q152,174 148,175 Q144,176 142,170 Q140,164 132,160"
+          fill="#D09818" stroke="#3D2B0A" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Eyes (small, round, brown — kawaii style) -->
+    <g id="mascot-eyes">
+      <ellipse id="eye-bg-l" cx="88" cy="92" rx="8" ry="9" fill="#3D2B0A"/>
+      <ellipse class="mascot-eye-iris" cx="90" cy="91" rx="4" ry="5" fill="#3D2B0A"/>
+      <circle cx="92" cy="87" r="3" fill="white" opacity="0.95"/>
+      <circle cx="87" cy="94" r="1.5" fill="white" opacity="0.3"/>
+
+      <ellipse id="eye-bg-r" cx="132" cy="92" rx="8" ry="9" fill="#3D2B0A"/>
+      <ellipse class="mascot-eye-iris" cx="134" cy="91" rx="4" ry="5" fill="#3D2B0A"/>
+      <circle cx="136" cy="87" r="3" fill="white" opacity="0.95"/>
+      <circle cx="131" cy="94" r="1.5" fill="white" opacity="0.3"/>
+    </g>
+
+    <!-- Wink overlays -->
+    <path id="mascot-wink-l" d="M78,92 Q88,82 98,92" fill="none" stroke="#3D2B0A"
+          stroke-width="3.5" stroke-linecap="round" opacity="0"/>
+    <path id="mascot-wink-r" d="M122,92 Q132,82 142,92" fill="none" stroke="#3D2B0A"
+          stroke-width="3.5" stroke-linecap="round" opacity="0"/>
+
+    <!-- Heart eyes overlay -->
+    <g id="mascot-heart-l" opacity="0" transform="translate(88,92) scale(0.6)">
+      <path d="M0,-10 C-5,-18 -16,-18 -16,-8 C-16,0 0,12 0,12 C0,12 16,0 16,-8 C16,-18 5,-18 0,-10Z"
+            fill="url(#heartG)" stroke="#3D2B0A" stroke-width="2.2"/>
+      <ellipse cx="-4" cy="-7" rx="4" ry="3" fill="white" opacity="0.3" transform="rotate(-15)"/>
+    </g>
+    <g id="mascot-heart-r" opacity="0" transform="translate(132,92) scale(0.6)">
+      <path d="M0,-10 C-5,-18 -16,-18 -16,-8 C-16,0 0,12 0,12 C0,12 16,0 16,-8 C16,-18 5,-18 0,-10Z"
+            fill="url(#heartG)" stroke="#3D2B0A" stroke-width="2.2"/>
+      <ellipse cx="-4" cy="-7" rx="4" ry="3" fill="white" opacity="0.3" transform="rotate(-15)"/>
+    </g>
+
+    <!-- Blush -->
+    <ellipse id="blush-l" cx="72" cy="108" rx="9" ry="5.5" fill="#FF8090" filter="url(#blurBlush)" opacity="0.55"/>
+    <ellipse id="blush-r" cx="148" cy="108" rx="9" ry="5.5" fill="#FF8090" filter="url(#blurBlush)" opacity="0.50"/>
+
+    <!-- Mouth (wide open smile — kawaii style) -->
+    <path id="mascot-mouth" d="M93,110 Q110,138 127,110 Z" fill="url(#mouthG)" stroke="#3D2B0A" stroke-width="2.5"/>
+    <path id="mascot-mouth-fill" d="M100,128 Q110,135 120,128" fill="#E87080" opacity="1"/>
+
+    <!-- Tongue -->
+    <g id="mascot-tongue" opacity="0">
+      <ellipse cx="118" cy="126" rx="6" ry="5" fill="#E87080" stroke="#3D2B0A" stroke-width="1.5"/>
+      <ellipse cx="117" cy="124" rx="2.5" ry="1.8" fill="#F5A0A8" opacity="0.5"/>
+    </g>
+
+    <!-- Brows -->
+    <path class="mascot-brow" id="brow-l" d="M78,76 L98,73" opacity="0"/>
+    <path class="mascot-brow" id="brow-r" d="M122,73 L142,76" opacity="0"/>
+
+    <!-- Extra indicator -->
+    <text id="mascot-extra" x="175" y="15" font-size="16" opacity="0"></text>
+
+    <!-- Speed lines -->
+    <g id="mascot-speed-lines" opacity="0">
+      <line x1="10" y1="40" x2="-15" y2="42" stroke="rgba(0,212,255,0.35)" stroke-width="1.5"/>
+      <line x1="12" y1="60" x2="-12" y2="61" stroke="rgba(0,212,255,0.25)" stroke-width="1.2"/>
+      <line x1="10" y1="80" x2="-8" y2="81" stroke="rgba(0,212,255,0.3)" stroke-width="1"/>
+      <line x1="14" y1="100" x2="-4" y2="101" stroke="rgba(0,212,255,0.15)" stroke-width="0.8"/>
+    </g>
+
+  </g>
+</svg>
+
+<!-- Drag ghost -->
+<div id="drag-ghost"></div>
+
+<!-- Substitution panel overlay -->
+<div id="subs-overlay">
+    <div id="subs-backdrop" onclick="closeSubs()"></div>
+    <div id="subs-panel">
+        <div class="picker-header">
+            <div class="picker-title">Substitution Suggestions</div>
+            <div class="picker-hint">Surplus cheeses that could cover shortages</div>
+        </div>
+        <div id="subs-list"></div>
+        <div id="picker-footer">
+            <button class="btn btn-dim" onclick="closeSubs()">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- Cheese picker overlay -->
+<div id="picker-overlay">
+    <div id="picker-backdrop" onclick="closePicker()"></div>
+    <div id="picker-panel">
+        <div class="picker-header">
+            <div class="picker-title" id="picker-title">Assign Cheese</div>
+            <div class="picker-hint">Click to assign. Sorted by headroom.</div>
+        </div>
+        <div id="picker-list"></div>
+        <div id="picker-footer">
+            <button class="btn btn-dim" onclick="closePicker()">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<!-- Floating mascot speech bubble -->
+<div id="mascot-speech">
+    <div id="mascot-speech-inner">
+        <div id="mascot-msg">Ready to plan!</div>
+        <div id="mascot-state">idle</div>
+    </div>
+    <div id="mascot-speech-tail"></div>
+</div>
+
+<script src="/static/app.js?v=24"></script>
+</body>
+</html>

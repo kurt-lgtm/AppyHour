@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "appyhour": {
+      "command": "python",
+      "args": ["C:/Users/Work/AppyHour/AppyHourMCP/server.py"],
+      "env": {
+        "PYTHONPATH": "C:/Users/Work/AppyHour/GelPackCalculator;C:/Users/Work/AppyHour/InventoryReorder;C:/Users/Work/AppyHour/ShippingReports"
+      }
+    }
+  }
+}
