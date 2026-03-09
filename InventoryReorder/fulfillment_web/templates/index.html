@@ -290,167 +290,148 @@
     </div>
 </div>
 
-<!-- Free-roaming mascot — "Wedge" — kawaii cheese character -->
-<svg id="mascot" viewBox="0 0 220 210">
+<!-- Free-roaming mascot — "Wedge" — kawaii cheese block character -->
+<svg id="mascot" viewBox="0 0 180 240">
   <defs>
-    <linearGradient id="bodyMain" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#FFD54F"/>
-      <stop offset="100%" stop-color="#F0B020"/>
-    </linearGradient>
-    <linearGradient id="bodySide" x1="0" y1="0" x2="1" y2="0.5">
-      <stop offset="0%" stop-color="#E8A818"/>
-      <stop offset="100%" stop-color="#D09010"/>
-    </linearGradient>
-    <linearGradient id="bodyTop" x1="0" y1="1" x2="0.5" y2="0">
-      <stop offset="0%" stop-color="#FFE082"/>
-      <stop offset="100%" stop-color="#FFF3B0"/>
-    </linearGradient>
-    <radialGradient id="eyeW" cx="0.45" cy="0.38" r="0.6">
-      <stop offset="0%" stop-color="#FFFFFF"/>
-      <stop offset="100%" stop-color="#EEEEF5"/>
-    </radialGradient>
     <radialGradient id="heartG" cx="0.4" cy="0.3" r="0.65">
       <stop offset="0%" stop-color="#FF4070"/>
       <stop offset="100%" stop-color="#D02548"/>
     </radialGradient>
-    <radialGradient id="mouthG" cx="0.5" cy="0.4" r="0.55">
-      <stop offset="0%" stop-color="#6B2020"/>
-      <stop offset="100%" stop-color="#3D1515"/>
-    </radialGradient>
-    <radialGradient id="footG" cx="0.4" cy="0.35" r="0.6">
-      <stop offset="0%" stop-color="#D09818"/>
-      <stop offset="100%" stop-color="#B08010"/>
+    <radialGradient id="mouthG" cx="0.5" cy="0.3" r="0.6">
+      <stop offset="0%" stop-color="#5C2020"/>
+      <stop offset="100%" stop-color="#3A1212"/>
     </radialGradient>
     <filter id="cheddy-shadow" x="-8%" y="-5%" width="118%" height="118%">
       <feDropShadow dx="1" dy="2" stdDeviation="2" flood-color="#2A1A0540"/>
     </filter>
     <filter id="blurBlush" x="-40%" y="-40%" width="180%" height="180%">
-      <feGaussianBlur stdDeviation="3.5"/>
+      <feGaussianBlur stdDeviation="3"/>
     </filter>
   </defs>
 
   <g id="mascot-body-group">
 
-    <!-- Legs (small stubby legs from torso) -->
+    <!-- Tiny legs (from small torso) -->
     <g id="leg-l">
-      <rect x="88" y="178" width="14" height="14" rx="5"
-            fill="#E8A818" stroke="#3D2B0A" stroke-width="3"/>
-      <ellipse cx="95" cy="195" rx="12" ry="6"
-               fill="url(#footG)" stroke="#3D2B0A" stroke-width="3"/>
+      <rect x="62" y="208" width="10" height="12" rx="4"
+            fill="#D9A020" stroke="#5C3A10" stroke-width="2.5"/>
+      <ellipse cx="67" cy="222" rx="9" ry="5"
+               fill="#C09018" stroke="#5C3A10" stroke-width="2.5"/>
     </g>
     <g id="leg-r">
-      <rect x="118" y="178" width="14" height="14" rx="5"
-            fill="#E8A818" stroke="#3D2B0A" stroke-width="3"/>
-      <ellipse cx="125" cy="195" rx="12" ry="6"
-               fill="url(#footG)" stroke="#3D2B0A" stroke-width="3"/>
+      <rect x="88" y="208" width="10" height="12" rx="4"
+            fill="#D9A020" stroke="#5C3A10" stroke-width="2.5"/>
+      <ellipse cx="93" cy="222" rx="9" ry="5"
+               fill="#C09018" stroke="#5C3A10" stroke-width="2.5"/>
     </g>
 
-    <!-- Small torso (connects head to legs) -->
-    <rect x="88" y="152" width="44" height="30" rx="8"
-          fill="#F0C030" stroke="#3D2B0A" stroke-width="3"/>
+    <!-- Tiny torso -->
+    <path d="M60,190 Q58,188 58,195 L58,210 Q58,215 63,215 L97,215 Q102,215 102,210 L102,195 Q102,188 100,190 Z"
+          fill="#E8A818" stroke="#5C3A10" stroke-width="2.5" stroke-linejoin="round"/>
 
-    <!-- Cheese wedge head -->
+    <!-- Cheese block head — big flat rectangular block with wedge cut top-right -->
     <g filter="url(#cheddy-shadow)">
-      <!-- Right side face (3D depth) -->
-      <path d="M162,30 L170,34 L165,148 L158,150 Z"
-            fill="url(#bodySide)" stroke="#3D2B0A" stroke-width="3" stroke-linejoin="round"/>
+      <!-- Main cheese block: tall rectangle, rounded corners, diagonal cut upper-right -->
+      <path d="M20,30
+               Q18,25 22,20
+               L120,20
+               L148,5
+               Q152,3 154,7
+               L154,168
+               Q154,176 148,178
+               L22,178
+               Q18,176 18,168
+               Z"
+            fill="#F0B828" stroke="#5C3A10" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round"/>
 
-      <!-- Top face -->
-      <path d="M78,14 L170,34 L162,30 L72,18 Z"
-            fill="url(#bodyTop)" stroke="#3D2B0A" stroke-width="3" stroke-linejoin="round"/>
+      <!-- Lighter top edge strip (cut face) -->
+      <path d="M120,20 L148,5 Q152,3 154,7 L154,20 Q140,22 120,20 Z"
+            fill="#F8D048" stroke="none"/>
 
-      <!-- Front face: rounded kawaii wedge -->
-      <path d="M72,18
-               Q65,22 55,50
-               Q42,90 38,130
-               Q36,145 42,152
-               L158,152
-               Q164,148 162,135
-               L162,30
-               Q158,22 72,18 Z"
-            fill="url(#bodyMain)" stroke="#3D2B0A" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+      <!-- Right edge slightly darker -->
+      <path d="M148,7 L154,7 L154,168 Q154,176 148,178 L148,178 Z"
+            fill="#D9A020" stroke="none" opacity="0.3"/>
 
-      <!-- Cheese holes (orange filled circles — kawaii style) -->
-      <circle cx="68" cy="45" r="9" fill="#E8960E" stroke="#D08508" stroke-width="1.5"/>
-      <circle cx="148" cy="50" r="7" fill="#E8960E" stroke="#D08508" stroke-width="1.5"/>
-      <circle cx="100" cy="38" r="5" fill="#E8960E" stroke="#D08508" stroke-width="1.5"/>
-      <circle cx="55" cy="80" r="6" fill="#E8960E" stroke="#D08508" stroke-width="1.5"/>
-      <circle cx="145" cy="85" r="8" fill="#E8960E" stroke="#D08508" stroke-width="1.5"/>
-      <circle cx="65" cy="120" r="7" fill="#E8960E" stroke="#D08508" stroke-width="1.5"/>
-      <circle cx="140" cy="125" r="5.5" fill="#E8960E" stroke="#D08508" stroke-width="1.5"/>
-      <circle cx="85" cy="140" r="4" fill="#E8960E" stroke="#D08508" stroke-width="1.5"/>
-      <circle cx="120" cy="42" r="4" fill="#E8960E" stroke="#D08508" stroke-width="1.5"/>
-      <circle cx="160" cy="110" r="4" fill="#D88808" stroke="#C07808" stroke-width="1"/>
-
-      <!-- Highlight -->
-      <path d="M74,20 Q68,28 60,48 Q55,60 52,72"
-            fill="none" stroke="white" stroke-width="2" opacity="0.2" stroke-linecap="round"/>
+      <!-- Cheese holes (orange/amber filled — kawaii flat style) -->
+      <circle cx="48" cy="42" r="10" fill="#D9900E" opacity="0.8"/>
+      <circle cx="128" cy="38" r="7" fill="#D9900E" opacity="0.8"/>
+      <circle cx="85" cy="35" r="5" fill="#D9900E" opacity="0.7"/>
+      <circle cx="38" cy="80" r="6" fill="#D9900E" opacity="0.7"/>
+      <circle cx="135" cy="75" r="8" fill="#D9900E" opacity="0.8"/>
+      <circle cx="55" cy="60" r="4.5" fill="#D9900E" opacity="0.65"/>
+      <circle cx="110" cy="55" r="6" fill="#D9900E" opacity="0.7"/>
+      <circle cx="42" cy="135" r="7" fill="#D9900E" opacity="0.7"/>
+      <circle cx="130" cy="140" r="5" fill="#D9900E" opacity="0.65"/>
+      <circle cx="75" cy="155" r="4.5" fill="#D9900E" opacity="0.6"/>
+      <circle cx="140" cy="105" r="5.5" fill="#D9900E" opacity="0.7"/>
+      <circle cx="32" cy="108" r="4" fill="#D9900E" opacity="0.6"/>
     </g>
 
-    <!-- Arms (small nubs from torso) -->
-    <path id="mascot-arm-l" d="M88,158 Q75,160 70,168 Q68,174 72,175 Q76,176 78,170 Q80,164 88,160"
-          fill="#E8A818" stroke="#3D2B0A" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-    <path id="mascot-arm-r" d="M132,158 Q145,160 150,168 Q152,174 148,175 Q144,176 142,170 Q140,164 132,160"
-          fill="#D09818" stroke="#3D2B0A" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Arms (tiny nubs from torso, left one waving up) -->
+    <path id="mascot-arm-l" d="M58,195 Q45,192 40,198 Q38,203 42,204 Q46,205 47,200 Q49,196 58,197"
+          fill="#D9A020" stroke="#5C3A10" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path id="mascot-arm-r" d="M102,195 Q115,192 120,198 Q122,203 118,204 Q114,205 113,200 Q111,196 102,197"
+          fill="#D9A020" stroke="#5C3A10" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
 
-    <!-- Eyes (small, round, brown — kawaii style) -->
+    <!-- Eyes (small, solid brown ovals with white highlights — kawaii) -->
     <g id="mascot-eyes">
-      <ellipse id="eye-bg-l" cx="88" cy="92" rx="8" ry="9" fill="#3D2B0A"/>
-      <ellipse class="mascot-eye-iris" cx="90" cy="91" rx="4" ry="5" fill="#3D2B0A"/>
-      <circle cx="92" cy="87" r="3" fill="white" opacity="0.95"/>
-      <circle cx="87" cy="94" r="1.5" fill="white" opacity="0.3"/>
+      <ellipse id="eye-bg-l" cx="65" cy="100" rx="7" ry="8" fill="#3D2B0A"/>
+      <ellipse class="mascot-eye-iris" cx="67" cy="99" rx="3.5" ry="4.5" fill="#3D2B0A"/>
+      <circle cx="69" cy="95" r="2.8" fill="white" opacity="0.95"/>
+      <circle cx="64" cy="102" r="1.3" fill="white" opacity="0.3"/>
 
-      <ellipse id="eye-bg-r" cx="132" cy="92" rx="8" ry="9" fill="#3D2B0A"/>
-      <ellipse class="mascot-eye-iris" cx="134" cy="91" rx="4" ry="5" fill="#3D2B0A"/>
-      <circle cx="136" cy="87" r="3" fill="white" opacity="0.95"/>
-      <circle cx="131" cy="94" r="1.5" fill="white" opacity="0.3"/>
+      <ellipse id="eye-bg-r" cx="110" cy="100" rx="7" ry="8" fill="#3D2B0A"/>
+      <ellipse class="mascot-eye-iris" cx="112" cy="99" rx="3.5" ry="4.5" fill="#3D2B0A"/>
+      <circle cx="114" cy="95" r="2.8" fill="white" opacity="0.95"/>
+      <circle cx="109" cy="102" r="1.3" fill="white" opacity="0.3"/>
     </g>
 
     <!-- Wink overlays -->
-    <path id="mascot-wink-l" d="M78,92 Q88,82 98,92" fill="none" stroke="#3D2B0A"
-          stroke-width="3.5" stroke-linecap="round" opacity="0"/>
-    <path id="mascot-wink-r" d="M122,92 Q132,82 142,92" fill="none" stroke="#3D2B0A"
-          stroke-width="3.5" stroke-linecap="round" opacity="0"/>
+    <path id="mascot-wink-l" d="M56,100 Q65,90 74,100" fill="none" stroke="#3D2B0A"
+          stroke-width="3" stroke-linecap="round" opacity="0"/>
+    <path id="mascot-wink-r" d="M101,100 Q110,90 119,100" fill="none" stroke="#3D2B0A"
+          stroke-width="3" stroke-linecap="round" opacity="0"/>
 
     <!-- Heart eyes overlay -->
-    <g id="mascot-heart-l" opacity="0" transform="translate(88,92) scale(0.6)">
+    <g id="mascot-heart-l" opacity="0" transform="translate(65,100) scale(0.55)">
       <path d="M0,-10 C-5,-18 -16,-18 -16,-8 C-16,0 0,12 0,12 C0,12 16,0 16,-8 C16,-18 5,-18 0,-10Z"
             fill="url(#heartG)" stroke="#3D2B0A" stroke-width="2.2"/>
       <ellipse cx="-4" cy="-7" rx="4" ry="3" fill="white" opacity="0.3" transform="rotate(-15)"/>
     </g>
-    <g id="mascot-heart-r" opacity="0" transform="translate(132,92) scale(0.6)">
+    <g id="mascot-heart-r" opacity="0" transform="translate(110,100) scale(0.55)">
       <path d="M0,-10 C-5,-18 -16,-18 -16,-8 C-16,0 0,12 0,12 C0,12 16,0 16,-8 C16,-18 5,-18 0,-10Z"
             fill="url(#heartG)" stroke="#3D2B0A" stroke-width="2.2"/>
       <ellipse cx="-4" cy="-7" rx="4" ry="3" fill="white" opacity="0.3" transform="rotate(-15)"/>
     </g>
 
     <!-- Blush -->
-    <ellipse id="blush-l" cx="72" cy="108" rx="9" ry="5.5" fill="#FF8090" filter="url(#blurBlush)" opacity="0.55"/>
-    <ellipse id="blush-r" cx="148" cy="108" rx="9" ry="5.5" fill="#FF8090" filter="url(#blurBlush)" opacity="0.50"/>
+    <ellipse id="blush-l" cx="50" cy="118" rx="8" ry="5" fill="#FF8090" filter="url(#blurBlush)" opacity="0.5"/>
+    <ellipse id="blush-r" cx="125" cy="118" rx="8" ry="5" fill="#FF8090" filter="url(#blurBlush)" opacity="0.45"/>
 
-    <!-- Mouth (wide open smile — kawaii style) -->
-    <path id="mascot-mouth" d="M93,110 Q110,138 127,110 Z" fill="url(#mouthG)" stroke="#3D2B0A" stroke-width="2.5"/>
-    <path id="mascot-mouth-fill" d="M100,128 Q110,135 120,128" fill="#E87080" opacity="1"/>
+    <!-- Mouth: big open D-shape (flat top, curved bottom) with tongue -->
+    <path id="mascot-mouth" d="M70,118 L105,118 Q108,118 108,122 Q108,142 88,145 Q68,142 68,122 Q68,118 70,118 Z"
+          fill="url(#mouthG)" stroke="#5C3A10" stroke-width="2.5"/>
+    <path id="mascot-mouth-fill" d="M78,136 Q88,142 98,136" fill="#E87080" opacity="1"/>
 
     <!-- Tongue -->
     <g id="mascot-tongue" opacity="0">
-      <ellipse cx="118" cy="126" rx="6" ry="5" fill="#E87080" stroke="#3D2B0A" stroke-width="1.5"/>
-      <ellipse cx="117" cy="124" rx="2.5" ry="1.8" fill="#F5A0A8" opacity="0.5"/>
+      <ellipse cx="95" cy="136" rx="6" ry="5" fill="#E87080" stroke="#3D2B0A" stroke-width="1.5"/>
+      <ellipse cx="94" cy="134" rx="2.5" ry="1.8" fill="#F5A0A8" opacity="0.5"/>
     </g>
 
     <!-- Brows -->
-    <path class="mascot-brow" id="brow-l" d="M78,76 L98,73" opacity="0"/>
-    <path class="mascot-brow" id="brow-r" d="M122,73 L142,76" opacity="0"/>
+    <path class="mascot-brow" id="brow-l" d="M55,84 L75,81" opacity="0"/>
+    <path class="mascot-brow" id="brow-r" d="M100,81 L120,84" opacity="0"/>
 
     <!-- Extra indicator -->
-    <text id="mascot-extra" x="175" y="15" font-size="16" opacity="0"></text>
+    <text id="mascot-extra" x="158" y="10" font-size="16" opacity="0"></text>
 
     <!-- Speed lines -->
     <g id="mascot-speed-lines" opacity="0">
-      <line x1="10" y1="40" x2="-15" y2="42" stroke="rgba(0,212,255,0.35)" stroke-width="1.5"/>
-      <line x1="12" y1="60" x2="-12" y2="61" stroke="rgba(0,212,255,0.25)" stroke-width="1.2"/>
-      <line x1="10" y1="80" x2="-8" y2="81" stroke="rgba(0,212,255,0.3)" stroke-width="1"/>
-      <line x1="14" y1="100" x2="-4" y2="101" stroke="rgba(0,212,255,0.15)" stroke-width="0.8"/>
+      <line x1="5" y1="40" x2="-15" y2="42" stroke="rgba(0,212,255,0.35)" stroke-width="1.5"/>
+      <line x1="7" y1="70" x2="-10" y2="71" stroke="rgba(0,212,255,0.25)" stroke-width="1.2"/>
+      <line x1="5" y1="100" x2="-8" y2="101" stroke="rgba(0,212,255,0.3)" stroke-width="1"/>
+      <line x1="7" y1="130" x2="-4" y2="131" stroke="rgba(0,212,255,0.15)" stroke-width="0.8"/>
     </g>
 
   </g>

@@ -526,10 +526,10 @@ function updatePupils() {
     // Move iris ellipses (Wedge's dark iris IS the pupil)
     const irisEls = document.querySelectorAll('.mascot-eye-iris');
     if (irisEls.length === 2) {
-        irisEls[0].setAttribute('cx', 90 + ox * flip);
-        irisEls[0].setAttribute('cy', 91 + oy);
-        irisEls[1].setAttribute('cx', 134 + ox * flip);
-        irisEls[1].setAttribute('cy', 91 + oy);
+        irisEls[0].setAttribute('cx', 67 + ox * flip);
+        irisEls[0].setAttribute('cy', 99 + oy);
+        irisEls[1].setAttribute('cx', 112 + ox * flip);
+        irisEls[1].setAttribute('cy', 99 + oy);
     }
 }
 
@@ -619,13 +619,13 @@ function setMascotExpression(state, msg) {
 
     // Reset eyes to normal (visible)
     if (eyes) eyes.setAttribute('opacity', '1');
-    eyeBgL.setAttribute('ry', '9'); eyeBgR.setAttribute('ry', '9');
-    eyeBgL.setAttribute('rx', '8'); eyeBgR.setAttribute('rx', '8');
+    eyeBgL.setAttribute('ry', '8'); eyeBgR.setAttribute('ry', '8');
+    eyeBgL.setAttribute('rx', '7'); eyeBgR.setAttribute('rx', '7');
     // Reset iris to default size
     const irisReset = document.querySelectorAll('.mascot-eye-iris');
     if (irisReset.length === 2) {
-        irisReset[0].setAttribute('rx', '4'); irisReset[0].setAttribute('ry', '5');
-        irisReset[1].setAttribute('rx', '4'); irisReset[1].setAttribute('ry', '5');
+        irisReset[0].setAttribute('rx', '3.5'); irisReset[0].setAttribute('ry', '4.5');
+        irisReset[1].setAttribute('rx', '3.5'); irisReset[1].setAttribute('ry', '4.5');
     }
     if (winkL) winkL.setAttribute('opacity', '0');
     if (winkR) winkR.setAttribute('opacity', '0');
@@ -634,19 +634,19 @@ function setMascotExpression(state, msg) {
     if (tongue) tongue.setAttribute('opacity', '0');
     browL.setAttribute('opacity', '0'); browR.setAttribute('opacity', '0');
 
-    // Default mouth: happy triangle
-    mouth.setAttribute('d', 'M93,110 Q110,138 127,110 Z');
+    // Default mouth: big D-shape open smile
+    mouth.setAttribute('d', 'M70,118 L105,118 Q108,118 108,122 Q108,142 88,145 Q68,142 68,122 Q68,118 70,118 Z');
     mouth.setAttribute('fill', 'url(#mouthG)');
-    mouth.setAttribute('stroke', '#3D2B0A');
+    mouth.setAttribute('stroke', '#5C3A10');
     mouth.setAttribute('stroke-width', '2.5');
     mouth.setAttribute('opacity', '1');
-    mouthFill.setAttribute('d', 'M100,128 Q110,135 120,128');
+    mouthFill.setAttribute('d', 'M78,136 Q88,142 98,136');
     mouthFill.setAttribute('fill', '#E87080');
     mouthFill.setAttribute('opacity', '1');
 
-    // Default arms: at sides (from torso)
-    armL.setAttribute('d', 'M88,158 Q75,160 70,168 Q68,174 72,175 Q76,176 78,170 Q80,164 88,160');
-    armR.setAttribute('d', 'M132,158 Q145,160 150,168 Q152,174 148,175 Q144,176 142,170 Q140,164 132,160');
+    // Default arms: at sides (from tiny torso)
+    armL.setAttribute('d', 'M58,195 Q45,192 40,198 Q38,203 42,204 Q46,205 47,200 Q49,196 58,197');
+    armR.setAttribute('d', 'M102,195 Q115,192 120,198 Q122,203 118,204 Q114,205 113,200 Q111,196 102,197');
 
     switch (state) {
         case 'happy':
@@ -654,17 +654,17 @@ function setMascotExpression(state, msg) {
             // Excited: big pupils, ellipse mouth, arms UP
             const irisEls = document.querySelectorAll('.mascot-eye-iris');
             if (irisEls.length === 2) {
-                irisEls[0].setAttribute('rx', '5.5'); irisEls[0].setAttribute('ry', '6.5');
-                irisEls[1].setAttribute('rx', '5.5'); irisEls[1].setAttribute('ry', '6.5');
+                irisEls[0].setAttribute('rx', '4.5'); irisEls[0].setAttribute('ry', '5.5');
+                irisEls[1].setAttribute('rx', '4.5'); irisEls[1].setAttribute('ry', '5.5');
             }
-            // Open ellipse mouth
-            mouth.setAttribute('d', '');
-            mouth.setAttribute('opacity', '0');
-            mouthFill.setAttribute('d', 'M90,116 A20,16 0 1,0 130,116 A20,16 0 1,0 90,116');
-            mouthFill.setAttribute('fill', 'url(#mouthG)');
+            // Bigger open mouth
+            mouth.setAttribute('d', 'M65,118 L110,118 Q114,118 114,122 Q114,148 88,152 Q62,148 62,122 Q62,118 65,118 Z');
+            mouth.setAttribute('opacity', '1');
+            mouthFill.setAttribute('d', 'M76,142 Q88,150 100,142');
+            mouthFill.setAttribute('fill', '#E87080');
             // Arms raised
-            armL.setAttribute('d', 'M88,155 Q72,140 65,128 Q62,122 66,120 Q70,118 72,124 Q76,135 88,148');
-            armR.setAttribute('d', 'M132,155 Q148,140 155,128 Q158,122 154,120 Q150,118 148,124 Q144,135 132,148');
+            armL.setAttribute('d', 'M58,192 Q42,182 36,174 Q33,169 37,167 Q41,166 43,172 Q47,180 58,188');
+            armR.setAttribute('d', 'M102,192 Q118,182 124,174 Q127,169 123,167 Q119,166 117,172 Q113,180 102,188');
             if (state === 'celebrate') {
                 extra.textContent = '\u2605'; extra.setAttribute('opacity', '1');
                 extra.style.fill = '#00d4ff';
@@ -672,30 +672,30 @@ function setMascotExpression(state, msg) {
             break;
         case 'worried':
             // Surprised-ish: wide eyes, O mouth, sweatdrop
-            eyeBgL.setAttribute('ry', '11'); eyeBgR.setAttribute('ry', '11');
-            eyeBgL.setAttribute('rx', '10'); eyeBgR.setAttribute('rx', '10');
+            eyeBgL.setAttribute('ry', '10'); eyeBgR.setAttribute('ry', '10');
+            eyeBgL.setAttribute('rx', '9'); eyeBgR.setAttribute('rx', '9');
             // Small O mouth
             mouth.setAttribute('d', '');
             mouth.setAttribute('opacity', '0');
-            mouthFill.setAttribute('d', 'M100,114 A10,12 0 1,0 120,114 A10,12 0 1,0 100,114');
+            mouthFill.setAttribute('d', 'M78,120 A10,12 0 1,0 98,120 A10,12 0 1,0 78,120');
             mouthFill.setAttribute('fill', 'url(#mouthG)');
             // One arm raised
-            armL.setAttribute('d', 'M88,155 Q72,140 65,128 Q62,122 66,120 Q70,118 72,124 Q76,135 88,148');
+            armL.setAttribute('d', 'M58,192 Q42,182 36,174 Q33,169 37,167 Q41,166 43,172 Q47,180 58,188');
             extra.textContent = '\u2019'; extra.setAttribute('opacity', '1');
             extra.style.fill = '#60a5fa';
             break;
         case 'alert':
             // Surprised: wide eyes, O mouth, !! marks
-            eyeBgL.setAttribute('ry', '11'); eyeBgR.setAttribute('ry', '11');
-            eyeBgL.setAttribute('rx', '10'); eyeBgR.setAttribute('rx', '10');
+            eyeBgL.setAttribute('ry', '10'); eyeBgR.setAttribute('ry', '10');
+            eyeBgL.setAttribute('rx', '9'); eyeBgR.setAttribute('rx', '9');
             // O mouth
             mouth.setAttribute('d', '');
             mouth.setAttribute('opacity', '0');
-            mouthFill.setAttribute('d', 'M100,114 A10,12 0 1,0 120,114 A10,12 0 1,0 100,114');
+            mouthFill.setAttribute('d', 'M78,120 A10,12 0 1,0 98,120 A10,12 0 1,0 78,120');
             mouthFill.setAttribute('fill', 'url(#mouthG)');
             // Both arms raised
-            armL.setAttribute('d', 'M88,155 Q72,140 65,128 Q62,122 66,120 Q70,118 72,124 Q76,135 88,148');
-            armR.setAttribute('d', 'M132,155 Q148,140 155,128 Q158,122 154,120 Q150,118 148,124 Q144,135 132,148');
+            armL.setAttribute('d', 'M58,192 Q42,182 36,174 Q33,169 37,167 Q41,166 43,172 Q47,180 58,188');
+            armR.setAttribute('d', 'M102,192 Q118,182 124,174 Q127,169 123,167 Q119,166 117,172 Q113,180 102,188');
             extra.textContent = '!!'; extra.setAttribute('opacity', '1');
             extra.style.fill = '#ff3b5c';
             blushL.style.opacity = '0'; blushR.style.opacity = '0';
@@ -708,7 +708,7 @@ function setMascotExpression(state, msg) {
             // Big ellipse mouth
             mouth.setAttribute('d', '');
             mouth.setAttribute('opacity', '0');
-            mouthFill.setAttribute('d', 'M90,116 A20,16 0 1,0 130,116 A20,16 0 1,0 90,116');
+            mouthFill.setAttribute('d', 'M65,118 A23,18 0 1,0 110,118 A23,18 0 1,0 65,118');
             mouthFill.setAttribute('fill', 'url(#mouthG)');
             if (speedLines) speedLines.setAttribute('opacity', '0.6');
             break;
@@ -719,14 +719,14 @@ function setMascotExpression(state, msg) {
             // Hide left eye elements only
             eyeBgL.setAttribute('ry', '0');
             // Smirk mouth (curve, no fill)
-            mouth.setAttribute('d', 'M93,112 Q110,130 127,112');
+            mouth.setAttribute('d', 'M70,120 Q88,138 105,120');
             mouth.setAttribute('fill', 'none');
-            mouth.setAttribute('stroke', '#3D2B0A');
+            mouth.setAttribute('stroke', '#5C3A10');
             mouth.setAttribute('stroke-width', '3');
             mouthFill.setAttribute('opacity', '0');
             if (tongue) tongue.setAttribute('opacity', '1');
             // One arm raised
-            armL.setAttribute('d', 'M88,155 Q72,140 65,128 Q62,122 66,120 Q70,118 72,124 Q76,135 88,148');
+            armL.setAttribute('d', 'M58,192 Q42,182 36,174 Q33,169 37,167 Q41,166 43,172 Q47,180 58,188');
             extra.textContent = '?'; extra.setAttribute('opacity', '1');
             extra.style.fill = '#00d4ff';
             break;
@@ -734,8 +734,8 @@ function setMascotExpression(state, msg) {
             // Reset iris size to normal
             const irisDefault = document.querySelectorAll('.mascot-eye-iris');
             if (irisDefault.length === 2) {
-                irisDefault[0].setAttribute('rx', '4'); irisDefault[0].setAttribute('ry', '5');
-                irisDefault[1].setAttribute('rx', '4'); irisDefault[1].setAttribute('ry', '5');
+                irisDefault[0].setAttribute('rx', '3.5'); irisDefault[0].setAttribute('ry', '4.5');
+                irisDefault[1].setAttribute('rx', '3.5'); irisDefault[1].setAttribute('ry', '4.5');
             }
             break;
     }
