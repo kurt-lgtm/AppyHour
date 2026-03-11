@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Fulfillment Planner</title>
     <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/styles.css?v=30">
+    <link rel="stylesheet" href="/static/styles.css?v=31">
 </head>
 <body>
 
@@ -22,6 +22,7 @@
         <button class="btn btn-accent view-btn active" id="view-dashboard" onclick="switchView('dashboard')">&#128202; Dashboard</button>
         <button class="btn btn-accent view-btn" id="view-calendar" onclick="switchView('calendar')">&#128197; Calendar</button>
         <button class="btn btn-accent view-btn" id="view-invoices" onclick="switchView('invoices')">&#128196; Invoices</button>
+        <button class="btn btn-accent view-btn" id="view-cutorder" onclick="switchView('cutorder')">&#9986; Cut Order</button>
         <button class="btn btn-accent view-btn" id="view-settings" onclick="switchView('settings')">&#9881; Settings</button>
         <div class="toolbar-sep"></div>
         <button class="btn btn-green" onclick="syncDropbox()">&#9729; Dropbox</button>
@@ -417,6 +418,108 @@
         </div>
     </div>
 
+    <!-- ══ Cut Order View ══ (hidden by default) -->
+    <div id="cutorder-view" style="display:none">
+        <div id="cutorder-header">
+            <div class="cal-summary">
+                <div class="cal-summary-item">
+                    <span class="cal-summary-label">Total Demand</span>
+                    <span class="cal-summary-value" id="co-total-demand">--</span>
+                </div>
+                <div class="cal-summary-item">
+                    <span class="cal-summary-label">Wheels to Cut</span>
+                    <span class="cal-summary-value" id="co-total-wheels">--</span>
+                </div>
+                <div class="cal-summary-item">
+                    <span class="cal-summary-label">Pcs from Cut</span>
+                    <span class="cal-summary-value" id="co-total-pcs">--</span>
+                </div>
+                <div class="cal-summary-item">
+                    <span class="cal-summary-label">Shortages</span>
+                    <span class="cal-summary-value inv-pending" id="co-shortage-count">--</span>
+                </div>
+            </div>
+            <div class="inv-actions">
+                <button class="btn btn-blue" onclick="loadCutOrder()">&#128260; Refresh</button>
+                <button class="btn btn-green" onclick="exportCutOrderCSV()">&#8682; Export CSV</button>
+            </div>
+        </div>
+
+        <!-- Cut Lines Table -->
+        <div class="panel" id="co-lines-panel">
+            <div class="panel-header">
+                <span class="icon">&#9986;</span>
+                Cut Lines
+            </div>
+            <div class="panel-body">
+                <div class="net-table-wrap">
+                    <table class="net-table" id="co-table">
+                        <thead>
+                            <tr>
+                                <th>SKU</th>
+                                <th class="num">Sliced</th>
+                                <th class="num">RC Dmd</th>
+                                <th class="num">SH Dmd</th>
+                                <th class="num">Total</th>
+                                <th class="num">Gap</th>
+                                <th class="num">Cut / Avail</th>
+                                <th class="num">Pcs</th>
+                                <th class="num">Net</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="co-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Shortages Panel -->
+        <div class="panel" id="co-shortages-panel" style="display:none">
+            <div class="panel-header">
+                <span class="icon">&#9888;</span>
+                Shortages
+            </div>
+            <div class="panel-body" id="co-shortages-body"></div>
+        </div>
+
+        <!-- Surplus Candidates -->
+        <div class="panel" id="co-surplus-panel" style="display:none">
+            <div class="panel-header">
+                <span class="icon">&#128200;</span>
+                Surplus Candidates (CEX-EC reassignment)
+            </div>
+            <div class="panel-body" id="co-surplus-body"></div>
+        </div>
+
+        <!-- Projection Settings (inline) -->
+        <div class="panel" id="co-projection-panel">
+            <div class="panel-header">
+                <span class="icon">&#128202;</span>
+                First-Order Projection
+            </div>
+            <div class="panel-body" id="co-projection-body" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+                <label style="font-family:'Space Mono',monospace;font-size:10px;text-transform:uppercase;color:var(--fg2)">Active Curation</label>
+                <select id="co-proj-curation" class="settings-input" style="width:100px"></select>
+                <label style="font-family:'Space Mono',monospace;font-size:10px;text-transform:uppercase;color:var(--fg2)">Multiplier</label>
+                <input type="number" id="co-proj-multiplier" class="settings-input" style="width:60px" min="1" max="10" value="3">
+                <label style="font-family:'Space Mono',monospace;font-size:10px;text-transform:uppercase;color:var(--fg2)">
+                    <input type="checkbox" id="co-proj-enabled" checked> Enabled
+                </label>
+                <button class="btn btn-green btn-sm" onclick="saveProjectionSettings()">Save</button>
+            </div>
+        </div>
+
+        <!-- Attribution Drawer -->
+        <div id="co-attr-drawer" class="cal-drawer">
+            <div class="cal-drawer-header">
+                <span class="cal-drawer-title" id="co-attr-title">Demand Attribution</span>
+                <button class="btn btn-dim btn-sm" onclick="closeDrawer('co-attr-drawer')">Close</button>
+            </div>
+            <div class="cal-drawer-body" id="co-attr-body"></div>
+        </div>
+    </div>
+
     <!-- ══ Settings View ══ (hidden by default) -->
     <div id="settings-view" style="display:none">
         <div id="settings-header">
@@ -796,6 +899,6 @@
     <div id="mascot-speech-tail"></div>
 </div>
 
-<script src="/static/app.js?v=31"></script>
+<script src="/static/app.js?v=32"></script>
 </body>
 </html>

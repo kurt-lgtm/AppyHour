@@ -1863,11 +1863,13 @@ function switchView(view) {
     const calView = document.getElementById('calendar-view');
     const invView = document.getElementById('invoices-view');
     const setView = document.getElementById('settings-view');
+    const coView = document.getElementById('cutorder-view');
 
     content.style.display = 'none';
     calView.style.display = 'none';
     if (invView) invView.style.display = 'none';
     if (setView) setView.style.display = 'none';
+    if (coView) coView.style.display = 'none';
 
     if (view === 'dashboard') {
         content.style.display = '';
@@ -1882,6 +1884,9 @@ function switchView(view) {
     } else if (view === 'settings') {
         if (setView) setView.style.display = '';
         loadSettingsView();
+    } else if (view === 'cutorder') {
+        if (coView) coView.style.display = '';
+        loadCutOrder();
     }
 }
 
@@ -2066,6 +2071,10 @@ function showMFGDrawer(weekIdx, date) {
     body.innerHTML = html;
     drawer.classList.add('visible');
     document.getElementById('po-drawer').classList.remove('visible');
+}
+
+function openDrawer(id) {
+    document.getElementById(id).classList.add('visible');
 }
 
 function closeDrawer(id) {
@@ -3721,4 +3730,201 @@ async function showLeadTimes() {
 
     body.innerHTML = html;
     openDrawer('leadtime-drawer');
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  CUT ORDER VIEW
+// ══════════════════════════════════════════════════════════════════════
+
+let cutOrderData = null;
+
+async function loadCutOrder() {
+    log('Loading cut order...', 'cyan');
+    const data = await api('/api/cut_order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+    });
+    if (data.error) {
+        log('Cut order error: ' + data.error, 'red');
+        return;
+    }
+    cutOrderData = data;
+    renderCutOrder(data);
+    loadProjectionSettings();
+    log(`Cut order: ${data.summary.total_skus} SKUs, ${data.summary.total_demand} demand, ${data.summary.shortage_count} shortages`, data.summary.shortage_count > 0 ? 'red' : 'green');
+}
+
+function renderCutOrder(data) {
+    // Summary bar
+    document.getElementById('co-total-demand').textContent = data.summary.total_demand.toLocaleString();
+    document.getElementById('co-total-wheels').textContent = data.summary.total_wheels_to_cut;
+    document.getElementById('co-total-pcs').textContent = data.summary.total_pcs_from_cut.toLocaleString();
+    document.getElementById('co-shortage-count').textContent = data.summary.shortage_count;
+
+    // Cut lines table
+    const tbody = document.getElementById('co-body');
+    tbody.innerHTML = '';
+
+    for (const line of data.cut_lines) {
+        if (line.total_demand === 0 && line.sliced === 0) continue;
+
+        const rowClass = {
+            'SHORTAGE': 'cut-row-shortage',
+            'MFG': 'cut-row-mfg',
+            'OK': 'cut-row-ok',
+            'SURPLUS': 'cut-row-surplus',
+            'NO DEMAND': 'cut-row-nodemand',
+        }[line.status] || 'cut-row-ok';
+
+        const tr = document.createElement('tr');
+        tr.className = rowClass;
+
+        const cutInfo = line.wheels_to_cut > 0
+            ? `<span class="co-cut">${line.wheels_to_cut}</span> / ${line.wheels_available}`
+            : line.wheels_available > 0 ? `- / ${line.wheels_available}` : '-';
+
+        const pcsInfo = line.pcs_from_cut > 0
+            ? `<span class="co-cut">+${line.pcs_from_cut}</span>`
+            : '-';
+
+        tr.innerHTML = `
+            <td class="co-sku" onclick="showAttribution('${line.sku}')">${line.sku}</td>
+            <td class="num">${line.sliced}</td>
+            <td class="num">${line.rc_demand}</td>
+            <td class="num">${line.sh_demand}</td>
+            <td class="num">${line.total_demand}</td>
+            <td class="num">${line.gap > 0 ? line.gap : '-'}</td>
+            <td class="num">${cutInfo}</td>
+            <td class="num">${pcsInfo}</td>
+            <td class="num co-net">${line.net >= 0 ? '+' : ''}${line.net}</td>
+            <td><span class="status-badge status-${line.status.replace(/\s+/g, '-')}">${line.status}</span></td>
+        `;
+        tbody.appendChild(tr);
+    }
+
+    // Shortages panel
+    const shortPanel = document.getElementById('co-shortages-panel');
+    const shortBody = document.getElementById('co-shortages-body');
+    if (data.shortages.length > 0) {
+        shortPanel.style.display = '';
+        let html = '<table class="net-table"><thead><tr><th>SKU</th><th class="num">Gap</th><th class="num">Wheels Avail</th><th class="num">Net</th></tr></thead><tbody>';
+        for (const s of data.shortages) {
+            html += `<tr class="shortage">
+                <td style="font-family:'Space Mono',monospace;font-size:10px">${s.sku}</td>
+                <td class="num" style="color:var(--red);font-weight:700">${s.gap}</td>
+                <td class="num">${s.wheels_available}</td>
+                <td class="num" style="color:var(--red)">${s.net}</td>
+            </tr>`;
+        }
+        html += '</tbody></table>';
+        shortBody.innerHTML = html;
+    } else {
+        shortPanel.style.display = 'none';
+    }
+
+    // Surplus candidates
+    const surpPanel = document.getElementById('co-surplus-panel');
+    const surpBody = document.getElementById('co-surplus-body');
+    if (data.surplus_candidates.length > 0) {
+        surpPanel.style.display = '';
+        let html = '<table class="net-table"><thead><tr><th>SKU</th><th class="num">Sliced</th><th class="num">Demand</th><th class="num">Net</th></tr></thead><tbody>';
+        for (const c of data.surplus_candidates) {
+            html += `<tr>
+                <td style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green)">${c.sku}</td>
+                <td class="num">${c.sliced}</td>
+                <td class="num">${c.total_demand}</td>
+                <td class="num" style="color:var(--green);font-weight:600">+${c.net}</td>
+            </tr>`;
+        }
+        html += '</tbody></table>';
+        surpBody.innerHTML = html;
+    } else {
+        surpPanel.style.display = 'none';
+    }
+}
+
+async function showAttribution(sku) {
+    const data = await api(`/api/demand_breakdown/${sku}`);
+    const title = document.getElementById('co-attr-title');
+    const body = document.getElementById('co-attr-body');
+    title.textContent = `Demand Attribution — ${sku}`;
+
+    let html = '';
+    const total = (data.direct || 0) +
+        Object.values(data.prcjam || {}).reduce((a, b) => a + b, 0) +
+        Object.values(data.cexec || {}).reduce((a, b) => a + b, 0);
+
+    // Direct
+    if (data.direct > 0) {
+        html += `<div class="attr-section">
+            <div class="attr-section-title attr-direct">Direct (Recipe + Custom)</div>
+            <div class="attr-row"><span class="attr-label">Direct picks</span><span class="attr-value attr-direct">${data.direct}</span></div>
+        </div>`;
+    }
+
+    // PR-CJAM
+    const prcjam = data.prcjam || {};
+    if (Object.keys(prcjam).length > 0) {
+        html += `<div class="attr-section"><div class="attr-section-title attr-prcjam">PR-CJAM</div>`;
+        for (const [cur, qty] of Object.entries(prcjam).sort((a, b) => b[1] - a[1])) {
+            html += `<div class="attr-row"><span class="attr-label">${cur}</span><span class="attr-value attr-prcjam">${qty}</span></div>`;
+        }
+        html += '</div>';
+    }
+
+    // CEX-EC
+    const cexec = data.cexec || {};
+    if (Object.keys(cexec).length > 0) {
+        html += `<div class="attr-section"><div class="attr-section-title attr-cexec">CEX-EC</div>`;
+        for (const [cur, qty] of Object.entries(cexec).sort((a, b) => b[1] - a[1])) {
+            html += `<div class="attr-row"><span class="attr-label">${cur}</span><span class="attr-value attr-cexec">${qty}</span></div>`;
+        }
+        html += '</div>';
+    }
+
+    // Total
+    html += `<div class="attr-section" style="border-top:1px solid var(--border);padding-top:8px;margin-top:4px">
+        <div class="attr-row"><span class="attr-label" style="font-weight:600">Total</span><span class="attr-value" style="font-size:16px">${total}</span></div>
+    </div>`;
+
+    body.innerHTML = html;
+    openDrawer('co-attr-drawer');
+}
+
+async function loadProjectionSettings() {
+    const data = await api('/api/projection_settings');
+    const curSelect = document.getElementById('co-proj-curation');
+    const mulInput = document.getElementById('co-proj-multiplier');
+    const enabledCb = document.getElementById('co-proj-enabled');
+
+    // Populate curation dropdown
+    const curations = ['MONG', 'MDT', 'OWC', 'SPN', 'ALPT', 'ISUN', 'HHIGH'];
+    curSelect.innerHTML = curations.map(c =>
+        `<option value="${c}" ${c === data.active_curation ? 'selected' : ''}>${c}</option>`
+    ).join('');
+
+    mulInput.value = data.multiplier || 3;
+    enabledCb.checked = data.enabled !== false;
+}
+
+async function saveProjectionSettings() {
+    const data = {
+        enabled: document.getElementById('co-proj-enabled').checked,
+        active_curation: document.getElementById('co-proj-curation').value,
+        multiplier: parseInt(document.getElementById('co-proj-multiplier').value) || 3,
+        recipe_only: true,
+    };
+    const resp = await api('/api/projection_settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+    });
+    if (resp.ok) {
+        log(`Projection updated: ${data.active_curation} × ${data.multiplier}`, 'green');
+    }
+}
+
+function exportCutOrderCSV() {
+    window.open('/api/cut_order_csv', '_blank');
 }

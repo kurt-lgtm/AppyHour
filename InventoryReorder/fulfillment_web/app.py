@@ -1085,20 +1085,79 @@ def is_pickable(sku):
 def resolve_pr_cjam(suffix):
     s = _s()
     pr_cjam = s.get("pr_cjam", {})
-    info = pr_cjam.get(suffix, {})
-    ch = info.get("cheese", "") if isinstance(info, dict) else str(info)
-    return {ch: 1} if ch else {}
+    return resolve_pr_cjam_with(suffix, pr_cjam)
 
 
 def resolve_cex_ec(suffix):
     s = _s()
     cex_ec = s.get("cex_ec", {})
     splits = s.get("cexec_splits", {})
-    sp = splits.get(suffix, {})
-    if sp:
-        return dict(sp)  # fractional ratios, accumulated and rounded later
-    ch = cex_ec.get(suffix, "")
+    return resolve_cex_ec_with(suffix, cex_ec, splits)
+
+
+def resolve_pr_cjam_with(suffix, pr_cjam_dict):
+    """Pure version — takes explicit assignment dict, not settings."""
+    info = pr_cjam_dict.get(suffix, {})
+    ch = info.get("cheese", "") if isinstance(info, dict) else str(info)
     return {ch: 1} if ch else {}
+
+
+def resolve_cex_ec_with(suffix, cex_ec_dict, splits_dict):
+    """Pure version — takes explicit assignment dict, not settings."""
+    sp = splits_dict.get(suffix, {})
+    if sp:
+        return dict(sp)
+    ch = cex_ec_dict.get(suffix, "")
+    return {ch: 1} if ch else {}
+
+
+def resolve_demand(direct_demand, prcjam_counts, cexec_counts, pr_cjam, cex_ec, splits):
+    """Resolve raw demand components using provided assignments.
+    Returns (demand_dict, attribution_dict).
+    - direct_demand: {sku: qty} — cheese from recipes + custom picks
+    - prcjam_counts: {curation_suffix: qty}
+    - cexec_counts: {curation_suffix: qty}
+    - attribution: {sku: {direct: N, prcjam: {cur: N}, cexec: {cur: N}}}
+    """
+    demand = defaultdict(float)
+    attribution = defaultdict(lambda: {"direct": 0, "prcjam": {}, "cexec": {}})
+
+    # Direct demand
+    for sku, qty in direct_demand.items():
+        demand[sku] += qty
+        attribution[sku]["direct"] += qty
+
+    # PR-CJAM resolution
+    for suffix, count in prcjam_counts.items():
+        resolved = resolve_pr_cjam_with(suffix, pr_cjam)
+        for rsku, rqty in resolved.items():
+            rsku = normalize_sku(rsku)
+            amt = rqty * count
+            demand[rsku] += amt
+            attribution[rsku]["prcjam"][suffix] = attribution[rsku]["prcjam"].get(suffix, 0) + amt
+
+    # CEX-EC resolution
+    for suffix, count in cexec_counts.items():
+        if suffix == "BARE":
+            continue
+        resolved = resolve_cex_ec_with(suffix, cex_ec, splits)
+        for rsku, rqty in resolved.items():
+            rsku = normalize_sku(rsku)
+            amt = rqty * count
+            demand[rsku] += amt
+            attribution[rsku]["cexec"][suffix] = attribution[rsku]["cexec"].get(suffix, 0) + amt
+
+    resolved_demand = {sku: int(round(q)) for sku, q in demand.items() if q > 0}
+    # Clean up attribution — convert defaultdict to plain dict
+    attr_out = {}
+    for sku in resolved_demand:
+        a = attribution[sku]
+        attr_out[sku] = {
+            "direct": int(round(a["direct"])),
+            "prcjam": {k: int(round(v)) for k, v in a["prcjam"].items()},
+            "cexec": {k: int(round(v)) for k, v in a["cexec"].items()},
+        }
+    return resolved_demand, attr_out
 
 
 # ── Ship Tag Helpers ──────────────────────────────────────────────────
@@ -1350,7 +1409,8 @@ def load_inventory_from_files(template_path, product_inv_path,
 
 def parse_order_dashboard(path):
     """Parse Shopify order-dashboard. Returns demand dicts + counts.
-    Splits demand by _SHIP_ tag into Saturday vs Tuesday windows."""
+    Splits demand by _SHIP_ tag into Saturday vs Tuesday windows.
+    Returns raw unresolved components alongside resolved demand."""
     all_demand = defaultdict(int)
     sat_demand = defaultdict(int)
     tue_demand = defaultdict(int)
@@ -1358,6 +1418,9 @@ def parse_order_dashboard(path):
     recurring_demand = defaultdict(int)
     prcjam_counts = defaultdict(int)
     cexec_counts = defaultdict(int)
+    direct_demand = defaultdict(int)  # cheese without PR-CJAM/CEX-EC
+    first_order_prcjam = defaultdict(int)  # first-order PR-CJAM by curation
+    first_order_cexec = defaultdict(int)  # first-order CEX-EC by curation
     first_order_count = 0
     recurring_count = 0
     total_order_count = 0
@@ -1392,6 +1455,9 @@ def parse_order_dashboard(path):
                 if upper.startswith("PR-CJAM-"):
                     suffix = upper.split("PR-CJAM-", 1)[1]
                     prcjam_counts[suffix] += 1
+                    if is_first:
+                        first_order_prcjam[suffix] += 1
+                    # Still resolve for backward-compat sat_demand
                     resolved = resolve_pr_cjam(suffix)
                     for rsku, rqty in resolved.items():
                         rsku = normalize_sku(rsku)
@@ -1406,6 +1472,8 @@ def parse_order_dashboard(path):
                 if upper.startswith("CEX-EC-"):
                     suffix = upper.split("CEX-EC-", 1)[1]
                     cexec_counts[suffix] += 1
+                    if is_first:
+                        first_order_cexec[suffix] += 1
                     resolved = resolve_cex_ec(suffix)
                     for rsku, rqty in resolved.items():
                         rsku = normalize_sku(rsku)
@@ -1427,6 +1495,7 @@ def parse_order_dashboard(path):
                 sku = normalize_sku(sku)
                 all_demand[sku] += 1
                 target[sku] += 1
+                direct_demand[sku] += 1
                 if is_first:
                     first_order_demand[sku] += 1
                 if is_recurring:
@@ -1444,12 +1513,21 @@ def parse_order_dashboard(path):
         "prcjam_counts": dict(prcjam_counts),
         "cexec_counts": dict(cexec_counts),
         "ship_tags": dict(ship_tags_found),
+        # Raw unresolved components for deferred resolution
+        "direct_demand": dict(direct_demand),
+        "first_order_prcjam": dict(first_order_prcjam),
+        "first_order_cexec": dict(first_order_cexec),
     }
 
 
 def parse_charges_queued(path, target_date=None):
-    """Parse Recharge charges_queued CSV. Returns {sku: qty}."""
+    """Parse Recharge charges_queued CSV.
+    Returns ({sku: qty}, bare_skipped, raw_components).
+    raw_components = {direct_demand, prcjam_counts, cexec_counts}."""
     demand = defaultdict(float)
+    direct_demand = defaultdict(float)
+    prcjam_counts = defaultdict(float)
+    cexec_counts = defaultdict(float)
     charges_by_id = defaultdict(list)
     bare_skipped = 0
 
@@ -1483,11 +1561,12 @@ def parse_charges_queued(path, target_date=None):
                 suffix = upper.split("PR-CJAM-", 1)[1]
                 if suffix == "GEN":
                     if curation and curation not in ("MONTHLY", None):
-                        resolved = resolve_pr_cjam(curation)
+                        suffix = curation
                     else:
                         continue
-                else:
-                    resolved = resolve_pr_cjam(suffix)
+                prcjam_counts[suffix] += qty
+                # Still resolve for backward-compat demand
+                resolved = resolve_pr_cjam(suffix)
                 for rsku, rqty in resolved.items():
                     demand[normalize_sku(rsku)] += rqty * qty
                 continue
@@ -1498,6 +1577,7 @@ def parse_charges_queued(path, target_date=None):
 
             if upper.startswith("CEX-EC-"):
                 suffix = upper.split("CEX-EC-", 1)[1]
+                cexec_counts[suffix] += qty
                 resolved = resolve_cex_ec(suffix)
                 for rsku, rqty in resolved.items():
                     demand[normalize_sku(rsku)] += rqty * qty
@@ -1506,9 +1586,16 @@ def parse_charges_queued(path, target_date=None):
             if not is_pickable(sku):
                 continue
 
-            demand[normalize_sku(sku)] += qty
+            nsku = normalize_sku(sku)
+            demand[nsku] += qty
+            direct_demand[nsku] += qty
 
-    return {sku: int(round(q)) for sku, q in demand.items()}, bare_skipped
+    raw = {
+        "direct_demand": {k: int(round(v)) for k, v in direct_demand.items()},
+        "prcjam_counts": {k: int(round(v)) for k, v in prcjam_counts.items()},
+        "cexec_counts": {k: int(round(v)) for k, v in cexec_counts.items()},
+    }
+    return {sku: int(round(q)) for sku, q in demand.items()}, bare_skipped, raw
 
 
 def parse_march_charges(path, start_day, end_day, year=2026, month=3):
@@ -1643,13 +1730,14 @@ def load_rmfg():
         warnings.append("No order-dashboard CSV found")
 
     charges_bare = 0
+    rc_raw = {"direct_demand": {}, "prcjam_counts": {}, "cexec_counts": {}}
     if files["charges_queued"]:
         # Auto-detect target date from filename
         fname = os.path.basename(files["charges_queued"])
         # charges_queued-2026.03.06-... → target date 2026-03-07 (next day)
         # But actually we want all charges in the file if they're for Sat
         # Try without date filter first, then with
-        queued, charges_bare = parse_charges_queued(files["charges_queued"])
+        queued, charges_bare, rc_raw = parse_charges_queued(files["charges_queued"])
         for sku, qty in queued.items():
             sat_demand[sku] += qty
         log_lines.append(f"Charges queued: {sum(queued.values())} items")
@@ -1658,7 +1746,7 @@ def load_rmfg():
     else:
         warnings.append("No charges_queued CSV found")
 
-    # 3. Tuesday demand (from ship tag split, or fallback to first orders × 3)
+    # 3. Tuesday demand (from ship tag split, or fallback to first orders × multiplier)
     tue_demand = {}
     dashboard_tue = dashboard_info.get("tue_demand", {})
     if dashboard_tue:
@@ -1667,13 +1755,15 @@ def load_rmfg():
             f"Tuesday: {sum(dashboard_tue.values())} units from ship tag split"
         )
     elif dashboard_info.get("first_order_demand"):
+        proj = _s().get("first_order_projection", {})
+        multiplier = proj.get("multiplier", 3) if proj.get("enabled", True) else 3
         tue_demand = {
-            sku: qty * 3
+            sku: qty * multiplier
             for sku, qty in dashboard_info["first_order_demand"].items()
         }
         log_lines.append(
             f"Tuesday estimate: {dashboard_info['first_order_count']} "
-            f"first orders × 3"
+            f"first orders × {multiplier}"
         )
 
     # 4. Next Saturday demand (MARCH CHARGES)
@@ -1698,6 +1788,42 @@ def load_rmfg():
     STATE["rmfg_folder"] = folder
     STATE["rmfg_files"] = {k: os.path.basename(v) if v else None
                            for k, v in files.items()}
+
+    # Store raw unresolved components for deferred resolution
+    # Merge Shopify (dashboard) + Recharge (charges_queued) raw components
+    sh_direct = dashboard_info.get("direct_demand", {})
+    sh_prcjam = dashboard_info.get("prcjam_counts", {})
+    sh_cexec = dashboard_info.get("cexec_counts", {})
+
+    merged_direct = defaultdict(int)
+    merged_prcjam = defaultdict(int)
+    merged_cexec = defaultdict(int)
+    for sku, q in sh_direct.items():
+        merged_direct[sku] += q
+    for sku, q in rc_raw.get("direct_demand", {}).items():
+        merged_direct[sku] += q
+    for cur, q in sh_prcjam.items():
+        merged_prcjam[cur] += q
+    for cur, q in rc_raw.get("prcjam_counts", {}).items():
+        merged_prcjam[cur] += q
+    for cur, q in sh_cexec.items():
+        merged_cexec[cur] += q
+    for cur, q in rc_raw.get("cexec_counts", {}).items():
+        merged_cexec[cur] += q
+
+    STATE["rmfg_direct_sat"] = dict(merged_direct)
+    STATE["rmfg_prcjam_sat"] = dict(merged_prcjam)
+    STATE["rmfg_cexec_sat"] = dict(merged_cexec)
+    # Per-source raw for attribution
+    STATE["rmfg_direct_rc"] = rc_raw.get("direct_demand", {})
+    STATE["rmfg_prcjam_rc"] = rc_raw.get("prcjam_counts", {})
+    STATE["rmfg_cexec_rc"] = rc_raw.get("cexec_counts", {})
+    STATE["rmfg_direct_sh"] = dict(sh_direct)
+    STATE["rmfg_prcjam_sh"] = dict(sh_prcjam)
+    STATE["rmfg_cexec_sh"] = dict(sh_cexec)
+    # First-order counts for projection
+    STATE["rmfg_first_order_prcjam"] = dashboard_info.get("first_order_prcjam", {})
+    STATE["rmfg_first_order_cexec"] = dashboard_info.get("first_order_cexec", {})
 
     # Auto-snapshot on RMFG folder load
     folder_name = os.path.basename(folder)
@@ -1775,6 +1901,22 @@ def calculate_rmfg():
 
     if not inv and not sat_demand:
         return jsonify({"error": "No RMFG data loaded. Use Load Folder first."}), 400
+
+    # Deferred resolution: re-resolve from raw components using current settings
+    attribution = {}
+    raw_direct = STATE.get("rmfg_direct_sat")
+    raw_prcjam = STATE.get("rmfg_prcjam_sat")
+    raw_cexec = STATE.get("rmfg_cexec_sat")
+    if raw_direct is not None and raw_prcjam is not None:
+        s = _s()
+        pr_cjam = s.get("pr_cjam", {})
+        cex_ec = s.get("cex_ec", {})
+        splits = s.get("cexec_splits", {})
+        sat_demand, attribution = resolve_demand(
+            raw_direct, raw_prcjam, raw_cexec, pr_cjam, cex_ec, splits
+        )
+        STATE["rmfg_sat_demand"] = sat_demand
+        STATE["rmfg_attribution"] = attribution
 
     # If we have inventory (e.g. from Dropbox) but no parsed demand,
     # build demand from settings (Recharge + Shopify + manual)
@@ -2032,6 +2174,316 @@ def calculate_rmfg():
         "shelf_life": shelf_items,
         "assign_demands": {},
         "churn_info": churn_info,
+        "attribution": attribution,
+    })
+
+
+# ── Cut Order ─────────────────────────────────────────────────────────
+
+@app.route("/api/cut_order", methods=["POST"])
+def get_cut_order():
+    """Generate cut order from current demand, inventory, and wheel data."""
+    inv = STATE.get("rmfg_inventory", {})
+    bulk_weights = STATE.get("bulk_weights", {})
+    s = _s()
+    pr_cjam = s.get("pr_cjam", {})
+    cex_ec = s.get("cex_ec", {})
+    splits = s.get("cexec_splits", {})
+
+    # Re-resolve demand from raw components
+    raw_direct = STATE.get("rmfg_direct_sat", {})
+    raw_prcjam = STATE.get("rmfg_prcjam_sat", {})
+    raw_cexec = STATE.get("rmfg_cexec_sat", {})
+
+    if raw_direct or raw_prcjam or raw_cexec:
+        sat_demand, attribution = resolve_demand(
+            raw_direct, raw_prcjam, raw_cexec, pr_cjam, cex_ec, splits
+        )
+    else:
+        sat_demand = STATE.get("rmfg_sat_demand", {})
+        attribution = STATE.get("rmfg_attribution", {})
+
+    # Also resolve Recharge vs Shopify breakdown for RC/SH columns
+    sh_direct = STATE.get("rmfg_direct_sh", {})
+    sh_prcjam = STATE.get("rmfg_prcjam_sh", {})
+    sh_cexec = STATE.get("rmfg_cexec_sh", {})
+    rc_direct = STATE.get("rmfg_direct_rc", {})
+    rc_prcjam = STATE.get("rmfg_prcjam_rc", {})
+    rc_cexec = STATE.get("rmfg_cexec_rc", {})
+
+    sh_demand, _ = resolve_demand(sh_direct, sh_prcjam, sh_cexec,
+                                   pr_cjam, cex_ec, splits) if sh_direct or sh_prcjam else ({}, {})
+    rc_demand, _ = resolve_demand(rc_direct, rc_prcjam, rc_cexec,
+                                   pr_cjam, cex_ec, splits) if rc_direct or rc_prcjam else ({}, {})
+
+    # Collect all CH-* with demand or inventory
+    all_ch = set()
+    all_ch.update(k for k in inv if k.startswith("CH-"))
+    all_ch.update(k for k in sat_demand if k.startswith("CH-"))
+
+    cut_lines = []
+    shortages = []
+    surplus_candidates = []
+    total_demand = 0
+    total_wheels_to_cut = 0
+    total_pcs_from_cut = 0
+    shortage_count = 0
+
+    for sku in sorted(all_ch):
+        sliced = inv.get(sku, 0)
+        demand = int(round(sat_demand.get(sku, 0)))
+        rc_qty = int(round(rc_demand.get(sku, 0)))
+        sh_qty = int(round(sh_demand.get(sku, 0)))
+
+        bw = bulk_weights.get(sku, {})
+        wheel_potential = bw.get("potential_yield", 0)
+        wheel_count = bw.get("count", 0)
+        wheel_weight = bw.get("weight_lbs", 0)
+
+        gap = demand - sliced
+        wheels_to_cut = 0
+        pcs_from_cut = 0
+
+        if gap > 0 and wheel_count > 0 and wheel_weight > 0:
+            slices_per_wheel = int(wheel_weight * WHEEL_TO_SLICE_FACTOR)
+            wheels_to_cut = min(math.ceil(gap / slices_per_wheel), wheel_count)
+            pcs_from_cut = wheels_to_cut * slices_per_wheel
+
+        net = sliced + pcs_from_cut - demand
+
+        if demand == 0:
+            status = "NO DEMAND"
+        elif gap <= 0:
+            status = "OK"
+            if sliced > demand * 1.5 and sliced > 100:
+                status = "SURPLUS"
+        elif pcs_from_cut >= gap:
+            status = "MFG"
+        else:
+            status = "SHORTAGE"
+            shortage_count += 1
+
+        sku_attr = attribution.get(sku, {})
+
+        line = {
+            "sku": sku,
+            "sliced": sliced,
+            "rc_demand": rc_qty,
+            "sh_demand": sh_qty,
+            "total_demand": demand,
+            "gap": max(0, gap),
+            "wheels_to_cut": wheels_to_cut,
+            "wheels_available": wheel_count,
+            "wheel_weight": wheel_weight,
+            "pcs_from_cut": pcs_from_cut,
+            "net": net,
+            "status": status,
+            "attribution": sku_attr,
+        }
+        cut_lines.append(line)
+        total_demand += demand
+
+        if status == "SHORTAGE":
+            shortages.append(line)
+        if status == "SURPLUS" or (status == "OK" and net > 50):
+            surplus_candidates.append(line)
+
+        if wheels_to_cut > 0:
+            total_wheels_to_cut += wheels_to_cut
+            total_pcs_from_cut += pcs_from_cut
+
+    # Sort: shortages first, then by gap descending
+    cut_lines.sort(key=lambda r: (
+        {"SHORTAGE": 0, "MFG": 1, "OK": 2, "SURPLUS": 3, "NO DEMAND": 4}.get(r["status"], 9),
+        -r["gap"]
+    ))
+    surplus_candidates.sort(key=lambda r: -r["net"])
+
+    return jsonify({
+        "cut_lines": cut_lines,
+        "shortages": shortages,
+        "surplus_candidates": surplus_candidates[:15],
+        "assignments": {
+            "pr_cjam": pr_cjam,
+            "cex_ec": cex_ec,
+            "cexec_splits": splits,
+        },
+        "summary": {
+            "total_demand": total_demand,
+            "total_wheels_to_cut": total_wheels_to_cut,
+            "total_pcs_from_cut": total_pcs_from_cut,
+            "shortage_count": shortage_count,
+            "total_skus": len([l for l in cut_lines if l["total_demand"] > 0]),
+        },
+    })
+
+
+@app.route("/api/demand_breakdown/<sku>")
+def demand_breakdown(sku):
+    """Get detailed demand attribution for a single SKU."""
+    attribution = STATE.get("rmfg_attribution", {})
+    attr = attribution.get(sku, {"direct": 0, "prcjam": {}, "cexec": {}})
+    return jsonify(attr)
+
+
+@app.route("/api/cut_order_csv")
+def export_cut_order_csv():
+    """Export current cut order as CSV download."""
+    inv = STATE.get("rmfg_inventory", {})
+    bulk_weights = STATE.get("bulk_weights", {})
+    s = _s()
+    pr_cjam = s.get("pr_cjam", {})
+    cex_ec_d = s.get("cex_ec", {})
+    splits = s.get("cexec_splits", {})
+
+    raw_direct = STATE.get("rmfg_direct_sat", {})
+    raw_prcjam = STATE.get("rmfg_prcjam_sat", {})
+    raw_cexec = STATE.get("rmfg_cexec_sat", {})
+
+    if raw_direct or raw_prcjam or raw_cexec:
+        sat_demand, _ = resolve_demand(raw_direct, raw_prcjam, raw_cexec,
+                                        pr_cjam, cex_ec_d, splits)
+    else:
+        sat_demand = STATE.get("rmfg_sat_demand", {})
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["SKU", "Sliced", "Demand", "Gap", "Wheels to Cut",
+                      "Wheels Avail", "Pcs from Cut", "Net", "Status"])
+
+    all_ch = sorted(set(k for k in inv if k.startswith("CH-")) |
+                    set(k for k in sat_demand if k.startswith("CH-")))
+
+    for sku in all_ch:
+        sliced = inv.get(sku, 0)
+        demand = int(round(sat_demand.get(sku, 0)))
+        if demand == 0 and sliced == 0:
+            continue
+        bw = bulk_weights.get(sku, {})
+        wc = bw.get("count", 0)
+        ww = bw.get("weight_lbs", 0)
+        gap = max(0, demand - sliced)
+        wtc = 0
+        pfc = 0
+        if gap > 0 and wc > 0 and ww > 0:
+            spw = int(ww * WHEEL_TO_SLICE_FACTOR)
+            wtc = min(math.ceil(gap / spw), wc)
+            pfc = wtc * spw
+        net = sliced + pfc - demand
+        st = "OK"
+        if demand == 0:
+            st = "NO DEMAND"
+        elif gap <= 0:
+            st = "OK"
+        elif pfc >= gap:
+            st = "MFG"
+        else:
+            st = "SHORTAGE"
+        writer.writerow([sku, sliced, demand, gap, wtc, wc, pfc, net, st])
+
+    output.seek(0)
+    today = datetime.date.today().isoformat()
+    return send_file(
+        io.BytesIO(output.getvalue().encode()),
+        mimetype="text/csv",
+        as_attachment=True,
+        download_name=f"cut_order_{today}.csv",
+    )
+
+
+@app.route("/api/projection_settings", methods=["GET", "POST"])
+def projection_settings():
+    """Get or set first-order projection settings."""
+    s = _s()
+    if request.method == "GET":
+        proj = s.get("first_order_projection", {
+            "enabled": True,
+            "active_curation": "MONG",
+            "multiplier": 3,
+            "recipe_only": True,
+        })
+        return jsonify(proj)
+
+    data = request.json or {}
+    s["first_order_projection"] = {
+        "enabled": bool(data.get("enabled", True)),
+        "active_curation": data.get("active_curation", "MONG"),
+        "multiplier": max(1, min(10, int(data.get("multiplier", 3)))),
+        "recipe_only": bool(data.get("recipe_only", True)),
+    }
+    STATE["saved"] = s
+    save_settings(s)
+    return jsonify({"ok": True, "projection": s["first_order_projection"]})
+
+
+@app.route("/api/reassignment_preview", methods=["POST"])
+def reassignment_preview():
+    """Preview demand impact of changing a PR-CJAM or CEX-EC assignment."""
+    data = request.json or {}
+    slot = data.get("slot")  # "prcjam" or "cexec"
+    curation = data.get("curation", "")
+    cheese = data.get("cheese", "")
+
+    s = _s()
+    pr_cjam = dict(s.get("pr_cjam", {}))
+    cex_ec = dict(s.get("cex_ec", {}))
+    splits = dict(s.get("cexec_splits", {}))
+
+    raw_direct = STATE.get("rmfg_direct_sat", {})
+    raw_prcjam = STATE.get("rmfg_prcjam_sat", {})
+    raw_cexec = STATE.get("rmfg_cexec_sat", {})
+
+    if not raw_direct and not raw_prcjam:
+        return jsonify({"error": "No raw demand data loaded"}), 400
+
+    # Current demand
+    current_demand, _ = resolve_demand(raw_direct, raw_prcjam, raw_cexec,
+                                        pr_cjam, cex_ec, splits)
+
+    # Apply proposed change
+    if slot == "prcjam":
+        pr_cjam_new = dict(pr_cjam)
+        entry = pr_cjam_new.get(curation, {})
+        if isinstance(entry, dict):
+            entry = dict(entry)
+            entry["cheese"] = cheese
+        else:
+            entry = {"cheese": cheese, "jam": ""}
+        pr_cjam_new[curation] = entry
+        new_demand, _ = resolve_demand(raw_direct, raw_prcjam, raw_cexec,
+                                        pr_cjam_new, cex_ec, splits)
+    elif slot == "cexec":
+        cex_ec_new = dict(cex_ec)
+        cex_ec_new[curation] = cheese
+        # Clear any split for this curation
+        splits_new = dict(splits)
+        splits_new.pop(curation, None)
+        new_demand, _ = resolve_demand(raw_direct, raw_prcjam, raw_cexec,
+                                        pr_cjam, cex_ec_new, splits_new)
+    else:
+        return jsonify({"error": f"Unknown slot: {slot}"}), 400
+
+    # Compute deltas
+    all_skus = set(current_demand) | set(new_demand)
+    deltas = {}
+    for sku in all_skus:
+        old_q = current_demand.get(sku, 0)
+        new_q = new_demand.get(sku, 0)
+        if old_q != new_q:
+            deltas[sku] = {"old": old_q, "new": new_q, "delta": new_q - old_q}
+
+    # Check adjacency constraint
+    recipes = s.get("curation_recipes", {})
+    constraint = check_constraint(
+        curation,
+        cheese if slot == "prcjam" else pr_cjam.get(curation, {}).get("cheese", ""),
+        cheese if slot == "cexec" else cex_ec.get(curation, ""),
+        recipes, pr_cjam, cex_ec
+    )
+
+    return jsonify({
+        "deltas": deltas,
+        "constraint": constraint,
     })
 
 

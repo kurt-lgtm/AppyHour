@@ -1662,3 +1662,76 @@ body::before {
     vertical-align: middle;
     margin-left: 4px;
 }
+
+/* ── Cut Order View ─────────────────────────────────────────────── */
+#cutorder-view {
+    padding: 8px 16px;
+}
+#cutorder-header {
+    margin-bottom: 8px;
+}
+#co-lines-panel {
+    margin-bottom: 8px;
+}
+#co-lines-panel .net-table-wrap {
+    max-height: calc(100vh - 320px);
+}
+.cut-row-shortage td { border-left: 3px solid var(--red) !important; }
+.cut-row-shortage .co-net { color: var(--red); font-weight: 700; }
+.cut-row-mfg td { border-left: 3px solid var(--orange) !important; }
+.cut-row-mfg .co-net { color: var(--orange); font-weight: 600; }
+.cut-row-ok td { border-left: 3px solid transparent; }
+.cut-row-ok .co-net { color: var(--green); }
+.cut-row-surplus td { border-left: 3px solid var(--green) !important; }
+.cut-row-surplus .co-net { color: var(--green); font-weight: 500; }
+.cut-row-nodemand td { opacity: 0.4; }
+
+#co-table .co-sku {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    cursor: pointer;
+}
+#co-table .co-sku:hover {
+    color: var(--accent);
+    text-decoration: underline;
+}
+#co-table .co-cut {
+    font-family: 'Rajdhani', sans-serif;
+    font-weight: 600;
+    color: var(--orange);
+}
+#co-shortages-panel, #co-surplus-panel {
+    margin-bottom: 8px;
+}
+#co-projection-panel {
+    margin-bottom: 8px;
+}
+
+/* Attribution drawer detail */
+.attr-section {
+    margin-bottom: 12px;
+}
+.attr-section-title {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--fg2);
+    margin-bottom: 4px;
+}
+.attr-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 2px 8px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 12px;
+}
+.attr-row .attr-label { color: var(--fg); }
+.attr-row .attr-value {
+    font-family: 'Rajdhani', sans-serif;
+    font-weight: 600;
+    color: var(--accent);
+}
+.attr-prcjam { color: var(--accent) !important; }
+.attr-cexec { color: #b894f0 !important; }
+.attr-direct { color: var(--fg) !important; }
