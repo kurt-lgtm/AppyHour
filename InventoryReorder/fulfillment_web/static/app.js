@@ -10,6 +10,7 @@ let pickerCur = null;
 let pickerSlot = null;
 let rmfgLoaded = false;  // true after RMFG folder is loaded
 let currentView = 'dashboard';
+let demandMode = localStorage.getItem('demandMode') || 'discrete';  // 'discrete' or 'churned'
 
 // Mascot state
 const mascot = {
@@ -39,11 +40,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // Auto-run full pipeline on startup
     setTimeout(() => runAll(), 300);
 
-    // Auto-refresh every hour (Dropbox + Recharge + recalculate)
-    setInterval(() => {
-        log('Auto-refresh triggered (hourly)', 'cyan');
-        runAll();
-    }, 60 * 60 * 1000);
+    // Smart auto-refresh: sync interval from settings, day-aware
+    initAutoSync();
 
     // Mouse tracking
     document.addEventListener('mousemove', e => {
@@ -1145,6 +1143,7 @@ function renderNetTable(data) {
         thead.innerHTML = `
             <th onclick="sortTable('sku')" data-col="sku">SKU</th>
             <th onclick="sortTable('available')" data-col="available" class="num">Avail</th>
+            <th onclick="sortTable('potential')" data-col="potential" class="num">Pot.</th>
             <th onclick="sortTable('sat_demand')" data-col="sat_demand" class="num">Sat Dmd</th>
             <th onclick="sortTable('tue_demand')" data-col="tue_demand" class="num">Tue</th>
             <th onclick="sortTable('next_sat_demand')" data-col="next_sat_demand" class="num">Next Sat</th>
@@ -1172,8 +1171,8 @@ function renderNetTable(data) {
     const filtered = data.filter(r => {
         if (r.status === 'NO DEMAND' && r.available === 0) return false;
         if (filter === 'CH-*' && !r.sku.startsWith('CH-')) return false;
-        if (filter === 'Shortages' && r.status !== 'SHORTAGE') return false;
-        if (filter === 'Tight' && !['SHORTAGE','TIGHT'].includes(r.status)) return false;
+        if (filter === 'Shortages' && !['SHORTAGE','MFG'].includes(r.status)) return false;
+        if (filter === 'Tight' && !['SHORTAGE','MFG','TIGHT'].includes(r.status)) return false;
         if (filter === 'Surplus' && r.status !== 'SURPLUS') return false;
         return true;
     });
@@ -1186,6 +1185,7 @@ function renderNetTable(data) {
         // Tooltip
         const tipParts = [`${r.sku}: ${r.available} avail`];
         if (isRMFG) {
+            if (r.potential > 0) tipParts.push(`Potential: +${r.potential} (${r.wheel_count} wheels)`);
             tipParts.push(`Sat: ${r.sat_demand}, Tue: ${r.tue_demand || 0}, Next Sat: ${r.next_sat_demand || 0}`);
             tipParts.push(`NET Sat: ${r.net_sat >= 0 ? '+' : ''}${r.net_sat}`);
             if (r.net_final !== undefined) tipParts.push(`NET Final: ${r.net_final >= 0 ? '+' : ''}${r.net_final}`);
@@ -1197,9 +1197,13 @@ function renderNetTable(data) {
 
         const netClass = netCellClass(r.net, r.available);
         if (isRMFG) {
+            const potCell = r.potential > 0
+                ? `<span style="color:var(--blue)" title="${r.wheel_count} wheels">+${r.potential}</span>`
+                : '-';
             tr.innerHTML = `
-                <td class="sku-cell">${r.sku}</td>
+                <td class="sku-cell">${r.sku} ${renderSparkline(r.sku)}</td>
                 <td class="num">${r.available}</td>
+                <td class="num">${potCell}</td>
                 <td class="num">${r.sat_demand}</td>
                 <td class="num">${r.tue_demand || 0}</td>
                 <td class="num">${r.next_sat_demand || 0}</td>
@@ -1210,7 +1214,7 @@ function renderNetTable(data) {
             `;
         } else {
             tr.innerHTML = `
-                <td class="sku-cell">${r.sku}</td>
+                <td class="sku-cell">${r.sku} ${renderSparkline(r.sku)}</td>
                 <td class="num">${r.available}</td>
                 <td class="num">${r.direct}</td>
                 <td class="num">${r.prcjam}</td>
@@ -1525,7 +1529,11 @@ async function calculateRMFG() {
     setMascot('loading', 'Crunching Saturday NETs...');
     log('Calculating multi-window NET...', '');
 
-    const data = await api('/api/calculate_rmfg', { method: 'POST' });
+    const data = await api('/api/calculate_rmfg', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({demand_mode: demandMode}),
+    });
 
     if (data.error) {
         // Fallback to legacy calculate
@@ -1572,6 +1580,19 @@ async function calculateRMFG() {
 
     renderShelfLife(data.shelf_life || []);
 
+    // Churn mode indicator
+    if (data.churn_info) {
+        const ci = data.churn_info;
+        const modeBtn = document.getElementById('demand-mode-btn');
+        if (modeBtn) {
+            modeBtn.textContent = ci.mode === 'churned' ? 'CHURNED' : 'DISCRETE';
+            modeBtn.style.borderColor = ci.mode === 'churned' ? 'var(--orange)' : 'var(--accent)';
+        }
+        if (ci.mode === 'churned' && ci.sat_reduction > 0) {
+            log(`Churn applied: Sat -${ci.sat_reduction}, Tue -${ci.tue_reduction}, Next -${ci.next_reduction}`, 'orange');
+        }
+    }
+
     // Banner + mascot mood
     const banner = document.getElementById('banner');
     const tightCount = results.filter(r => r.status === 'TIGHT').length;
@@ -1615,7 +1636,11 @@ async function syncDropbox() {
 
     log(`Dropbox: ${data.file} (${data.modified})`, 'green');
     log(`  ${data.inventory_count} SKUs (${data.cheese_count} cheese)`, 'green');
+    if (data.wheel_skus > 0) {
+        log(`  ${data.wheel_skus} wheel SKUs, +${data.potential_yield.toLocaleString()} potential yield`, 'blue');
+    }
     rmfgLoaded = true;
+    lastDropboxSync = Date.now();
     setMascot('happy', `Loaded ${data.cheese_count} cheeses from Dropbox`);
     return true;
 }
@@ -1638,6 +1663,7 @@ async function syncRecharge() {
         });
     }
     log(`  Total cheese demand: ${data.cheese_demand_units} units`, 'green');
+    lastRechargeSync = Date.now();
     setMascot('happy', `Loaded ${data.total_charges} charges`);
     return true;
 }
@@ -1654,6 +1680,7 @@ async function syncShopify() {
     }
 
     log(`Shopify: ${data.orders} orders, ${data.skus} SKUs, ${data.units} units`, 'green');
+    lastShopifySync = Date.now();
     setMascot('happy', `${data.orders} Shopify orders loaded`);
     return true;
 }
@@ -1723,6 +1750,11 @@ async function runAll() {
         syncEl.textContent = `synced ${h}:${m}${ap}`;
     }
 
+    // Load SKU history for sparklines
+    await loadSkuHistory();
+
+    // Load morning briefing
+    await loadBriefing();
     log('=== RUN ALL COMPLETE ===', 'green');
 }
 
@@ -1741,13 +1773,20 @@ async function showSubstitutions() {
     data.forEach(s => {
         const div = document.createElement('div');
         div.className = 'sub-shortage';
+        const potInfo = s.potential > 0
+            ? ` <span style="color:var(--blue);font-size:10px" title="${s.wheel_count} wheels available">| POT +${s.potential} (${s.wheel_count} wh) = NET ${s.net_with_potential >= 0 ? '+' : ''}${s.net_with_potential}</span>`
+            : '';
         let inner = `
             <div class="sub-shortage-header">
                 <span class="sub-shortage-sku">${s.sku}</span>
-                <span class="sub-shortage-info">SHORT ${s.deficit} (avail ${s.available}, demand ${s.demand})</span>
+                <span class="sub-shortage-info">SHORT ${s.deficit} (avail ${s.available}, demand ${s.demand})${potInfo}</span>
             </div>
         `;
-        if (s.substitutes.length === 0) {
+        // If wheels cover the deficit, show MFG note
+        if (s.potential > 0 && s.net_with_potential >= 0) {
+            inner += `<div style="padding:2px 8px;font-family:'Space Mono',monospace;font-size:10px;color:var(--blue)">MFG: Cut ${Math.ceil(s.deficit / (s.potential / s.wheel_count))} wheels to cover deficit</div>`;
+        }
+        if (s.substitutes.length === 0 && !(s.potential > 0 && s.net_with_potential >= 0)) {
             inner += '<div class="sub-none">No good substitutes found</div>';
         } else {
             s.substitutes.forEach(sub => {
@@ -1822,16 +1861,27 @@ function switchView(view) {
 
     const content = document.getElementById('content');
     const calView = document.getElementById('calendar-view');
+    const invView = document.getElementById('invoices-view');
+    const setView = document.getElementById('settings-view');
+
+    content.style.display = 'none';
+    calView.style.display = 'none';
+    if (invView) invView.style.display = 'none';
+    if (setView) setView.style.display = 'none';
 
     if (view === 'dashboard') {
         content.style.display = '';
-        calView.style.display = 'none';
     } else if (view === 'calendar') {
-        content.style.display = 'none';
         calView.style.display = '';
         if (!calendarData) {
             loadCalendar();
         }
+    } else if (view === 'invoices') {
+        if (invView) invView.style.display = '';
+        loadInvoices();
+    } else if (view === 'settings') {
+        if (setView) setView.style.display = '';
+        loadSettingsView();
     }
 }
 
@@ -2065,3 +2115,1610 @@ let petClickTimer = null;
     };
     el.addEventListener('click', el._petHandler);
 })();
+
+// ══════════════════════════════════════════════════════════════════════
+//  INVOICES VIEW
+// ══════════════════════════════════════════════════════════════════════
+
+let invoicesData = [];
+let currentInvoiceId = null;
+
+async function loadInvoices() {
+    log('Loading invoice data...', '');
+    const status = await api('/api/invoice_status');
+    const el = (id) => document.getElementById(id);
+
+    el('inv-total-count').textContent = status.total_invoices || 0;
+    el('inv-pending-count').textContent = status.pending_match || 0;
+    el('inv-pending-count').style.color = status.pending_match > 0 ? 'var(--yellow)' : 'var(--green)';
+    el('inv-total-charge').textContent = '$' + (status.total_production_charge || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    el('inv-last-sync').textContent = status.last_sync || 'never';
+
+    const data = await api('/api/invoices');
+    invoicesData = data.invoices || [];
+    renderInvoiceTable(invoicesData);
+}
+
+function renderInvoiceTable(invoices) {
+    const tbody = document.getElementById('inv-body');
+    if (!tbody) return;
+
+    if (invoices.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--fg3);padding:30px">No invoices yet. Click <b>Sync Gmail</b> to check for production invoices.</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = invoices.map(inv => {
+        const statusClass = {
+            matched: 'inv-status-matched',
+            partial: 'inv-status-partial',
+            pending: 'inv-status-pending',
+            error: 'inv-status-error',
+        }[inv.status] || '';
+
+        return `<tr class="${inv.unmatched_count > 0 ? 'tight' : ''}">
+            <td class="sku-cell">${inv.id}</td>
+            <td>${inv.mfg_date || '--'}</td>
+            <td>${inv.received_date || '--'}</td>
+            <td class="num">${inv.products}</td>
+            <td class="num">${inv.cases.toLocaleString()}</td>
+            <td class="num">${inv.total_yield.toLocaleString()}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif;font-size:14px">$${inv.total_charge.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+            <td><span class="status-badge ${statusClass}">${inv.status.toUpperCase()}</span></td>
+            <td><button class="btn btn-accent btn-sm" onclick="showInvoiceDetail('${inv.id}')">Detail</button></td>
+        </tr>`;
+    }).join('');
+}
+
+async function syncInvoices(force = false) {
+    // Show loading state in table and stats
+    const tbody = document.getElementById('inv-body');
+    if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--accent);padding:30px;font-family:'Space Mono',monospace;font-size:10px;letter-spacing:1px">${force ? 'RE-DOWNLOADING ALL INVOICES FROM GMAIL...' : 'CHECKING GMAIL FOR NEW INVOICES...'}</td></tr>`;
+    document.getElementById('inv-total-count').textContent = '...';
+    document.getElementById('inv-pending-count').textContent = '...';
+    document.getElementById('inv-total-charge').textContent = '...';
+    document.getElementById('inv-last-sync').textContent = 'syncing...';
+
+    setMascot('loading', force ? 'Re-downloading all invoices...' : 'Connecting to Gmail...');
+    log(force ? 'Force re-syncing — clearing all invoices and re-parsing from Gmail...' : 'Connecting to Gmail IMAP...', 'cyan');
+
+    // Start the sync (returns immediately, runs in background)
+    const start = await api('/api/invoice_sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force }),
+    });
+
+    if (start.error && !start.started) {
+        log(`Invoice sync failed: ${start.error}`, 'red');
+        setMascot('alert', start.error.includes('IMAP') ? 'Gmail connection failed!' : 'Sync error!');
+        if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--red);padding:30px">${start.error}</td></tr>`;
+        return;
+    }
+
+    // Poll for progress
+    let lastProgress = '';
+    while (true) {
+        await new Promise(r => setTimeout(r, 800));
+        const status = await api('/api/invoice_sync_progress');
+
+        if (status.progress && status.progress !== lastProgress) {
+            lastProgress = status.progress;
+            if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--accent);padding:30px;font-family:'Space Mono',monospace;font-size:10px;letter-spacing:1px">${status.progress.toUpperCase()}</td></tr>`;
+            setMascot('loading', status.progress);
+            log(status.progress, 'cyan');
+        }
+
+        if (!status.running) {
+            const data = status.result || {};
+            if (data.error) {
+                log(`Invoice sync failed: ${data.error}`, 'red');
+                setMascot('alert', 'Sync failed!');
+                if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--red);padding:30px">${data.error}</td></tr>`;
+                return;
+            }
+
+            log(`Gmail sync complete: ${data.emails_checked} emails scanned, ${data.new_invoices} new invoices parsed`, 'green');
+            if (data.new_invoices > 0) {
+                log(`Total invoices in system: ${data.total_invoices}`, 'green');
+            }
+            addScore(data.new_invoices * 50);
+
+            if (data.new_invoices > 0) {
+                setMascot('celebrate', `Parsed ${data.new_invoices} invoice${data.new_invoices > 1 ? 's' : ''}!`);
+            } else {
+                setMascot('idle', 'Inbox checked — no new invoices');
+            }
+            setTimeout(() => setMascotExpression('idle'), 3000);
+            break;
+        }
+    }
+
+    await loadInvoices();
+}
+
+async function showInvoiceDetail(id) {
+    currentInvoiceId = id;
+    log(`Loading invoice ${id}...`, '');
+    const inv = await api(`/api/invoice/${id}`);
+
+    if (inv.error) {
+        log(`Error loading invoice: ${inv.error}`, 'red');
+        return;
+    }
+
+    document.getElementById('inv-detail-title').textContent = `Invoice ${inv.id} — ${inv.mfg_date || 'Unknown date'}`;
+
+    const body = document.getElementById('inv-detail-body');
+    let html = '';
+
+    // Summary row
+    html += `<div style="display:flex;gap:16px;margin-bottom:12px;flex-wrap:wrap">
+        <div style="color:var(--fg3);font-size:11px">Full MFG: <span style="color:var(--accent);font-family:'Rajdhani',sans-serif;font-size:14px">$${(inv.full_mfg_charge || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span></div>
+        <div style="color:var(--fg3);font-size:11px">Label Only: <span style="color:var(--accent);font-family:'Rajdhani',sans-serif;font-size:14px">$${(inv.label_only_charge || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span></div>
+        <div style="color:var(--fg3);font-size:11px">Meals: <span style="color:var(--accent);font-family:'Rajdhani',sans-serif;font-size:14px">$${(inv.meals_charge || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span></div>
+        <div style="color:var(--fg3);font-size:11px">Total: <span style="color:var(--green);font-family:'Rajdhani',sans-serif;font-size:16px;font-weight:600">$${(inv.total_production_charge || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</span></div>
+    </div>`;
+
+    // Line items table
+    html += `<table><thead><tr>
+        <th>Section</th><th>Product</th><th>SKU</th><th class="num">Cases</th><th class="num">Yield</th><th class="num">Est. Cost</th><th>Match</th>
+    </tr></thead><tbody>`;
+
+    for (const li of (inv.line_items || [])) {
+        const isUnmatched = !li.sku;
+        const matchBadge = isUnmatched
+            ? `<span class="inv-unmatched" onclick="mapProductSku('${li.product_name.replace(/'/g, "\\'")}')">MAP SKU</span>`
+            : `<span style="color:var(--green);font-size:9px">${li.match_method} (${Math.round(li.match_confidence * 100)}%)</span>`;
+
+        html += `<tr class="${isUnmatched ? 'shortage' : ''}">
+            <td style="font-size:10px;color:var(--fg3)">${li.section.replace('_', ' ')}</td>
+            <td>${li.product_name}</td>
+            <td class="sku-cell">${li.sku || '--'}</td>
+            <td class="num">${li.case_packouts || '--'}</td>
+            <td class="num">${li.total_yield.toLocaleString()}</td>
+            <td class="num">${li.estimated_cost != null ? '$' + li.estimated_cost.toFixed(2) : '--'}</td>
+            <td>${matchBadge}</td>
+        </tr>`;
+    }
+    html += '</tbody></table>';
+
+    // Yield Analysis (fetch async, append)
+    const yieldPlaceholder = `inv-yield-${inv.id}`;
+    html += `<div id="${yieldPlaceholder}" style="margin-top:14px"></div>`;
+
+    // PO Matches
+    if (inv.po_matches && inv.po_matches.length > 0) {
+        html += '<div style="margin-top:14px"><b style="color:var(--accent);font-size:11px;text-transform:uppercase;letter-spacing:1px">PO Reconciliation</b></div>';
+        html += `<table style="margin-top:6px"><thead><tr>
+            <th>SKU</th><th class="num">PO Qty</th><th class="num">Actual</th><th class="num">Variance</th><th class="num">Var %</th>
+        </tr></thead><tbody>`;
+        for (const m of inv.po_matches) {
+            const varColor = m.variance < 0 ? 'var(--red)' : m.variance > 0 ? 'var(--green)' : 'var(--fg)';
+            html += `<tr>
+                <td class="sku-cell">${m.sku}</td>
+                <td class="num">${m.po_qty}</td>
+                <td class="num">${m.actual_yield}</td>
+                <td class="num" style="color:${varColor}">${m.variance > 0 ? '+' : ''}${m.variance}</td>
+                <td class="num" style="color:${varColor}">${m.variance_pct > 0 ? '+' : ''}${m.variance_pct.toFixed(1)}%</td>
+            </tr>`;
+        }
+        html += '</tbody></table>';
+    }
+
+    body.innerHTML = html;
+    document.getElementById('inv-detail-drawer').classList.add('visible');
+    document.getElementById('inv-cost-drawer').classList.remove('visible');
+
+    // Load yield analysis
+    api(`/api/invoice_yield/${id}`).then(yData => {
+        const el = document.getElementById(`inv-yield-${id}`);
+        if (!el || !yData.annotations || yData.annotations.length === 0) return;
+
+        let yHtml = '<b style="color:var(--accent);font-size:11px;text-transform:uppercase;letter-spacing:1px">Yield Analysis (vs Historical Avg)</b>';
+        yHtml += `<table style="margin-top:6px"><thead><tr>
+            <th>SKU</th><th class="num">Cases</th><th class="num">Actual</th><th class="num">Expected</th><th class="num">Variance</th><th class="num">Pcs/Wh</th><th class="num">Oz/Pc</th><th class="num">Wt (lb)</th>
+        </tr></thead><tbody>`;
+
+        for (const a of yData.annotations) {
+            if (a.expected === null) {
+                yHtml += `<tr style="opacity:0.5">
+                    <td class="sku-cell">${a.sku}</td><td class="num">${a.cases}</td><td class="num">${a.actual}</td>
+                    <td class="num" colspan="5" style="color:var(--fg3);font-size:10px">${a.note}</td>
+                </tr>`;
+                continue;
+            }
+            const varColor = a.variance < 0 ? 'var(--red)' : a.variance > 0 ? 'var(--green)' : 'var(--fg)';
+            const varSign = a.variance > 0 ? '+' : '';
+            const srcTag = a.weight_source === 'inventory' ? '' : ' <span style="color:var(--fg3);font-size:8px">est</span>';
+            yHtml += `<tr>
+                <td class="sku-cell">${a.sku}</td>
+                <td class="num">${a.cases}</td>
+                <td class="num">${a.actual.toLocaleString()}</td>
+                <td class="num" style="color:var(--fg2)">${a.expected.toLocaleString()}</td>
+                <td class="num" style="color:${varColor}">${varSign}${a.variance} (${varSign}${a.variance_pct}%)</td>
+                <td class="num" style="color:var(--fg2)">${a.avg_ratio || '--'}</td>
+                <td class="num" style="font-family:'Rajdhani',sans-serif;font-size:13px">${a.oz_per_pc ? a.oz_per_pc.toFixed(2) : '--'}${srcTag}</td>
+                <td class="num" style="color:var(--fg3)">${a.weight_lbs || '--'}</td>
+            </tr>`;
+        }
+        yHtml += '</tbody></table>';
+        el.innerHTML = yHtml;
+    });
+}
+
+function mapProductSku(productName) {
+    currentMapProduct = productName;
+    const overlay = document.getElementById('inv-sku-mapper');
+    overlay.style.display = '';
+    document.getElementById('inv-mapper-title').textContent = `Map: "${productName}"`;
+    const list = document.getElementById('inv-mapper-list');
+    list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--fg3)">Loading candidates...</div>';
+
+    // Fetch ranked candidates
+    api('/api/invoice_match_candidates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ product_name: productName }),
+    }).then(data => {
+        const candidates = data.candidates || [];
+        let html = '';
+
+        if (candidates.length > 0) {
+            // Recommended section
+            const recommended = candidates.filter(c => c.recommended);
+            const others = candidates.filter(c => !c.recommended);
+
+            if (recommended.length > 0) {
+                html += '<div class="inv-mapper-section">RECOMMENDED</div>';
+                html += recommended.map(c => mapperItem(productName, c, true)).join('');
+            }
+            if (others.length > 0) {
+                html += '<div class="inv-mapper-section">OTHER CANDIDATES</div>';
+                html += others.map(c => mapperItem(productName, c, false)).join('');
+            }
+        }
+
+        // Also show full inventory below
+        html += '<div class="inv-mapper-section">ALL SKUS</div>';
+        api('/api/data').then(fullData => {
+            const inv = fullData.inventory || {};
+            const skus = Object.entries(inv)
+                .map(([sku, info]) => ({
+                    sku,
+                    name: (typeof info === 'object' ? info.name : '') || sku,
+                }))
+                .sort((a, b) => a.sku.localeCompare(b.sku));
+
+            html += skus.map(s =>
+                `<div class="picker-item" onclick="confirmSkuMap('${productName.replace(/'/g, "\\'")}', '${s.sku}')">
+                    <span class="pi-sku">${s.sku}</span>
+                    <span style="flex:1;color:var(--fg2);font-size:11px">${s.name}</span>
+                </div>`
+            ).join('');
+            list.innerHTML = html;
+        });
+    });
+}
+
+function mapperItem(productName, c, isRecommended) {
+    const scorePct = Math.round(c.score * 100);
+    const scoreColor = scorePct >= 70 ? 'var(--green)' : scorePct >= 55 ? 'var(--yellow)' : 'var(--fg3)';
+    const catIcon = c.category === 'cheese' ? '🧀' : c.category === 'meat' ? '🥩' : c.category === 'accompaniment' ? '🫒' : '📦';
+    return `<div class="picker-item ${isRecommended ? 'inv-recommended' : ''}" onclick="confirmSkuMap('${productName.replace(/'/g, "\\'")}', '${c.sku}')">
+        <span style="font-size:12px">${catIcon}</span>
+        <span class="pi-sku">${c.sku}</span>
+        <span style="flex:1;color:var(--fg2);font-size:11px">${c.name}</span>
+        <span style="color:${scoreColor};font-family:'Rajdhani',sans-serif;font-size:13px;font-weight:600;min-width:40px;text-align:right">${scorePct}%</span>
+    </div>`;
+}
+
+let currentMapProduct = '';
+
+async function confirmSkuMap(productName, sku) {
+    closeSkuMapper();
+    log(`Saving mapping: "${productName}" → ${sku}...`, 'cyan');
+    setMascot('loading', 'Saving SKU mapping...');
+
+    const data = await api('/api/invoice_map_sku', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ product_name: productName, sku }),
+    });
+
+    if (data.error) {
+        log(`Mapping failed: ${data.error}`, 'red');
+        setMascot('alert', 'Mapping failed!');
+        return;
+    }
+
+    log(`Mapped "${productName}" → ${sku} — updated ${data.updated} line item${data.updated > 1 ? 's' : ''} across all invoices`, 'green');
+    setMascot('happy', 'SKU mapped!');
+    setTimeout(() => setMascotExpression('idle'), 2000);
+    addScore(25);
+
+    // Refresh detail view
+    if (currentInvoiceId) {
+        await showInvoiceDetail(currentInvoiceId);
+    }
+    await loadInvoices();
+}
+
+function closeSkuMapper() {
+    const overlay = document.getElementById('inv-sku-mapper');
+    if (overlay) overlay.style.display = 'none';
+}
+
+async function autoMapAll() {
+    setMascot('loading', 'Matching product names to SKUs...');
+    log('Auto-mapping unmatched invoice products to inventory SKUs...', 'cyan');
+
+    const data = await api('/api/invoice_auto_map', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+    });
+
+    if (data.error) {
+        log(`Auto-map failed: ${data.error}`, 'red');
+        setMascot('alert', 'Auto-map failed!');
+        return;
+    }
+
+    const mapped = data.mapped || [];
+    const skipped = data.skipped || [];
+
+    for (const m of mapped) {
+        log(`  Matched: "${m.product_name}" → ${m.sku} (${Math.round(m.score * 100)}% confidence)`, 'green');
+    }
+    for (const s of skipped) {
+        log(`  Low confidence: "${s.product_name}" — best guess ${s.best_sku} (${Math.round(s.best_score * 100)}%) — needs manual mapping`, 'yellow');
+    }
+
+    if (mapped.length > 0 || skipped.length > 0) {
+        log(`Auto-map complete: ${mapped.length} matched, ${skipped.length} need manual review`, mapped.length > 0 ? 'green' : 'yellow');
+    } else {
+        log('All products already mapped — nothing to do', 'green');
+    }
+    addScore(mapped.length * 25);
+
+    if (skipped.length === 0 && mapped.length > 0) {
+        setMascot('celebrate', `All ${mapped.length} products matched!`);
+    } else if (mapped.length > 0) {
+        setMascot('happy', `${mapped.length} matched, ${skipped.length} need review`);
+    } else {
+        setMascot('idle', 'All products already mapped');
+    }
+    setTimeout(() => setMascotExpression('idle'), 3000);
+
+    await loadInvoices();
+    if (currentInvoiceId) await showInvoiceDetail(currentInvoiceId);
+}
+
+async function reconcileInvoice() {
+    if (!currentInvoiceId) return;
+
+    setMascot('loading', 'Matching invoice against open POs...');
+    log(`Reconciling invoice ${currentInvoiceId} — comparing yields to open purchase orders...`, 'cyan');
+
+    // Disable button during operation
+    const btn = document.getElementById('inv-reconcile-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Reconciling...'; }
+
+    const data = await api(`/api/invoice_reconcile/${currentInvoiceId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+    });
+
+    if (btn) { btn.disabled = false; btn.textContent = 'Reconcile'; }
+
+    if (data.error) {
+        log(`Reconciliation failed: ${data.error}`, 'red');
+        setMascot('alert', 'Reconciliation failed!');
+        return;
+    }
+
+    if (data.closed_pos > 0) log(`  Closed ${data.closed_pos} purchase order${data.closed_pos > 1 ? 's' : ''} (marked Received)`, 'green');
+    if (data.yield_entries > 0) log(`  Logged ${data.yield_entries} yield entr${data.yield_entries > 1 ? 'ies' : 'y'} to production history`, 'green');
+    if (data.cost_entries > 0) log(`  Calculated per-unit costs for ${data.cost_entries} SKU${data.cost_entries > 1 ? 's' : ''}`, 'green');
+    if (data.closed_pos === 0 && data.yield_entries === 0) log('  No matching open POs found — costs calculated only', 'yellow');
+    log(`Reconciliation complete for ${currentInvoiceId}`, 'green');
+
+    addScore(100);
+    setMascot('celebrate', `Reconciled! ${data.closed_pos} POs closed`);
+    setTimeout(() => setMascotExpression('idle'), 3000);
+
+    await showInvoiceDetail(currentInvoiceId);
+    await loadInvoices();
+}
+
+async function showCostAnalytics() {
+    setMascot('loading', 'Crunching production costs...');
+    log('Loading per-SKU production cost analytics...', 'cyan');
+    const data = await api('/api/invoice_cost_history');
+    const analytics = data.analytics || [];
+
+    const body = document.getElementById('inv-cost-body');
+
+    if (analytics.length === 0) {
+        body.innerHTML = '<div style="text-align:center;color:var(--fg3);padding:20px">No cost data yet. Reconcile invoices to calculate per-unit production costs.</div>';
+        log('No cost data — reconcile invoices first to generate cost analytics', 'yellow');
+        setMascot('idle', 'Reconcile invoices first');
+        document.getElementById('inv-cost-drawer').classList.add('visible');
+        document.getElementById('inv-detail-drawer').classList.remove('visible');
+        return;
+    }
+    log(`Cost analytics loaded: ${analytics.length} SKUs tracked`, 'green');
+    setMascot('idle', `${analytics.length} SKU costs`);
+
+    let html = `<table><thead><tr>
+        <th>SKU</th><th class="num">Total Yield</th><th class="num">Total Cost</th><th class="num">Avg $/Unit</th><th class="num">Invoices</th>
+    </tr></thead><tbody>`;
+
+    const maxCost = Math.max(...analytics.map(a => a.avg_cost_per_unit));
+
+    for (const a of analytics) {
+        const barWidth = maxCost > 0 ? Math.round((a.avg_cost_per_unit / maxCost) * 100) : 0;
+        html += `<tr>
+            <td class="sku-cell">${a.sku}</td>
+            <td class="num">${a.total_yield.toLocaleString()}</td>
+            <td class="num">$${a.total_cost.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+            <td class="num">
+                <div style="display:flex;align-items:center;justify-content:flex-end;gap:6px">
+                    <div class="inv-cost-bar" style="width:${barWidth}%"></div>
+                    <span>$${a.avg_cost_per_unit.toFixed(2)}</span>
+                </div>
+            </td>
+            <td class="num">${a.entries}</td>
+        </tr>`;
+    }
+    html += '</tbody></table>';
+
+    body.innerHTML = html;
+    document.getElementById('inv-cost-drawer').classList.add('visible');
+    document.getElementById('inv-detail-drawer').classList.remove('visible');
+}
+
+
+// ── Inventory Reconciliation ─────────────────────────────────────────
+
+let reconSnapshots = [];
+
+async function showReconciliation() {
+    setMascot('loading', 'Loading snapshots...');
+    log('Opening inventory reconciliation...', 'cyan');
+
+    const data = await api('/api/reconcile_snapshots');
+    reconSnapshots = data.snapshots || [];
+
+    const body = document.getElementById('inv-recon-body');
+
+    if (reconSnapshots.length < 2) {
+        body.innerHTML = '<div style="text-align:center;color:var(--fg3);padding:20px">Need at least 2 inventory snapshots. Sync Dropbox or run depletion to create snapshots.</div>';
+        log('Not enough snapshots for reconciliation', 'yellow');
+        setMascot('idle', 'Need more snapshots');
+        document.getElementById('inv-recon-drawer').classList.add('visible');
+        return;
+    }
+
+    // Build snapshot picker
+    let html = `<div style="padding:12px 16px;border-bottom:1px solid var(--border)">
+        <div style="display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap">
+            <div>
+                <label style="font-family:'Space Mono',monospace;font-size:9px;text-transform:uppercase;color:var(--fg3);display:block;margin-bottom:4px">Actual (Monday)</label>
+                <select id="recon-monday" style="background:var(--bg2);color:var(--fg);border:1px solid var(--border);padding:4px 8px;font-family:'DM Sans',sans-serif;font-size:12px;border-radius:3px">
+                    ${reconSnapshots.map(sn => `<option value="${sn.id}" ${sn.cycle_day === 'monday' ? 'selected' : ''}>${sn.label || sn.timestamp.slice(0,10)} (${sn.sku_count} SKUs${sn.cycle_day ? ', ' + sn.cycle_day : ''})</option>`).join('')}
+                </select>
+            </div>
+            <div>
+                <label style="font-family:'Space Mono',monospace;font-size:9px;text-transform:uppercase;color:var(--fg3);display:block;margin-bottom:4px">Baseline (Friday)</label>
+                <select id="recon-friday" style="background:var(--bg2);color:var(--fg);border:1px solid var(--border);padding:4px 8px;font-family:'DM Sans',sans-serif;font-size:12px;border-radius:3px">
+                    ${reconSnapshots.map(sn => `<option value="${sn.id}" ${(sn.cycle_day === 'friday' || sn.source === 'depletion') ? 'selected' : ''}>${sn.label || sn.timestamp.slice(0,10)} (${sn.sku_count} SKUs${sn.cycle_day ? ', ' + sn.cycle_day : ''})</option>`).join('')}
+                </select>
+            </div>
+            <button class="btn btn-green btn-sm" onclick="runReconciliation()">Compare</button>
+        </div>
+    </div>
+    <div id="recon-results" style="padding:12px 16px;color:var(--fg3);text-align:center">Select snapshots and click Compare</div>`;
+
+    body.innerHTML = html;
+    document.getElementById('inv-recon-drawer').classList.add('visible');
+    // Close other drawers
+    document.getElementById('inv-detail-drawer').classList.remove('visible');
+    document.getElementById('inv-cost-drawer').classList.remove('visible');
+    setMascot('idle', 'Pick snapshots to compare');
+    log(`${reconSnapshots.length} snapshots available for comparison`, 'green');
+}
+
+async function runReconciliation() {
+    const mondayId = document.getElementById('recon-monday').value;
+    const fridayId = document.getElementById('recon-friday').value;
+
+    if (mondayId === fridayId) {
+        log('Cannot compare a snapshot to itself', 'red');
+        setMascot('alert', 'Pick two different snapshots!');
+        return;
+    }
+
+    setMascot('loading', 'Reconciling inventory...');
+    log('Running inventory reconciliation...', 'cyan');
+
+    const data = await api('/api/reconcile_inventory', {
+        monday_snap_id: mondayId,
+        friday_snap_id: fridayId,
+    });
+
+    if (data.error) {
+        log(`Reconciliation error: ${data.error}`, 'red');
+        setMascot('alert', 'Reconciliation failed');
+        document.getElementById('recon-results').innerHTML = `<div style="color:var(--red);padding:16px">${data.error}</div>`;
+        return;
+    }
+
+    const rows = data.rows || [];
+    const summary = data.summary || {};
+
+    log(`Reconciliation complete: ${summary.total_skus} SKUs checked, ${summary.flagged} flagged, ${summary.invoices_in_window} invoices in window`, summary.flagged > 0 ? 'yellow' : 'green');
+    setMascot(summary.flagged > 0 ? 'alert' : 'happy', `${summary.flagged} discrepancies found`);
+
+    // Build summary stats
+    let html = `<div style="display:flex;gap:16px;padding:0 0 12px;border-bottom:1px solid var(--border);margin-bottom:12px;flex-wrap:wrap">
+        <div class="cal-summary-item">
+            <span class="cal-summary-label">Baseline</span>
+            <span class="cal-summary-value" style="font-size:11px">${data.friday.label || data.friday.timestamp.slice(0,10)}</span>
+        </div>
+        <div class="cal-summary-item">
+            <span class="cal-summary-label">Actual</span>
+            <span class="cal-summary-value" style="font-size:11px">${data.monday.label || data.monday.timestamp.slice(0,10)}</span>
+        </div>
+        <div class="cal-summary-item">
+            <span class="cal-summary-label">SKUs Checked</span>
+            <span class="cal-summary-value">${summary.total_skus}</span>
+        </div>
+        <div class="cal-summary-item">
+            <span class="cal-summary-label">Flagged</span>
+            <span class="cal-summary-value" style="color:${summary.flagged > 0 ? 'var(--red)' : 'var(--green)'}">${summary.flagged}</span>
+        </div>
+        <div class="cal-summary-item">
+            <span class="cal-summary-label">Total Discrepancy</span>
+            <span class="cal-summary-value" style="color:var(--orange)">${summary.total_discrepancy}</span>
+        </div>
+        <div class="cal-summary-item">
+            <span class="cal-summary-label">Invoices in Window</span>
+            <span class="cal-summary-value">${summary.invoices_in_window}</span>
+        </div>
+    </div>`;
+
+    // Build results table
+    html += `<div class="net-table-wrap"><table class="net-table"><thead><tr>
+        <th>SKU</th>
+        <th class="num">Baseline</th>
+        <th class="num">+ Invoice</th>
+        <th class="num">Expected</th>
+        <th class="num">Actual</th>
+        <th class="num">Diff</th>
+        <th class="num">%</th>
+        <th>Status</th>
+    </tr></thead><tbody>`;
+
+    for (const r of rows) {
+        const flagClass = r.flagged ? 'style="background:rgba(255,59,92,0.06)"' : '';
+        const diffColor = r.diff > 0 ? 'var(--green)' : r.diff < 0 ? 'var(--red)' : 'var(--fg3)';
+        const statusLabel = r.flagged
+            ? (r.status === 'over' ? '<span style="color:var(--green)">OVER</span>' : '<span style="color:var(--red)">UNDER</span>')
+            : (r.diff === 0 ? '<span style="color:var(--fg3)">MATCH</span>' : '<span style="color:var(--fg3)">OK</span>');
+
+        html += `<tr ${flagClass}>
+            <td class="sku-cell">${r.sku}</td>
+            <td class="num">${r.friday}</td>
+            <td class="num" style="color:var(--accent)">${r.invoice_yield > 0 ? '+' + r.invoice_yield : '—'}</td>
+            <td class="num">${r.expected}</td>
+            <td class="num" style="font-weight:500">${r.monday}</td>
+            <td class="num" style="color:${diffColor};font-weight:${r.flagged ? '600' : '400'}">${r.diff > 0 ? '+' : ''}${r.diff}</td>
+            <td class="num" style="color:${diffColor}">${r.pct > 0 ? '+' : ''}${r.pct}%</td>
+            <td>${statusLabel}</td>
+        </tr>`;
+    }
+    html += '</tbody></table></div>';
+
+    document.getElementById('recon-results').innerHTML = html;
+}
+
+// ── Depletion File Parser ────────────────────────────────────────────
+
+let lastDepletionData = null;
+
+function uploadDepletion() {
+    document.getElementById('depletion-input').click();
+}
+
+async function handleDepletionFile(input) {
+    const file = input.files[0];
+    if (!file) return;
+    input.value = '';
+
+    setMascot('loading', 'Parsing depletion file...');
+    log(`Uploading depletion: ${file.name}`, 'cyan');
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const resp = await fetch('/api/depletion_parse', {method: 'POST', body: formData});
+    const data = await resp.json();
+
+    if (data.error) {
+        log(`Depletion error: ${data.error}`, 'red');
+        setMascot('alert', 'Parse failed!');
+        return;
+    }
+
+    lastDepletionData = data;
+    renderDepletionResults(data);
+    log(`Depletion parsed: ${data.order_count} orders, ${data.mapped_count} mapped, ${data.unmatched_count} unmatched`, 'green');
+    setMascot('happy', `${data.order_count} orders parsed!`);
+}
+
+function renderDepletionResults(data) {
+    const body = document.getElementById('depletion-drawer-body');
+    const title = document.getElementById('depletion-drawer-title');
+    title.textContent = `Depletion: ${data.filename}`;
+
+    let html = `<div style="display:flex;gap:16px;padding:10px 12px;border-bottom:1px solid var(--border)">
+        <div class="cal-summary"><div class="cal-summary-val" style="font-family:'Rajdhani',sans-serif;font-size:18px;font-weight:600">${data.order_count.toLocaleString()}</div><div class="cal-summary-label">Orders</div></div>
+        <div class="cal-summary"><div class="cal-summary-val" style="font-family:'Rajdhani',sans-serif;font-size:18px">${data.total_units.toLocaleString()}</div><div class="cal-summary-label">Total Units</div></div>
+        <div class="cal-summary"><div class="cal-summary-val" style="font-family:'Rajdhani',sans-serif;font-size:18px">${data.product_count}</div><div class="cal-summary-label">Products</div></div>
+        <div class="cal-summary"><div class="cal-summary-val" style="color:var(--green)">${data.mapped_count}</div><div class="cal-summary-label">Mapped</div></div>
+        <div class="cal-summary"><div class="cal-summary-val" style="color:${data.unmatched_count > 0 ? 'var(--red)' : 'var(--green)'}">${data.unmatched_count}</div><div class="cal-summary-label">Unmatched</div></div>
+    </div>`;
+
+    // Unmatched products (if any)
+    if (data.unmatched && data.unmatched.length > 0) {
+        html += `<div style="padding:8px 12px;background:rgba(255,59,92,0.05);border-bottom:1px solid var(--border)">
+            <div style="font-family:'Space Mono',monospace;font-size:10px;text-transform:uppercase;color:var(--red);margin-bottom:6px">Unmatched Products</div>`;
+        for (const u of data.unmatched) {
+            html += `<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0">
+                <span style="font-family:'DM Sans',sans-serif;font-size:12px;color:var(--red)">${u.product} (${u.qty})</span>
+                <button class="btn btn-dim btn-sm" onclick="mapDepletionProduct('${u.product.replace(/'/g, "\\'")}')">Map SKU</button>
+            </div>`;
+        }
+        html += '</div>';
+    }
+
+    // SKU totals table
+    const skuEntries = Object.entries(data.sku_totals).sort((a, b) => b[1] - a[1]);
+    html += `<table><thead><tr>
+        <th>SKU</th><th>Product</th><th class="num">Depleted</th>
+    </tr></thead><tbody>`;
+
+    // Build reverse map: sku -> product name
+    const skuToProduct = {};
+    for (const [product, sku] of Object.entries(data.mapped)) {
+        skuToProduct[sku] = product;
+    }
+
+    for (const [sku, qty] of skuEntries) {
+        html += `<tr>
+            <td style="font-family:'Space Mono',monospace;font-size:10px">${sku}</td>
+            <td style="font-family:'DM Sans',sans-serif;font-size:11px">${skuToProduct[sku] || ''}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif;font-weight:600">${qty.toLocaleString()}</td>
+        </tr>`;
+    }
+    html += '</tbody></table>';
+
+    body.innerHTML = html;
+    document.getElementById('depletion-drawer').classList.add('visible');
+    document.getElementById('depletion-apply-btn').disabled = false;
+}
+
+async function applyDepletion() {
+    if (!lastDepletionData || !lastDepletionData.sku_totals) return;
+    if (!confirm(`Apply depletion of ${Object.keys(lastDepletionData.sku_totals).length} SKUs (${lastDepletionData.total_units.toLocaleString()} units) to inventory?`)) return;
+
+    setMascot('loading', 'Applying depletion...');
+    const data = await api('/api/depletion_apply', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            sku_totals: lastDepletionData.sku_totals,
+            label: lastDepletionData.filename,
+            order_count: lastDepletionData.order_count,
+        }),
+    });
+
+    if (data && data.ok) {
+        log(`Depletion applied: ${data.skus_affected} SKUs, ${data.total_depleted.toLocaleString()} units`, 'green');
+        setMascot('happy', 'Inventory updated!');
+        document.getElementById('depletion-apply-btn').disabled = true;
+        // Record forecast accuracy
+        const depWindow = new Date().getDay() === 6 ? 'saturday' : 'tuesday';
+        recordForecastAccuracy(lastDepletionData.sku_totals, depWindow);
+        // Re-calculate to see new NET
+        calculateRMFG();
+    } else {
+        log(`Depletion failed: ${data?.error || 'unknown'}`, 'red');
+        setMascot('alert', 'Apply failed!');
+    }
+}
+
+function mapDepletionProduct(product) {
+    const sku = prompt(`Enter SKU for "${product}":`);
+    if (!sku) return;
+
+    api('/api/depletion_map_sku', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({product, sku: sku.toUpperCase()}),
+    }).then(data => {
+        if (data && data.ok) {
+            log(`Mapped: ${product} = ${sku.toUpperCase()}`, 'green');
+        }
+    });
+}
+
+
+// ── Demand Mode Toggle ──────────────────────────────────────────────
+
+function toggleDemandMode() {
+    demandMode = demandMode === 'discrete' ? 'churned' : 'discrete';
+    localStorage.setItem('demandMode', demandMode);
+    log(`Demand mode: ${demandMode.toUpperCase()}`, demandMode === 'churned' ? 'orange' : 'cyan');
+    calculateRMFG();
+}
+
+
+// ── Inventory Snapshots ──────────────────────────────────────────────
+
+let snapshotSelectA = null;
+let snapshotSelectB = null;
+
+async function showSnapshots() {
+    const data = await api('/api/snapshots');
+    if (!data || !data.snapshots) {
+        log('Failed to load snapshots', 'red');
+        return;
+    }
+
+    const body = document.getElementById('snapshot-drawer-body');
+    const snaps = data.snapshots;
+
+    if (snaps.length === 0) {
+        body.innerHTML = `<div style="padding:16px;color:var(--fg2);font-family:'Space Mono',monospace;font-size:10px;text-transform:uppercase">
+            No snapshots yet. Save one using the button above, or sync Dropbox to auto-snapshot.</div>`;
+        document.getElementById('snapshot-drawer').classList.add('visible');
+        return;
+    }
+
+    snapshotSelectA = null;
+    snapshotSelectB = null;
+
+    let html = `<div style="padding:8px 12px;display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--border)">
+        <span style="font-family:'Space Mono',monospace;font-size:10px;text-transform:uppercase;color:var(--fg2)">
+            Select two snapshots to compare</span>
+        <button class="btn btn-accent btn-sm" id="snap-compare-btn" onclick="compareSnapshots()" disabled>Compare</button>
+    </div>`;
+
+    html += `<table><thead><tr>
+        <th style="width:30px">A</th><th style="width:30px">B</th>
+        <th>Label</th><th>Date</th><th>Cycle</th><th>Source</th>
+        <th class="num">SKUs</th><th class="num">Units</th><th class="num">Pot. Yield</th>
+        <th style="width:40px"></th>
+    </tr></thead><tbody>`;
+
+    for (const s of snaps.slice().reverse()) {
+        const ts = new Date(s.timestamp);
+        const dateStr = ts.toLocaleDateString('en-US', {month:'short', day:'numeric'});
+        const timeStr = ts.toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit'});
+        const cycleClass = {friday:'color:var(--accent)',saturday:'color:var(--green)',
+            monday:'color:var(--blue)',tuesday:'color:var(--orange)',
+            wednesday:'color:var(--yellow)'}[s.cycle_day] || '';
+        const potYield = s.potential_yield || 0;
+
+        html += `<tr>
+            <td><input type="radio" name="snap-a" value="${s.id}" onchange="snapSelect('a','${s.id}')"></td>
+            <td><input type="radio" name="snap-b" value="${s.id}" onchange="snapSelect('b','${s.id}')"></td>
+            <td style="font-family:'DM Sans',sans-serif;font-size:12px">${s.label}</td>
+            <td style="font-family:'Rajdhani',sans-serif;font-size:12px">${dateStr} ${timeStr}</td>
+            <td style="font-family:'Space Mono',monospace;font-size:10px;text-transform:uppercase;${cycleClass}">${s.cycle_day || '-'}</td>
+            <td style="font-family:'Space Mono',monospace;font-size:10px;text-transform:uppercase">${s.source}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif">${s.sku_count}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif">${s.total_units.toLocaleString()}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif;color:var(--blue)">${potYield > 0 ? '+' + potYield.toLocaleString() : '-'}</td>
+            <td><button class="btn btn-dim btn-sm" onclick="deleteSnapshot('${s.id}')" title="Delete">&#128465;</button></td>
+        </tr>`;
+    }
+    html += '</tbody></table>';
+
+    body.innerHTML = html;
+    document.getElementById('snapshot-drawer').classList.add('visible');
+}
+
+function snapSelect(which, id) {
+    if (which === 'a') snapshotSelectA = id;
+    else snapshotSelectB = id;
+    const btn = document.getElementById('snap-compare-btn');
+    btn.disabled = !(snapshotSelectA && snapshotSelectB && snapshotSelectA !== snapshotSelectB);
+}
+
+async function takeSnapshot() {
+    const label = prompt('Snapshot label:', `Manual - ${new Date().toLocaleDateString()}`);
+    if (!label) return;
+
+    const data = await api('/api/snapshot', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({label}),
+    });
+
+    if (data && data.ok) {
+        log(`Snapshot saved: ${data.snapshot.sku_count} SKUs, ${data.snapshot.total_units.toLocaleString()} units`, 'green');
+        showSnapshots();
+    } else {
+        log('Failed to save snapshot', 'red');
+    }
+}
+
+async function deleteSnapshot(id) {
+    if (!confirm('Delete this snapshot?')) return;
+    await api(`/api/snapshot/${id}`, {method: 'DELETE'});
+    showSnapshots();
+}
+
+async function compareSnapshots() {
+    if (!snapshotSelectA || !snapshotSelectB) return;
+
+    const data = await api(`/api/snapshot_compare?a=${snapshotSelectA}&b=${snapshotSelectB}`);
+    if (!data || data.error) {
+        log('Comparison failed: ' + (data?.error || 'unknown'), 'red');
+        return;
+    }
+
+    const body = document.getElementById('snapshot-compare-body');
+    const title = document.getElementById('snapshot-compare-title');
+    title.textContent = `${data.a.label} vs ${data.b.label}`;
+
+    const s = data.summary;
+    let html = `<div style="display:flex;gap:16px;padding:10px 12px;border-bottom:1px solid var(--border)">
+        <div class="cal-summary"><div class="cal-summary-val" style="font-family:'Rajdhani',sans-serif;font-size:18px;font-weight:600">${s.net_change >= 0 ? '+' : ''}${s.net_change.toLocaleString()}</div><div class="cal-summary-label">Net Change</div></div>
+        <div class="cal-summary"><div class="cal-summary-val" style="font-family:'Rajdhani',sans-serif;font-size:18px">${s.total_a.toLocaleString()}</div><div class="cal-summary-label">${data.a.cycle_day || 'A'}</div></div>
+        <div class="cal-summary"><div class="cal-summary-val" style="font-family:'Rajdhani',sans-serif;font-size:18px">${s.total_b.toLocaleString()}</div><div class="cal-summary-label">${data.b.cycle_day || 'B'}</div></div>
+        <div class="cal-summary"><div class="cal-summary-val" style="color:var(--green)">${s.skus_increased}</div><div class="cal-summary-label">Increased</div></div>
+        <div class="cal-summary"><div class="cal-summary-val" style="color:var(--red)">${s.skus_decreased}</div><div class="cal-summary-label">Decreased</div></div>
+    </div>`;
+
+    // Sort by absolute delta descending
+    const rows = data.rows.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+
+    // Check if any rows have potential yield data
+    const hasPotential = rows.some(r => (r.potential_a || 0) > 0 || (r.potential_b || 0) > 0);
+    const potHeader = hasPotential ? '<th class="num">Pot. A</th><th class="num">Pot. B</th>' : '';
+
+    html += `<table><thead><tr>
+        <th>SKU</th>
+        <th class="num">${data.a.label.substring(0, 20)}</th>
+        <th class="num">${data.b.label.substring(0, 20)}</th>
+        <th class="num">Delta</th>
+        <th class="num">%</th>
+        ${potHeader}
+    </tr></thead><tbody>`;
+
+    for (const r of rows) {
+        const deltaColor = r.delta > 0 ? 'var(--green)' : r.delta < 0 ? 'var(--red)' : 'var(--fg2)';
+        const pctStr = r.pct_change !== null ? `${r.pct_change > 0 ? '+' : ''}${r.pct_change}%` : '-';
+        const potCells = hasPotential
+            ? `<td class="num" style="font-family:'Rajdhani',sans-serif;color:var(--blue)">${(r.potential_a || 0) > 0 ? '+' + r.potential_a.toLocaleString() : '-'}</td>
+               <td class="num" style="font-family:'Rajdhani',sans-serif;color:var(--blue)">${(r.potential_b || 0) > 0 ? '+' + r.potential_b.toLocaleString() : '-'}</td>`
+            : '';
+        html += `<tr>
+            <td style="font-family:'Space Mono',monospace;font-size:10px">${r.sku}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif">${r.qty_a.toLocaleString()}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif">${r.qty_b.toLocaleString()}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif;color:${deltaColor};font-weight:600">${r.delta > 0 ? '+' : ''}${r.delta.toLocaleString()}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif;color:${deltaColor};font-size:11px">${pctStr}</td>
+            ${potCells}
+        </tr>`;
+    }
+    html += '</tbody></table>';
+
+    body.innerHTML = html;
+    document.getElementById('snapshot-drawer').classList.remove('visible');
+    document.getElementById('snapshot-compare-drawer').classList.add('visible');
+}
+
+// ── Smart Auto-Sync ─────────────────────────────────────────────────
+
+let lastDropboxSync = 0;
+let lastRechargeSync = 0;
+let lastShopifySync = 0;
+let autoSyncInterval = null;
+
+async function initAutoSync() {
+    // Fetch settings for auto_refresh_interval
+    const data = await api('/api/data');
+    const intervalMins = data?.auto_refresh_interval || 60;
+    if (intervalMins <= 0) return;
+
+    const intervalMs = intervalMins * 60 * 1000;
+
+    // Set up recurring refresh
+    if (autoSyncInterval) clearInterval(autoSyncInterval);
+    autoSyncInterval = setInterval(() => {
+        smartSync(false);
+    }, intervalMs);
+
+    log(`Auto-sync: every ${intervalMins}min`, 'cyan');
+}
+
+async function smartSync(isStartup = false) {
+    const now = Date.now();
+    const day = new Date().getDay(); // 0=Sun, 1=Mon, 5=Fri, 6=Sat
+    const minGap = 10 * 60 * 1000; // 10 minute minimum between same-source syncs
+
+    // Dropbox: prioritize on Friday(5) and Monday(1) — inventory snapshot days
+    if (now - lastDropboxSync > minGap) {
+        const dbStatus = await api('/api/dropbox_status');
+        if (dbStatus?.configured) {
+            if (day === 1 || day === 5 || now - lastDropboxSync > 30 * 60 * 1000) {
+                log('Auto-sync: Dropbox...', 'cyan');
+                const ok = await syncDropbox();
+                if (ok) lastDropboxSync = now;
+            }
+        }
+    }
+
+    // Recharge: sync if stale (>2 hours or first sync of session)
+    if (now - lastRechargeSync > 2 * 60 * 60 * 1000) {
+        const rcStatus = await api('/api/recharge_status');
+        if (rcStatus?.configured) {
+            log('Auto-sync: Recharge...', 'cyan');
+            const ok = await syncRecharge();
+            if (ok) lastRechargeSync = now;
+        }
+    }
+
+    // Shopify: sync if stale (>2 hours)
+    if (now - lastShopifySync > 2 * 60 * 60 * 1000) {
+        const shStatus = await api('/api/shopify_status');
+        if (shStatus?.configured) {
+            log('Auto-sync: Shopify...', 'cyan');
+            const ok = await syncShopify();
+            if (ok) lastShopifySync = now;
+        }
+    }
+
+    // Recalculate after syncs
+    await calculateRMFG();
+}
+
+// ── Morning Briefing ────────────────────────────────────────────────
+
+async function loadBriefing() {
+    const data = await api('/api/briefing');
+    if (!data || data.error) return;
+
+    const card = document.getElementById('briefing-card');
+    document.getElementById('briefing-day').textContent = data.weekday;
+    document.getElementById('briefing-date').textContent = data.date;
+    document.getElementById('briefing-hint').textContent = data.action_hint;
+
+    const grid = document.getElementById('briefing-grid');
+    let cells = '';
+
+    // Shortages cell
+    const sClass = data.shortage_count > 0 ? 'shortage' : 'ok';
+    const sDetail = data.shortage_count > 0
+        ? data.shortages.slice(0, 3).map(s => `${s.sku} (-${s.deficit})`).join(', ')
+        : 'All clear';
+    cells += `<div class="briefing-cell">
+        <div class="briefing-cell-label">Shortages</div>
+        <div class="briefing-cell-value ${sClass}">${data.shortage_count}</div>
+        <div class="briefing-cell-detail">${sDetail}</div>
+    </div>`;
+
+    // Tight cell
+    const tClass = data.tight_count > 0 ? 'tight' : 'ok';
+    cells += `<div class="briefing-cell">
+        <div class="briefing-cell-label">Tight</div>
+        <div class="briefing-cell-value ${tClass}">${data.tight_count}</div>
+        <div class="briefing-cell-detail">${data.tight_count > 0 ? data.tight.slice(0, 2).map(t => t.sku).join(', ') : 'Comfortable'}</div>
+    </div>`;
+
+    // Expiring cell
+    const eClass = data.expiring_count > 0 ? 'shortage' : 'ok';
+    const eDetail = data.expiring_count > 0
+        ? data.expiring.slice(0, 2).map(e => `${e.sku} (${e.days_left}d)`).join(', ')
+        : 'None within 7 days';
+    cells += `<div class="briefing-cell">
+        <div class="briefing-cell-label">Expiring</div>
+        <div class="briefing-cell-value ${eClass}">${data.expiring_count}</div>
+        <div class="briefing-cell-detail">${eDetail}</div>
+    </div>`;
+
+    // Tuesday coverage gaps
+    const gClass = data.tue_gaps.length > 0 ? 'tight' : 'ok';
+    const gDetail = data.tue_gaps.length > 0
+        ? data.tue_gaps.slice(0, 2).map(g => `${g.sku} (-${g.gap})`).join(', ')
+        : 'Covered';
+    cells += `<div class="briefing-cell">
+        <div class="briefing-cell-label">Tue Gaps</div>
+        <div class="briefing-cell-value ${gClass}">${data.tue_gaps.length}</div>
+        <div class="briefing-cell-detail">${gDetail}</div>
+    </div>`;
+
+    // Inventory summary
+    cells += `<div class="briefing-cell">
+        <div class="briefing-cell-label">Inventory</div>
+        <div class="briefing-cell-value info">${data.total_cheese_skus}</div>
+        <div class="briefing-cell-detail">${data.total_cheese_units.toLocaleString()} units</div>
+    </div>`;
+
+    // Forecast accuracy (if available)
+    if (data.recent_accuracy && data.recent_accuracy.length > 0) {
+        const last = data.recent_accuracy[data.recent_accuracy.length - 1];
+        const mapeClass = last.mape <= 10 ? 'ok' : last.mape <= 20 ? 'tight' : 'shortage';
+        cells += `<div class="briefing-cell" style="cursor:pointer" onclick="showAccuracy()">
+            <div class="briefing-cell-label">Forecast MAPE</div>
+            <div class="briefing-cell-value ${mapeClass}">${last.mape}%</div>
+            <div class="briefing-cell-detail">Last ${data.recent_accuracy.length} records</div>
+        </div>`;
+    }
+
+    grid.innerHTML = cells;
+    card.style.display = '';
+}
+
+function closeBriefing() {
+    document.getElementById('briefing-card').style.display = 'none';
+}
+
+
+// ── Forecast Accuracy ───────────────────────────────────────────────
+
+async function recordForecastAccuracy(depletionSkus, window) {
+    const data = await api('/api/forecast_accuracy', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            depletion_skus: depletionSkus,
+            window: window,
+            date: new Date().toISOString().split('T')[0],
+        }),
+    });
+    if (data && data.ok) {
+        const r = data.record;
+        log(`Forecast accuracy recorded: MAPE ${r.mape}%, overall ${r.overall_pct_error > 0 ? '+' : ''}${r.overall_pct_error}%`, 'blue');
+    }
+}
+
+async function showAccuracy() {
+    const data = await api('/api/forecast_accuracy/summary');
+    if (!data || !data.has_data) {
+        log('No forecast accuracy data yet. Apply a depletion to start tracking.', 'yellow');
+        return;
+    }
+
+    const body = document.getElementById('accuracy-drawer-body');
+    let html = `<div style="display:flex;gap:16px;padding:10px 12px;border-bottom:1px solid var(--border)">
+        <div class="cal-summary"><div class="cal-summary-val" style="font-family:'Rajdhani',sans-serif;font-size:18px;font-weight:600;color:${data.recent_mape <= 10 ? 'var(--green)' : data.recent_mape <= 20 ? 'var(--yellow)' : 'var(--red)'}">${data.recent_mape}%</div><div class="cal-summary-label">Avg MAPE</div></div>
+        <div class="cal-summary"><div class="cal-summary-val" style="font-family:'Rajdhani',sans-serif;font-size:18px">${data.recent_overall_error > 0 ? '+' : ''}${data.recent_overall_error}%</div><div class="cal-summary-label">Avg Bias</div></div>
+        <div class="cal-summary"><div class="cal-summary-val" style="font-family:'Rajdhani',sans-serif;font-size:18px">${data.total_records}</div><div class="cal-summary-label">Records</div></div>
+    </div>`;
+
+    // Trend table
+    if (data.trend && data.trend.length > 0) {
+        html += `<div style="padding:8px 12px"><div style="font-family:'Space Mono',monospace;font-size:10px;text-transform:uppercase;color:var(--fg2);margin-bottom:6px">Recent History</div>`;
+        html += `<table><thead><tr>
+            <th>Date</th><th>Window</th><th class="num">Predicted</th><th class="num">Actual</th><th class="num">MAPE</th><th class="num">Bias</th>
+        </tr></thead><tbody>`;
+        for (const r of data.trend) {
+            const mColor = r.mape <= 10 ? 'var(--green)' : r.mape <= 20 ? 'var(--yellow)' : 'var(--red)';
+            html += `<tr>
+                <td style="font-family:'Space Mono',monospace;font-size:10px">${r.date}</td>
+                <td style="font-family:'Space Mono',monospace;font-size:10px;text-transform:uppercase">${r.window}</td>
+                <td class="num" style="font-family:'Rajdhani',sans-serif">${r.total_predicted.toLocaleString()}</td>
+                <td class="num" style="font-family:'Rajdhani',sans-serif">${r.total_actual.toLocaleString()}</td>
+                <td class="num" style="font-family:'Rajdhani',sans-serif;color:${mColor}">${r.mape != null ? r.mape + '%' : '-'}</td>
+                <td class="num" style="font-family:'Rajdhani',sans-serif">${r.overall_pct_error != null ? (r.overall_pct_error > 0 ? '+' : '') + r.overall_pct_error + '%' : '-'}</td>
+            </tr>`;
+        }
+        html += '</tbody></table></div>';
+    }
+
+    // Biased SKUs
+    if (data.biased_skus && data.biased_skus.length > 0) {
+        html += `<div style="padding:8px 12px"><div style="font-family:'Space Mono',monospace;font-size:10px;text-transform:uppercase;color:var(--fg2);margin-bottom:6px">Consistently Biased SKUs</div>`;
+        html += `<table><thead><tr>
+            <th>SKU</th><th class="num">Avg Error</th><th>Direction</th><th class="num">Samples</th>
+        </tr></thead><tbody>`;
+        for (const s of data.biased_skus) {
+            const dColor = s.direction === 'over' ? 'var(--red)' : 'var(--blue)';
+            html += `<tr>
+                <td style="font-family:'Space Mono',monospace;font-size:10px">${s.sku}</td>
+                <td class="num" style="font-family:'Rajdhani',sans-serif;color:${dColor}">${s.avg_error_pct > 0 ? '+' : ''}${s.avg_error_pct}%</td>
+                <td style="font-family:'Space Mono',monospace;font-size:10px;color:${dColor};text-transform:uppercase">${s.direction}</td>
+                <td class="num" style="font-family:'Rajdhani',sans-serif">${s.samples}</td>
+            </tr>`;
+        }
+        html += '</tbody></table></div>';
+    }
+
+    body.innerHTML = html;
+    openDrawer('accuracy-drawer');
+}
+
+
+// ── Settings View ───────────────────────────────────────────────────
+
+async function loadSettingsView() {
+    const data = await api('/api/settings_config');
+    if (!data) return;
+
+    // General
+    document.getElementById('set-auto-refresh').value = data.auto_refresh_interval || 60;
+    document.getElementById('set-fulfillment-buffer').value = data.fulfillment_buffer || '10';
+    document.getElementById('set-expiration-days').value = data.expiration_warning_days || '14';
+    document.getElementById('set-recon-pct').value = data.yield_reconciliation_threshold_pct || 5;
+    document.getElementById('set-recon-min').value = data.yield_reconciliation_threshold_min || 2;
+
+    // SMTP
+    document.getElementById('set-smtp-host').value = data.smtp_host || 'smtp.gmail.com';
+    document.getElementById('set-smtp-port').value = data.smtp_port || '587';
+    document.getElementById('set-smtp-user').value = data.smtp_user || '';
+    document.getElementById('set-smtp-pass').value = data.smtp_password || '';
+    document.getElementById('set-email-from').value = data.depletion_email_from || '';
+    document.getElementById('set-email-to').value = data.depletion_email_to || '';
+
+    // Vendor catalog
+    renderVendorCatalog(data.vendor_catalog || {});
+
+    // Reorder points
+    renderReorderPoints(data.reorder_points || {});
+}
+
+async function saveGeneralSettings() {
+    const data = await api('/api/settings_config', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            auto_refresh_interval: parseInt(document.getElementById('set-auto-refresh').value) || 60,
+            fulfillment_buffer: document.getElementById('set-fulfillment-buffer').value,
+            expiration_warning_days: document.getElementById('set-expiration-days').value,
+            yield_reconciliation_threshold_pct: parseInt(document.getElementById('set-recon-pct').value) || 5,
+            yield_reconciliation_threshold_min: parseInt(document.getElementById('set-recon-min').value) || 2,
+        }),
+    });
+    if (data?.ok) log('General settings saved', 'green');
+}
+
+async function saveSmtpSettings() {
+    const data = await api('/api/settings_config', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            smtp_host: document.getElementById('set-smtp-host').value,
+            smtp_port: document.getElementById('set-smtp-port').value,
+            smtp_user: document.getElementById('set-smtp-user').value,
+            smtp_password: document.getElementById('set-smtp-pass').value,
+            depletion_email_from: document.getElementById('set-email-from').value,
+            depletion_email_to: document.getElementById('set-email-to').value,
+        }),
+    });
+    if (data?.ok) log('SMTP settings saved', 'green');
+}
+
+function renderVendorCatalog(catalog) {
+    const body = document.getElementById('vendor-body');
+    if (!body) return;
+    let html = '';
+    for (const [sku, v] of Object.entries(catalog).sort()) {
+        html += `<tr>
+            <td style="font-family:'Space Mono',monospace;font-size:10px">${sku}</td>
+            <td style="font-family:'DM Sans',sans-serif;font-size:11px">${v.vendor || ''}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif">$${(v.unit_cost || 0).toFixed(2)}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif">${v.case_qty || 1}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif">${v.moq || 0}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif">${v.wheel_weight_lbs || '-'}</td>
+            <td><button class="btn btn-red btn-sm" onclick="deleteVendor('${sku}')">Del</button></td>
+        </tr>`;
+    }
+    body.innerHTML = html || '<tr><td colspan="7" style="color:var(--fg2);font-size:11px;padding:12px">No vendor catalog entries. Click + Add to create one.</td></tr>';
+}
+
+async function addVendorRow() {
+    const sku = prompt('SKU (e.g. CH-CHED):');
+    if (!sku) return;
+    const vendor = prompt('Vendor name:') || '';
+    const unit_cost = parseFloat(prompt('Unit cost ($):') || '0');
+    const case_qty = parseInt(prompt('Case quantity:') || '1');
+    const data = await api('/api/vendor_catalog', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ sku, vendor, unit_cost, case_qty, moq: 0, wheel_weight_lbs: 0 }),
+    });
+    if (data?.ok) {
+        log(`Added vendor entry: ${sku}`, 'green');
+        loadSettingsView();
+    }
+}
+
+async function deleteVendor(sku) {
+    await api(`/api/vendor_catalog/${sku}`, { method: 'DELETE' });
+    loadSettingsView();
+}
+
+function renderReorderPoints(rp) {
+    const body = document.getElementById('reorder-body');
+    if (!body) return;
+    let html = '';
+    for (const [sku, p] of Object.entries(rp).sort()) {
+        html += `<tr>
+            <td style="font-family:'Space Mono',monospace;font-size:10px">${sku}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif">${p.min_stock || 0}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif">${p.preferred_qty || 0}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif">${p.lead_days || 7}</td>
+            <td><button class="btn btn-red btn-sm" onclick="deleteReorderPoint('${sku}')">Del</button></td>
+        </tr>`;
+    }
+    body.innerHTML = html || '<tr><td colspan="5" style="color:var(--fg2);font-size:11px;padding:12px">No reorder points. Click + Add to set per-SKU thresholds.</td></tr>';
+}
+
+async function addReorderRow() {
+    const sku = prompt('SKU (e.g. CH-CHED):');
+    if (!sku) return;
+    const min_stock = parseInt(prompt('Minimum stock level:') || '0');
+    const preferred_qty = parseInt(prompt('Preferred order quantity (0 = auto):') || '0');
+    const lead_days = parseInt(prompt('Lead time (days):') || '7');
+    const data = await api('/api/reorder_points', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ sku, min_stock, preferred_qty, lead_days }),
+    });
+    if (data?.ok) {
+        log(`Added reorder point: ${sku} (min: ${min_stock})`, 'green');
+        loadSettingsView();
+    }
+}
+
+async function deleteReorderPoint(sku) {
+    const data = await api('/api/settings_config', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ reorder_points: {} }),  // We need a delete endpoint
+    });
+    // For now, remove via full update
+    const config = await api('/api/settings_config');
+    if (config?.reorder_points) {
+        delete config.reorder_points[sku];
+        await api('/api/settings_config', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ reorder_points: config.reorder_points }),
+        });
+        loadSettingsView();
+    }
+}
+
+
+// ── Undo Depletion / Audit Trail ────────────────────────────────────
+
+async function undoDepletion() {
+    if (!confirm('Undo the last depletion? This will restore inventory to the pre-depletion snapshot.')) return;
+    const data = await api('/api/undo_depletion', { method: 'POST' });
+    if (data?.error) {
+        log(`Undo failed: ${data.error}`, 'red');
+        return;
+    }
+    log(`Undo: restored ${data.units_restored} units from "${data.restored_from}"`, 'green');
+    setMascot('happy', 'Depletion undone!');
+    await calculateRMFG();
+}
+
+async function showAuditLog() {
+    const data = await api('/api/audit_log');
+    if (!data?.entries) return;
+
+    const body = document.getElementById('audit-drawer-body');
+    let html = `<table><thead><tr>
+        <th>Time</th><th>Action</th><th>Detail</th>
+    </tr></thead><tbody>`;
+
+    for (const e of data.entries) {
+        const ts = e.timestamp ? new Date(e.timestamp).toLocaleString() : '';
+        const actionColors = {
+            depletion_applied: 'var(--orange)',
+            undo_depletion: 'var(--green)',
+            waste_recorded: 'var(--red)',
+            po_emailed: 'var(--blue)',
+            po_received: 'var(--green)',
+            snapshot_dropbox: 'var(--accent)',
+            snapshot_depletion: 'var(--orange)',
+            snapshot_manual: 'var(--fg2)',
+            snapshot_undo: 'var(--green)',
+        };
+        const color = actionColors[e.action] || 'var(--fg2)';
+        html += `<tr>
+            <td style="font-family:'Space Mono',monospace;font-size:10px;white-space:nowrap">${ts}</td>
+            <td class="audit-action" style="color:${color}">${e.action}</td>
+            <td style="font-family:'DM Sans',sans-serif;font-size:11px">${e.detail || ''}</td>
+        </tr>`;
+    }
+    html += '</tbody></table>';
+    body.innerHTML = html;
+    openDrawer('audit-drawer');
+}
+
+
+// ── Waste / Spoilage Ledger ─────────────────────────────────────────
+
+async function showWasteLedger() {
+    const data = await api('/api/waste');
+    if (!data) return;
+
+    const body = document.getElementById('waste-drawer-body');
+    let html = '';
+
+    // Summary stats
+    if (data.total_wasted > 0) {
+        html += `<div style="display:flex;gap:16px;padding:10px 12px;border-bottom:1px solid var(--border)">
+            <div class="cal-summary"><div class="cal-summary-val" style="font-family:'Rajdhani',sans-serif;font-size:18px;font-weight:600;color:var(--red)">${data.total_wasted}</div><div class="cal-summary-label">Total Wasted</div></div>
+            <div class="cal-summary"><div class="cal-summary-val" style="font-family:'Rajdhani',sans-serif;font-size:18px">${Object.keys(data.by_sku).length}</div><div class="cal-summary-label">SKUs Affected</div></div>
+            <div class="cal-summary"><div class="cal-summary-val" style="font-family:'Rajdhani',sans-serif;font-size:18px">${data.entries.length}</div><div class="cal-summary-label">Entries</div></div>
+        </div>`;
+
+        // By-reason breakdown
+        html += `<div style="display:flex;gap:12px;padding:8px 12px;border-bottom:1px solid var(--border)">`;
+        for (const [reason, qty] of Object.entries(data.by_reason)) {
+            html += `<span style="font-family:'Space Mono',monospace;font-size:10px;color:var(--fg2)">${reason}: <span style="color:var(--red)">${qty}</span></span>`;
+        }
+        html += '</div>';
+    }
+
+    // Table
+    html += `<table><thead><tr>
+        <th>Date</th><th>SKU</th><th class="num">Qty</th><th>Reason</th><th>Actions</th>
+    </tr></thead><tbody>`;
+
+    for (const e of (data.entries || []).slice().reverse()) {
+        html += `<tr>
+            <td style="font-family:'Space Mono',monospace;font-size:10px">${e.date}</td>
+            <td style="font-family:'Space Mono',monospace;font-size:10px">${e.sku}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif;color:var(--red)">${e.qty}</td>
+            <td style="font-family:'DM Sans',sans-serif;font-size:11px">${e.reason}</td>
+            <td><button class="btn btn-dim btn-sm" onclick="deleteWaste('${e.id}')">Del</button></td>
+        </tr>`;
+    }
+    html += '</tbody></table>';
+
+    if (!data.entries || data.entries.length === 0) {
+        html = `<div style="padding:16px;color:var(--fg2);font-family:'Space Mono',monospace;font-size:10px;text-transform:uppercase">No waste recorded yet.</div>`;
+    }
+
+    body.innerHTML = html;
+    openDrawer('waste-drawer');
+}
+
+function showRecordWaste() {
+    const sku = prompt('SKU to waste (e.g. CH-BRIE):');
+    if (!sku) return;
+    const qty = parseInt(prompt('Quantity wasted:') || '0');
+    if (qty <= 0) return;
+    const reason = prompt('Reason (spoilage/damaged/expired/other):', 'spoilage') || 'spoilage';
+    recordWaste(sku, qty, reason);
+}
+
+async function recordWaste(sku, qty, reason) {
+    const data = await api('/api/waste', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ sku, qty, reason }),
+    });
+    if (data?.ok) {
+        log(`Waste: ${sku} x${qty} (${reason})`, 'orange');
+        showWasteLedger();
+    }
+}
+
+async function deleteWaste(id) {
+    await api(`/api/waste/${id}`, { method: 'DELETE' });
+    showWasteLedger();
+}
+
+
+// ── Email Wednesday PO ──────────────────────────────────────────────
+
+async function emailPO() {
+    if (!confirm('Email the current order list via SMTP?')) return;
+
+    // Collect lines from the order drawer table
+    const rows = document.querySelectorAll('#order-drawer-body table tbody tr');
+    const lines = [];
+    rows.forEach(row => {
+        const cells = row.querySelectorAll('td');
+        if (cells.length >= 4) {
+            lines.push({
+                sku: cells[0]?.textContent?.trim() || '',
+                order_qty: parseInt(cells[1]?.textContent?.trim()) || 0,
+                cases: parseInt(cells[2]?.textContent?.trim()) || 0,
+                case_qty: parseInt(cells[3]?.textContent?.trim()) || 1,
+                vendor: cells[4]?.textContent?.trim() || '',
+                line_cost: parseFloat(cells[5]?.textContent?.replace('$', '').trim()) || 0,
+            });
+        }
+    });
+
+    if (lines.length === 0) {
+        log('No order lines to email', 'yellow');
+        return;
+    }
+
+    const data = await api('/api/email_po', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ lines }),
+    });
+
+    if (data?.error) {
+        log(`Email failed: ${data.error}`, 'red');
+    } else if (data?.ok) {
+        log(`PO emailed to ${data.sent_to} (${data.lines} lines)`, 'green');
+        setMascot('happy', 'PO sent!');
+    }
+}
+
+
+// ── Wed PO Draft (from reorder points) ──────────────────────────────
+
+async function showPODraft() {
+    const data = await api('/api/wed_po_draft');
+    if (!data) return;
+
+    if (data.message) {
+        log(data.message, 'yellow');
+        return;
+    }
+
+    if (data.lines.length === 0) {
+        log('All SKUs above reorder points — no orders needed', 'green');
+        return;
+    }
+
+    // Render in order drawer
+    const body = document.getElementById('order-drawer-body');
+    let html = `<div style="display:flex;gap:16px;padding:10px 12px;border-bottom:1px solid var(--border)">
+        <div class="cal-summary"><div class="cal-summary-val" style="font-family:'Rajdhani',sans-serif;font-size:18px;font-weight:600">${data.total_lines}</div><div class="cal-summary-label">Order Lines</div></div>
+        <div class="cal-summary"><div class="cal-summary-val" style="font-family:'Rajdhani',sans-serif;font-size:18px">$${data.total_cost.toLocaleString()}</div><div class="cal-summary-label">Total Cost</div></div>
+    </div>`;
+
+    html += `<table><thead><tr>
+        <th>SKU</th><th class="num">Order Qty</th><th class="num">Cases</th><th class="num">Case Qty</th>
+        <th>Vendor</th><th class="num">Cost</th><th class="num">Current</th><th class="num">Min</th><th class="num">Deficit</th>
+    </tr></thead><tbody>`;
+
+    for (const l of data.lines) {
+        html += `<tr>
+            <td style="font-family:'Space Mono',monospace;font-size:10px">${l.sku}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif;font-weight:600">${l.order_qty}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif">${l.cases}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif">${l.case_qty}</td>
+            <td style="font-family:'DM Sans',sans-serif;font-size:11px">${l.vendor || '-'}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif">${l.line_cost > 0 ? '$' + l.line_cost.toFixed(2) : '-'}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif;color:var(--red)">${l.current}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif">${l.min_stock}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif;color:var(--red)">${l.deficit}</td>
+        </tr>`;
+    }
+    html += '</tbody></table>';
+
+    body.innerHTML = html;
+    openDrawer('order-drawer');
+}
+
+
+// ── Sparklines in NET Table ─────────────────────────────────────────
+
+let skuHistoryCache = null;
+
+async function loadSkuHistory() {
+    const data = await api('/api/sku_history');
+    if (data?.count > 1) {
+        skuHistoryCache = data.history;
+    }
+}
+
+function renderSparkline(sku) {
+    if (!skuHistoryCache || !skuHistoryCache[sku]) return '';
+    const vals = skuHistoryCache[sku];
+    if (vals.length < 2) return '';
+
+    const w = 48, h = 16;
+    const max = Math.max(...vals, 1);
+    const min = Math.min(...vals, 0);
+    const range = max - min || 1;
+    const step = w / (vals.length - 1);
+
+    let path = '';
+    vals.forEach((v, i) => {
+        const x = i * step;
+        const y = h - ((v - min) / range) * h;
+        path += (i === 0 ? 'M' : 'L') + `${x.toFixed(1)},${y.toFixed(1)}`;
+    });
+
+    // Color based on trend
+    const first = vals[0], last = vals[vals.length - 1];
+    const color = last > first ? 'var(--green)' : last < first ? 'var(--red)' : 'var(--fg2)';
+
+    return `<svg class="sparkline" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+        <path d="${path}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`;
+}
+
+
+// ── Supplier Lead Times ─────────────────────────────────────────────
+
+async function showLeadTimes() {
+    const data = await api('/api/lead_times');
+    if (!data) return;
+
+    const body = document.getElementById('leadtime-drawer-body');
+
+    if (!data.has_data) {
+        body.innerHTML = `<div style="padding:16px;color:var(--fg2);font-family:'Space Mono',monospace;font-size:10px;text-transform:uppercase">
+            No lead time data yet. Mark POs as received to start tracking.</div>`;
+        openDrawer('leadtime-drawer');
+        return;
+    }
+
+    let html = '';
+
+    // Vendor summary
+    html += `<div style="padding:8px 12px"><div style="font-family:'Space Mono',monospace;font-size:10px;text-transform:uppercase;color:var(--fg2);margin-bottom:6px">By Vendor</div>`;
+    html += `<table><thead><tr>
+        <th>Vendor</th><th class="num">Avg Days</th><th class="num">Min</th><th class="num">Max</th><th class="num">Records</th>
+    </tr></thead><tbody>`;
+    for (const [vendor, s] of Object.entries(data.by_vendor).sort()) {
+        html += `<tr>
+            <td style="font-family:'DM Sans',sans-serif;font-size:11px">${vendor}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif;font-weight:600">${s.avg_days}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif">${s.min_days}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif">${s.max_days}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif">${s.count}</td>
+        </tr>`;
+    }
+    html += '</tbody></table></div>';
+
+    // By SKU
+    if (Object.keys(data.by_sku).length > 0) {
+        html += `<div style="padding:8px 12px"><div style="font-family:'Space Mono',monospace;font-size:10px;text-transform:uppercase;color:var(--fg2);margin-bottom:6px">By SKU</div>`;
+        html += `<table><thead><tr>
+            <th>SKU</th><th class="num">Avg Days</th><th class="num">Records</th>
+        </tr></thead><tbody>`;
+        for (const [sku, s] of Object.entries(data.by_sku).sort()) {
+            html += `<tr>
+                <td style="font-family:'Space Mono',monospace;font-size:10px">${sku}</td>
+                <td class="num" style="font-family:'Rajdhani',sans-serif;font-weight:600">${s.avg_days}</td>
+                <td class="num" style="font-family:'Rajdhani',sans-serif">${s.count}</td>
+            </tr>`;
+        }
+        html += '</tbody></table></div>';
+    }
+
+    // Recent entries
+    html += `<div style="padding:8px 12px"><div style="font-family:'Space Mono',monospace;font-size:10px;text-transform:uppercase;color:var(--fg2);margin-bottom:6px">Recent Receipts</div>`;
+    html += `<table><thead><tr>
+        <th>SKU</th><th>Vendor</th><th>Placed</th><th>Received</th><th class="num">Days</th><th class="num">Qty</th>
+    </tr></thead><tbody>`;
+    for (const e of data.entries.slice().reverse()) {
+        html += `<tr>
+            <td style="font-family:'Space Mono',monospace;font-size:10px">${e.sku}</td>
+            <td style="font-family:'DM Sans',sans-serif;font-size:11px">${e.vendor || '-'}</td>
+            <td style="font-family:'Space Mono',monospace;font-size:10px">${e.placed_date || '-'}</td>
+            <td style="font-family:'Space Mono',monospace;font-size:10px">${e.received_date}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif;font-weight:600">${e.actual_lead_days != null ? e.actual_lead_days : '-'}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif">${e.qty}</td>
+        </tr>`;
+    }
+    html += '</tbody></table></div>';
+
+    body.innerHTML = html;
+    openDrawer('leadtime-drawer');
+}
