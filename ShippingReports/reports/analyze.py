@@ -108,54 +108,99 @@ def transit_analysis(shipments: List[dict],
 
 
 def misroute_analysis(shipments: List[dict],
-                      territories: Dict[str, List[str]]) -> List[Dict[str, Any]]:
+                      territories: Dict[str, List[str]],
+                      acceptable_hubs: Optional[Dict[str, set]] = None,
+                      dallas_2day_states: Optional[set] = None,
+                      min_volume: int = 3) -> List[Dict[str, Any]]:
     """Detect shipments routed through the wrong hub for their state.
 
     Args:
         shipments: List of shipment dicts
         territories: Dict mapping hub name to list of state abbreviations
+        acceptable_hubs: Optional dict of state -> set of acceptable hubs.
+            If not provided, only the primary territory hub is acceptable.
+        dallas_2day_states: States with no assigned hub (2Day Express from Dallas).
+            Excluded from misroute analysis entirely.
+        min_volume: Minimum shipments per state to include in results
     """
-    # Build reverse lookup: state -> expected hub
+    if dallas_2day_states is None:
+        dallas_2day_states = set()
+
+    # Build reverse lookup: state -> primary hub
     state_to_hub = {}
     for hub, states in territories.items():
         for state in states:
             state_to_hub[state] = hub
 
+    def _acceptable_for(st):
+        if acceptable_hubs and st in acceptable_hubs:
+            return set(acceptable_hubs[st])
+        primary = state_to_hub.get(st)
+        return {primary} if primary else set()
+
     misroutes = []
     by_state = defaultdict(lambda: defaultdict(list))
     for s in shipments:
-        if s.get('transit_days') is not None:
-            by_state[s['state']][s['hub']].append(s)
+        if s.get('transit_days') is None:
+            continue
+        if s.get('hub') in ('HQ_IGNORE', 'Unknown'):
+            continue
+        if s['state'] in dallas_2day_states:
+            continue
+        by_state[s['state']][s['hub']].append(s)
 
     for state in sorted(by_state.keys()):
-        expected = state_to_hub.get(state, 'Unknown')
         hub_data = by_state[state]
-        wrong = {h: rows for h, rows in hub_data.items() if h != expected}
-        right = hub_data.get(expected, [])
-
-        if not wrong:
+        total = sum(len(rows) for rows in hub_data.values())
+        if total < min_volume:
             continue
 
+        acceptable = _acceptable_for(state)
+        primary = state_to_hub.get(state, 'Unknown')
+
+        # Split into acceptable vs wrong, excluding Tuesday Dallas overflow
+        ok_rows = []
+        wrong = {}
+        for hub, rows in hub_data.items():
+            if hub in acceptable:
+                ok_rows.extend(rows)
+            else:
+                real_wrong = [r for r in rows
+                              if not (hub == 'Dallas' and r.get('ship_dow') == 'Tuesday')]
+                tue_overflow = [r for r in rows
+                                if hub == 'Dallas' and r.get('ship_dow') == 'Tuesday']
+                ok_rows.extend(tue_overflow)
+                if real_wrong:
+                    wrong[hub] = real_wrong
+
         wrong_count = sum(len(rows) for rows in wrong.values())
-        total = wrong_count + len(right)
         if wrong_count == 0:
             continue
 
-        right_avg_cost = sum(r['cost'] for r in right) / len(right) if right else 0
+        adjusted_total = wrong_count + len(ok_rows)
+
+        ok_avg_transit = sum(r['transit_days'] for r in ok_rows) / len(ok_rows) if ok_rows else None
+        ok_avg_cost = sum(r['cost'] for r in ok_rows) / len(ok_rows) if ok_rows else 0
         wrong_all = [r for rows in wrong.values() for r in rows]
         wrong_avg_cost = sum(r['cost'] for r in wrong_all) / len(wrong_all)
         wrong_avg_transit = sum(r['transit_days'] for r in wrong_all) / len(wrong_all)
 
+        # Flag whether the "wrong" hub is actually faster
+        wrong_is_faster = ok_avg_transit is not None and wrong_avg_transit < ok_avg_transit
+
         misroutes.append({
             'state': state,
-            'expected_hub': expected,
+            'expected_hub': primary,
+            'acceptable_hubs': sorted(acceptable),
             'wrong_count': wrong_count,
-            'total_count': total,
-            'misroute_pct': wrong_count / total * 100,
-            'expected_avg_cost': right_avg_cost,
+            'total_count': adjusted_total,
+            'misroute_pct': wrong_count / adjusted_total * 100,
+            'ok_avg_cost': ok_avg_cost,
             'wrong_avg_cost': wrong_avg_cost,
-            'cost_spread': wrong_avg_cost - right_avg_cost,
+            'cost_spread': wrong_avg_cost - ok_avg_cost,
+            'ok_avg_transit': ok_avg_transit,
             'wrong_avg_transit': wrong_avg_transit,
+            'wrong_is_faster': wrong_is_faster,
             'hub_breakdown': {h: len(rows) for h, rows in hub_data.items()},
         })
 

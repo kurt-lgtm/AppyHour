@@ -27,11 +27,13 @@ DEFAULT_STORM_DATES = {
     '2026-02-02', '2026-02-03', '2026-02-04',
 }
 
-# Territory assignments for misroute detection
+# Territory assignments: primary hub per state
+# States can also have acceptable alternate hubs (see ACCEPTABLE_HUBS)
 TERRITORIES = {
-    'Nashville': {'AL', 'CT', 'DC', 'DE', 'FL', 'GA', 'IL', 'IN', 'KY', 'MA',
-                  'MD', 'ME', 'MI', 'MO', 'MS', 'NC', 'NH', 'NJ', 'NY', 'OH',
-                  'PA', 'RI', 'SC', 'TN', 'VA', 'WV', 'WI'},
+    'Nashville': {'AL', 'CT', 'DC', 'DE', 'FL', 'GA', 'KY', 'MA',
+                  'MD', 'MS', 'NC', 'NJ', 'NY', 'PA', 'RI', 'SC',
+                  'TN', 'VA', 'WV'},
+    'Indianapolis': {'IL', 'IN', 'ME', 'MI', 'MO', 'NH', 'OH', 'WI'},
     'Anaheim': {'AZ', 'CA', 'CO', 'ID', 'NM', 'NV', 'OR', 'UT', 'WA'},
     'Dallas': {'AR', 'IA', 'KS', 'LA', 'MN', 'ND', 'NE', 'OK', 'SD', 'TX'},
 }
@@ -40,6 +42,26 @@ STATE_TO_HUB = {}
 for _hub, _states in TERRITORIES.items():
     for _st in _states:
         STATE_TO_HUB[_st] = _hub
+
+# States where multiple hubs are acceptable (not misroutes).
+# Key = state, value = set of acceptable hubs (primary is always included).
+ACCEPTABLE_HUBS = {
+    'IL': {'Indianapolis', 'Nashville', 'Dallas'},
+    'IN': {'Indianapolis', 'Nashville'},
+    'MI': {'Indianapolis', 'Nashville'},
+    'OH': {'Indianapolis', 'Nashville'},
+    'MO': {'Indianapolis', 'Nashville', 'Dallas'},
+    'WI': {'Indianapolis', 'Nashville'},
+    'ME': {'Indianapolis', 'Nashville'},
+    'NH': {'Indianapolis', 'Nashville'},
+    'MA': {'Nashville', 'Indianapolis'},
+    'NY': {'Nashville', 'Indianapolis'},
+    'PA': {'Nashville', 'Indianapolis'},
+}
+
+# Unassigned states — remote/low-volume, typically 2Day Express from Dallas
+# Not flagged as misroutes regardless of hub
+DALLAS_2DAY_STATES = {'AK', 'HI', 'MT', 'VT', 'WY'}
 
 # States already handled at state level (don't generate zip overrides)
 STATE_LEVEL_HANDLED = {'AK', 'HI', 'MN'}
@@ -157,17 +179,43 @@ def find_api_forced_2day_zips(all_shipments: List[dict],
     return results
 
 
+def _get_acceptable_hubs(state: str) -> set:
+    """Return set of acceptable hubs for a state.
+
+    Uses ACCEPTABLE_HUBS if defined, otherwise just the primary territory hub.
+    Dallas is always acceptable on Tuesdays (only hub operating).
+    HQ_IGNORE and Unknown are never real hubs.
+    """
+    if state in DALLAS_2DAY_STATES:
+        return {'Dallas', 'Nashville', 'Anaheim', 'Indianapolis'}
+    acceptable = ACCEPTABLE_HUBS.get(state)
+    if acceptable:
+        return set(acceptable)
+    primary = STATE_TO_HUB.get(state)
+    return {primary} if primary else set()
+
+
 def find_misrouted_zips(shipments: List[dict],
                         min_volume: int = 3,
                         min_misroute_pct: float = 40.0) -> Dict[str, dict]:
     """Find zips consistently shipped from wrong hub with transit penalty.
 
-    Only flags zips where misrouting causes measurable transit degradation.
+    Improvements over v1:
+    - Indianapolis recognized as a real hub
+    - Multi-hub states: acceptable alternate hubs aren't misroutes
+    - Tuesday Dallas shipments excluded (only hub operating that day)
+    - Unassigned states (AK, HI, MT, VT, WY) skipped — they're 2Day Express
+    - Only flags when wrong hub is actually slower
+    - Minimum volume threshold filters noise
     """
     by_zip = defaultdict(lambda: defaultdict(list))
     for s in shipments:
-        if s['state'] not in STATE_LEVEL_HANDLED:
-            by_zip[s['zip']][s['hub']].append(s)
+        # Skip non-fulfillment hubs and unassigned states
+        if s.get('hub') in ('HQ_IGNORE', 'Unknown'):
+            continue
+        if s['state'] in STATE_LEVEL_HANDLED or s['state'] in DALLAS_2DAY_STATES:
+            continue
+        by_zip[s['zip']][s['hub']].append(s)
 
     results = {}
     for zip_code, hub_data in by_zip.items():
@@ -176,51 +224,59 @@ def find_misrouted_zips(shipments: List[dict],
             continue
 
         state = next(iter(next(iter(hub_data.values()))))['state']
-        expected_hub = STATE_TO_HUB.get(state)
-        if not expected_hub:
+        acceptable = _get_acceptable_hubs(state)
+        if not acceptable:
             continue
 
-        wrong_hubs = {h: rows for h, rows in hub_data.items() if h != expected_hub}
+        # Split into acceptable vs wrong, but Tuesday Dallas is always acceptable
+        ok_rows = []
+        wrong_hubs = {}
+        for hub, rows in hub_data.items():
+            if hub in acceptable:
+                ok_rows.extend(rows)
+            else:
+                # Tuesday shipments from Dallas are expected overflow, not misroutes
+                real_wrong = [r for r in rows
+                              if not (hub == 'Dallas' and r.get('ship_dow') == 'Tuesday')]
+                tue_overflow = [r for r in rows
+                                if hub == 'Dallas' and r.get('ship_dow') == 'Tuesday']
+                ok_rows.extend(tue_overflow)
+                if real_wrong:
+                    wrong_hubs[hub] = real_wrong
+
         wrong_count = sum(len(rows) for rows in wrong_hubs.values())
         if wrong_count == 0:
             continue
 
-        misroute_pct = wrong_count / total * 100
+        adjusted_total = wrong_count + len(ok_rows)
+        misroute_pct = wrong_count / adjusted_total * 100
         if misroute_pct < min_misroute_pct:
             continue
 
-        # Check if misrouting causes transit penalty
-        right_rows = hub_data.get(expected_hub, [])
+        # Compare transit: only flag if wrong hub is slower
         wrong_rows = [r for rows in wrong_hubs.values() for r in rows]
-
-        right_avg = sum(r['transit_days'] for r in right_rows) / len(right_rows) if right_rows else None
         wrong_avg = sum(r['transit_days'] for r in wrong_rows) / len(wrong_rows)
+        ok_avg = sum(r['transit_days'] for r in ok_rows) / len(ok_rows) if ok_rows else None
 
-        # Only flag if wrong hub is slower (or we have no right-hub data to compare)
-        if right_avg is not None and wrong_avg <= right_avg:
-            continue
+        if ok_avg is not None and wrong_avg <= ok_avg:
+            continue  # "Wrong" hub is same speed or faster — not a real problem
 
         city = wrong_rows[0]['city']
         wrong_hub_names = list(wrong_hubs.keys())
-
-        # Check if these are Tuesday-only (expected, not actionable on Saturday)
-        wrong_dows = [r['ship_dow'] for r in wrong_rows]
-        tue_pct = sum(1 for d in wrong_dows if d in ('Tuesday', 'Monday')) / len(wrong_dows) * 100
-        # If >80% are Tue/Mon, this is capacity overflow not a routing problem
-        if tue_pct > 80:
-            continue
+        primary_hub = STATE_TO_HUB.get(state, 'Unknown')
 
         results[zip_code] = {
             'city': city,
             'state': state,
-            'expected_hub': expected_hub,
+            'expected_hub': primary_hub,
+            'acceptable_hubs': sorted(acceptable),
             'wrong_hubs': wrong_hub_names,
-            'sample_size': total,
+            'sample_size': adjusted_total,
             'misroute_count': wrong_count,
             'misroute_pct': round(misroute_pct, 1),
             'wrong_avg_transit': round(wrong_avg, 1),
-            'right_avg_transit': round(right_avg, 1) if right_avg else None,
-            'transit_penalty': round(wrong_avg - right_avg, 1) if right_avg else None,
+            'ok_avg_transit': round(ok_avg, 1) if ok_avg else None,
+            'transit_penalty': round(wrong_avg - ok_avg, 1) if ok_avg else None,
             'last_ship': max(r['ship_date'] for r in wrong_rows if r.get('ship_date')),
         }
 
@@ -339,6 +395,7 @@ def build_zip_overrides(force_2day: Dict[str, dict],
         tags = []
         for wrong_hub in info['wrong_hubs']:
             tags.append(f"!NO OnTrac - {wrong_hub}_AHB!")
+        ok_transit_str = f"{info['ok_avg_transit']}d" if info.get('ok_avg_transit') else '?'
         overrides[zip_code] = {
             'city': info['city'],
             'state': info['state'],
@@ -346,8 +403,9 @@ def build_zip_overrides(force_2day: Dict[str, dict],
             'tags': tags,
             'transit_override': None,
             'reason': (f"{info['misroute_pct']}% misrouted to {', '.join(info['wrong_hubs'])} "
-                       f"(avg {info['wrong_avg_transit']}d vs {info['right_avg_transit']}d from "
-                       f"{info['expected_hub']}, n={info['sample_size']})"),
+                       f"(avg {info['wrong_avg_transit']}d vs {ok_transit_str} from "
+                       f"{', '.join(info.get('acceptable_hubs', [info['expected_hub']]))}, "
+                       f"n={info['sample_size']})"),
             'confidence': 'high' if info['sample_size'] >= 5 else 'medium',
             'sample_size': info['sample_size'],
             'last_seen': info['last_ship'],
