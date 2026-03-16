@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Fulfillment Planner</title>
     <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/styles.css?v=31">
+    <link rel="stylesheet" href="/static/styles.css?v=33">
 </head>
 <body>
 
@@ -23,6 +23,7 @@
         <button class="btn btn-accent view-btn" id="view-calendar" onclick="switchView('calendar')">&#128197; Calendar</button>
         <button class="btn btn-accent view-btn" id="view-invoices" onclick="switchView('invoices')">&#128196; Invoices</button>
         <button class="btn btn-accent view-btn" id="view-cutorder" onclick="switchView('cutorder')">&#9986; Cut Order</button>
+        <button class="btn btn-accent view-btn" id="view-runway" onclick="switchView('runway')">&#9201; Runway</button>
         <button class="btn btn-accent view-btn" id="view-settings" onclick="switchView('settings')">&#9881; Settings</button>
         <div class="toolbar-sep"></div>
         <button class="btn btn-green" onclick="syncDropbox()">&#9729; Dropbox</button>
@@ -111,6 +112,16 @@
                         </tr></thead>
                         <tbody id="extras-body"></tbody>
                     </table>
+                </div>
+            </div>
+
+            <!-- Monthly Boxes -->
+            <div class="panel" id="monthly-box-panel">
+                <div class="panel-header">
+                    <span class="icon">&#128230;</span>
+                    Monthly Boxes
+                </div>
+                <div class="panel-body" id="monthly-boxes-container">
                 </div>
             </div>
 
@@ -442,6 +453,7 @@
             <div class="inv-actions">
                 <button class="btn btn-blue" onclick="loadCutOrder()">&#128260; Refresh</button>
                 <button class="btn btn-green" onclick="exportCutOrderCSV()">&#8682; Export CSV</button>
+                <button class="btn btn-blue" onclick="emailCutOrder()">&#9993; Email Cut Order</button>
             </div>
         </div>
 
@@ -492,6 +504,16 @@
             <div class="panel-body" id="co-surplus-body"></div>
         </div>
 
+        <!-- Inventory Journal -->
+        <div class="panel" id="co-journal-panel" style="display:none">
+            <div class="panel-header">
+                <span class="icon">&#128220;</span>
+                Inventory Journal
+                <button class="btn btn-dim btn-sm" style="margin-left:auto" onclick="loadJournal()">Refresh</button>
+            </div>
+            <div class="panel-body" id="co-journal-body"></div>
+        </div>
+
         <!-- Projection Settings (inline) -->
         <div class="panel" id="co-projection-panel">
             <div class="panel-header">
@@ -517,6 +539,52 @@
                 <button class="btn btn-dim btn-sm" onclick="closeDrawer('co-attr-drawer')">Close</button>
             </div>
             <div class="cal-drawer-body" id="co-attr-body"></div>
+        </div>
+    </div>
+
+    <!-- ══ Runway View ══ (hidden by default) -->
+    <div id="runway-view" style="display:none">
+        <div id="runway-header">
+            <div class="cal-summary">
+                <div class="cal-summary-item">
+                    <span class="cal-summary-label">SKUs Tracked</span>
+                    <span class="cal-summary-value" id="rw-sku-count">--</span>
+                </div>
+                <div class="cal-summary-item">
+                    <span class="cal-summary-label">Avg Runway</span>
+                    <span class="cal-summary-value" id="rw-avg-forecast">--</span>
+                </div>
+                <div class="cal-summary-item">
+                    <span class="cal-summary-label">At Risk</span>
+                    <span class="cal-summary-value" id="rw-at-risk">--</span>
+                </div>
+                <div class="cal-summary-item">
+                    <span class="cal-summary-label" style="font-size:8px">repeat</span>
+                    <span class="cal-summary-value" id="rw-repeat-rate" style="font-size:14px">--</span>
+                </div>
+                <div class="cal-summary-item">
+                    <span class="cal-summary-label" style="font-size:8px">reship</span>
+                    <span class="cal-summary-value" id="rw-reship-pct" style="font-size:14px">--</span>
+                </div>
+                <div class="cal-summary-item">
+                    <span class="cal-summary-label" style="font-size:8px">churn/wk</span>
+                    <span class="cal-summary-value" id="rw-churn-wk" style="font-size:14px">--</span>
+                </div>
+            </div>
+        </div>
+        <div class="rw-legend">
+            <span class="rw-legend-item"><span class="rw-legend-swatch rw-swatch-solid"></span> Processed</span>
+            <span class="rw-legend-item"><span class="rw-legend-swatch rw-swatch-striped"></span> Wheel Potential</span>
+            <span class="rw-legend-item"><span class="rw-legend-swatch rw-swatch-ghost"></span> Discrete Edge</span>
+            <span class="rw-legend-item"><span class="rw-legend-dot" style="background:var(--rw-bar-ok)"></span> OK</span>
+            <span class="rw-legend-item"><span class="rw-legend-dot" style="background:var(--rw-bar-tight)"></span> Tight</span>
+            <span class="rw-legend-item"><span class="rw-legend-dot" style="background:var(--rw-bar-shortage)"></span> Shortage</span>
+            <span class="rw-legend-sep"></span>
+            <button class="rw-toggle-hidden" id="rw-toggle-hidden-btn" onclick="toggleRunwayHidden()" style="display:none">Show 0 hidden</button>
+        </div>
+        <div class="rw-body">
+            <div id="runway-assignments" class="rw-assignments"></div>
+            <div id="runway-grid" class="rw-grid"></div>
         </div>
     </div>
 
@@ -899,6 +967,6 @@
     <div id="mascot-speech-tail"></div>
 </div>
 
-<script src="/static/app.js?v=32"></script>
+<script src="/static/app.js?v=34"></script>
 </body>
 </html>

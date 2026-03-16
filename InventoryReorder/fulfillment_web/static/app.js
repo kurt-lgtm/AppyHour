@@ -783,6 +783,93 @@ function spawnConfetti() {
 async function loadAssignments() {
     const rows = await api('/api/assignments');
     renderAssignments(rows);
+    loadMonthlyBoxes();
+}
+
+async function loadMonthlyBoxes() {
+    const data = await api('/api/monthly_boxes');
+    renderMonthlyBoxes(data);
+}
+
+function renderMonthlyBoxes(data) {
+    const container = document.getElementById('monthly-boxes-container');
+    if (!container) return;
+    container.innerHTML = '';
+    for (const [boxType, info] of Object.entries(data)) {
+        const panel = document.createElement('div');
+        panel.className = 'monthly-box-panel';
+        let slotsHtml = '';
+        info.slots.forEach((slot, idx) => {
+            const assigned = slot.sku ? slot.sku : '\u2014';
+            const cls = slot.sku ? 'assigned' : 'unassigned';
+            slotsHtml += `<tr>
+                <td class="mb-slot-name">${slot.slot}</td>
+                <td class="mb-sku-cell ${cls}" data-box="${boxType}" data-idx="${idx}">${assigned}</td>
+            </tr>`;
+        });
+        const countDisplay = info.from_orders
+            ? `<span class="mb-count-label" title="From Shopify + Recharge orders">${info.count} orders</span>`
+            : `<input type="number" class="mb-count-input" value="${info.count}" min="0"
+                       data-box="${boxType}" title="Box count (manual)">`;
+        panel.innerHTML = `
+            <div class="mb-header">
+                <span class="mb-type">${boxType}</span>
+                ${countDisplay}
+            </div>
+            <table class="assign-table mb-table">
+                <thead><tr><th>Slot</th><th>SKU</th></tr></thead>
+                <tbody>${slotsHtml}</tbody>
+            </table>
+        `;
+        // Click handlers for SKU cells
+        panel.querySelectorAll('.mb-sku-cell').forEach(td => {
+            td.addEventListener('click', () => openMonthlyBoxPicker(td.dataset.box, parseInt(td.dataset.idx)));
+        });
+        // Count input handler (only for manual counts)
+        const countInput = panel.querySelector('.mb-count-input');
+        if (countInput) {
+            countInput.addEventListener('change', async () => {
+                await fetch('/api/monthly_box_count', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ box_type: boxType, count: parseInt(countInput.value) || 0 }),
+                });
+                log(`${boxType} count set to ${countInput.value}`, 'cyan');
+            });
+        }
+        container.appendChild(panel);
+    }
+}
+
+async function openMonthlyBoxPicker(boxType, slotIndex) {
+    const candidates = await api(`/api/monthly_box_candidates/${boxType}/${slotIndex}`);
+    const list = document.getElementById('picker-list');
+    list.innerHTML = '';
+    document.getElementById('picker-title').textContent = `Assign ${boxType} Slot ${slotIndex + 1}`;
+    candidates.forEach(c => {
+        const div = document.createElement('div');
+        div.className = 'picker-item';
+        div.innerHTML = `
+            <span class="pi-sku">${c.sku}</span>
+            <span class="pi-qty">${c.qty} avail</span>
+            <span class="pi-constraint pi-ok">${c.name || ''}</span>
+        `;
+        div.addEventListener('click', async () => {
+            const resp = await fetch('/api/monthly_box_assign', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ box_type: boxType, slot_index: slotIndex, sku: c.sku }),
+            });
+            const data = await resp.json();
+            if (data.ok) {
+                log(`Assigned: ${c.sku} -> ${boxType} slot ${slotIndex + 1}`, 'green');
+                closePicker();
+                loadMonthlyBoxes();
+            }
+        });
+        list.appendChild(div);
+    });
+    document.getElementById('picker-overlay').classList.add('visible');
 }
 
 function renderAssignments(rows) {
@@ -910,11 +997,15 @@ async function openPicker(curation, slot) {
         `;
         div.addEventListener('click', () => {
             if (c.constraint !== 'OK') {
-                setMascot('alert', `Blocked! ${c.sku} violates +/-2`);
-                log(`Blocked: ${c.sku} for ${curation} (${c.constraint})`, 'red');
-                return;
+                log(`Warning: ${c.sku} for ${curation} has adjacency overlap (${c.constraint}) — assigning anyway`, 'yellow');
+                setMascot('thinking', `${c.sku} overlaps nearby — proceed with caution`);
             }
-            assignCheese(curation, slot, c.sku);
+            if (pickerCallback) {
+                pickerCallback(curation, slot, c.sku);
+                pickerCallback = null;
+            } else {
+                assignCheese(curation, slot, c.sku);
+            }
             closePicker();
         });
         list.appendChild(div);
@@ -1854,6 +1945,8 @@ document.addEventListener('keydown', e => {
 //  VIEW SWITCHING + ACTION CALENDAR
 // ══════════════════════════════════════════════════════════════════════
 
+let pickerCallback = null;  // Override for picker click in runway view
+
 function switchView(view) {
     currentView = view;
     document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
@@ -1864,12 +1957,14 @@ function switchView(view) {
     const invView = document.getElementById('invoices-view');
     const setView = document.getElementById('settings-view');
     const coView = document.getElementById('cutorder-view');
+    const rwView = document.getElementById('runway-view');
 
     content.style.display = 'none';
     calView.style.display = 'none';
     if (invView) invView.style.display = 'none';
     if (setView) setView.style.display = 'none';
     if (coView) coView.style.display = 'none';
+    if (rwView) rwView.style.display = 'none';
 
     if (view === 'dashboard') {
         content.style.display = '';
@@ -1887,6 +1982,9 @@ function switchView(view) {
     } else if (view === 'cutorder') {
         if (coView) coView.style.display = '';
         loadCutOrder();
+    } else if (view === 'runway') {
+        if (rwView) rwView.style.display = '';
+        loadRunway();
     }
 }
 
@@ -3056,6 +3154,24 @@ async function initAutoSync() {
     }, intervalMs);
 
     log(`Auto-sync: every ${intervalMins}min`, 'cyan');
+
+    // Wednesday 10am cut order email check — only fetch settings on Wednesdays
+    setInterval(async () => {
+        const now = new Date();
+        if (now.getDay() !== 3) return;
+        if (now.getHours() !== 10 || now.getMinutes() > 5) return;
+
+        const todayStr = now.toISOString().slice(0, 10);
+        if (window._lastCutOrderEmailDate === todayStr) return;
+
+        const settings = await api('/api/data');
+        if (!settings?.cut_order_email_schedule?.enabled) return;
+
+        window._lastCutOrderEmailDate = todayStr;
+        log('Auto-sending Wednesday cut order email...', 'cyan');
+        await loadCutOrder();
+        await emailCutOrder();
+    }, 60000);
 }
 
 async function smartSync(isStartup = false) {
@@ -3752,6 +3868,7 @@ async function loadCutOrder() {
     cutOrderData = data;
     renderCutOrder(data);
     loadProjectionSettings();
+    loadJournal();
     log(`Cut order: ${data.summary.total_skus} SKUs, ${data.summary.total_demand} demand, ${data.summary.shortage_count} shortages`, data.summary.shortage_count > 0 ? 'red' : 'green');
 }
 
@@ -3927,4 +4044,286 @@ async function saveProjectionSettings() {
 
 function exportCutOrderCSV() {
     window.open('/api/cut_order_csv', '_blank');
+}
+
+async function emailCutOrder() {
+    if (!cutOrderData || !cutOrderData.cut_lines) {
+        log('Load cut order first', 'red');
+        return;
+    }
+    setMascot('loading', 'Sending cut order email...');
+    const resp = await api('/api/email_cut_order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lines: cutOrderData.cut_lines, summary: cutOrderData.summary }),
+    });
+    if (resp.ok) {
+        log(`Cut order emailed to ${resp.sent_to} (${resp.lines} lines)`, 'green');
+        setMascot('happy', 'Email sent!');
+    } else {
+        log('Email failed: ' + (resp.error || 'unknown error'), 'red');
+        setMascot('alert', 'Email failed');
+    }
+}
+
+async function loadJournal() {
+    const data = await api('/api/journal');
+    const panel = document.getElementById('co-journal-panel');
+    const body = document.getElementById('co-journal-body');
+    if (!data || !data.entries || data.entries.length === 0) {
+        panel.style.display = 'none';
+        return;
+    }
+    panel.style.display = '';
+    let html = '<table class="net-table"><thead><tr><th>Time</th><th>Type</th><th>Label</th><th>Changes</th></tr></thead><tbody>';
+    for (const e of data.entries) {
+        const ts = e.ts ? new Date(e.ts).toLocaleString() : '';
+        const deltas = e.sku_deltas ? Object.entries(e.sku_deltas).map(([k,v]) => `${k}: ${v > 0 ? '+' : ''}${v}`).join(', ') : '';
+        const typeClass = e.type === 'depletion' ? 'color:var(--red)' : e.type === 'production' ? 'color:var(--green)' : '';
+        html += `<tr><td style="font-size:10px">${ts}</td><td style="${typeClass};text-transform:uppercase;font-size:9px;font-weight:600">${e.type}</td><td>${e.label || ''}</td><td style="font-size:10px">${deltas}</td></tr>`;
+    }
+    html += '</tbody></table>';
+    body.innerHTML = html;
+}
+
+
+// ══════════════════════════════════════════════════════════════════════
+//  RUNWAY VIEW
+// ══════════════════════════════════════════════════════════════════════
+
+let runwayHiddenSkus = new Set(JSON.parse(localStorage.getItem('runwayHiddenSkus') || '[]'));
+let runwayShowHidden = false;
+let _lastRunwayData = null;
+
+function saveRunwayHidden() {
+    localStorage.setItem('runwayHiddenSkus', JSON.stringify([...runwayHiddenSkus]));
+}
+
+function toggleRunwayHidden() {
+    runwayShowHidden = !runwayShowHidden;
+    const btn = document.getElementById('rw-toggle-hidden-btn');
+    if (btn) btn.classList.toggle('active', runwayShowHidden);
+    if (_lastRunwayData) renderRunway(_lastRunwayData);
+}
+
+function hideRunwaySku(sku) {
+    runwayHiddenSkus.add(sku);
+    saveRunwayHidden();
+    if (_lastRunwayData) renderRunway(_lastRunwayData);
+}
+
+function unhideRunwaySku(sku) {
+    runwayHiddenSkus.delete(sku);
+    saveRunwayHidden();
+    if (_lastRunwayData) renderRunway(_lastRunwayData);
+}
+
+async function loadRunway() {
+    log('Loading runway...', 'cyan');
+    try {
+        const data = await api('/api/runway', {
+            method: 'POST',
+            body: JSON.stringify({}),
+        });
+        if (data.error) {
+            log(data.error, 'red');
+            return;
+        }
+        _lastRunwayData = data;
+        renderRunway(data);
+    } catch (e) {
+        log('Runway load failed: ' + e.message, 'red');
+    }
+}
+
+function renderRunway(data) {
+    const allSkus = data.skus || [];
+    const labels = data.week_labels || [];
+    const params = data.model_params || {};
+    const assignments = data.assignments || [];
+
+    // Filter hidden
+    const visibleSkus = runwayShowHidden ? allSkus :
+        allSkus.filter(s => !runwayHiddenSkus.has(s.sku));
+    const hiddenCount = allSkus.filter(s => runwayHiddenSkus.has(s.sku)).length;
+
+    // Summary bar — compute from visible only
+    const withDemand = visibleSkus.filter(s => s.forecast.weeks.some(w => w.demand > 0));
+    document.getElementById('rw-sku-count').textContent = withDemand.length;
+
+    const avgF = withDemand.length ? (withDemand.reduce((a, s) => a + s.forecast.runway_weeks, 0) / withDemand.length).toFixed(1) : '--';
+    document.getElementById('rw-avg-forecast').textContent = avgF + ' wk';
+
+    const atRisk = visibleSkus.filter(s => s.worst_status === 'SHORTAGE' || s.worst_status === 'TIGHT').length;
+    document.getElementById('rw-at-risk').textContent = atRisk;
+    document.getElementById('rw-at-risk').style.color = atRisk > 0 ? 'var(--red)' : 'var(--rw-bar-ok)';
+
+    document.getElementById('rw-repeat-rate').textContent = params.repeat_rate || '--';
+    document.getElementById('rw-reship-pct').textContent = (params.reship_pct || 0) + '%';
+    document.getElementById('rw-churn-wk').textContent = ((params.avg_churn_weekly || 0) * 100).toFixed(1) + '%';
+
+    // Update hidden toggle button
+    const toggleBtn = document.getElementById('rw-toggle-hidden-btn');
+    if (toggleBtn) {
+        toggleBtn.textContent = hiddenCount > 0
+            ? `${runwayShowHidden ? 'Hide' : 'Show'} ${hiddenCount} hidden`
+            : 'No hidden';
+        toggleBtn.classList.toggle('active', runwayShowHidden);
+        toggleBtn.style.display = hiddenCount > 0 ? '' : 'none';
+    }
+
+    // Assignment panel
+    renderRunwayAssignments(assignments);
+
+    // Grid — continuous bar
+    renderRunwayGrid(visibleSkus, labels);
+}
+
+function renderRunwayAssignments(assignments) {
+    const panel = document.getElementById('runway-assignments');
+    const maxUnits = Math.max(1, ...assignments.map(a => Math.max(a.prcjam_units, a.cexec_units)));
+
+    let html = '<div class="rw-assign-title">Assignments</div>';
+    html += '<table class="rw-assign-table"><thead><tr>';
+    html += '<th>Cur</th><th>PR-CJAM</th><th>CEX-EC</th>';
+    html += '</tr></thead><tbody>';
+
+    for (const a of assignments) {
+        const pjW = Math.max(2, (a.prcjam_units / maxUnits) * 60);
+        const ceW = Math.max(2, (a.cexec_units / maxUnits) * 60);
+        const pjClass = a.prcjam ? '' : ' unassigned';
+        const ceClass = a.cexec ? '' : ' unassigned';
+
+        html += `<tr>`;
+        html += `<td class="rw-cur-label">${a.curation}</td>`;
+        html += `<td class="rw-cheese-cell${pjClass}" onclick="openRunwayPicker('${a.curation}','prcjam')">
+            <div>${a.prcjam || '\u2014'}</div>
+            <div class="rw-spark-wrap">
+                <span class="rw-sparkline" style="width:${pjW}px"></span>
+                <span class="rw-spark-units">${a.prcjam_units}</span>
+            </div>
+        </td>`;
+        html += `<td class="rw-cheese-cell${ceClass}" onclick="openRunwayPicker('${a.curation}','cexec')">
+            <div>${a.cexec || '\u2014'}</div>
+            <div class="rw-spark-wrap">
+                <span class="rw-sparkline cexec" style="width:${ceW}px"></span>
+                <span class="rw-spark-units">${a.cexec_units}</span>
+            </div>
+        </td>`;
+        html += '</tr>';
+    }
+    html += '</tbody></table>';
+    panel.innerHTML = html;
+}
+
+function openRunwayPicker(cur, slot) {
+    pickerCallback = (curation, sl, cheese) => {
+        assignCheeseRunway(curation, sl, cheese);
+    };
+    openPicker(cur, slot);
+}
+
+async function assignCheeseRunway(curation, slot, cheese) {
+    await fetch('/api/assign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ curation, slot, cheese }),
+    });
+    log(`Runway: assigned ${cheese} \u2192 ${curation} ${slot}`, 'green');
+    loadRunway();
+    calculateRMFG();
+}
+
+function renderRunwayGrid(skus, labels) {
+    const grid = document.getElementById('runway-grid');
+    const NUM_WEEKS = labels.length || 4;
+
+    // Week ticks at fixed positions (evenly spaced across bar)
+    const tickPositions = [];
+    for (let wi = 0; wi < NUM_WEEKS; wi++) {
+        tickPositions.push(((wi + 1) / NUM_WEEKS) * 100);
+    }
+
+    let html = '<table class="rw-grid-table"><thead><tr>';
+    html += '<th></th><th>SKU</th><th>Stock</th>';
+    // Header with date labels at fixed positions
+    html += `<th class="rw-th-runway" style="width:60%;position:relative">
+        <div style="display:flex;justify-content:space-around;font-family:'Rajdhani',sans-serif;font-size:10px;font-weight:600;color:var(--fg3)">`;
+    for (let i = 0; i < labels.length; i++) {
+        html += `<span>${labels[i]}</span>`;
+    }
+    html += `</div></th>`;
+    html += '<th class="rw-th-weeks">Weeks</th>';
+    html += '</tr></thead><tbody>';
+
+    for (const s of skus) {
+        const isHidden = runwayHiddenSkus.has(s.sku);
+        const statusClass = s.worst_status === 'SHORTAGE' ? 'rw-shortage' :
+                            s.worst_status === 'TIGHT' ? 'rw-tight' : 'rw-ok';
+
+        const totalSupply = s.available + s.potential;
+        const totalDemand = s.forecast.weeks.reduce((a, w) => a + w.demand, 0);
+
+        // Bar fill = runway weeks / NUM_WEEKS (relative to time axis)
+        // A SKU lasting all 4 weeks fills 100%; 2 weeks fills 50%
+        const forecastRunway = s.forecast.runway_weeks;
+        const fillPct = Math.min(100, (forecastRunway / NUM_WEEKS) * 100);
+
+        // Split fill between processed and potential (wheel yield)
+        let procPct, potPct;
+        if (s.potential > 0 && totalSupply > 0) {
+            const procRatio = s.available / totalSupply;
+            procPct = fillPct * procRatio;
+            potPct = fillPct * (1 - procRatio);
+        } else {
+            procPct = fillPct;
+            potPct = 0;
+        }
+
+        // Tooltip with recurring/predicted breakdown
+        const recWk = s.recurring_per_wk || 0;
+        const predWk = s.predicted_per_wk || 0;
+        const ttParts = [`Stock: ${s.available}` + (s.potential > 0 ? ` + ${s.potential} wheels` : '')];
+        ttParts.push(`Recurring: ${recWk}/wk`);
+        ttParts.push(`Predicted: ${predWk}/wk`);
+        ttParts.push(`Runway: ${forecastRunway} wk`);
+        const tooltip = ttParts.join(' | ');
+
+        // Hide/unhide button
+        const hideBtn = isHidden
+            ? `<span class="rw-hide-btn" onclick="unhideRunwaySku('${s.sku}')" title="Unhide" style="opacity:1;color:var(--warm)">+</span>`
+            : `<span class="rw-hide-btn" onclick="hideRunwaySku('${s.sku}')" title="Hide">\u00d7</span>`;
+
+        const rowOpacity = isHidden ? ' style="opacity:0.35"' : '';
+
+        html += `<tr${rowOpacity}>`;
+        html += `<td style="width:18px;padding:0 2px">${hideBtn}</td>`;
+        html += `<td class="rw-sku-col">
+            <span>${s.sku}</span>
+            <span class="rw-sku-name">${s.name || ''}</span>
+        </td>`;
+        html += `<td class="rw-avail-col">${totalSupply}</td>`;
+
+        // Runway bar — fixed week positions, fill = runway proportion
+        html += `<td>
+            <div class="rw-bar-cell" title="${tooltip}">
+                <div class="rw-bar-track">
+                    <div class="rw-fill-processed ${statusClass}" style="width:${procPct}%"></div>`;
+        if (potPct > 0) {
+            html += `<div class="rw-fill-potential ${statusClass}" style="left:${procPct}%;width:${potPct}%"></div>`;
+        }
+        html += `</div>`;  // close rw-bar-track
+        // Week ticks at fixed positions
+        for (let ti = 0; ti < NUM_WEEKS - 1; ti++) {
+            html += `<div class="rw-week-tick" style="left:${tickPositions[ti]}%"></div>`;
+        }
+        html += `</div></td>`;  // close rw-bar-cell
+
+        // Runway weeks
+        html += `<td class="rw-runway-col ${statusClass}">${forecastRunway} wk</td>`;
+        html += '</tr>';
+    }
+
+    html += '</tbody></table>';
+    grid.innerHTML = html;
 }
