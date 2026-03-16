@@ -204,12 +204,24 @@ def register(mcp):
 
             config_path = SHIPPING_DIR / "config.yaml"
             territories = {}
+            acceptable_hubs = None
+            dallas_2day_states = None
             if config_path.exists():
                 with open(config_path) as f:
                     cfg = yaml.safe_load(f)
                     territories = cfg.get("territories", {})
+                    raw_acceptable = cfg.get("acceptable_hubs", {})
+                    if raw_acceptable:
+                        acceptable_hubs = {k: set(v) for k, v in raw_acceptable.items()}
+                    raw_2day = cfg.get("dallas_2day_states", [])
+                    if raw_2day:
+                        dallas_2day_states = set(raw_2day)
 
-            result = analyze.misroute_analysis(shipments, territories)
+            result = analyze.misroute_analysis(
+                shipments, territories,
+                acceptable_hubs=acceptable_hubs,
+                dallas_2day_states=dallas_2day_states,
+            )
             return to_json({"misroutes": result})
         except Exception as e:
             return format_error(e, "detect_misroutes")

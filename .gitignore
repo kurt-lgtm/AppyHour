@@ -1,4 +1,5 @@
 # Secrets & credentials
+.env
 shipping-perfomance-review-*.json
 *_settings.json
 *_shopify_settings.json
