@@ -4023,6 +4023,15 @@ async function loadProjectionSettings() {
 
     mulInput.value = data.multiplier || 3;
     enabledCb.checked = data.enabled !== false;
+
+    // Load weeks-back setting
+    const wbSelect = document.getElementById('co-shopify-weeks-back');
+    if (wbSelect && data.shopify_weeks_back) {
+        wbSelect.value = data.shopify_weeks_back;
+    }
+
+    // Load first-order overrides table
+    loadFirstOrderOverrides();
 }
 
 async function saveProjectionSettings() {
@@ -4040,6 +4049,80 @@ async function saveProjectionSettings() {
     if (resp.ok) {
         log(`Projection updated: ${data.active_curation} × ${data.multiplier}`, 'green');
     }
+}
+
+async function saveShopifyWeeksBack() {
+    const val = document.getElementById('co-shopify-weeks-back').value;
+    await api('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shopify_weeks_back: parseInt(val) }),
+    });
+    log(`Shopify history window: ${val} weeks`, 'green');
+}
+
+async function loadFirstOrderOverrides() {
+    const data = await api('/api/first_order_overrides');
+    if (!data) return;
+    const rolling = data.rolling_averages || {};
+    const overrides = data.overrides || {};
+    const allSkus = [...new Set([...Object.keys(rolling), ...Object.keys(overrides)])].sort();
+
+    const container = document.getElementById('fo-overrides-table');
+    if (allSkus.length === 0) {
+        container.innerHTML = '<span style="font-size:10px;color:var(--fg3)">No Shopify first-order data. Run Shopify Sync first.</span>';
+        return;
+    }
+
+    let html = '<table style="width:100%;font-size:11px;border-collapse:collapse">';
+    html += '<tr style="color:var(--fg3);font-family:\'Space Mono\',monospace;font-size:9px;text-transform:uppercase">';
+    html += '<th style="text-align:left;padding:3px 4px">SKU</th>';
+    html += '<th style="text-align:right;padding:3px 4px">Rolling Avg</th>';
+    html += '<th style="text-align:right;padding:3px 4px">Override</th>';
+    html += '<th style="width:30px"></th></tr>';
+
+    for (const sku of allSkus) {
+        const avg = rolling[sku] || 0;
+        const ov = overrides[sku];
+        const hasOverride = ov !== undefined && ov !== null;
+        html += `<tr style="border-bottom:1px solid rgba(42,42,48,0.2)">`;
+        html += `<td style="padding:3px 4px;font-family:'DM Sans',sans-serif;color:var(--fg)">${sku}</td>`;
+        html += `<td style="padding:3px 4px;text-align:right;font-family:'Rajdhani',sans-serif;color:var(--fg3)">${avg}/wk</td>`;
+        html += `<td style="padding:3px 4px;text-align:right">
+            <input type="number" class="settings-input" style="width:50px;font-size:11px;text-align:right"
+                   id="fo-ov-${sku}" value="${hasOverride ? ov : ''}"
+                   placeholder="${avg}" min="0"
+                   onchange="setFirstOrderOverride('${sku}', this.value)">
+        </td>`;
+        html += `<td style="padding:3px 2px;text-align:center">
+            ${hasOverride ? `<span style="cursor:pointer;color:var(--fg3);font-size:10px" onclick="clearFirstOrderOverride('${sku}')" title="Clear override">\u00d7</span>` : ''}
+        </td>`;
+        html += '</tr>';
+    }
+    html += '</table>';
+    container.innerHTML = html;
+}
+
+async function setFirstOrderOverride(sku, value) {
+    if (value === '' || value === null) return clearFirstOrderOverride(sku);
+    const qty = parseInt(value);
+    if (isNaN(qty) || qty < 0) return;
+    await api('/api/first_order_override', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sku, qty }),
+    });
+    log(`Override set: ${sku} = ${qty}/wk`, 'green');
+}
+
+async function clearFirstOrderOverride(sku) {
+    await api('/api/first_order_override', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sku, clear: true }),
+    });
+    log(`Override cleared: ${sku}`, 'green');
+    loadFirstOrderOverrides();
 }
 
 function exportCutOrderCSV() {
@@ -4234,6 +4317,30 @@ async function assignCheeseRunway(curation, slot, cheese) {
     calculateRMFG();
 }
 
+function toggleDemandBreakdown(sku) {
+    const existing = document.getElementById(`rw-breakdown-${sku}`);
+    if (existing) { existing.remove(); return; }
+    if (!_lastRunwayData) return;
+    const skuData = _lastRunwayData.skus.find(s => s.sku === sku);
+    if (!skuData) return;
+    const row = document.querySelector(`tr[data-sku="${sku}"]`);
+    if (!row) return;
+    const detail = document.createElement('tr');
+    detail.id = `rw-breakdown-${sku}`;
+    detail.className = 'rw-breakdown-row';
+    const rec = skuData.recurring_per_wk || 0;
+    const fo = skuData.first_order_per_wk || 0;
+    const addon = skuData.addon_per_wk || 0;
+    detail.innerHTML = `<td></td><td colspan="5" class="rw-breakdown-cell">
+        <span class="rw-bd-item">RC Recurring: <b>${rec}</b>/wk</span>
+        <span class="rw-bd-sep">\u00b7</span>
+        <span class="rw-bd-item">First Orders: <b>${fo}</b>/wk</span>
+        <span class="rw-bd-sep">\u00b7</span>
+        <span class="rw-bd-item">Add-ons: <b>${addon}</b>/wk</span>
+    </td>`;
+    row.after(detail);
+}
+
 function renderRunwayGrid(skus, labels) {
     const grid = document.getElementById('runway-grid');
     const NUM_WEEKS = labels.length || 4;
@@ -4244,29 +4351,40 @@ function renderRunwayGrid(skus, labels) {
         tickPositions.push(((wi + 1) / NUM_WEEKS) * 100);
     }
 
-    let html = '<table class="rw-grid-table"><thead><tr>';
-    html += '<th></th><th>SKU</th><th>Stock</th>';
+    let html = '<table class="rw-grid-table">';
+    html += '<colgroup>';
+    html += '<col style="width:18px">';      // hide btn
+    html += '<col style="width:95px">';      // SKU (+ gap before Avail)
+    html += '<col style="width:62px">';      // Avail (wider for potential prefix)
+    html += '<col style="width:56px">';      // Dmd/wk
+    html += '<col>';                          // Bar (fills remaining)
+    html += '<col style="width:50px">';      // Runway
+    html += '</colgroup>';
+    html += '<thead><tr>';
+    html += '<th></th><th>SKU</th>';
+    html += '<th class="rw-th-num">Avail</th>';
+    html += '<th class="rw-th-num rw-th-dmd">Dmd/wk</th>';
     // Header with date labels at fixed positions
-    html += `<th class="rw-th-runway" style="width:60%;position:relative">
-        <div style="display:flex;justify-content:space-around;font-family:'Rajdhani',sans-serif;font-size:10px;font-weight:600;color:var(--fg3)">`;
+    html += `<th class="rw-th-runway" style="position:relative">
+        <div style="display:flex;justify-content:space-around;font-family:'Space Mono',monospace;font-size:10px;font-weight:600;letter-spacing:0.5px;color:var(--fg2)">`;
     for (let i = 0; i < labels.length; i++) {
         html += `<span>${labels[i]}</span>`;
     }
     html += `</div></th>`;
-    html += '<th class="rw-th-weeks">Weeks</th>';
+    html += '<th class="rw-th-weeks">Runway</th>';
     html += '</tr></thead><tbody>';
 
     for (const s of skus) {
         const isHidden = runwayHiddenSkus.has(s.sku);
-        const statusClass = s.worst_status === 'SHORTAGE' ? 'rw-shortage' :
-                            s.worst_status === 'TIGHT' ? 'rw-tight' : 'rw-ok';
+        // Color based on runway weeks: red < 1wk, tight 1-2wk, ok 2+wk
+        const forecastRunway = s.forecast.runway_weeks;
+        const statusClass = forecastRunway < 1 ? 'rw-shortage' :
+                            forecastRunway < 2 ? 'rw-tight' : 'rw-ok';
 
         const totalSupply = s.available + s.potential;
-        const totalDemand = s.forecast.weeks.reduce((a, w) => a + w.demand, 0);
 
         // Bar fill = runway weeks / NUM_WEEKS (relative to time axis)
         // A SKU lasting all 4 weeks fills 100%; 2 weeks fills 50%
-        const forecastRunway = s.forecast.runway_weeks;
         const fillPct = Math.min(100, (forecastRunway / NUM_WEEKS) * 100);
 
         // Split fill between processed and potential (wheel yield)
@@ -4280,14 +4398,18 @@ function renderRunwayGrid(skus, labels) {
             potPct = 0;
         }
 
-        // Tooltip with recurring/predicted breakdown
+        // Demand per week (combined)
+        const demandWk = s.demand_per_wk || 0;
+
+        // Tooltip with full breakdown
         const recWk = s.recurring_per_wk || 0;
-        const predWk = s.predicted_per_wk || 0;
-        const ttParts = [`Stock: ${s.available}` + (s.potential > 0 ? ` + ${s.potential} wheels` : '')];
-        ttParts.push(`Recurring: ${recWk}/wk`);
-        ttParts.push(`Predicted: ${predWk}/wk`);
+        const foWk = s.first_order_per_wk || 0;
+        const addonWk = s.addon_per_wk || 0;
+        const ttParts = [`${s.sku}: ${s.available} avail`];
+        if (s.potential > 0) ttParts.push(`+${s.potential} wheel potential`);
+        ttParts.push(`Demand: ${demandWk}/wk (RC: ${recWk}, FO: ${foWk}, Add: ${addonWk})`);
         ttParts.push(`Runway: ${forecastRunway} wk`);
-        const tooltip = ttParts.join(' | ');
+        const tooltip = ttParts.join('\n');
 
         // Hide/unhide button
         const hideBtn = isHidden
@@ -4296,13 +4418,22 @@ function renderRunwayGrid(skus, labels) {
 
         const rowOpacity = isHidden ? ' style="opacity:0.35"' : '';
 
-        html += `<tr${rowOpacity}>`;
+        // Avail display: show potential in parens if > 0
+        const availDisplay = s.potential > 0
+            ? `<span class="rw-pot-hint">${s.potential}&nbsp;</span>${s.available}`
+            : `${s.available}`;
+
+        html += `<tr data-sku="${s.sku}"${rowOpacity}>`;
         html += `<td style="width:18px;padding:0 2px">${hideBtn}</td>`;
         html += `<td class="rw-sku-col">
             <span>${s.sku}</span>
             <span class="rw-sku-name">${s.name || ''}</span>
         </td>`;
-        html += `<td class="rw-avail-col">${totalSupply}</td>`;
+        html += `<td class="rw-avail-col">${availDisplay}</td>`;
+        html += `<td class="rw-demand-col" onclick="toggleDemandBreakdown('${s.sku}')">
+            <span class="rw-demand-num">${demandWk}</span>
+            <span class="rw-expand-icon">&#9662;</span>
+        </td>`;
 
         // Runway bar — fixed week positions, fill = runway proportion
         html += `<td>

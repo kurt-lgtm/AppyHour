@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Fulfillment Planner</title>
     <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/styles.css?v=33">
+    <link rel="stylesheet" href="/static/styles.css?v=39">
 </head>
 <body>
 
@@ -529,6 +529,21 @@
                     <input type="checkbox" id="co-proj-enabled" checked> Enabled
                 </label>
                 <button class="btn btn-green btn-sm" onclick="saveProjectionSettings()">Save</button>
+                <span style="margin-left:12px"></span>
+                <label style="font-family:'Space Mono',monospace;font-size:10px;text-transform:uppercase;color:var(--fg2)">History Weeks</label>
+                <select id="co-shopify-weeks-back" class="settings-input" style="width:60px" onchange="saveShopifyWeeksBack()">
+                    <option value="4">4</option>
+                    <option value="6">6</option>
+                    <option value="8" selected>8</option>
+                </select>
+            </div>
+            <!-- First-Order Overrides -->
+            <div id="fo-overrides-section" style="padding:8px 12px;border-top:1px solid var(--border)">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+                    <span style="font-family:'Space Mono',monospace;font-size:10px;text-transform:uppercase;color:var(--fg2)">First-Order Overrides</span>
+                    <button class="btn btn-dim btn-sm" onclick="loadFirstOrderOverrides()">Refresh</button>
+                </div>
+                <div id="fo-overrides-table"></div>
             </div>
         </div>
 
@@ -967,6 +982,6 @@
     <div id="mascot-speech-tail"></div>
 </div>
 
-<script src="/static/app.js?v=34"></script>
+<script src="/static/app.js?v=40"></script>
 </body>
 </html>

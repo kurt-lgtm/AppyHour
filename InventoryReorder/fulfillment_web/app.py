@@ -1912,16 +1912,35 @@ def load_rmfg():
             f"Tuesday: {sum(dashboard_tue.values())} units from ship tag split"
         )
     elif dashboard_info.get("first_order_demand"):
-        proj = _s().get("first_order_projection", {})
-        multiplier = proj.get("multiplier", 3) if proj.get("enabled", True) else 3
-        tue_demand = {
-            sku: qty * multiplier
-            for sku, qty in dashboard_info["first_order_demand"].items()
-        }
-        log_lines.append(
-            f"Tuesday estimate: {dashboard_info['first_order_count']} "
-            f"first orders × {multiplier}"
-        )
+        # Prefer Shopify rolling average over static multiplier
+        s = _s()
+        shopify_fo = s.get("shopify_first_order_demand", {})
+        fo_overrides = s.get("first_order_overrides", {})
+        if shopify_fo or fo_overrides:
+            # Use rolling average with manual overrides
+            merged = dict(shopify_fo)
+            merged.update(fo_overrides)
+            tue_demand = {
+                sku: int(round(merged.get(sku, 0)))
+                for sku in dashboard_info["first_order_demand"]
+                if merged.get(sku, 0) > 0
+            }
+            log_lines.append(
+                f"Tuesday estimate: Shopify rolling avg "
+                f"({len(merged)} SKUs, {len(fo_overrides)} overrides)"
+            )
+        else:
+            # Legacy fallback: x3 multiplier
+            proj = s.get("first_order_projection", {})
+            multiplier = proj.get("multiplier", 3) if proj.get("enabled", True) else 3
+            tue_demand = {
+                sku: qty * multiplier
+                for sku, qty in dashboard_info["first_order_demand"].items()
+            }
+            log_lines.append(
+                f"Tuesday estimate: {dashboard_info['first_order_count']} "
+                f"first orders × {multiplier} (no Shopify data)"
+            )
 
     # 4. Next Saturday demand (MARCH CHARGES)
     next_sat_demand = {}
@@ -2673,10 +2692,13 @@ def get_runway():
         shopify_first = s.get("shopify_first_order_demand", {})
         shopify_recurring = s.get("shopify_recurring_demand", {})
         shopify_unfulfilled = s.get("shopify_unfulfilled", {})
+        first_order_overrides = s.get("first_order_overrides", {})
 
         # Predictive demand = first orders + add-ons (anything in Shopify
         # that's NOT a recurring subscription)
         predictive_weekly = {}
+        first_order_weekly = {}
+        addon_weekly = {}
         if shopify_weekly:
             for sku, total_avg in shopify_weekly.items():
                 nsku = normalize_sku(sku)
@@ -2686,6 +2708,17 @@ def get_runway():
                 pred = max(0, total_avg - rec_avg)
                 if pred > 0:
                     predictive_weekly[nsku] = pred
+                # Split predictive into first-order vs addon
+                fo = first_order_overrides.get(nsku,
+                     first_order_overrides.get(sku,
+                     shopify_first.get(nsku,
+                     shopify_first.get(sku, 0))))
+                fo = min(fo, pred)  # can't exceed total predictive
+                if fo > 0:
+                    first_order_weekly[nsku] = fo
+                addon = pred - fo
+                if addon > 0:
+                    addon_weekly[nsku] = addon
 
         # Merge into week_demands:
         # week_demands already has Recharge recurring (actual, flat per week)
@@ -2704,11 +2737,15 @@ def get_runway():
         # first_order_demand = Shopify predictive (gets repeat_rate projection)
         recurring_demand = {}
         first_order_demand = {}
+        first_order_split = {}
+        addon_split = {}
         if week_demands:
             for sku, qty in week_demands[0].items():
                 pred = predictive_weekly.get(sku, 0)
                 recurring_demand[sku] = max(0, int(round(qty - pred)))
                 first_order_demand[sku] = int(round(pred))
+                first_order_split[sku] = int(round(first_order_weekly.get(sku, 0)))
+                addon_split[sku] = int(round(addon_weekly.get(sku, 0)))
     else:
         # LEGACY PATH: RMFG folder data
         raw_direct = STATE.get("rmfg_direct_sat", {})
@@ -2725,6 +2762,8 @@ def get_runway():
         dashboard = STATE.get("rmfg_dashboard", {})
         recurring_demand = dashboard.get("recurring_demand", {})
         first_order_demand = dashboard.get("first_order_demand", {})
+        first_order_split = dict(first_order_demand)
+        addon_split = {}
         # Build 4 weekly windows from legacy data
         week_demands = [sat_demand_resolved, tue_demand,
                         sat_demand_resolved, sat_demand_resolved]
@@ -2767,9 +2806,9 @@ def get_runway():
         else:
             category = "accompaniment"
 
-        # Walk through weekly windows
+        # Walk through weekly windows (include wheel/bulk potential in supply)
         forecast_weeks = []
-        f_carry = avail
+        f_carry = avail + potential
 
         rec_qty = recurring_demand.get(sku, 0)
         pred_qty = first_order_demand.get(sku, 0)
@@ -2812,8 +2851,10 @@ def get_runway():
             f_carry = max(0, f_out)
 
         # Runway weeks: how many weeks until stock hits 0
+        # Include wheel/bulk potential in total supply
+        total_supply = avail + potential
         f_runway = 0.0
-        remaining = avail
+        remaining = total_supply
         for wi in range(NUM_WEEKS):
             fd = forecast_weeks[wi]["demand"]
             if fd <= 0:
@@ -2840,6 +2881,10 @@ def get_runway():
 
         total_forecast += forecast_weeks[0]["demand"]
 
+        demand_per_wk = int(round(rec_qty + f_predictive))
+        fo_wk = first_order_split.get(sku, 0)
+        addon_wk = addon_split.get(sku, 0)
+
         sku_rows.append({
             "sku": sku,
             "name": sku_name,
@@ -2850,8 +2895,11 @@ def get_runway():
                 "weeks": forecast_weeks,
                 "runway_weeks": round(f_runway, 1),
             },
+            "demand_per_wk": demand_per_wk,
             "recurring_per_wk": int(round(rec_qty)),
             "predicted_per_wk": int(round(f_predictive)),
+            "first_order_per_wk": fo_wk,
+            "addon_per_wk": addon_wk,
             "attribution": attr,
             "worst_status": worst_status,
         })
@@ -2909,6 +2957,45 @@ def get_runway():
         },
         "assignments": assignments,
     })
+
+
+# ── First-Order Overrides ─────────────────────────────────────────────
+
+@app.route("/api/first_order_override", methods=["POST"])
+def set_first_order_override():
+    """Set or clear a per-SKU first-order demand override."""
+    data = request.get_json(force=True)
+    sku = data.get("sku", "").strip()
+    if not sku:
+        return jsonify({"error": "sku required"}), 400
+    s = _s()
+    overrides = s.get("first_order_overrides", {})
+    if data.get("clear"):
+        overrides.pop(sku, None)
+    else:
+        qty = data.get("qty")
+        if qty is None:
+            return jsonify({"error": "qty required"}), 400
+        try:
+            qty_int = int(qty)
+        except (TypeError, ValueError):
+            return jsonify({"error": "qty must be an integer"}), 400
+        if qty_int < 0 or qty_int > 10000:
+            return jsonify({"error": "qty out of range (0-10000)"}), 400
+        overrides[sku] = qty_int
+    s["first_order_overrides"] = overrides
+    save_settings(s)
+    STATE["saved"] = s
+    return jsonify({"ok": True, "overrides": overrides})
+
+
+@app.route("/api/first_order_overrides", methods=["GET"])
+def get_first_order_overrides():
+    """Return current first-order overrides and rolling averages."""
+    s = _s()
+    overrides = s.get("first_order_overrides", {})
+    rolling = s.get("shopify_first_order_demand", {})
+    return jsonify({"overrides": overrides, "rolling_averages": rolling})
 
 
 # ── Cut Order ─────────────────────────────────────────────────────────
@@ -3135,6 +3222,7 @@ def projection_settings():
             "multiplier": 3,
             "recipe_only": True,
         })
+        proj["shopify_weeks_back"] = s.get("shopify_weeks_back", 8)
         return jsonify(proj)
 
     data = request.json or {}
@@ -3965,8 +4053,11 @@ def shopify_sync():
         "Content-Type": "application/json",
     })
 
-    # Pull fulfilled orders from last 4 weeks for weekly demand calculation
-    weeks_back = 4
+    # Pull fulfilled orders for weekly demand calculation
+    try:
+        weeks_back = max(1, min(52, int(_s().get("shopify_weeks_back", 8))))
+    except (TypeError, ValueError):
+        weeks_back = 8
     cutoff = (datetime.datetime.now() - datetime.timedelta(days=weeks_back * 7)).isoformat()
     url = f"{store}/admin/api/{api_version}/orders.json"
     params = {"status": "any", "fulfillment_status": "shipped",
