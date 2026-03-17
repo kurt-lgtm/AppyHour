@@ -1,9 +1,15 @@
-"""Find Class 2/3 and 4B in Recharge queued charges — with proper customer/sub IDs.
+"""Find Class 2/3, 4B, and 13 in Recharge queued charges — with proper customer/sub IDs.
 
 Excludes:
 - One-time paid add-ons (EX-, BL-, customer extras without _rc_bundle)
 - Customer-chosen duplicates (box_contents shows intentional qty > 1)
 - Only flags _rc_bundle curation items as errors
+- BYO boxes (customers choose their own items, dupes are intentional)
+- No-meat CORS boxes (CEX-EC ×3 is expected — extra cheese replaces meat)
+- Items on different subscription IDs (add-on subscriptions, not curation bugs)
+
+Class 13: Month-to-month membership with pre-written curation items
+  (blank SKU box with food items — curation tool should not touch these)
 """
 import requests, json, time, csv, re, os
 from collections import Counter
@@ -162,18 +168,20 @@ for c in charges:
 
     has_custom_box = any(s.startswith(("AHB-MCUST", "AHB-LCUST")) for s in box_skus)
     has_monthly_box = any(s in ("AHB-MED", "AHB-LGE", "AHB-CMED") for s in box_skus)
+    is_byo = any("BYO" in s for s in box_skus)
+    is_no_meat_cors = any("CORS" in s for s in box_skus)
 
-    # CLASS 2/3: blank box SKU with curation items (not just paid extras)
+    # CLASS 13: month-to-month membership with pre-written curation items
+    # (blank SKU box that the curation tool should never touch)
     if has_blank_box and not has_custom_box and not has_monthly_box:
-        # Only flag if there are _rc_bundle curation food items (not just paid add-ons)
         curation_skus = [s for s in curation_food if s.startswith(("CH-", "MT-", "AC-", "CEX-"))]
         if curation_skus:
             detail = f"Curation SKUs: {', '.join(sorted(set(curation_skus)))}"
             if paid_skus:
                 detail += f" | Paid extras (kept): {', '.join(sorted(set(paid_skus)))}"
             results.append({
-                "class": "2/3",
-                "class_desc": "Box product with blank SKU + curation items",
+                "class": "13",
+                "class_desc": "Month-to-month membership with pre-written curation items",
                 "charge_id": str(charge_id),
                 "scheduled": scheduled,
                 "customer": customer_name,
@@ -183,6 +191,10 @@ for c in charges:
                 "box_sku": "(blank)",
                 "details": detail,
             })
+
+    # Skip BYO boxes — customers choose their own items, dupes are intentional
+    if is_byo:
+        continue
 
     # CLASS 4B: duplicate curation items (not customer-chosen)
     if curation_food:
@@ -194,6 +206,25 @@ for c in charges:
             bc_skus = _parse_box_contents(box_contents_text)
             dups = {sku: total for sku, total in dups.items()
                     if bc_skus.get(sku, 1) < total}
+
+        # Exclude CEX-EC dupes on no-meat CORS boxes (expected — extra cheese replaces meat)
+        if dups and is_no_meat_cors:
+            dups = {sku: cnt for sku, cnt in dups.items() if not sku.startswith("CEX-")}
+
+        # Exclude dupes where items are on different subscription IDs (add-on subs)
+        if dups:
+            remaining = {}
+            for sku, cnt in dups.items():
+                sub_ids_for_sku = set()
+                for li in line_items:
+                    li_sku = (li.get("sku") or "").strip()
+                    if li_sku == sku:
+                        sub_id = str(li.get("subscription_id") or li.get("purchase_item_id") or "")
+                        sub_ids_for_sku.add(sub_id)
+                # Only flag if all instances are on the SAME subscription (curation bug)
+                if len(sub_ids_for_sku) <= 1:
+                    remaining[sku] = cnt
+            dups = remaining
 
         if dups:
             box = box_skus[0] if box_skus else ""
