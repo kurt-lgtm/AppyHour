@@ -1736,20 +1736,30 @@ async function syncDropbox() {
     return true;
 }
 
-async function syncRecharge() {
+async function syncRecharge(opts = {}) {
+    const force = opts.force || false;
     setMascot('loading', 'Pulling from Recharge...');
-    log('Fetching queued charges from Recharge API...', 'cyan');
+    log(force ? 'Force-fetching from Recharge API...' : 'Syncing Recharge (cached if fresh)...', 'cyan');
 
-    const data = await api('/api/recharge_sync', { method: 'POST' });
+    const data = await api('/api/recharge_sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force }),
+    });
     if (data.error) {
         setMascot('alert', 'Recharge sync failed');
         log(`Recharge error: ${data.error}`, 'red');
         return false;
     }
 
-    const rcTime = data.api_seconds ? ` (${data.api_seconds}s, ${data.api_pages} pages)` : '';
-    log(`Recharge: ${data.total_charges} charges across ${data.months.join(', ')}${rcTime}`, 'green');
-    if (data.weeks) {
+    if (data.from_cache) {
+        const mins = Math.round((data.cache_age_seconds || 0) / 60);
+        log(`Recharge: ${data.total_charges} charges (cached, ${mins}m old)`, 'green');
+    } else {
+        const rcTime = data.api_seconds ? ` (${data.api_seconds}s, ${data.api_pages} pages)` : '';
+        log(`Recharge: ${data.total_charges} charges across ${data.months.join(', ')}${rcTime}`, 'green');
+    }
+    if (data.weeks && !data.from_cache) {
         data.weeks.forEach(w => {
             log(`  ${w.label} (${w.date}): ${w.skus} SKUs, ${w.units} units`, 'green');
         });

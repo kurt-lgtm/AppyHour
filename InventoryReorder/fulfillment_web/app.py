@@ -4209,9 +4209,17 @@ def dropbox_token():
 
 # ── Recharge API integration ──────────────────────────────────────────
 
+_recharge_sync_lock = threading.Lock()
+_recharge_bg_thread = None
+
 @app.route("/api/recharge_sync", methods=["POST"])
 def recharge_sync():
-    """Pull queued charges from Recharge API and resolve into cheese demand."""
+    """Pull queued charges from Recharge API and resolve into cheese demand.
+
+    Supports caching: if data was fetched within cache_minutes (default 30),
+    returns cached data instantly. Pass force=true to bypass cache.
+    Pass background=true to sync in background and return immediately.
+    """
     try:
         import requests as req
     except ImportError:
@@ -4221,6 +4229,48 @@ def recharge_sync():
     api_token = s.get("recharge_api_token", "")
     if not api_token:
         return jsonify({"error": "Recharge API token not set in Settings"}), 400
+
+    # Cache check
+    force = request.json.get("force", False) if request.is_json else False
+    background = request.json.get("background", False) if request.is_json else False
+    cache_minutes = int(s.get("recharge_cache_minutes", 30))
+    last_sync = STATE.get("recharge_last_sync")
+    if last_sync and not force:
+        age_seconds = (datetime.datetime.now() - last_sync).total_seconds()
+        if age_seconds < cache_minutes * 60:
+            cached = STATE.get("recharge_cached_response")
+            if cached:
+                cached["from_cache"] = True
+                cached["cache_age_seconds"] = int(age_seconds)
+                return jsonify(cached)
+
+    # Background sync: return immediately, sync in thread
+    if background:
+        global _recharge_bg_thread
+        if _recharge_bg_thread and _recharge_bg_thread.is_alive():
+            return jsonify({"ok": True, "status": "already_syncing"})
+        _recharge_bg_thread = threading.Thread(
+            target=_recharge_sync_worker, args=(api_token,), daemon=True)
+        _recharge_bg_thread.start()
+        return jsonify({"ok": True, "status": "syncing_in_background"})
+
+    # Foreground sync
+    return _recharge_sync_foreground(api_token, req)
+
+
+def _recharge_sync_worker(api_token):
+    """Background thread worker for Recharge sync."""
+    try:
+        import requests as req
+        with app.app_context():
+            _recharge_sync_foreground(api_token, req, save_to_state=True)
+    except Exception:
+        pass
+
+
+def _recharge_sync_foreground(api_token, req, save_to_state=False):
+    """Core Recharge sync logic. Returns Flask response or saves to STATE."""
+    s = _s()
 
     # Fetch queued charges
     session = req.Session()
@@ -4409,7 +4459,7 @@ def recharge_sync():
          "units": sum(week_demands[i].values())}
         for i in range(4)
     ]
-    return jsonify({
+    result = {
         "ok": True,
         "total_charges": total_charges_count,
         "months": sorted(total_by_month.keys()),
@@ -4417,7 +4467,16 @@ def recharge_sync():
         "cheese_demand_units": ch_demand,
         "api_pages": page_count,
         "api_seconds": elapsed,
-    })
+        "from_cache": False,
+    }
+
+    # Cache the result
+    STATE["recharge_last_sync"] = datetime.datetime.now()
+    STATE["recharge_cached_response"] = result
+
+    if save_to_state:
+        return result  # background worker — no Flask response needed
+    return jsonify(result)
 
 
 @app.route("/api/shopify_sync", methods=["POST"])
@@ -4662,10 +4721,16 @@ def load_settings_inventory():
 
 @app.route("/api/recharge_status")
 def recharge_status():
-    """Check if Recharge API is configured."""
+    """Check if Recharge API is configured and cache freshness."""
     s = _s()
+    last_sync = STATE.get("recharge_last_sync")
+    cache_age = None
+    if last_sync:
+        cache_age = int((datetime.datetime.now() - last_sync).total_seconds())
     return jsonify({
         "configured": bool(s.get("recharge_api_token")),
+        "last_sync": last_sync.isoformat() if last_sync else None,
+        "cache_age_seconds": cache_age,
     })
 
 
