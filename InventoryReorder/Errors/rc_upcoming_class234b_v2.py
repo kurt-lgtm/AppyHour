@@ -196,16 +196,35 @@ for c in charges:
     if is_byo:
         continue
 
+    # Determine expected curation item count by box type
+    is_large = any(s.startswith("AHB-LCUST") for s in box_skus)
+    is_medium = any(s.startswith("AHB-MCUST") for s in box_skus)
+    expected_count = 9 if is_large else 7 if is_medium else 0
+
     # CLASS 4B: duplicate curation items (not customer-chosen)
     if curation_food:
         food_counts = Counter(curation_food)
         dups = {s: cnt for s, cnt in food_counts.items() if cnt > 1}
 
-        # Check box_contents for intentional duplicates
-        if dups and box_contents_text:
-            bc_skus = _parse_box_contents(box_contents_text)
-            dups = {sku: total for sku, total in dups.items()
-                    if bc_skus.get(sku, 1) < total}
+        # If total curation count matches expected box size, dupes are the recipe
+        # (fixed curations like MDT have intentional duplicates in the recipe)
+        if dups and expected_count > 0 and len(curation_food) == expected_count:
+            # Check box_contents — if it matches, customer chose these dupes
+            if box_contents_text:
+                bc_skus = _parse_box_contents(box_contents_text)
+                dups = {sku: total for sku, total in dups.items()
+                        if bc_skus.get(sku, 1) < total}
+            else:
+                # No box_contents but correct count — trust the recipe
+                dups = {}
+
+        # If total EXCEEDS expected, there's a real overfill problem
+        elif dups and expected_count > 0 and len(curation_food) > expected_count:
+            # Still check box_contents for partial matches
+            if box_contents_text:
+                bc_skus = _parse_box_contents(box_contents_text)
+                dups = {sku: total for sku, total in dups.items()
+                        if bc_skus.get(sku, 1) < total}
 
         # Exclude CEX-EC dupes on no-meat CORS boxes (expected — extra cheese replaces meat)
         if dups and is_no_meat_cors:
@@ -230,7 +249,7 @@ for c in charges:
             box = box_skus[0] if box_skus else ""
             results.append({
                 "class": "4B",
-                "class_desc": "Doubled curation items in charge",
+                "class_desc": "Doubled curation items in charge (overfill)",
                 "charge_id": str(charge_id),
                 "scheduled": scheduled,
                 "customer": customer_name,
@@ -238,7 +257,7 @@ for c in charges:
                 "rc_customer_id": customer_id,
                 "rc_subscription_id": "",
                 "box_sku": box,
-                "details": f"Duplicates: {dups} | Total curation food: {len(curation_food)}",
+                "details": f"Duplicates: {dups} | Curation items: {len(curation_food)} (expected {expected_count})",
             })
 
 print(f"Found {len(results)} issues\n")
