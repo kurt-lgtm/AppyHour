@@ -4311,6 +4311,192 @@ async function loadRunwayActions() {
     }
 }
 
+// ── Horizon Toggle ───────────────────────────────────────────────────
+
+let runwayHorizon = 'weekly';
+let _lastMonthlyData = null;
+
+function toggleRunwayHorizon() {
+    runwayHorizon = runwayHorizon === 'weekly' ? 'monthly' : 'weekly';
+    document.getElementById('rw-hz-wk').classList.toggle('rw-hz-active', runwayHorizon === 'weekly');
+    document.getElementById('rw-hz-mo').classList.toggle('rw-hz-active', runwayHorizon === 'monthly');
+    // Show/hide extended stats
+    document.querySelectorAll('.rw-stat-extended').forEach(el => {
+        el.style.display = runwayHorizon === 'monthly' ? '' : 'none';
+    });
+    if (runwayHorizon === 'weekly') {
+        if (_lastRunwayData) renderRunway(_lastRunwayData);
+        else loadRunway();
+    } else {
+        loadRunwayMonthly();
+    }
+}
+
+async function loadRunwayMonthly() {
+    log('Loading 4-month runway...', 'cyan');
+    try {
+        const data = await api('/api/runway_monthly', {
+            method: 'POST',
+            body: JSON.stringify({}),
+        });
+        if (data.error) { log(data.error, 'red'); return; }
+        _lastMonthlyData = data;
+        renderRunwayMonthly(data);
+    } catch (e) {
+        log('Monthly runway failed: ' + e.message, 'red');
+    }
+}
+
+function renderRunwayMonthly(data) {
+    const allSkus = data.skus || [];
+    const labels = data.month_labels || [];
+    const stats = data.stats || {};
+
+    // Update stats
+    document.getElementById('rw-sku-count').textContent = stats.skus_tracked || '--';
+    document.getElementById('rw-avg-forecast').textContent = (stats.avg_runway || 0) + ' mo';
+    document.getElementById('rw-at-risk').textContent = stats.at_risk || 0;
+    document.getElementById('rw-velocity').textContent = Math.round(stats.velocity || 0) + '/wk';
+    document.getElementById('rw-coverage').textContent = (stats.coverage_pct || 0) + '%';
+    const trendVal = stats.velocity_trend || 0;
+    const trendEl = document.getElementById('rw-vel-trend');
+    trendEl.textContent = (trendVal >= 0 ? '+' : '') + trendVal + '/wk';
+    trendEl.style.color = trendVal > 0 ? 'var(--red)' : trendVal < 0 ? 'var(--green)' : 'var(--fg3)';
+    document.getElementById('rw-overstock').textContent = stats.overstock || 0;
+    document.getElementById('rw-wheel-util').textContent = (stats.wheel_util_pct || 0) + '%';
+
+    // Filter hidden
+    const visibleSkus = runwayShowHidden ? allSkus :
+        allSkus.filter(s => !runwayHiddenSkus.has(s.sku));
+
+    // Render grid
+    renderRunwayMonthlyGrid(visibleSkus, labels);
+}
+
+function renderRunwayMonthlyGrid(skus, labels) {
+    const grid = document.getElementById('runway-grid');
+    const NUM_MONTHS = labels.length || 4;
+
+    const tickPositions = [];
+    for (let mi = 0; mi < NUM_MONTHS; mi++) {
+        tickPositions.push(((mi + 1) / NUM_MONTHS) * 100);
+    }
+
+    let html = '<table class="rw-grid-table">';
+    html += '<colgroup>';
+    html += '<col style="width:18px">';
+    html += '<col style="width:95px">';
+    html += '<col style="width:62px">';
+    html += '<col style="width:60px">';
+    html += '<col>';
+    html += '<col style="width:55px">';
+    html += '</colgroup>';
+    html += '<thead><tr>';
+    html += '<th></th><th>SKU</th>';
+    html += '<th class="rw-th-num">Avail</th>';
+    html += '<th class="rw-th-num rw-th-dmd">Dmd/mo</th>';
+    html += `<th class="rw-th-runway" style="position:relative">
+        <div style="display:flex;justify-content:space-around;font-family:'Space Mono',monospace;font-size:10px;font-weight:600;letter-spacing:0.5px;color:var(--fg2)">`;
+    for (const lbl of labels) html += `<span>${lbl}</span>`;
+    html += `</div></th>`;
+    html += '<th class="rw-th-weeks">Runway</th>';
+    html += '</tr></thead><tbody>';
+
+    for (const s of skus) {
+        const isHidden = runwayHiddenSkus.has(s.sku);
+        const runway = s.runway_months;
+        const statusClass = runway < 1 ? 'rw-shortage' :
+                            runway < 2 ? 'rw-tight' : 'rw-ok';
+
+        const totalSupply = s.available + s.potential;
+        const fillPct = Math.min(100, (runway / NUM_MONTHS) * 100);
+
+        let procPct, potPct;
+        if (s.potential > 0 && totalSupply > 0) {
+            const procRatio = s.available / totalSupply;
+            procPct = fillPct * procRatio;
+            potPct = fillPct * (1 - procRatio);
+        } else {
+            procPct = fillPct;
+            potPct = 0;
+        }
+
+        const demandMo = s.demand_per_month || 0;
+        const tooltip = `${s.sku}: ${s.available} avail` +
+            (s.potential > 0 ? ` +${s.potential} potential` : '') +
+            `\nDemand: ${demandMo}/mo | Velocity: ${s.velocity}/wk` +
+            `\nRunway: ${runway} mo` +
+            (s.reorder_week ? `\nReorder by: ${s.reorder_week}` : '');
+
+        const hideBtn = isHidden
+            ? `<span class="rw-hide-btn" onclick="unhideRunwaySku('${s.sku}')" title="Unhide" style="opacity:1;color:var(--warm)">+</span>`
+            : `<span class="rw-hide-btn" onclick="hideRunwaySku('${s.sku}')" title="Hide">\u00d7</span>`;
+
+        const rowOpacity = isHidden ? ' style="opacity:0.35"' : '';
+        const availDisplay = s.potential > 0
+            ? `<span class="rw-pot-hint">${s.potential}&nbsp;</span>${s.available}`
+            : `${s.available}`;
+
+        // Reorder chip for at-risk SKUs
+        let reorderChip = '';
+        if (s.reorder_week && runway < 2) {
+            reorderChip = `<span class="rw-chip rw-chip-other" title="Reorder by ${s.reorder_week}">${s.reorder_week}</span>`;
+        }
+
+        html += `<tr data-sku="${s.sku}"${rowOpacity}>`;
+        html += `<td style="width:18px;padding:0 2px">${hideBtn}</td>`;
+        html += `<td class="rw-sku-col">
+            <span>${s.sku}</span>
+            <span class="rw-sku-name">${s.name || ''}</span>
+        </td>`;
+        html += `<td class="rw-avail-col">${availDisplay}</td>`;
+        html += `<td class="rw-demand-col" onclick="toggleMonthlyBreakdown('${s.sku}')">
+            <span class="rw-demand-num">${demandMo}</span>
+            <span class="rw-expand-icon">&#9662;</span>
+        </td>`;
+
+        html += `<td>
+            <div class="rw-bar-cell" title="${tooltip}">
+                <div class="rw-bar-track">
+                    <div class="rw-fill-processed ${statusClass}" style="width:${procPct}%"></div>`;
+        if (potPct > 0) {
+            html += `<div class="rw-fill-potential ${statusClass}" style="left:${procPct}%;width:${potPct}%"></div>`;
+        }
+        html += `</div>`;
+        for (let ti = 0; ti < NUM_MONTHS - 1; ti++) {
+            html += `<div class="rw-week-tick" style="left:${tickPositions[ti]}%"></div>`;
+        }
+        html += `</div></td>`;
+
+        html += `<td class="rw-runway-col ${statusClass}">${runway} mo${reorderChip}</td>`;
+        html += '</tr>';
+    }
+
+    html += '</tbody></table>';
+    grid.innerHTML = html;
+}
+
+function toggleMonthlyBreakdown(sku) {
+    const existing = document.getElementById(`rw-mo-breakdown-${sku}`);
+    if (existing) { existing.remove(); return; }
+    if (!_lastMonthlyData) return;
+    const skuData = _lastMonthlyData.skus.find(s => s.sku === sku);
+    if (!skuData) return;
+    const row = document.querySelector(`tr[data-sku="${sku}"]`);
+    if (!row) return;
+    const detail = document.createElement('tr');
+    detail.id = `rw-mo-breakdown-${sku}`;
+    detail.className = 'rw-breakdown-row';
+    let cells = '';
+    for (const m of skuData.months) {
+        const cls = m.status === 'SHORTAGE' ? 'tl-out' : m.status === 'TIGHT' ? '' : 'tl-in';
+        cells += `<span class="rw-bd-item">${m.label}: <b>${m.demand}</b> dmd, <b class="${cls}">${m.carry_out}</b> left</span><span class="rw-bd-sep">\u00b7</span>`;
+    }
+    cells += `<span class="rw-bd-item">Vel: <b>${skuData.velocity}</b>/wk (${skuData.velocity_trend >= 0 ? '+' : ''}${skuData.velocity_trend})</span>`;
+    detail.innerHTML = `<td></td><td colspan="5" class="rw-breakdown-cell">${cells}</td>`;
+    row.after(detail);
+}
+
 function renderRunway(data) {
     const allSkus = data.skus || [];
     const labels = data.week_labels || [];
@@ -4332,6 +4518,9 @@ function renderRunway(data) {
     const atRisk = visibleSkus.filter(s => s.worst_status === 'SHORTAGE' || s.worst_status === 'TIGHT').length;
     document.getElementById('rw-at-risk').textContent = atRisk;
     document.getElementById('rw-at-risk').style.color = atRisk > 0 ? 'var(--red)' : 'var(--rw-bar-ok)';
+
+    const totalVelocity = withDemand.reduce((a, s) => a + (s.demand_per_wk || 0), 0);
+    document.getElementById('rw-velocity').textContent = totalVelocity + '/wk';
 
 
     // Update hidden toggle button

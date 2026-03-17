@@ -2959,6 +2959,278 @@ def get_runway():
     })
 
 
+# ── Monthly Runway (4-month horizon) ─────────────────────────────────
+
+@app.route("/api/runway_monthly", methods=["POST"])
+def get_runway_monthly():
+    """Return per-SKU 4-month (16-week) depletion forecast."""
+    s = _s()
+    pr_cjam = s.get("pr_cjam", {})
+    cex_ec = s.get("cex_ec", {})
+    splits = s.get("cexec_splits", {})
+    churn_rates = s.get("churn_rates", {})
+    repeat_rate = s.get("repeat_rate", 0.56)
+    reship_pct = s.get("reship_buffer_pct", 0.77)
+    shopify_trend = s.get("shopify_trend_data", {})
+    inventory_settings = s.get("inventory", {})
+    recharge_queued = s.get("recharge_queued", {})
+
+    # Compute avg monthly churn
+    monthly_rates = []
+    for track, rates in churn_rates.items():
+        if isinstance(rates, dict):
+            r = rates.get("month_2_plus", rates.get("month_3_plus",
+                rates.get("month_1", 0.12)))
+            monthly_rates.append(r)
+    avg_monthly = sum(monthly_rates) / len(monthly_rates) if monthly_rates else 0.12
+    weekly_retention = (1 - avg_monthly) ** (1 / 4.33)
+
+    # --- Inventory source ---
+    inv = STATE.get("rmfg_inventory", {})
+    bulk_weights = STATE.get("bulk_weights", {})
+    if not inv:
+        inv = {}
+        for sku, data in inventory_settings.items():
+            if isinstance(data, dict):
+                inv[sku] = data.get("qty", 0)
+            else:
+                inv[sku] = int(data) if data else 0
+
+    if not inv and not recharge_queued:
+        return jsonify({"error": "No inventory or demand data."}), 400
+
+    # --- 16 Saturday windows (4 months) ---
+    NUM_WEEKS = 16
+    saturdays = _runway_saturdays(NUM_WEEKS)
+
+    # --- Demand sources ---
+    shopify_weekly = s.get("shopify_api_demand", {})
+    first_order_overrides = s.get("first_order_overrides", {})
+
+    if recharge_queued:
+        week_demands, _, _, _, curation_box_counts, attribution = \
+            _build_queued_runway_demand(
+                recharge_queued, pr_cjam, cex_ec, splits, saturdays
+            )
+        shopify_first = s.get("shopify_first_order_demand", {})
+        shopify_recurring = s.get("shopify_recurring_demand", {})
+
+        predictive_weekly = {}
+        if shopify_weekly:
+            for sku, total_avg in shopify_weekly.items():
+                nsku = normalize_sku(sku)
+                rec_avg = shopify_recurring.get(sku, 0)
+                pred = max(0, total_avg - rec_avg)
+                if pred > 0:
+                    predictive_weekly[nsku] = pred
+
+        for wi in range(len(week_demands)):
+            for nsku, qty in predictive_weekly.items():
+                week_demands[wi][nsku] = week_demands[wi].get(nsku, 0) + qty
+
+        recurring_demand = {}
+        first_order_demand = {}
+        if week_demands:
+            for sku, qty in week_demands[0].items():
+                pred = predictive_weekly.get(sku, 0)
+                recurring_demand[sku] = max(0, int(round(qty - pred)))
+                first_order_demand[sku] = int(round(pred))
+    else:
+        # Legacy path — use week 1 demand repeated
+        sat_demand = STATE.get("rmfg_sat_demand", {})
+        recurring_demand = sat_demand
+        first_order_demand = STATE.get("rmfg_tue_demand", {})
+        attribution = {}
+        week_demands = [dict(sat_demand) for _ in range(NUM_WEEKS)]
+
+    # --- Collect pickable SKUs ---
+    RUNWAY_PREFIXES = ("CH-", "MT-", "AC-", "TR-")
+    all_skus = set()
+    all_skus.update(k for k in inv if any(k.startswith(p) for p in RUNWAY_PREFIXES))
+    for wd in week_demands:
+        all_skus.update(k for k in wd if any(k.startswith(p) for p in RUNWAY_PREFIXES))
+
+    archived_skus = set(s.get("archived_skus", []))
+
+    # --- Per-SKU 16-week forecast, aggregated into 4 months ---
+    sku_rows = []
+    total_velocity = 0
+    total_velocity_trend = 0
+    velocity_count = 0
+    total_supply = 0
+    total_potential = 0
+    total_potential_committed = 0
+    month1_demand_total = 0
+
+    for sku in sorted(all_skus):
+        if sku in archived_skus:
+            continue
+        avail = inv.get(sku, 0)
+        bw = bulk_weights.get(sku, {})
+        potential = bw.get("potential_yield", 0) if isinstance(bw, dict) else 0
+
+        inv_entry = inventory_settings.get(sku, {})
+        sku_name = inv_entry.get("name", "") if isinstance(inv_entry, dict) else ""
+
+        rec_qty = recurring_demand.get(sku, 0)
+        pred_qty = first_order_demand.get(sku, 0)
+
+        reship_mult = 1 + (reship_pct / 100.0)
+        trend = shopify_trend.get(sku, {})
+        wavg = trend.get("weekly_avg", 0)
+        slope = trend.get("trend_slope", 0)
+        trend_adj = (1 + slope / wavg) if wavg > 0 else 1.0
+        f_predictive = pred_qty * repeat_rate * trend_adj * reship_mult
+
+        # Walk 16 weeks
+        f_carry = avail + potential
+        weekly_demands = []
+        for wi in range(NUM_WEEKS):
+            f_recurring = rec_qty * (weekly_retention ** wi)
+            f_demand = max(0, int(round(f_recurring + f_predictive)))
+            weekly_demands.append(f_demand)
+            f_carry = max(0, f_carry - f_demand)
+
+        # Aggregate into 4 monthly buckets (4 weeks each)
+        supply = avail + potential
+        months = []
+        month_labels = []
+        for mi in range(4):
+            wk_start = mi * 4
+            wk_end = min(wk_start + 4, NUM_WEEKS)
+            month_demand = sum(weekly_demands[wk_start:wk_end])
+            carry_in = supply
+            carry_out = supply - month_demand
+            if month_demand == 0:
+                status = "OK"
+            elif carry_out < 0:
+                status = "SHORTAGE"
+            elif carry_out < month_demand * 0.3:
+                status = "TIGHT"
+            else:
+                status = "OK"
+            # Label from the first Saturday in this month bucket
+            sat_date = saturdays[wk_start]
+            label = sat_date.strftime("%b")
+            month_labels.append(label)
+            months.append({
+                "label": label,
+                "demand": month_demand,
+                "carry_in": max(0, carry_in),
+                "carry_out": carry_out,
+                "status": status,
+            })
+            supply = max(0, carry_out)
+
+        # Runway months (fractional)
+        remaining = avail + potential
+        f_runway = 0.0
+        for mi in range(4):
+            md = months[mi]["demand"]
+            if md <= 0:
+                f_runway += 1.0
+                continue
+            if remaining >= md:
+                remaining -= md
+                f_runway += 1.0
+            else:
+                f_runway += remaining / md
+                break
+
+        # Auto-hide zero supply + zero demand
+        total_demand_all = sum(m["demand"] for m in months)
+        if avail == 0 and potential == 0 and total_demand_all == 0:
+            continue
+
+        # Velocity: avg weekly demand (from first 4 weeks)
+        velocity = sum(weekly_demands[:4]) / 4.0 if weekly_demands else 0
+        velocity_wk2 = sum(weekly_demands[4:8]) / 4.0 if len(weekly_demands) >= 8 else velocity
+        vel_trend = velocity_wk2 - velocity  # positive = growing demand
+
+        # Reorder week: first week where cumulative demand > supply
+        reorder_week = None
+        cum_demand = 0
+        for wi in range(NUM_WEEKS):
+            cum_demand += weekly_demands[wi]
+            if cum_demand > avail + potential:
+                reorder_week = saturdays[wi].strftime("%b %d")
+                break
+
+        # Track totals for global stats
+        if velocity > 0:
+            total_velocity += velocity
+            total_velocity_trend += vel_trend
+            velocity_count += 1
+        total_supply += avail
+        total_potential += potential
+        if potential > 0 and total_demand_all > 0:
+            total_potential_committed += min(potential,
+                max(0, total_demand_all - avail))
+        month1_demand_total += months[0]["demand"] if months else 0
+
+        worst = min({"SHORTAGE": 0, "TIGHT": 1, "OK": 2}.get(m["status"], 2)
+                    for m in months)
+        worst_status = ["SHORTAGE", "TIGHT", "OK"][worst]
+
+        sku_rows.append({
+            "sku": sku,
+            "name": sku_name,
+            "available": avail,
+            "potential": potential,
+            "months": months,
+            "runway_months": round(f_runway, 1),
+            "demand_per_month": int(round(total_demand_all / 4)),
+            "velocity": round(velocity, 1),
+            "velocity_trend": round(vel_trend, 1),
+            "reorder_week": reorder_week,
+            "worst_status": worst_status,
+        })
+
+    # Sort by worst first
+    sku_rows.sort(key=lambda r: (
+        {"SHORTAGE": 0, "TIGHT": 1, "OK": 2}.get(r["worst_status"], 2),
+        r["runway_months"],
+    ))
+
+    # Global stats
+    skus_with_demand = [r for r in sku_rows if r["demand_per_month"] > 0]
+    avg_runway = (sum(r["runway_months"] for r in skus_with_demand) /
+                  len(skus_with_demand)) if skus_with_demand else 0
+    at_risk = sum(1 for r in sku_rows if r["runway_months"] < 2)
+    reorder_soon = sum(1 for r in sku_rows if r["reorder_week"] is not None
+                       and r["runway_months"] < 1)
+    overstock = sum(1 for r in sku_rows if r["runway_months"] > 3)
+    coverage = round((total_supply + total_potential) / month1_demand_total * 100
+                      if month1_demand_total > 0 else 0)
+    wheel_util = round(total_potential_committed / total_potential * 100
+                       if total_potential > 0 else 0)
+
+    # Deduplicate month labels
+    seen = set()
+    unique_labels = []
+    for m in (sku_rows[0]["months"] if sku_rows else []):
+        if m["label"] not in seen:
+            unique_labels.append(m["label"])
+            seen.add(m["label"])
+
+    return jsonify({
+        "skus": sku_rows,
+        "month_labels": unique_labels,
+        "stats": {
+            "avg_runway": round(avg_runway, 1),
+            "at_risk": at_risk,
+            "reorder_soon": reorder_soon,
+            "velocity": round(total_velocity, 0),
+            "velocity_trend": round(total_velocity_trend / velocity_count, 1)
+                              if velocity_count else 0,
+            "coverage_pct": coverage,
+            "overstock": overstock,
+            "wheel_util_pct": wheel_util,
+            "skus_tracked": len(skus_with_demand),
+        },
+    })
+
+
 # ── Activity Log ──────────────────────────────────────────────────────
 
 @app.route("/api/activity_log")

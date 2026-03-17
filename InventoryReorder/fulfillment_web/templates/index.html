@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Fulfillment Planner</title>
     <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/styles.css?v=41">
+    <link rel="stylesheet" href="/static/styles.css?v=42">
 </head>
 <body>
 
@@ -560,9 +560,13 @@
     <!-- ══ Runway View ══ (hidden by default) -->
     <div id="runway-view">
         <div id="runway-header">
-            <div class="cal-summary">
+            <div class="cal-summary" style="align-items:center">
+                <button class="rw-horizon-toggle" id="rw-horizon-toggle" onclick="toggleRunwayHorizon()">
+                    <span class="rw-hz-opt rw-hz-active" id="rw-hz-wk">4 WK</span>
+                    <span class="rw-hz-opt" id="rw-hz-mo">4 MO</span>
+                </button>
                 <div class="cal-summary-item">
-                    <span class="cal-summary-label">SKUs Tracked</span>
+                    <span class="cal-summary-label">SKUs</span>
                     <span class="cal-summary-value" id="rw-sku-count">--</span>
                 </div>
                 <div class="cal-summary-item">
@@ -572,6 +576,26 @@
                 <div class="cal-summary-item">
                     <span class="cal-summary-label">At Risk</span>
                     <span class="cal-summary-value" id="rw-at-risk">--</span>
+                </div>
+                <div class="cal-summary-item">
+                    <span class="cal-summary-label">Velocity</span>
+                    <span class="cal-summary-value" id="rw-velocity">--</span>
+                </div>
+                <div class="cal-summary-item rw-stat-extended" style="display:none">
+                    <span class="cal-summary-label">Coverage</span>
+                    <span class="cal-summary-value" id="rw-coverage">--</span>
+                </div>
+                <div class="cal-summary-item rw-stat-extended" style="display:none">
+                    <span class="cal-summary-label">Trend</span>
+                    <span class="cal-summary-value" id="rw-vel-trend">--</span>
+                </div>
+                <div class="cal-summary-item rw-stat-extended" style="display:none">
+                    <span class="cal-summary-label">Overstock</span>
+                    <span class="cal-summary-value" id="rw-overstock">--</span>
+                </div>
+                <div class="cal-summary-item rw-stat-extended" style="display:none">
+                    <span class="cal-summary-label">Wheel Util</span>
+                    <span class="cal-summary-value" id="rw-wheel-util">--</span>
                 </div>
             </div>
         </div>
@@ -991,6 +1015,6 @@
     <div id="mascot-speech-tail"></div>
 </div>
 
-<script src="/static/app.js?v=41"></script>
+<script src="/static/app.js?v=42"></script>
 </body>
 </html>

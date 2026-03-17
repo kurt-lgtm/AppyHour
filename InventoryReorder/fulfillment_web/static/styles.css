@@ -2004,6 +2004,21 @@ tr:hover .rw-hide-btn { opacity: 1; }
     max-width: 120px; overflow: hidden; text-overflow: ellipsis;
     vertical-align: middle;
 }
+/* Horizon toggle button */
+.rw-horizon-toggle {
+    display: inline-flex; background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 4px; padding: 0; overflow: hidden; cursor: pointer;
+    margin-right: 8px;
+}
+.rw-hz-opt {
+    font-family: 'Space Mono', monospace; font-size: 10px; font-weight: 600;
+    padding: 4px 10px; color: var(--fg3); transition: all 0.15s;
+    letter-spacing: 0.5px;
+}
+.rw-hz-opt.rw-hz-active {
+    background: var(--accent); color: var(--bg); border-radius: 3px;
+}
+
 .rw-chip-mfg { background: rgba(0,230,118,0.15); color: var(--green); }
 .rw-chip-po { background: rgba(96,165,250,0.15); color: var(--blue); }
 .rw-chip-other { background: rgba(255,136,0,0.12); color: var(--orange); }
