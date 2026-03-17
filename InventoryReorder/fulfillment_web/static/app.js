@@ -1747,7 +1747,8 @@ async function syncRecharge() {
         return false;
     }
 
-    log(`Recharge: ${data.total_charges} charges across ${data.months.join(', ')}`, 'green');
+    const rcTime = data.api_seconds ? ` (${data.api_seconds}s, ${data.api_pages} pages)` : '';
+    log(`Recharge: ${data.total_charges} charges across ${data.months.join(', ')}${rcTime}`, 'green');
     if (data.weeks) {
         data.weeks.forEach(w => {
             log(`  ${w.label} (${w.date}): ${w.skus} SKUs, ${w.units} units`, 'green');
@@ -1770,7 +1771,8 @@ async function syncShopify() {
         return false;
     }
 
-    log(`Shopify: ${data.orders} orders, ${data.skus} SKUs, ${data.units} units`, 'green');
+    const shTime = data.api_seconds ? ` (${data.api_seconds}s, ${data.api_pages} pages)` : '';
+    log(`Shopify: ${data.orders_analyzed || data.orders} orders, ${data.skus} SKUs${shTime}`, 'green');
     lastShopifySync = Date.now();
     setMascot('happy', `${data.orders} Shopify orders loaded`);
     return true;

@@ -3965,39 +3965,33 @@ def recharge_sync():
     date_max = (today + datetime.timedelta(days=28)).isoformat()
     params = {"status": "queued", "limit": 250,
               "scheduled_at_min": date_min, "scheduled_at_max": date_max}
-    page = 1
+    import time as _time
+    t0 = _time.time()
+    page_count = 0
     while True:
-        resp = session.get(url, params=params, timeout=30)
+        # Retry with backoff on 429 rate limit
+        for attempt in range(3):
+            resp = session.get(url, params=params, timeout=30)
+            if resp.status_code == 429:
+                retry_after = int(resp.headers.get("Retry-After", 2))
+                _time.sleep(retry_after)
+                continue
+            break
         resp.raise_for_status()
         data = resp.json()
         charges = data.get("charges", [])
         if not charges:
             break
         all_charges.extend(charges)
+        page_count += 1
 
-        # Try cursor-based pagination first (2021-11 API)
+        # Cursor-based pagination (v2021-11 API — mandatory)
         next_cursor = data.get("next_cursor")
         if next_cursor:
             params = {"cursor": next_cursor, "limit": 250}
             continue
-
-        # Try Link header pagination (older API)
-        link = resp.headers.get("Link", "")
-        if 'rel="next"' in link:
-            import re
-            m = re.search(r'<([^>]+)>;\s*rel="next"', link)
-            if m:
-                url = m.group(1)
-                params = {}
-                continue
-
-        # Try page-based pagination
-        if len(charges) == 250:
-            page += 1
-            params = {"status": "queued", "limit": 250, "page": page}
-            continue
-
         break
+    elapsed = round(_time.time() - t0, 1)
 
     if not all_charges:
         return jsonify({"error": "No queued charges found"}), 404
@@ -4149,6 +4143,8 @@ def recharge_sync():
         "months": sorted(total_by_month.keys()),
         "weeks": week_summary,
         "cheese_demand_units": ch_demand,
+        "api_pages": page_count,
+        "api_seconds": elapsed,
     })
 
 
@@ -4191,16 +4187,27 @@ def shopify_sync():
     params = {"status": "any", "fulfillment_status": "shipped",
               "limit": 250, "created_at_min": cutoff}
 
+    import time as _time
+    t0 = _time.time()
     all_orders = []
+    page_count = 0
     while url:
-        resp = session.get(url, params=params, timeout=30)
+        # Retry with backoff on 429 rate limit
+        for attempt in range(3):
+            resp = session.get(url, params=params, timeout=30)
+            if resp.status_code == 429:
+                retry_after = float(resp.headers.get("Retry-After", 2))
+                _time.sleep(retry_after)
+                continue
+            break
         if resp.status_code != 200:
             return jsonify({"error": f"Shopify API error {resp.status_code}: {resp.text[:200]}"}), 400
         data = resp.json()
         orders = data.get("orders", [])
         all_orders.extend(orders)
+        page_count += 1
 
-        # Link header pagination
+        # Link header pagination (standard for Shopify REST API)
         url = None
         params = None
         link = resp.headers.get("Link", "")
@@ -4322,6 +4329,8 @@ def shopify_sync():
         "unfulfilled_units": total_unfulfilled,
         "first_order_skus": len(s.get("shopify_first_order_demand", {})),
         "recurring_skus": len(s.get("shopify_recurring_demand", {})),
+        "api_pages": page_count,
+        "api_seconds": round(_time.time() - t0, 1),
     })
 
 
