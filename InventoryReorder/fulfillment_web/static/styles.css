@@ -1798,7 +1798,7 @@ body::before {
     display: flex; gap: 12px; height: calc(100vh - 180px);
 }
 .rw-assignments {
-    width: 220px; min-width: 200px; flex-shrink: 0;
+    width: 280px; min-width: 240px; flex-shrink: 0;
     background: var(--surface); border: 1px solid var(--border);
     border-radius: var(--radius); padding: 8px;
     overflow-y: auto;
@@ -1806,7 +1806,7 @@ body::before {
 .rw-grid {
     flex: 1; overflow-y: auto; overflow-x: hidden;
     background: var(--surface); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 0;
+    border-radius: var(--radius); padding: 0 6px;
 }
 
 /* Assignment panel */
@@ -1920,7 +1920,7 @@ tr:hover .rw-hide-btn { opacity: 1; }
 /* Week tick marks on the continuous bar */
 .rw-week-tick {
     position: absolute; top: 0; bottom: 0; width: 1px;
-    background: rgba(255,255,255,0.18);
+    background: rgba(255,255,255,0.35);
     pointer-events: none;
 }
 .rw-week-label-overlay {
