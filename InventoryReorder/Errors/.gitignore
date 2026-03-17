@@ -1,0 +1,9 @@
+# One-off batch outputs
+*.csv
+*.xlsx
+*.json
+*.md
+
+# Python cache
+__pycache__/
+*.pyc

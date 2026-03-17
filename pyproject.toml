@@ -4,13 +4,21 @@ version = "1.0.0"
 description = "Cold chain fulfillment analytics platform"
 requires-python = ">=3.10"
 dependencies = [
-    "requests>=2.31.0",
-    "openpyxl>=3.1.0",
-    "pyyaml>=6.0",
-    "pydantic>=2.0",
+    "requests>=2.32.5",
+    "openpyxl>=3.1.5",
+    "pyyaml>=6.0.3",
+    "pydantic>=2.12.4",
 ]
 
 [project.optional-dependencies]
+fulfillment = [
+    "flask>=3.1.2",
+    "pywebview>=6.1",
+    "fpdf2>=2.8.7",
+]
+shipping = [
+    "aiohttp>=3.13.2",
+]
 mcp = [
     "mcp[cli]>=1.0.0",
 ]
