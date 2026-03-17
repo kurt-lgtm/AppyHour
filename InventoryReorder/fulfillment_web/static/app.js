@@ -1846,6 +1846,9 @@ async function runAll() {
 
     // Load morning briefing
     await loadBriefing();
+
+    // Auto-switch to runway view and load it
+    switchView('runway');
     log('=== RUN ALL COMPLETE ===', 'green');
 }
 
@@ -1952,40 +1955,27 @@ function switchView(view) {
     document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
     document.getElementById(`view-${view}`).classList.add('active');
 
-    const content = document.getElementById('content');
-    const calView = document.getElementById('calendar-view');
-    const invView = document.getElementById('invoices-view');
-    const setView = document.getElementById('settings-view');
-    const coView = document.getElementById('cutorder-view');
-    const rwView = document.getElementById('runway-view');
+    const views = {
+        dashboard: document.getElementById('content'),
+        calendar: document.getElementById('calendar-view'),
+        invoices: document.getElementById('invoices-view'),
+        settings: document.getElementById('settings-view'),
+        cutorder: document.getElementById('cutorder-view'),
+        runway: document.getElementById('runway-view'),
+        log: document.getElementById('log-view'),
+    };
 
-    content.style.display = 'none';
-    calView.style.display = 'none';
-    if (invView) invView.style.display = 'none';
-    if (setView) setView.style.display = 'none';
-    if (coView) coView.style.display = 'none';
-    if (rwView) rwView.style.display = 'none';
+    Object.values(views).forEach(v => { if (v) v.style.display = 'none'; });
 
-    if (view === 'dashboard') {
-        content.style.display = '';
-    } else if (view === 'calendar') {
-        calView.style.display = '';
-        if (!calendarData) {
-            loadCalendar();
-        }
-    } else if (view === 'invoices') {
-        if (invView) invView.style.display = '';
-        loadInvoices();
-    } else if (view === 'settings') {
-        if (setView) setView.style.display = '';
-        loadSettingsView();
-    } else if (view === 'cutorder') {
-        if (coView) coView.style.display = '';
-        loadCutOrder();
-    } else if (view === 'runway') {
-        if (rwView) rwView.style.display = '';
-        loadRunway();
-    }
+    const target = views[view];
+    if (target) target.style.display = '';
+
+    if (view === 'calendar' && !calendarData) loadCalendar();
+    else if (view === 'invoices') loadInvoices();
+    else if (view === 'settings') loadSettingsView();
+    else if (view === 'cutorder') loadCutOrder();
+    else if (view === 'runway') loadRunway();
+    else if (view === 'log') loadActivityLog();
 }
 
 async function loadCalendar() {
@@ -3374,6 +3364,89 @@ async function showAccuracy() {
 
 // ── Settings View ───────────────────────────────────────────────────
 
+// ── Activity Log ─────────────────────────────────────────────────────
+
+async function loadActivityLog() {
+    const container = document.getElementById('log-timeline');
+    if (!container) return;
+    container.innerHTML = '<span style="color:var(--fg3)">Loading activity...</span>';
+
+    try {
+        const data = await api('/api/activity_log?days=60');
+        if (!data || !data.events) {
+            container.innerHTML = '<span style="color:var(--fg3)">No activity data.</span>';
+            return;
+        }
+
+        // Update header stats
+        const countEl = document.getElementById('log-event-count');
+        const inEl = document.getElementById('log-inflow-total');
+        const outEl = document.getElementById('log-outflow-total');
+        if (countEl) countEl.textContent = data.event_count;
+        if (inEl) inEl.textContent = '+' + data.total_in;
+        if (outEl) outEl.textContent = data.total_out;
+
+        // Group events by date
+        const groups = {};
+        for (const evt of data.events) {
+            const d = evt.date || 'Unknown';
+            if (!groups[d]) groups[d] = [];
+            groups[d].push(evt);
+        }
+
+        let html = '';
+        for (const [date, evts] of Object.entries(groups)) {
+            html += `<div class="tl-date-group">${date}</div>`;
+            for (const evt of evts) {
+                const icon = evt.direction === 'in' ? '\u25B2' :
+                             evt.direction === 'out' ? '\u25BC' : '\u25C6';
+                const dirClass = 'tl-' + evt.direction;
+                const units = evt.total_units !== 0
+                    ? `<span class="tl-units ${dirClass}">${evt.total_units > 0 ? '+' : ''}${evt.total_units}</span>`
+                    : '';
+                const typeLabel = evt.type.replace(/_/g, ' ');
+                const skuCount = evt.skus ? evt.skus.length : 0;
+                const expandId = `tl-${date}-${evt.type}-${Math.random().toString(36).slice(2, 6)}`;
+
+                html += `<div class="tl-entry ${dirClass}">`;
+                html += `<span class="tl-icon ${dirClass}">${icon}</span>`;
+                html += `<div class="tl-content">`;
+                html += `<div class="tl-header">`;
+                html += `<span class="tl-type">${typeLabel}</span>`;
+                html += `<span class="tl-summary">${evt.summary}</span>`;
+                html += units;
+                if (skuCount > 0) {
+                    html += `<span class="tl-expand" onclick="toggleTlDetail('${expandId}')">${skuCount} SKUs \u25BE</span>`;
+                }
+                html += `</div>`;
+                // Expandable detail
+                if (skuCount > 0) {
+                    html += `<div class="tl-detail" id="${expandId}" style="display:none">`;
+                    for (const s of evt.skus) {
+                        const qClass = s.qty > 0 ? 'tl-in' : 'tl-out';
+                        html += `<span class="tl-sku-item"><span class="${qClass}">${s.qty > 0 ? '+' : ''}${s.qty}</span> ${s.sku}</span>`;
+                    }
+                    html += `</div>`;
+                }
+                html += `</div></div>`;
+            }
+        }
+
+        if (!html) html = '<span style="color:var(--fg3)">No events in the last 60 days.</span>';
+        container.innerHTML = html;
+
+    } catch (e) {
+        container.innerHTML = `<span style="color:var(--red)">Error: ${e.message}</span>`;
+    }
+}
+
+function toggleTlDetail(id) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+// ── Settings ─────────────────────────────────────────────────────────
+
 async function loadSettingsView() {
     const data = await api('/api/settings_config');
     if (!data) return;
@@ -4214,8 +4287,25 @@ async function loadRunway() {
         }
         _lastRunwayData = data;
         renderRunway(data);
+        // Fetch shortage actions and attach to rows
+        loadRunwayActions();
     } catch (e) {
         log('Runway load failed: ' + e.message, 'red');
+    }
+}
+
+let _runwayFixMap = {};
+
+async function loadRunwayActions() {
+    try {
+        const fixes = await api('/api/suggest_fixes');
+        if (!fixes || !Array.isArray(fixes)) return;
+        _runwayFixMap = {};
+        for (const f of fixes) _runwayFixMap[f.sku] = f;
+        // Re-render with actions attached
+        if (_lastRunwayData) renderRunway(_lastRunwayData);
+    } catch (e) {
+        // Non-critical
     }
 }
 
@@ -4241,9 +4331,6 @@ function renderRunway(data) {
     document.getElementById('rw-at-risk').textContent = atRisk;
     document.getElementById('rw-at-risk').style.color = atRisk > 0 ? 'var(--red)' : 'var(--rw-bar-ok)';
 
-    document.getElementById('rw-repeat-rate').textContent = params.repeat_rate || '--';
-    document.getElementById('rw-reship-pct').textContent = (params.reship_pct || 0) + '%';
-    document.getElementById('rw-churn-wk').textContent = ((params.avg_churn_weekly || 0) * 100).toFixed(1) + '%';
 
     // Update hidden toggle button
     const toggleBtn = document.getElementById('rw-toggle-hidden-btn');
@@ -4451,7 +4538,20 @@ function renderRunwayGrid(skus, labels) {
         html += `</div></td>`;  // close rw-bar-cell
 
         // Runway weeks
-        html += `<td class="rw-runway-col ${statusClass}">${forecastRunway} wk</td>`;
+        // Runway weeks + inline action chip for shortages
+        let actionHtml = '';
+        const fix = _runwayFixMap[s.sku];
+        if (fix && forecastRunway < 2) {
+            const firstFix = fix.fixes[0] || '';
+            let chipClass = 'rw-chip';
+            if (firstFix.startsWith('MFG:')) chipClass += ' rw-chip-mfg';
+            else if (firstFix.startsWith('PO:')) chipClass += ' rw-chip-po';
+            else chipClass += ' rw-chip-other';
+            const chipText = firstFix.replace(/^(MFG|PO): /, '');
+            const allFixes = fix.fixes.map(f => f.replace(/"/g, '&quot;')).join('&#10;');
+            actionHtml = `<span class="${chipClass}" title="${allFixes}">${chipText}</span>`;
+        }
+        html += `<td class="rw-runway-col ${statusClass}">${forecastRunway} wk${actionHtml}</td>`;
         html += '</tr>';
     }
 

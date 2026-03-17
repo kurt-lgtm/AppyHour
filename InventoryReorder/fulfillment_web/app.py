@@ -2959,6 +2959,134 @@ def get_runway():
     })
 
 
+# ── Activity Log ──────────────────────────────────────────────────────
+
+@app.route("/api/activity_log")
+def activity_log():
+    """Return unified timeline of inventory events sorted by date desc."""
+    s = _s()
+    days = request.args.get("days", 60, type=int)
+    cutoff = (datetime.datetime.now() - datetime.timedelta(days=days)).strftime("%Y-%m-%d")
+    events = []
+
+    # Depletions (outflow)
+    for d in s.get("depletion_history", []):
+        date = d.get("date", "")
+        if date < cutoff:
+            continue
+        total = d.get("total", 0)
+        day_label = d.get("day", "")
+        reship = d.get("reship_count", 0)
+        skus = d.get("skus", {})
+        sku_list = [{"sku": k, "qty": -v} for k, v in skus.items() if v]
+        sku_list.sort(key=lambda x: x["qty"])
+        summary = f"{day_label} fulfillment — {total} units"
+        if reship:
+            summary += f" ({reship} reships)"
+        events.append({
+            "type": "DEPLETION", "date": date, "direction": "out",
+            "summary": summary, "total_units": -total,
+            "skus": sku_list,
+        })
+
+    # Open POs (inflow when received, action when submitted)
+    for po in s.get("open_pos", []):
+        eta = po.get("eta", "")
+        sku = po.get("sku", "")
+        qty = po.get("qty", 0)
+        status = po.get("status", "Open")
+        vendor = po.get("vendor", "")
+        if status == "Received":
+            date = po.get("received_date", eta)
+            if date < cutoff:
+                continue
+            events.append({
+                "type": "PO_RECEIVED", "date": date, "direction": "in",
+                "summary": f"PO received from {vendor} — {qty} units",
+                "total_units": qty,
+                "skus": [{"sku": sku, "qty": qty}],
+            })
+        elif eta and eta >= cutoff:
+            events.append({
+                "type": "PO_OPEN", "date": eta, "direction": "status",
+                "summary": f"PO open — {qty} {sku} from {vendor} (ETA {eta})",
+                "total_units": qty,
+                "skus": [{"sku": sku, "qty": qty}],
+            })
+
+    # Production yields (inflow)
+    for y in s.get("production_yield_history", []):
+        date = y.get("date", "")
+        if date < cutoff:
+            continue
+        sku = y.get("sku", "")
+        actual = y.get("actual", 0)
+        events.append({
+            "type": "PRODUCTION", "date": date, "direction": "in",
+            "summary": f"Production yield — {actual} units of {sku}",
+            "total_units": actual,
+            "skus": [{"sku": sku, "qty": actual}],
+        })
+
+    # Transfers (inflow/outflow depending on perspective)
+    for t in s.get("transfer_history", []):
+        date = t.get("date", "")
+        if date < cutoff:
+            continue
+        sku = t.get("sku", "")
+        qty = t.get("qty", 0)
+        from_wh = t.get("from_warehouse", "")
+        to_wh = t.get("to_warehouse", "")
+        events.append({
+            "type": "TRANSFER", "date": date, "direction": "in",
+            "summary": f"Transfer {from_wh} → {to_wh} — {qty} {sku}",
+            "total_units": qty,
+            "skus": [{"sku": sku, "qty": qty}],
+        })
+
+    # Waste ledger (outflow)
+    for w in s.get("waste_ledger", []):
+        date = w.get("date", "")
+        if date < cutoff:
+            continue
+        sku = w.get("sku", "")
+        qty = w.get("qty", 0)
+        reason = w.get("reason", "")
+        events.append({
+            "type": "WASTE", "date": date, "direction": "out",
+            "summary": f"Waste — {qty} {sku} ({reason})",
+            "total_units": -qty,
+            "skus": [{"sku": sku, "qty": -qty}],
+        })
+
+    # Reconciliation events (status)
+    for r in s.get("reconciliation_history", []):
+        date = r.get("date", "")
+        if date < cutoff:
+            continue
+        mismatches = r.get("mismatches", 0)
+        checked = r.get("skus_checked", 0)
+        events.append({
+            "type": "RECONCILIATION", "date": date, "direction": "status",
+            "summary": f"Reconciliation — {checked} SKUs checked, {mismatches} mismatches",
+            "total_units": 0, "skus": [],
+        })
+
+    # Sort newest first
+    events.sort(key=lambda e: e["date"], reverse=True)
+
+    # Compute totals
+    total_in = sum(e["total_units"] for e in events if e["direction"] == "in")
+    total_out = sum(e["total_units"] for e in events if e["direction"] == "out")
+
+    return jsonify({
+        "events": events,
+        "total_in": total_in,
+        "total_out": total_out,
+        "event_count": len(events),
+    })
+
+
 # ── First-Order Overrides ─────────────────────────────────────────────
 
 @app.route("/api/first_order_override", methods=["POST"])

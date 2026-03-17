@@ -1995,3 +1995,68 @@ tr:hover .rw-hide-btn { opacity: 1; }
 .rw-bd-sep {
     margin: 0 8px; color: var(--fg3); opacity: 0.4;
 }
+
+/* Inline action chips on shortage rows */
+.rw-chip {
+    display: inline-block; font-family: 'Space Mono', monospace;
+    font-size: 8px; padding: 1px 5px; border-radius: 3px;
+    margin-left: 4px; white-space: nowrap; cursor: default;
+    max-width: 120px; overflow: hidden; text-overflow: ellipsis;
+    vertical-align: middle;
+}
+.rw-chip-mfg { background: rgba(0,230,118,0.15); color: var(--green); }
+.rw-chip-po { background: rgba(96,165,250,0.15); color: var(--blue); }
+.rw-chip-other { background: rgba(255,136,0,0.12); color: var(--orange); }
+
+/* ══ Activity Log Timeline ══════════════════════════════════════════ */
+.tl-date-group {
+    font-family: 'Space Mono', monospace; font-size: 11px; font-weight: 600;
+    color: var(--fg2); padding: 12px 0 4px; margin-top: 4px;
+    border-bottom: 1px solid var(--border); letter-spacing: 0.5px;
+}
+.tl-entry {
+    display: flex; align-items: flex-start; gap: 8px;
+    padding: 6px 4px; border-bottom: 1px solid rgba(42,42,48,0.2);
+}
+.tl-entry:hover { background: rgba(255,255,255,0.02); }
+.tl-icon {
+    font-size: 10px; width: 16px; text-align: center;
+    flex-shrink: 0; margin-top: 2px;
+}
+.tl-icon.tl-in { color: var(--green); }
+.tl-icon.tl-out { color: var(--red); }
+.tl-icon.tl-status { color: var(--blue); }
+.tl-content { flex: 1; min-width: 0; }
+.tl-header {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.tl-type {
+    font-family: 'Space Mono', monospace; font-size: 9px;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    color: var(--fg3); min-width: 80px;
+}
+.tl-summary {
+    font-family: 'DM Sans', sans-serif; font-size: 12px;
+    color: var(--fg); flex: 1;
+}
+.tl-units {
+    font-family: 'Rajdhani', sans-serif; font-size: 13px; font-weight: 600;
+    white-space: nowrap;
+}
+.tl-units.tl-in { color: var(--green); }
+.tl-units.tl-out { color: var(--red); }
+.tl-expand {
+    font-family: 'Space Mono', monospace; font-size: 9px;
+    color: var(--fg3); cursor: pointer; white-space: nowrap;
+}
+.tl-expand:hover { color: var(--fg); }
+.tl-detail {
+    padding: 4px 0 4px 24px;
+    display: flex; flex-wrap: wrap; gap: 4px 12px;
+}
+.tl-sku-item {
+    font-family: 'DM Sans', sans-serif; font-size: 11px;
+    color: var(--fg2); white-space: nowrap;
+}
+.tl-sku-item .tl-in { color: var(--green); font-weight: 600; }
+.tl-sku-item .tl-out { color: var(--red); font-weight: 600; }
