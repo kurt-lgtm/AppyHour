@@ -10830,13 +10830,11 @@ class InventoryReorderApp:
             for sku, qty in skus.items():
                 if sku.startswith("CH-"):
                     demand_direct[sku] += int(qty)
-                elif sku.startswith("EX-EC"):
-                    # EX-EC resolves same as CEX-EC
-                    if "-" in sku[5:]:
-                        suffix = sku.split("-", 2)[2] if sku.count("-") >= 2 else ""
-                        cheese = self.cex_ec.get(suffix, "")
-                        if cheese:
-                            demand_exec[cheese] += int(qty)
+                elif sku.upper() in ("EX-EC", "CEX-EM", "EX-EM", "CEX-EA", "EX-EA"):
+                    # Global extras — resolve via global_extras settings
+                    ge = self.settings.get("global_extras", {}).get(sku.upper(), "")
+                    if ge:
+                        demand_exec[ge] += int(qty)
 
         # From Shopify API demand
         for sku, qty in self.shopify_api_demand.items():
@@ -10877,12 +10875,8 @@ class InventoryReorderApp:
                         cheese = self.cex_ec.get(suffix, "")
                         if cheese:
                             demand_cexec[cheese] += qty
-                elif upper.startswith("EX-EC-"):
-                    suffix = upper.split("EX-EC-", 1)[1]
-                    cheese = self.cex_ec.get(suffix, "")
-                    if cheese:
-                        demand_exec[cheese] += qty
-                # Bare CEX-EC / EX-EC / CEX-EM / EX-EM / EX-EA — skip
+                # Bare EX-EC / CEX-EM / EX-EM / EX-EA — not resolved here
+                # (resolved via global_extras in fulfillment web app)
 
         # From imported CSV demand
         for sku, qty in getattr(self, '_fp_csv_demand', {}).items():

@@ -4,12 +4,17 @@ Wraps the same logic as GelPackCalculator/app/routers/shipping.py.
 """
 
 import json
+import time
+import re
 from typing import Optional
 from pathlib import Path
+from datetime import datetime, timedelta
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from enum import Enum
 
-from utils import format_error, to_json, SHIPPING_DIR
+import requests
+
+from utils import format_error, to_json, SHIPPING_DIR, GELCALC_DIR, get_inventory_settings
 
 
 # Lazy-loaded modules
@@ -295,3 +300,185 @@ def register(mcp):
             return to_json({"overrides": overrides, "count": len(overrides)})
         except Exception as e:
             return format_error(e, "get_zip_overrides")
+
+    @mcp.tool(
+        name="appyhour_apply_zip_routing_tags",
+        annotations={
+            "title": "Apply Routing Tags for Zip Overrides",
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
+    )
+    async def apply_zip_routing_tags(
+        dry_run: bool = True,
+    ) -> str:
+        """Find unfulfilled Shopify orders in zip-override zones and apply routing tags.
+
+        Reads zip_routing_overrides from GelPackCalculator settings. For each
+        unfulfilled order shipping to an override zip:
+        1. Checks for conflicting routing tags and removes them
+        2. Applies the appropriate routing tag (e.g. !FedEx 2Day - Dallas_AHB!)
+
+        Args:
+            dry_run: If True (default), report what would change without modifying orders.
+                     Set to False to actually apply tags.
+
+        Returns:
+            JSON with tagged orders, conflicts resolved, and any errors.
+        """
+        try:
+            settings = get_inventory_settings()
+            store = settings.get("shopify_store_url", "").strip()
+            token = settings.get("shopify_access_token", "").strip()
+            if not store or not token:
+                return to_json({"error": "Shopify credentials not configured"})
+
+            gql_url = f"https://{store}.myshopify.com/admin/api/2024-01/graphql.json"
+            rest_base = f"https://{store}.myshopify.com/admin/api/2024-01"
+            headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+
+            # Load zip overrides from GelPack settings
+            gc_path = GELCALC_DIR / "gel_calc_shopify_settings.json"
+            if not gc_path.exists():
+                return to_json({"error": "GelPack settings not found"})
+            with open(gc_path) as f:
+                gc = json.load(f)
+            overrides = gc.get("zip_routing_overrides", {})
+            force_2day_zips = {
+                z for z, v in overrides.items() if v.get("action") == "force_2day"
+            }
+            if not force_2day_zips:
+                return to_json({"message": "No force_2day zip overrides configured", "tagged": 0})
+
+            TAG = "!FedEx 2Day - Dallas_AHB!"
+            ROUTING_PREFIXES = ("!ANY", "!NO ", "!FedEx", "!UPS", "!OnTrac")
+
+            # Fetch unfulfilled orders
+            cutoff = (datetime.now() - timedelta(days=21)).isoformat()
+            url = f"{rest_base}/orders.json"
+            params = {
+                "status": "open", "fulfillment_status": "unfulfilled",
+                "limit": 250, "created_at_min": cutoff,
+                "fields": "id,name,tags,shipping_address",
+            }
+            all_orders = []
+            while url:
+                resp = requests.get(url, headers=headers, params=params, timeout=60)
+                if resp.status_code != 200:
+                    break
+                data = resp.json()
+                all_orders.extend(data.get("orders", []))
+                url = None
+                params = None
+                link = resp.headers.get("Link", "")
+                if 'rel="next"' in link:
+                    m = re.search(r'<([^>]+)>;\s*rel="next"', link)
+                    if m:
+                        url = m.group(1)
+                time.sleep(0.3)
+
+            # Find orders needing tags
+            targets = []
+            for o in all_orders:
+                addr = o.get("shipping_address") or {}
+                zipcode = (addr.get("zip") or "").strip()
+                prefix = zipcode[:3]
+                if prefix not in force_2day_zips:
+                    continue
+                tags = o.get("tags", "") or ""
+                tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+                routing_tags = [t for t in tag_list if any(t.startswith(p) for p in ROUTING_PREFIXES)]
+
+                already_tagged = TAG in tag_list
+                conflicts = [t for t in routing_tags if t != TAG]
+
+                if already_tagged and not conflicts:
+                    continue  # already correct
+
+                targets.append({
+                    "order_id": o["id"],
+                    "name": o.get("name", ""),
+                    "city": addr.get("city", ""),
+                    "state": addr.get("province_code", ""),
+                    "zip": zipcode,
+                    "conflicts": conflicts,
+                    "already_tagged": already_tagged,
+                })
+
+            if dry_run:
+                return to_json({
+                    "dry_run": True,
+                    "orders_to_tag": len(targets),
+                    "force_2day_zips": sorted(force_2day_zips),
+                    "tag": TAG,
+                    "details": targets,
+                })
+
+            # Apply tags via GraphQL
+            tags_add_q = """
+            mutation tagsAdd($id: ID!, $tags: [String!]!) {
+              tagsAdd(id: $id, tags: $tags) {
+                node { ... on Order { id name } }
+                userErrors { field message }
+              }
+            }
+            """
+            tags_remove_q = """
+            mutation tagsRemove($id: ID!, $tags: [String!]!) {
+              tagsRemove(id: $id, tags: $tags) {
+                node { ... on Order { id name } }
+                userErrors { field message }
+              }
+            }
+            """
+
+            results = {"tagged": 0, "conflicts_resolved": 0, "failed": 0, "details": []}
+
+            for t in targets:
+                gid = f"gid://shopify/Order/{t['order_id']}"
+
+                # Remove conflicting routing tags first
+                if t["conflicts"]:
+                    resp = requests.post(gql_url, headers=headers, json={
+                        "query": tags_remove_q,
+                        "variables": {"id": gid, "tags": t["conflicts"]},
+                    }, timeout=30)
+                    data = resp.json()
+                    errors = (data.get("data", {}).get("tagsRemove", {})
+                              .get("userErrors", []))
+                    if not errors:
+                        results["conflicts_resolved"] += 1
+                    time.sleep(0.3)
+
+                # Add FedEx 2Day tag
+                if not t["already_tagged"]:
+                    resp = requests.post(gql_url, headers=headers, json={
+                        "query": tags_add_q,
+                        "variables": {"id": gid, "tags": [TAG]},
+                    }, timeout=30)
+                    data = resp.json()
+                    if "errors" in data:
+                        results["failed"] += 1
+                        results["details"].append({
+                            "name": t["name"], "error": str(data["errors"])[:100]})
+                    else:
+                        ue = (data.get("data", {}).get("tagsAdd", {})
+                              .get("userErrors", []))
+                        if ue:
+                            results["failed"] += 1
+                            results["details"].append({"name": t["name"], "error": str(ue)})
+                        else:
+                            results["tagged"] += 1
+                            results["details"].append({
+                                "name": t["name"],
+                                "city": t["city"],
+                                "zip": t["zip"],
+                                "conflicts_removed": t["conflicts"],
+                            })
+                    time.sleep(0.3)
+
+            return to_json(results)
+        except Exception as e:
+            return format_error(e, "apply_zip_routing_tags")

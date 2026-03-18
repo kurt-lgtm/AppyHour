@@ -44,9 +44,7 @@ def is_pickable(sku):
         return False
     if upper.startswith("PR-CJAM"):
         return False
-    if upper.startswith("CEX-E"):
-        return False
-    if upper == "CEX-EM":
+    if upper.startswith("CEX-"):
         return False
     return bool(sku.strip())
 
@@ -252,6 +250,12 @@ def load_recharge_csv(settings):
                             demand[normalize_sku(ec)] += qty
                 continue
 
+            # Resolve global extras (bare EX-EC, CEX-EM, EX-EM, etc.)
+            ge = settings.get("global_extras", {}).get(upper)
+            if ge:
+                demand[normalize_sku(ge)] += qty
+                continue
+
             if not is_pickable(sku):
                 continue
 
@@ -326,6 +330,12 @@ def load_shopify_csv(settings):
                         ec = cex_ec_map.get(curation, "")
                         if isinstance(ec, str) and ec:
                             target[normalize_sku(ec)] += qty
+                continue
+
+            # Resolve global extras (bare EX-EC, CEX-EM, EX-EM, etc.)
+            ge = settings.get("global_extras", {}).get(upper)
+            if ge:
+                target[normalize_sku(ge)] += qty
                 continue
 
             if not is_pickable(sku):
@@ -503,6 +513,12 @@ def pull_recharge_api(settings):
                         ec = cex_ec.get(curation, "")
                         if isinstance(ec, str) and ec:
                             demand[normalize_sku(ec)] += qty
+                continue
+
+            # Resolve global extras (bare EX-EC, CEX-EM, EX-EM, etc.)
+            ge = settings.get("global_extras", {}).get(upper)
+            if ge:
+                demand[normalize_sku(ge)] += qty
                 continue
 
             if not is_pickable(sku):

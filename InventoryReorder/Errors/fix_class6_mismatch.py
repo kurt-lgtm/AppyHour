@@ -29,9 +29,83 @@ if "MDT" in CURATION_RECIPES:
     ]
 FOOD_PREFIXES = ("CH-", "MT-", "AC-", "CEX-")
 CUSTOM_BOX_PREFIXES = ("AHB-MCUST", "AHB-LCUST")
+PICKABLE_PREFIXES = ("CH-", "MT-", "AC-")
 
 # Minimum match % to consider it a clean 1:1 swap
 MIN_MATCH_PCT = 0.85
+
+# Recharge API setup
+RC_TOKEN = settings.get("recharge_api_token", "")
+RC_HEADERS = {
+    "X-Recharge-Access-Token": RC_TOKEN,
+    "Accept": "application/json",
+    "X-Recharge-Version": "2021-11",
+}
+
+
+def fetch_rc_charge(charge_id):
+    """Fetch a single Recharge charge by ID. Returns charge dict or None."""
+    if not RC_TOKEN or not charge_id:
+        return None
+    try:
+        resp = requests.get(
+            f"https://api.rechargeapps.com/charges/{charge_id}",
+            headers=RC_HEADERS, timeout=30,
+        )
+        if resp.status_code != 200:
+            return None
+        return resp.json().get("charge")
+    except Exception:
+        return None
+
+
+def check_rc_items(order, expected_curation, actual_curation):
+    """Check Recharge charge to determine if items were customer-chosen.
+
+    Returns a dict:
+      rc_status: "batch_issue" | "customer_chosen" | "rc_matches_expected" | "unknown"
+      rc_items: set of pickable SKUs from the RC charge
+      rc_charge_id: str
+    """
+    note_attrs = order.get("note_attributes") or []
+    charge_id = None
+    for attr in note_attrs:
+        if attr.get("name") == "rc_charge_id":
+            charge_id = attr.get("value")
+            break
+
+    if not charge_id:
+        return {"rc_status": "unknown", "rc_items": set(), "rc_charge_id": ""}
+
+    charge = fetch_rc_charge(charge_id)
+    if not charge:
+        return {"rc_status": "unknown", "rc_items": set(), "rc_charge_id": charge_id}
+
+    # Extract pickable SKUs from RC charge line items
+    rc_skus = set()
+    for item in charge.get("line_items", []):
+        sku = (item.get("sku") or "").strip()
+        if sku and any(sku.startswith(p) for p in PICKABLE_PREFIXES):
+            rc_skus.add(sku)
+
+    expected_skus = set(s for s, q in CURATION_RECIPES.get(expected_curation, []))
+    actual_skus = set(s for s, q in CURATION_RECIPES.get(actual_curation, []))
+
+    if not rc_skus:
+        return {"rc_status": "unknown", "rc_items": rc_skus, "rc_charge_id": charge_id}
+
+    # RC has the correct recipe → only Shopify is wrong
+    expected_overlap = len(rc_skus & expected_skus) / max(len(rc_skus), 1)
+    if expected_overlap >= 0.85:
+        return {"rc_status": "rc_matches_expected", "rc_items": rc_skus, "rc_charge_id": charge_id}
+
+    # RC has the same wrong recipe → batch issue on Recharge side
+    actual_overlap = len(rc_skus & actual_skus) / max(len(rc_skus), 1)
+    if actual_overlap >= 0.85:
+        return {"rc_status": "batch_issue", "rc_items": rc_skus, "rc_charge_id": charge_id}
+
+    # RC items don't match either recipe → customer may have customized
+    return {"rc_status": "customer_chosen", "rc_items": rc_skus, "rc_charge_id": charge_id}
 
 
 def fetch_all_unfulfilled():
@@ -41,7 +115,7 @@ def fetch_all_unfulfilled():
         "status": "open",
         "fulfillment_status": "unfulfilled",
         "limit": 250,
-        "fields": "id,name,created_at,customer,email,tags,line_items",
+        "fields": "id,name,created_at,customer,email,tags,line_items,note_attributes",
     }
     page = 0
     while url:
@@ -212,6 +286,10 @@ def find_class6_orders(orders):
         customer = order.get("customer") or {}
         cust_name = f"{customer.get('first_name', '')} {customer.get('last_name', '')}".strip()
 
+        # Check Recharge charge for customer-chosen items
+        rc_check = check_rc_items(order, box_curation, best_cur)
+        time.sleep(0.3)  # rate limit RC API
+
         results.append({
             "order_id": order["id"],
             "order_name": order.get("name", ""),
@@ -223,25 +301,46 @@ def find_class6_orders(orders):
             "match_pct": best_pct,
             "to_remove": to_remove,
             "to_add": to_add,
+            "rc_status": rc_check["rc_status"],
+            "rc_items": rc_check["rc_items"],
+            "rc_charge_id": rc_check["rc_charge_id"],
         })
 
     return results
 
 
 def print_plan(results):
+    safe = [r for r in results if r["rc_status"] != "customer_chosen"]
+    skipped = [r for r in results if r["rc_status"] == "customer_chosen"]
+
     print(f"\n{'='*80}")
-    print(f"CLASS 6 CLEAN 1:1 MISMATCH: {len(results)} orders")
+    print(f"CLASS 6 CLEAN 1:1 MISMATCH: {len(results)} orders "
+          f"({len(safe)} fixable, {len(skipped)} customer-chosen)")
     print(f"{'='*80}\n")
 
+    RC_LABELS = {
+        "batch_issue": "RC has wrong items too (batch issue)",
+        "rc_matches_expected": "RC has correct items (Shopify-only issue)",
+        "unknown": "RC charge not found",
+        "customer_chosen": "SKIP — items may be customer-chosen",
+    }
+
     for r in results:
-        print(f"Order {r['order_name']} | {r['customer']} | {r['box_sku']}")
+        status_label = RC_LABELS.get(r["rc_status"], r["rc_status"])
+        marker = " *** SKIPPING" if r["rc_status"] == "customer_chosen" else ""
+        print(f"Order {r['order_name']} | {r['customer']} | {r['box_sku']}{marker}")
         print(f"  Box says {r['box_curation']}, items match {r['actual_curation']} ({r['match_pct']:.0%})")
+        print(f"  Recharge: {status_label} (charge {r['rc_charge_id']})")
+        if r["rc_items"]:
+            print(f"  RC items: {', '.join(sorted(r['rc_items']))}")
         if r['to_remove']:
             skus = ", ".join(item['sku'] for item in r['to_remove'])
             print(f"  REMOVE: {skus}")
         if r['to_add']:
             print(f"  ADD: {', '.join(r['to_add'])}")
         print()
+
+    return safe
 
 
 def apply_changes(results, variant_map):
@@ -408,19 +507,19 @@ def main():
     if single_order:
         results = [r for r in results if r["order_name"] == f"#{single_order}"]
 
-    print_plan(results)
+    safe_results = print_plan(results)
 
-    if not results:
-        print("No clean 1:1 Class 6 mismatches found.")
+    if not safe_results:
+        print("No fixable Class 6 mismatches found.")
         return
 
     if not commit:
         print("DRY RUN — no changes made. Use --commit to apply changes.")
         return
 
-    # Collect all SKUs we need to add
+    # Collect all SKUs we need to add (only from safe results)
     all_add_skus = set()
-    for r in results:
+    for r in safe_results:
         all_add_skus.update(r['to_add'])
 
     print(f"\nLooking up variant IDs for {len(all_add_skus)} SKUs...")
@@ -432,13 +531,13 @@ def main():
         print("Cannot proceed.")
         return
 
-    print(f"\nApplying changes to {len(results)} orders...")
+    print(f"\nApplying changes to {len(safe_results)} orders...")
     confirm = input("Type 'yes' to confirm: ")
     if confirm.strip().lower() != "yes":
         print("Aborted.")
         return
 
-    apply_changes(results, variant_map)
+    apply_changes(safe_results, variant_map)
 
 
 if __name__ == "__main__":
