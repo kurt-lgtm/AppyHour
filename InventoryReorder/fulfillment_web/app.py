@@ -1440,22 +1440,33 @@ def detect_rmfg_files(folder):
         "order_dashboard": None,
         "charges_queued": None,
         "march_charges": None,
+        "depletion": None,
     }
     for f in files:
         fl = f.lower()
         fp = os.path.join(folder, f)
-        if not f.endswith(".csv"):
-            continue
-        if "template check" in fl or "template_check" in fl:
-            result["template_check"] = fp
-        elif "product inventory" in fl or "product_inventory" in fl:
-            result["product_inventory"] = fp
-        elif "order-dashboard" in fl or "order_dashboard" in fl:
-            result["order_dashboard"] = fp
-        elif fl.startswith("charges_queued"):
-            result["charges_queued"] = fp
-        elif "march charges" in fl or "march_charges" in fl:
-            result["march_charges"] = fp
+        if f.endswith(".csv"):
+            if "template check" in fl or "template_check" in fl:
+                result["template_check"] = fp
+            elif "product inventory" in fl or "product_inventory" in fl:
+                result["product_inventory"] = fp
+            elif "order-dashboard" in fl or "order_dashboard" in fl:
+                result["order_dashboard"] = fp
+            elif fl.startswith("charges_queued"):
+                result["charges_queued"] = fp
+            elif "march charges" in fl or "march_charges" in fl:
+                result["march_charges"] = fp
+        elif f.endswith(".xlsx") and "weeklyproductionquery" in fl.replace("_", "").replace(" ", ""):
+            result["depletion"] = fp
+    # Also check project root for depletion XLSX
+    if not result["depletion"]:
+        parent = os.path.dirname(os.path.dirname(folder))  # up to AppyHour/
+        if os.path.isdir(parent):
+            for f in os.listdir(parent):
+                fl = f.lower()
+                if f.endswith(".xlsx") and "weeklyproductionquery" in fl.replace("_", "").replace(" ", ""):
+                    result["depletion"] = os.path.join(parent, f)
+                    break
     return result
 
 
@@ -2178,6 +2189,15 @@ def calculate_rmfg():
         STATE["rmfg_sat_demand"] = sat_demand
         STATE["rmfg_attribution"] = attribution
 
+    # If raw components don't exist but sat_demand does (e.g. from recharge_sync),
+    # populate raw components for the cut order interactive view.
+    # Treat all demand as "direct" since it was already resolved by recharge_sync.
+    if STATE.get("rmfg_direct_sat") is None and sat_demand:
+        STATE["rmfg_direct_sat"] = {k: v for k, v in sat_demand.items()
+                                     if any(k.startswith(p) for p in ("CH-", "MT-", "AC-"))}
+        STATE["rmfg_prcjam_sat"] = STATE.get("rmfg_prcjam_sat") or {}
+        STATE["rmfg_cexec_sat"] = STATE.get("rmfg_cexec_sat") or {}
+
     # Monthly box demand (AHB-MED, AHB-CMED, AHB-LGE) — individual SKU demand
     # already flows through parsers via direct_demand. Counts stored in STATE
     # for display in the Monthly Boxes panel.
@@ -2216,8 +2236,12 @@ def calculate_rmfg():
                     settings_demand[normalize_sku(ge_resolved)] += int(qty)
                 else:
                     settings_demand[normalize_sku(sku)] += int(qty)
-        # Shopify API demand (weekly)
+        # Shopify API demand (weekly averages from history)
         for sku, qty in shopify.items():
+            settings_demand[normalize_sku(sku)] += int(qty)
+        # Shopify unfulfilled orders (actual pending demand)
+        shopify_unfulfilled = s.get("shopify_unfulfilled", {})
+        for sku, qty in shopify_unfulfilled.items():
             settings_demand[normalize_sku(sku)] += int(qty)
         # Manual demand
         for sku, qty in manual.items():
@@ -2228,6 +2252,30 @@ def calculate_rmfg():
         tue_demand = {sku: max(1, int(q * 0.3))
                       for sku, q in sat_demand.items() if q > 0}
         next_sat_demand = dict(sat_demand)
+
+        # Populate raw component STATE for cut order interactive view
+        # Build decomposed components from settings sources
+        settings_direct = defaultdict(int)
+        settings_prcjam = defaultdict(int)
+        settings_cexec = defaultdict(int)
+        for month, data in rq_resolved.items():
+            for suffix, count in data.get("pr_cjam", {}).items():
+                settings_prcjam[suffix] += int(count)
+            for suffix, count in data.get("cex_ec", {}).items():
+                settings_cexec[suffix] += int(count)
+            for sku, qty in data.get("direct", {}).items():
+                settings_direct[normalize_sku(sku)] += int(qty)
+        for sku, qty in shopify.items():
+            settings_direct[normalize_sku(sku)] += int(qty)
+        for sku, qty in shopify_unfulfilled.items():
+            settings_direct[normalize_sku(sku)] += int(qty)
+        for sku, qty in manual.items():
+            settings_direct[normalize_sku(sku)] += int(qty)
+        STATE["rmfg_direct_sat"] = dict(settings_direct)
+        STATE["rmfg_prcjam_sat"] = dict(settings_prcjam)
+        STATE["rmfg_cexec_sat"] = dict(settings_cexec)
+        STATE["rmfg_sat_demand"] = sat_demand
+        STATE["rmfg_tue_demand"] = tue_demand
 
     # Apply churn adjustment if in churned mode
     churn_info = {}
@@ -3546,6 +3594,167 @@ def demand_breakdown(sku):
     return jsonify(attr)
 
 
+@app.route("/api/cut_order_interactive", methods=["POST"])
+def get_cut_order_interactive():
+    """Return raw data for client-side interactive cut order calculator.
+
+    Wk1 (Saturday): decomposed into direct/prcjam/cexec for client-side resolve.
+    Wk2 (Tuesday): pre-resolved totals (not decomposable in current pipeline).
+    All pickable SKUs (CH-, MT-, AC-) included.
+    """
+    inv = STATE.get("rmfg_inventory", {})
+    bulk_weights = STATE.get("bulk_weights", {})
+    s = _s()
+    pr_cjam = s.get("pr_cjam", {})
+    cex_ec = s.get("cex_ec", {})
+    splits = s.get("cexec_splits", {})
+    bulk_conversions = s.get("bulk_conversions", {})
+    inv_settings = s.get("inventory", {})
+
+    # Wk1 (Saturday) raw components for client-side resolve
+    wk1_direct = STATE.get("rmfg_direct_sat", {})
+    wk1_prcjam = STATE.get("rmfg_prcjam_sat", {})
+    wk1_cexec = STATE.get("rmfg_cexec_sat", {})
+
+    # Also get RC vs SH breakdown for Wk1
+    wk1_direct_rc = STATE.get("rmfg_direct_rc", {})
+    wk1_prcjam_rc = STATE.get("rmfg_prcjam_rc", {})
+    wk1_cexec_rc = STATE.get("rmfg_cexec_rc", {})
+    wk1_direct_sh = STATE.get("rmfg_direct_sh", {})
+    wk1_prcjam_sh = STATE.get("rmfg_prcjam_sh", {})
+    wk1_cexec_sh = STATE.get("rmfg_cexec_sh", {})
+
+    # Wk2 (Tuesday) — pre-resolved, not decomposable
+    wk2_demand = STATE.get("rmfg_tue_demand", {})
+
+    # Compute bulk supply potential for AC- items
+    bulk_supply = {}
+    for inv_sku, inv_data in inv_settings.items():
+        if not isinstance(inv_data, dict):
+            continue
+        cat = inv_data.get("category", "")
+        if cat != "Bulk Raw Materials":
+            continue
+        name = inv_data.get("name", "")
+        qty = float(inv_data.get("qty", 0))
+        if qty <= 0:
+            continue
+        for keyword, conv in bulk_conversions.items():
+            if keyword.lower() in name.lower():
+                target = conv.get("sku", "")
+                packet_oz = conv.get("packet_oz", 3.9)
+                unit = inv_data.get("unit", "").lower()
+                unit_size = float(inv_data.get("unit_size", 1))
+                if "lb" in unit:
+                    total_oz = qty * unit_size * 16
+                elif "oz" in unit:
+                    total_oz = qty * unit_size
+                else:
+                    total_oz = qty * unit_size
+                if target and packet_oz > 0:
+                    bulk_supply[target] = bulk_supply.get(target, 0) + int(total_oz / packet_oz)
+
+    # Collect all pickable SKUs
+    pickable = set()
+    for d in (inv, wk1_direct, wk2_demand):
+        for k in d:
+            if any(k.startswith(p) for p in ("CH-", "MT-", "AC-")):
+                pickable.add(k)
+
+    # Build per-SKU data
+    skus = {}
+    for sku in sorted(pickable):
+        sliced = inv.get(sku, 0)
+        data = inv_settings.get(sku, {})
+        name = data.get("name", "") if isinstance(data, dict) else ""
+
+        entry = {"sliced": sliced, "name": name}
+
+        # Wheel potential (CH- only)
+        bw = bulk_weights.get(sku, {})
+        if bw and sku.startswith("CH-"):
+            entry["wheel_count"] = bw.get("count", 0)
+            entry["wheel_weight"] = bw.get("weight_lbs", 0)
+            entry["wheel_potential"] = bw.get("potential_yield", 0)
+
+        # Bulk potential (AC- only)
+        if sku in bulk_supply:
+            entry["bulk_potential"] = bulk_supply[sku]
+
+        # Wk2 pre-resolved demand
+        entry["wk2_demand"] = int(round(wk2_demand.get(sku, 0)))
+
+        # Skip if no inventory, no demand, no supply potential
+        has_demand = (wk1_direct.get(sku, 0) > 0 or entry["wk2_demand"] > 0
+                      or sku in str(pr_cjam) or sku in str(cex_ec))
+        has_supply = sliced > 0 or entry.get("wheel_potential", 0) > 0 or entry.get("bulk_potential", 0) > 0
+        if not has_demand and not has_supply:
+            continue
+
+        skus[sku] = entry
+
+    # Monthly box slot data
+    monthly_slots = {}
+    monthly_counts = {}
+    for box_type in MONTHLY_BOX_TYPES:
+        slots_def = MONTHLY_BOX_SLOTS.get(box_type, [])
+        recipes = s.get("monthly_box_recipes", {})
+        current_month = datetime.datetime.now().strftime("%Y-%m")
+        month_recipes = recipes.get(current_month, {})
+        box_recipes = month_recipes.get(box_type, [])
+        # Build slot assignments from recipes
+        slot_list = []
+        for i, (slot_name, prefix) in enumerate(slots_def):
+            assigned_sku = ""
+            if i < len(box_recipes):
+                assigned_sku = box_recipes[i][1] if len(box_recipes[i]) > 1 else ""
+            slot_list.append([slot_name, prefix, assigned_sku])
+        monthly_slots[box_type] = slot_list
+        counts = s.get("monthly_box_counts", {})
+        monthly_counts[box_type] = counts.get(box_type, 0)
+
+    # Saved cut quantities
+    saved_cuts = s.get("cut_quantities", {"wk1": {}, "wk2": {}})
+
+    return jsonify({
+        "skus": skus,
+        "raw_components": {
+            "wk1": {
+                "direct": wk1_direct,
+                "prcjam_counts": wk1_prcjam,
+                "cexec_counts": wk1_cexec,
+            },
+        },
+        "wk2_demand": {k: int(round(v)) for k, v in wk2_demand.items()
+                       if any(k.startswith(p) for p in ("CH-", "MT-", "AC-"))},
+        "assignments": {
+            "pr_cjam": pr_cjam,
+            "cex_ec": cex_ec,
+            "cexec_splits": splits,
+        },
+        "monthly_slots": monthly_slots,
+        "monthly_box_counts": monthly_counts,
+        "curations": ALL_CURATIONS,
+        "saved_cuts": saved_cuts,
+    })
+
+
+@app.route("/api/cut_quantities", methods=["GET", "POST"])
+def cut_quantities():
+    """Get or save cut quantity inputs for the interactive calculator."""
+    s = _s()
+    if request.method == "GET":
+        return jsonify(s.get("cut_quantities", {"wk1": {}, "wk2": {}}))
+    data = request.get_json(force=True)
+    s["cut_quantities"] = {
+        "wk1": data.get("wk1", {}),
+        "wk2": data.get("wk2", {}),
+    }
+    save_settings(s)
+    STATE["saved"] = s
+    return jsonify({"ok": True})
+
+
 @app.route("/api/cut_order_csv")
 def export_cut_order_csv():
     """Export current cut order as CSV download."""
@@ -3810,7 +4019,50 @@ def run_all():
         calc_resp = calculate_rmfg()
         calc_data = calc_resp.get_json() if hasattr(calc_resp, 'get_json') else json.loads(calc_resp.data)
 
-    # 3. Substitutions
+    # 3. Apply depletion from shipments XLSX (if found)
+    depletion_result = None
+    rmfg_folder = load_data.get("folder", folder)
+    if not os.path.isabs(rmfg_folder):
+        rmfg_folder = os.path.join(_get_project_dir(), rmfg_folder)
+    if os.path.isdir(rmfg_folder):
+        files = detect_rmfg_files(rmfg_folder)
+        dep_path = files.get("depletion")
+        if dep_path and os.path.exists(dep_path):
+            product_totals, order_count, err = parse_depletion_xlsx(dep_path)
+            if not err and product_totals:
+                s = _s()
+                translations = s.get("sku_translations", {})
+                inventory = s.get("inventory", {})
+                sku_totals, mapped, unmatched = map_depletion_to_skus(
+                    product_totals, translations, inventory)
+                if sku_totals:
+                    # Apply depletion to rmfg_inventory
+                    inv = STATE.get("rmfg_inventory", {})
+                    dep_label = os.path.basename(dep_path)
+                    _take_snapshot(f"Pre-depletion: {dep_label}", source="depletion")
+                    applied = {}
+                    for sku, qty in sku_totals.items():
+                        before = inv.get(sku, 0)
+                        after = before - int(qty)
+                        inv[sku] = after
+                        applied[sku] = {"before": before, "after": after, "depleted": int(qty)}
+                    STATE["rmfg_inventory"] = inv
+                    _take_snapshot(f"Post-depletion: {dep_label}", source="depletion")
+                    depletion_result = {
+                        "file": dep_label,
+                        "order_count": order_count,
+                        "skus_affected": len(applied),
+                        "total_depleted": sum(int(q) for q in sku_totals.values()),
+                        "unmatched": unmatched,
+                    }
+
+    # 4. Re-calculate after depletion (so numbers reflect post-shipment inventory)
+    if depletion_result:
+        with app.test_request_context(json={}):
+            calc_resp = calculate_rmfg()
+            calc_data = calc_resp.get_json() if hasattr(calc_resp, 'get_json') else json.loads(calc_resp.data)
+
+    # 5. Substitutions
     subs = []
     with app.test_request_context():
         sub_resp = get_substitutions()
@@ -3820,6 +4072,7 @@ def run_all():
         "load": load_data,
         "results": calc_data,
         "substitutions": subs,
+        "depletion": depletion_result,
     })
 
 
@@ -4230,14 +4483,28 @@ def recharge_sync():
     if not api_token:
         return jsonify({"error": "Recharge API token not set in Settings"}), 400
 
-    # Cache check
+    # Cache check — also restore from persisted settings on cold start
     force = request.json.get("force", False) if request.is_json else False
     background = request.json.get("background", False) if request.is_json else False
-    cache_minutes = int(s.get("recharge_cache_minutes", 30))
+    cache_minutes = int(s.get("recharge_cache_minutes", 1440))  # 24h default
     last_sync = STATE.get("recharge_last_sync")
+    if not last_sync and s.get("recharge_last_sync_iso"):
+        try:
+            last_sync = datetime.datetime.fromisoformat(s["recharge_last_sync_iso"])
+            STATE["recharge_last_sync"] = last_sync
+            # Restore raw components + demand from settings
+            for key in ("rmfg_direct_sat", "rmfg_prcjam_sat", "rmfg_cexec_sat",
+                        "rmfg_sat_demand", "rmfg_tue_demand",
+                        "rmfg_next_sat_demand", "rmfg_week4_demand"):
+                if s.get(key):
+                    STATE.setdefault(key, s[key])
+        except (ValueError, TypeError):
+            pass
     if last_sync and not force:
         age_seconds = (datetime.datetime.now() - last_sync).total_seconds()
-        if age_seconds < cache_minutes * 60:
+        # Only use cache if raw components are also available
+        has_components = bool(STATE.get("rmfg_prcjam_sat") or s.get("rmfg_prcjam_sat"))
+        if age_seconds < cache_minutes * 60 and has_components:
             cached = STATE.get("recharge_cached_response")
             if cached:
                 cached["from_cache"] = True
@@ -4277,6 +4544,7 @@ def _recharge_sync_foreground(api_token, req, save_to_state=False):
     session.headers.update({
         "X-Recharge-Access-Token": api_token,
         "Accept": "application/json",
+        "X-Recharge-Version": "2021-11",
     })
 
     all_charges = []
@@ -4285,7 +4553,7 @@ def _recharge_sync_foreground(api_token, req, save_to_state=False):
     today = datetime.date.today()
     date_min = today.isoformat()
     date_max = (today + datetime.timedelta(days=28)).isoformat()
-    params = {"status": "queued", "limit": 250,
+    params = {"status": "queued", "limit": 250, "sort_by": "id-asc",
               "scheduled_at_min": date_min, "scheduled_at_max": date_max}
     import time as _time
     t0 = _time.time()
@@ -4336,6 +4604,9 @@ def _recharge_sync_foreground(api_token, req, save_to_state=False):
     # Bin charges by week: which Saturday window they fall into
     # Each charge's scheduled_at determines its window
     week_demands = [defaultdict(int) for _ in range(4)]
+    week_direct = [defaultdict(int) for _ in range(4)]
+    week_prcjam = [defaultdict(int) for _ in range(4)]
+    week_cexec = [defaultdict(int) for _ in range(4)]
     total_by_month = defaultdict(lambda: defaultdict(float))
     total_charges_count = 0
 
@@ -4381,6 +4652,16 @@ def _recharge_sync_foreground(api_token, req, save_to_state=False):
                 break
         curation = resolve_curation_from_box_sku(box_sku)
 
+        # PR-CJAM: 1 per box with a non-MONTHLY curation.
+        # Recharge only has PR-CJAM-GEN; the real suffix comes from the box.
+        if curation and curation not in ("MONTHLY", None):
+            week_prcjam[week_idx][curation] += 1
+            info = pr_cjam.get(curation, {})
+            ch = info.get("cheese", "") if isinstance(info, dict) \
+                else str(info)
+            if ch:
+                week_demands[week_idx][normalize_sku(ch)] += 1
+
         for item in items:
             sku = (item.get("sku") or "").strip()
             if not sku:
@@ -4390,25 +4671,14 @@ def _recharge_sync_foreground(api_token, req, save_to_state=False):
 
             total_by_month[month_label][sku] += qty
 
-            # PR-CJAM resolution with curation context
-            if upper.startswith("PR-CJAM-"):
-                suffix = upper.split("PR-CJAM-", 1)[1]
-                if suffix == "GEN":
-                    # Resolve using box curation
-                    if curation and curation not in ("MONTHLY", None):
-                        suffix = curation
-                    else:
-                        continue
-                info = pr_cjam.get(suffix, {})
-                ch = info.get("cheese", "") if isinstance(info, dict) \
-                    else str(info)
-                if ch:
-                    week_demands[week_idx][normalize_sku(ch)] += qty
+            # Skip PR-CJAM line items — already counted per-box above
+            if upper.startswith("PR-CJAM"):
                 continue
 
-            # CEX-EC resolution
+            # CEX-EC with explicit suffix (from Shopify or manual)
             if upper.startswith("CEX-EC-"):
                 suffix = upper.split("CEX-EC-", 1)[1]
+                week_cexec[week_idx][suffix] += qty
                 if suffix in splits:
                     for ssku, pct in splits[suffix].items():
                         week_demands[week_idx][normalize_sku(ssku)] += \
@@ -4419,11 +4689,19 @@ def _recharge_sync_foreground(api_token, req, save_to_state=False):
                         week_demands[week_idx][normalize_sku(ec)] += qty
                 continue
 
+            # Bare CEX-EC — resolve suffix from box curation
             if upper == "CEX-EC":
-                if curation and curation not in ("MONTHLY", None):
-                    ec = cex_ec.get(curation, "")
-                    if isinstance(ec, str) and ec:
-                        week_demands[week_idx][normalize_sku(ec)] += qty
+                suffix = curation if curation and curation not in ("MONTHLY", None) else None
+                if suffix:
+                    week_cexec[week_idx][suffix] += qty
+                    if suffix in splits:
+                        for ssku, pct in splits[suffix].items():
+                            week_demands[week_idx][normalize_sku(ssku)] += \
+                                int(qty * pct)
+                    else:
+                        ec = cex_ec.get(suffix, "")
+                        if isinstance(ec, str) and ec:
+                            week_demands[week_idx][normalize_sku(ec)] += qty
                 continue
 
             # Global extras resolution (bare SKUs across all curations)
@@ -4435,17 +4713,32 @@ def _recharge_sync_foreground(api_token, req, save_to_state=False):
             if not is_pickable(sku):
                 continue
 
+            week_direct[week_idx][normalize_sku(sku)] += qty
             week_demands[week_idx][normalize_sku(sku)] += qty
 
-    # Store per-week demand
+    # Store per-week demand (resolved)
     STATE["rmfg_sat_demand"] = dict(week_demands[0])      # This Saturday
     STATE["rmfg_tue_demand"] = dict(week_demands[1])       # Tuesday / week 2
     STATE["rmfg_next_sat_demand"] = dict(week_demands[2])  # Next Saturday
     STATE["rmfg_week4_demand"] = dict(week_demands[3])     # Week 4
 
+    # Store raw components for cut order deferred resolution
+    STATE["rmfg_direct_sat"] = dict(week_direct[0])
+    STATE["rmfg_prcjam_sat"] = dict(week_prcjam[0])
+    STATE["rmfg_cexec_sat"] = dict(week_cexec[0])
+
     # Save to settings for persistence
     s["recharge_queued"] = {m: dict(skus)
                             for m, skus in total_by_month.items()}
+    # Persist raw components so they survive restarts
+    s["rmfg_direct_sat"] = dict(week_direct[0])
+    s["rmfg_prcjam_sat"] = dict(week_prcjam[0])
+    s["rmfg_cexec_sat"] = dict(week_cexec[0])
+    # Persist per-week resolved demand
+    s["rmfg_sat_demand"] = dict(week_demands[0])
+    s["rmfg_tue_demand"] = dict(week_demands[1])
+    s["rmfg_next_sat_demand"] = dict(week_demands[2])
+    s["rmfg_week4_demand"] = dict(week_demands[3])
     save_settings(s)
     STATE["saved"] = s
 
@@ -4470,9 +4763,14 @@ def _recharge_sync_foreground(api_token, req, save_to_state=False):
         "from_cache": False,
     }
 
-    # Cache the result
-    STATE["recharge_last_sync"] = datetime.datetime.now()
+    # Cache the result (in memory + timestamp persisted)
+    now = datetime.datetime.now()
+    STATE["recharge_last_sync"] = now
     STATE["recharge_cached_response"] = result
+    s = _s()
+    s["recharge_last_sync_iso"] = now.isoformat()
+    save_settings(s)
+    STATE["saved"] = s
 
     if save_to_state:
         return result  # background worker — no Flask response needed
@@ -4493,6 +4791,34 @@ def shopify_sync():
         return jsonify({"error": "requests library not installed"}), 500
 
     s = _s()
+
+    # Cache check (3h default, persisted across restarts)
+    force = request.json.get("force", False) if request.is_json else False
+    cache_minutes = int(s.get("shopify_cache_minutes", 180))  # 3h default
+    last_sync = STATE.get("shopify_last_sync")
+    if not last_sync and s.get("shopify_last_sync_iso"):
+        try:
+            last_sync = datetime.datetime.fromisoformat(s["shopify_last_sync_iso"])
+            STATE["shopify_last_sync"] = last_sync
+        except (ValueError, TypeError):
+            pass
+    if last_sync and not force:
+        age_seconds = (datetime.datetime.now() - last_sync).total_seconds()
+        if age_seconds < cache_minutes * 60:
+            cached = STATE.get("shopify_cached_response")
+            if not cached:
+                # Reconstruct minimal cache from settings
+                cached = {
+                    "ok": True, "from_cache": True,
+                    "cache_age_seconds": int(age_seconds),
+                    "weekly_avg_units": sum(s.get("shopify_api_demand", {}).values()),
+                    "unfulfilled_units": sum(s.get("shopify_unfulfilled", {}).values()),
+                }
+            else:
+                cached["from_cache"] = True
+                cached["cache_age_seconds"] = int(age_seconds)
+            return jsonify(cached)
+
     store = s.get("shopify_store_url", "").strip()
     token = s.get("shopify_access_token", "").strip()
     if not store or not token:
@@ -4622,20 +4948,121 @@ def shopify_sync():
         shopify_weekly[sku] = round(total / num_weeks_with_data)
 
     # Unfulfilled orders = pending demand for current week
+    # Also extract PR-CJAM and CEX-EC curation counts from unfulfilled orders
     unfulfilled_demand = defaultdict(int)
+    sh_prcjam_counts = defaultdict(int)
+    sh_cexec_counts = defaultdict(int)
+    sh_direct_demand = defaultdict(int)
+
+    # Track first orders from last 3 days for MONG projection
+    import pytz
+    try:
+        et = pytz.timezone("US/Eastern")
+    except Exception:
+        et = datetime.timezone(datetime.timedelta(hours=-4))
+    now_et = datetime.datetime.now(et)
+    three_days_ago = (now_et - datetime.timedelta(days=3)).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    first_order_count_3d = 0
+
     for order in unfulfilled_orders:
-        for item in order.get("line_items", []):
+        line_items = order.get("line_items", [])
+        tags = order.get("tags", "") or ""
+        is_first = "Subscription First Order" in tags
+
+        # Count first orders from last 3 days
+        if is_first:
+            created = order.get("created_at", "")
+            try:
+                created_dt = datetime.datetime.fromisoformat(
+                    created.replace("Z", "+00:00"))
+                if created_dt.astimezone(et) >= three_days_ago:
+                    first_order_count_3d += 1
+            except (ValueError, TypeError):
+                first_order_count_3d += 1  # include if can't parse
+
+        # Find box SKU for curation context
+        box_sku = None
+        for item in line_items:
+            item_sku = (item.get("sku") or "").strip().upper()
+            if item_sku.startswith("AHB-"):
+                box_sku = item_sku
+                break
+        curation = resolve_curation_from_box_sku(box_sku) if box_sku else None
+
+        # PR-CJAM: 1 per box with non-MONTHLY curation
+        if curation and curation not in ("MONTHLY", None):
+            sh_prcjam_counts[curation] += 1
+
+        for item in line_items:
             sku = (item.get("sku") or "").strip()
             if not sku:
                 continue
+            upper = sku.upper()
             qty = int(float(item.get("quantity", 1)))
             nsku = normalize_sku(sku)
+
+            # Skip PR-CJAM line items — already counted per-box
+            if upper.startswith("PR-CJAM"):
+                continue
+
+            # CEX-EC with explicit suffix
+            if upper.startswith("CEX-EC-"):
+                suffix = upper.split("CEX-EC-", 1)[1]
+                sh_cexec_counts[suffix] += qty
+                continue
+
+            # Bare CEX-EC — resolve from box curation
+            if upper == "CEX-EC":
+                if curation and curation not in ("MONTHLY", None):
+                    sh_cexec_counts[curation] += qty
+                continue
+
             if is_pickable(nsku):
                 unfulfilled_demand[nsku] += qty
+                sh_direct_demand[nsku] += qty
+
+    # First-order MONG projection: project daily rate to Monday 11:59 PM ET
+    # First orders are MONG curation → add to PR-CJAM-MONG and CEX-EC-MONG
+    proj = s.get("first_order_projection", {})
+    proj_enabled = proj.get("enabled", True)
+    proj_curation = proj.get("active_curation", "MONG")
+
+    if proj_enabled and first_order_count_3d > 0:
+        daily_rate = first_order_count_3d / 3.0
+        # Find next Monday 11:59 PM ET
+        days_to_monday = (7 - now_et.weekday()) % 7  # 0=Mon already
+        if days_to_monday == 0 and now_et.hour >= 23:
+            days_to_monday = 7  # next Monday if past 11:59 PM
+        next_monday_midnight = (now_et + datetime.timedelta(days=days_to_monday)).replace(
+            hour=23, minute=59, second=0, microsecond=0)
+        hours_remaining = max(0, (next_monday_midnight - now_et).total_seconds() / 3600)
+        projected_additional = int(daily_rate * (hours_remaining / 24))
+
+        if projected_additional > 0:
+            sh_prcjam_counts[proj_curation] += projected_additional
+            sh_cexec_counts[proj_curation] += projected_additional
+
+    # Merge Shopify curation counts into STATE (additive with Recharge)
+    existing_prcjam = STATE.get("rmfg_prcjam_sat", {})
+    existing_cexec = STATE.get("rmfg_cexec_sat", {})
+    existing_direct = STATE.get("rmfg_direct_sat", {})
+    for cur, cnt in sh_prcjam_counts.items():
+        existing_prcjam[cur] = existing_prcjam.get(cur, 0) + cnt
+    for cur, cnt in sh_cexec_counts.items():
+        existing_cexec[cur] = existing_cexec.get(cur, 0) + cnt
+    for sku, qty in sh_direct_demand.items():
+        existing_direct[sku] = existing_direct.get(sku, 0) + qty
+    STATE["rmfg_prcjam_sat"] = existing_prcjam
+    STATE["rmfg_cexec_sat"] = existing_cexec
+    STATE["rmfg_direct_sat"] = existing_direct
 
     # Save to settings
     s["shopify_api_demand"] = shopify_weekly
     s["shopify_unfulfilled"] = dict(unfulfilled_demand)
+    s["rmfg_prcjam_sat"] = existing_prcjam
+    s["rmfg_cexec_sat"] = existing_cexec
+    s["rmfg_direct_sat"] = existing_direct
     # Save first-order vs recurring split (weekly averages)
     s["shopify_first_order_demand"] = {
         sku: round(qty / num_weeks_with_data)
@@ -4650,7 +5077,7 @@ def shopify_sync():
 
     total_weekly = sum(shopify_weekly.values())
     total_unfulfilled = sum(unfulfilled_demand.values())
-    return jsonify({
+    result = {
         "ok": True,
         "orders_analyzed": order_count,
         "weeks_of_history": num_weeks_with_data,
@@ -4662,7 +5089,18 @@ def shopify_sync():
         "recurring_skus": len(s.get("shopify_recurring_demand", {})),
         "api_pages": page_count,
         "api_seconds": round(_time.time() - t0, 1),
-    })
+        "from_cache": False,
+    }
+
+    # Cache the result (3h)
+    now = datetime.datetime.now()
+    STATE["shopify_last_sync"] = now
+    STATE["shopify_cached_response"] = result
+    s["shopify_last_sync_iso"] = now.isoformat()
+    save_settings(s)
+    STATE["saved"] = s
+
+    return jsonify(result)
 
 
 @app.route("/api/shopify_status")
@@ -5517,6 +5955,124 @@ def depletion_apply():
         "applied": applied,
         "total_depleted": sum(int(q) for q in sku_totals.values()),
         "skus_affected": len(applied),
+    })
+
+
+@app.route("/api/auto_deplete", methods=["POST"])
+def auto_deplete():
+    """Auto-find the latest 2 WeeklyProductionQuery XLSX files and apply depletions.
+
+    Tracks applied files in settings so they are never reapplied on subsequent runs.
+    Only applies the most recent 2 files (typically Saturday + Tuesday shipments).
+    """
+    # Search multiple locations for depletion files
+    base = _get_project_dir()
+    search_dirs = [base]
+    for sub in ("Shipments", os.path.join("InventoryReorder", "Shipments")):
+        candidate = os.path.join(base, sub)
+        if os.path.isdir(candidate):
+            search_dirs.append(candidate)
+    parent = os.path.dirname(base)
+    if os.path.isdir(parent) and parent != base:
+        search_dirs.append(parent)
+        for sub in ("Shipments", os.path.join("InventoryReorder", "Shipments")):
+            candidate = os.path.join(parent, sub)
+            if os.path.isdir(candidate) and candidate not in search_dirs:
+                search_dirs.append(candidate)
+
+    dep_paths = []
+    seen = set()
+    for search_dir in search_dirs:
+        if not os.path.isdir(search_dir):
+            continue
+        for f in sorted(os.listdir(search_dir)):
+            fl = f.lower()
+            if f.endswith(".xlsx") and "weeklyproductionquery" in fl.replace("_", "").replace(" ", ""):
+                fp = os.path.join(search_dir, f)
+                if fp not in seen:
+                    seen.add(fp)
+                    dep_paths.append(fp)
+
+    if not dep_paths:
+        return jsonify({"ok": False, "skipped": True,
+                        "reason": "No WeeklyProductionQuery XLSX found"})
+
+    # Only use latest 2 files (sorted by name, which includes date)
+    dep_paths = sorted(dep_paths, key=lambda p: os.path.basename(p))[-2:]
+
+    # Skip files already applied (tracked in settings)
+    s = _s()
+    applied_files = set(s.get("depletion_applied_files", []))
+    new_paths = [p for p in dep_paths if os.path.basename(p) not in applied_files]
+
+    if not new_paths:
+        already = [os.path.basename(p) for p in dep_paths]
+        return jsonify({"ok": False, "skipped": True,
+                        "reason": f"Already applied: {', '.join(already)}"})
+
+    inv = STATE.get("rmfg_inventory", {})
+    if not inv:
+        return jsonify({"ok": False, "skipped": True,
+                        "reason": "No inventory loaded yet"})
+
+    translations = s.get("sku_translations", {})
+    inventory_settings = s.get("inventory", {})
+
+    total_applied = {}
+    total_order_count = 0
+    all_unmatched = []
+    files_applied = []
+
+    for dep_path in new_paths:
+        product_totals, order_count, err = parse_depletion_xlsx(dep_path)
+        if err or not product_totals:
+            continue
+
+        sku_totals, mapped, unmatched = map_depletion_to_skus(
+            product_totals, translations, inventory_settings)
+        if not sku_totals:
+            continue
+
+        dep_label = os.path.basename(dep_path)
+        _take_snapshot(f"Pre-depletion: {dep_label}", source="depletion")
+
+        for sku, qty in sku_totals.items():
+            before = inv.get(sku, 0)
+            after = before - int(qty)
+            inv[sku] = after
+            if sku in total_applied:
+                total_applied[sku]["after"] = after
+                total_applied[sku]["depleted"] += int(qty)
+            else:
+                total_applied[sku] = {"before": before, "after": after,
+                                      "depleted": int(qty)}
+
+        STATE["rmfg_inventory"] = inv
+        _take_snapshot(f"Post-depletion: {dep_label}", source="depletion")
+        total_order_count += order_count
+        all_unmatched.extend(unmatched)
+        files_applied.append(dep_label)
+
+    if not files_applied:
+        return jsonify({"ok": False, "skipped": True,
+                        "reason": "Depletion files found but no data could be mapped"})
+
+    # Mark files as applied so they're never reapplied
+    applied_list = s.setdefault("depletion_applied_files", [])
+    for f in files_applied:
+        if f not in applied_list:
+            applied_list.append(f)
+    save_settings(s)
+    STATE["saved"] = s
+
+    return jsonify({
+        "ok": True,
+        "files": files_applied,
+        "file": ", ".join(files_applied),
+        "order_count": total_order_count,
+        "skus_affected": len(total_applied),
+        "total_depleted": sum(a["depleted"] for a in total_applied.values()),
+        "unmatched": all_unmatched,
     })
 
 

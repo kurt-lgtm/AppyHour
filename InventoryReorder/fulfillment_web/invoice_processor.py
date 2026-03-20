@@ -600,6 +600,18 @@ def get_match_candidates(product_name: str, sku_translations: dict,
 
 # ── Bulk Weight Extraction ───────────────────────────────────────────
 
+# SKUs purchased as whole pieces — NOT wheels/blocks to be sliced.
+# These appear as "Cheese Wheel" or "Cheese Block" in the inventory CSV
+# but yield no slicing potential (they ship as-is).
+PIECE_SKUS = frozenset({
+    "CH-GPBRIE",   # Petit Garlic & Pepper Triple Cream Brie
+    "CH-TTBRIE",   # Petit Truffle Triple Cream Brie
+    "CH-TIP",      # Tipperary Brie
+    "CH-EBRIE",    # Échiré Brie
+    "CH-MAFT",     # Maffra (never assigned)
+    "CH-TOPR",     # Toma Provence (purchased as pieces)
+})
+
 
 def extract_bulk_weights(csv_rows: list[dict]) -> dict:
     """
@@ -697,6 +709,10 @@ def extract_bulk_weights(csv_rows: list[dict]) -> dict:
                     "count": count,
                     "potential_yield": potential,
                 }
+
+    # Remove piece SKUs that aren't actually wheels/blocks to slice
+    for sku in PIECE_SKUS:
+        result.pop(sku, None)
 
     return result
 

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Fulfillment Planner</title>
     <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/styles.css?v=42">
+    <link rel="stylesheet" href="/static/styles.css?v=54">
 </head>
 <body>
 
@@ -434,84 +434,66 @@
         <div id="cutorder-header">
             <div class="cal-summary">
                 <div class="cal-summary-item">
+                    <span class="cal-summary-label">Wk1 Needs</span>
+                    <span class="cal-summary-value inv-pending" id="co-wk1-needs">--</span>
+                </div>
+                <div class="cal-summary-item">
+                    <span class="cal-summary-label">Wk2 Needs</span>
+                    <span class="cal-summary-value inv-pending" id="co-wk2-needs">--</span>
+                </div>
+                <div class="cal-summary-item">
                     <span class="cal-summary-label">Total Demand</span>
                     <span class="cal-summary-value" id="co-total-demand">--</span>
                 </div>
                 <div class="cal-summary-item">
-                    <span class="cal-summary-label">Wheels to Cut</span>
-                    <span class="cal-summary-value" id="co-total-wheels">--</span>
-                </div>
-                <div class="cal-summary-item">
-                    <span class="cal-summary-label">Pcs from Cut</span>
-                    <span class="cal-summary-value" id="co-total-pcs">--</span>
-                </div>
-                <div class="cal-summary-item">
-                    <span class="cal-summary-label">Shortages</span>
-                    <span class="cal-summary-value inv-pending" id="co-shortage-count">--</span>
+                    <span class="cal-summary-label">SKUs</span>
+                    <span class="cal-summary-value" id="co-sku-count">--</span>
                 </div>
             </div>
             <div class="inv-actions">
-                <button class="btn btn-blue" onclick="loadCutOrder()">&#128260; Refresh</button>
-                <button class="btn btn-green" onclick="exportCutOrderCSV()">&#8682; Export CSV</button>
-                <button class="btn btn-blue" onclick="emailCutOrder()">&#9993; Email Cut Order</button>
+                <label class="co-filter-toggle">
+                    <input type="checkbox" id="co-hide-zero" onchange="recalcCutOrder()"> Hide zero rows
+                </label>
+                <button class="btn btn-blue" onclick="loadCutOrderInteractive()">Refresh</button>
+                <button class="btn btn-green" onclick="exportCutOrderCSV()">Export CSV</button>
             </div>
         </div>
 
-        <!-- Cut Lines Table -->
-        <div class="panel" id="co-lines-panel">
-            <div class="panel-header">
-                <span class="icon">&#9986;</span>
-                Cut Lines
-            </div>
-            <div class="panel-body">
-                <div class="net-table-wrap">
-                    <table class="net-table" id="co-table">
-                        <thead>
-                            <tr>
-                                <th>SKU</th>
-                                <th class="num">Sliced</th>
-                                <th class="num">RC Dmd</th>
-                                <th class="num">SH Dmd</th>
-                                <th class="num">Total</th>
-                                <th class="num">Gap</th>
-                                <th class="num">Cut / Avail</th>
-                                <th class="num">Pcs</th>
-                                <th class="num">Net</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody id="co-body"></tbody>
-                    </table>
+        <!-- Cut Order: table + assignment drawer side by side -->
+        <div class="co-body-flex">
+            <div class="panel" id="co-lines-panel">
+                <div class="panel-body" style="padding:0">
+                    <div class="net-table-wrap">
+                        <table class="net-table co-calc-table" id="co-table">
+                            <thead>
+                                <tr>
+                                    <th>SKU</th>
+                                    <th>Name</th>
+                                    <th class="num">Avail</th>
+                                    <th class="num">Supply</th>
+                                    <th class="co-wk-sep"></th>
+                                    <th class="num">Dmd W1</th>
+                                    <th class="num">After W1</th>
+                                    <th class="num co-input-hdr">Cut W1</th>
+                                    <th class="num">Status</th>
+                                    <th class="co-wk-sep"></th>
+                                    <th class="num">Dmd W2</th>
+                                    <th class="num">After W2</th>
+                                    <th class="num co-input-hdr">Cut W2</th>
+                                    <th class="num">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="co-body"></tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
-        </div>
 
-        <!-- Shortages Panel -->
-        <div class="panel" id="co-shortages-panel" style="display:none">
-            <div class="panel-header">
-                <span class="icon">&#9888;</span>
-                Shortages
+            <!-- Assignment Panel (always visible, inline right) -->
+            <div id="co-assign-drawer">
+                <div class="co-assign-header">Assignments</div>
+                <div id="co-assign-body"></div>
             </div>
-            <div class="panel-body" id="co-shortages-body"></div>
-        </div>
-
-        <!-- Surplus Candidates -->
-        <div class="panel" id="co-surplus-panel" style="display:none">
-            <div class="panel-header">
-                <span class="icon">&#128200;</span>
-                Surplus Candidates (CEX-EC reassignment)
-            </div>
-            <div class="panel-body" id="co-surplus-body"></div>
-        </div>
-
-        <!-- Inventory Journal -->
-        <div class="panel" id="co-journal-panel" style="display:none">
-            <div class="panel-header">
-                <span class="icon">&#128220;</span>
-                Inventory Journal
-                <button class="btn btn-dim btn-sm" style="margin-left:auto" onclick="loadJournal()">Refresh</button>
-            </div>
-            <div class="panel-body" id="co-journal-body"></div>
         </div>
 
         <!-- Projection Settings (inline) -->
@@ -1015,6 +997,6 @@
     <div id="mascot-speech-tail"></div>
 </div>
 
-<script src="/static/app.js?v=42"></script>
+<script src="/static/app.js?v=54"></script>
 </body>
 </html>

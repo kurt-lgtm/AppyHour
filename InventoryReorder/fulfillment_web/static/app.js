@@ -1789,6 +1789,7 @@ async function syncShopify() {
 }
 
 async function runAll() {
+    switchView('dashboard');  // Show log panel during pipeline
     setMascot('loading', 'Running full pipeline...');
     log('=== RUN ALL ===', 'cyan');
 
@@ -1827,10 +1828,24 @@ async function runAll() {
         await syncShopify();
     }
 
-    // 3. Calculate
+    // 3. Apply shipment depletion (auto-find WeeklyProductionQuery XLSX)
+    log('Checking for shipment depletion file...', 'cyan');
+    const depResult = await api('/api/auto_deplete', { method: 'POST' });
+    if (depResult.ok) {
+        log(`Depletion applied: ${depResult.file} — ${depResult.total_depleted} units across ${depResult.skus_affected} SKUs (${depResult.order_count} orders)`, 'green');
+        if (depResult.unmatched && depResult.unmatched.length > 0) {
+            log(`  Unmatched products: ${depResult.unmatched.join(', ')}`, 'yellow');
+        }
+    } else if (depResult.skipped) {
+        log(`Depletion skipped: ${depResult.reason}`, 'yellow');
+    } else if (depResult.error) {
+        log(`Depletion error: ${depResult.error}`, 'red');
+    }
+
+    // 4. Calculate (after depletion so numbers reflect post-shipment inventory)
     await calculateRMFG();
 
-    // 3. Show substitutions if there are shortages
+    // 4b. Show substitutions if there are shortages
     const shortages = results.filter(r => r.status === 'SHORTAGE');
     if (shortages.length > 0) {
         await showSubstitutions();
@@ -1858,6 +1873,9 @@ async function runAll() {
 
     // Load morning briefing
     await loadBriefing();
+
+    // Pre-load cut order data so it's ready when user clicks the tab
+    await loadCutOrderInteractive();
 
     // Auto-switch to runway view and load it
     switchView('runway');
@@ -3939,111 +3957,383 @@ async function showLeadTimes() {
 
 let cutOrderData = null;
 
-async function loadCutOrder() {
-    log('Loading cut order...', 'cyan');
-    const data = await api('/api/cut_order', {
+// ── Cut Order Interactive Calculator ──────────────────────────────
+let coData = null;     // raw data from /api/cut_order_interactive
+let coCuts = {wk1: {}, wk2: {}};  // user's cut inputs
+let coSaveTimer = null;
+
+const CutOrderCalc = {
+    /** Resolve raw demand components using current assignments (client-side SUMIF). */
+    resolve(rawComponents, assignments) {
+        const demand = {};
+        const add = (sku, qty) => { demand[sku] = (demand[sku] || 0) + qty; };
+
+        // Direct demand (pickable items already resolved)
+        for (const [sku, qty] of Object.entries(rawComponents.direct || {})) {
+            if (qty > 0) add(sku, qty);
+        }
+
+        // PR-CJAM: each curation's count → assigned cheese SKU
+        const prCjam = assignments.pr_cjam || {};
+        for (const [cur, count] of Object.entries(rawComponents.prcjam_counts || {})) {
+            const cfg = prCjam[cur];
+            if (cfg && cfg.cheese) add(cfg.cheese, count);
+        }
+
+        // CEX-EC: each curation's count → assigned cheese (with splits)
+        const cexEc = assignments.cex_ec || {};
+        const splits = assignments.cexec_splits || {};
+        for (const [cur, count] of Object.entries(rawComponents.cexec_counts || {})) {
+            if (cur === 'BARE') continue;
+            const splitCfg = splits[cur];
+            if (splitCfg && Object.keys(splitCfg).length > 0) {
+                for (const [sku, ratio] of Object.entries(splitCfg)) {
+                    if (ratio > 0) add(sku, Math.round(count * ratio));
+                }
+            } else {
+                const cheese = cexEc[cur];
+                if (cheese) add(cheese, count);
+            }
+        }
+
+        return demand;
+    },
+
+    /** Calculate all rows for the interactive table. */
+    calculate(data, cuts, assignments) {
+        const wk1Demand = this.resolve(data.raw_components.wk1, assignments);
+        const wk2Demand = data.wk2_demand || {};
+        const rows = [];
+
+        const catOrder = {'CH-': 0, 'MT-': 1, 'AC-': 2};
+        const skus = Object.keys(data.skus).sort((a, b) => {
+            const ca = catOrder[a.substring(0, 3)] ?? 9;
+            const cb = catOrder[b.substring(0, 3)] ?? 9;
+            return ca !== cb ? ca - cb : a.localeCompare(b);
+        });
+
+        for (const sku of skus) {
+            const info = data.skus[sku];
+            const sliced = info.sliced || 0;
+            const supply = (info.wheel_potential || 0) + (info.bulk_potential || 0);
+            const avail = sliced;
+            const dmdW1 = Math.round(wk1Demand[sku] || 0);
+            const dmdW2 = Math.round(wk2Demand[sku] || 0);
+            const cutW1 = parseInt(cuts.wk1[sku]) || 0;
+            const cutW2 = parseInt(cuts.wk2[sku]) || 0;
+
+            const afterW1 = avail - dmdW1;
+            const goodW1 = (afterW1 + cutW1) >= 0;
+            const needW1 = goodW1 ? 0 : Math.abs(afterW1 + cutW1);
+
+            const availW2 = afterW1 + cutW1;
+            const afterW2 = availW2 - dmdW2;
+            const goodW2 = (afterW2 + cutW2) >= 0;
+            const needW2 = goodW2 ? 0 : Math.abs(afterW2 + cutW2);
+
+            rows.push({
+                sku, name: info.name || '', prefix: sku.substring(0, 3),
+                sliced, supply, avail,
+                dmdW1, afterW1, cutW1, goodW1, needW1,
+                dmdW2, afterW2, cutW2, goodW2, needW2,
+            });
+        }
+        return rows;
+    },
+};
+
+async function loadCutOrder() { return loadCutOrderInteractive(); }
+
+async function loadCutOrderInteractive() {
+    log('Loading interactive cut order...', 'cyan');
+    const data = await api('/api/cut_order_interactive', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({}),
     });
     if (data.error) {
         log('Cut order error: ' + data.error, 'red');
         return;
     }
-    cutOrderData = data;
-    renderCutOrder(data);
-    loadProjectionSettings();
-    loadJournal();
-    log(`Cut order: ${data.summary.total_skus} SKUs, ${data.summary.total_demand} demand, ${data.summary.shortage_count} shortages`, data.summary.shortage_count > 0 ? 'red' : 'green');
+    coData = data;
+    coCuts = data.saved_cuts || {wk1: {}, wk2: {}};
+    if (!coCuts.wk1) coCuts.wk1 = {};
+    if (!coCuts.wk2) coCuts.wk2 = {};
+    renderCutOrderInteractive();
+    renderCoAssignPanel();
+    log(`Cut order: ${Object.keys(data.skus).length} SKUs loaded`, 'green');
 }
 
-function renderCutOrder(data) {
-    // Summary bar
-    document.getElementById('co-total-demand').textContent = data.summary.total_demand.toLocaleString();
-    document.getElementById('co-total-wheels').textContent = data.summary.total_wheels_to_cut;
-    document.getElementById('co-total-pcs').textContent = data.summary.total_pcs_from_cut.toLocaleString();
-    document.getElementById('co-shortage-count').textContent = data.summary.shortage_count;
+function renderCutOrderInteractive() {
+    if (!coData) return;
+    const assignments = coData.assignments;
+    const rows = CutOrderCalc.calculate(coData, coCuts, assignments);
+    const hideZero = document.getElementById('co-hide-zero')?.checked;
 
-    // Cut lines table
     const tbody = document.getElementById('co-body');
     tbody.innerHTML = '';
 
-    for (const line of data.cut_lines) {
-        if (line.total_demand === 0 && line.sliced === 0) continue;
+    let currentCat = '';
+    const catLabels = {'CH-': 'CHEESE', 'MT-': 'MEAT', 'AC-': 'ACCOMPANIMENTS'};
+    let totalDmd = 0, wk1Needs = 0, wk2Needs = 0, skuCount = 0;
 
-        const rowClass = {
-            'SHORTAGE': 'cut-row-shortage',
-            'MFG': 'cut-row-mfg',
-            'OK': 'cut-row-ok',
-            'SURPLUS': 'cut-row-surplus',
-            'NO DEMAND': 'cut-row-nodemand',
-        }[line.status] || 'cut-row-ok';
+    for (const r of rows) {
+        // Skip meat — not part of cut order
+        if (r.prefix === 'MT-') continue;
+        // Filter zero rows
+        if (hideZero && r.dmdW1 === 0 && r.dmdW2 === 0 && r.sliced === 0 && r.supply === 0) continue;
+
+        // Category header
+        if (r.prefix !== currentCat) {
+            currentCat = r.prefix;
+            const catTr = document.createElement('tr');
+            catTr.className = 'co-cat-row';
+            catTr.innerHTML = `<td colspan="14">${catLabels[r.prefix] || r.prefix}</td>`;
+            tbody.appendChild(catTr);
+        }
+
+        skuCount++;
+        totalDmd += r.dmdW1 + r.dmdW2;
+        if (!r.goodW1) wk1Needs++;
+        if (!r.goodW2 && r.dmdW2 > 0) wk2Needs++;
 
         const tr = document.createElement('tr');
-        tr.className = rowClass;
+        tr.dataset.sku = r.sku;
 
-        const cutInfo = line.wheels_to_cut > 0
-            ? `<span class="co-cut">${line.wheels_to_cut}</span> / ${line.wheels_available}`
-            : line.wheels_available > 0 ? `- / ${line.wheels_available}` : '-';
-
-        const pcsInfo = line.pcs_from_cut > 0
-            ? `<span class="co-cut">+${line.pcs_from_cut}</span>`
-            : '-';
+        const supplyBadge = r.supply > 0
+            ? `<span class="co-supply-badge">+${r.supply}</span>` : '';
+        const afterW1Class = r.afterW1 >= 0 ? 'co-after-ok' : 'co-after-short';
+        const afterW2Class = r.afterW2 >= 0 ? 'co-after-ok' : 'co-after-short';
+        const goodW1Html = r.dmdW1 === 0 ? '' : r.goodW1
+            ? '<span class="co-good-ok">OK</span>'
+            : `<span class="co-good-need">NEED ${r.needW1}</span>`;
+        const goodW2Html = r.dmdW2 === 0 ? '' : r.goodW2
+            ? '<span class="co-good-ok">OK</span>'
+            : `<span class="co-good-need">NEED ${r.needW2}</span>`;
 
         tr.innerHTML = `
-            <td class="co-sku" onclick="showAttribution('${line.sku}')">${line.sku}</td>
-            <td class="num">${line.sliced}</td>
-            <td class="num">${line.rc_demand}</td>
-            <td class="num">${line.sh_demand}</td>
-            <td class="num">${line.total_demand}</td>
-            <td class="num">${line.gap > 0 ? line.gap : '-'}</td>
-            <td class="num">${cutInfo}</td>
-            <td class="num">${pcsInfo}</td>
-            <td class="num co-net">${line.net >= 0 ? '+' : ''}${line.net}</td>
-            <td><span class="status-badge status-${line.status.replace(/\s+/g, '-')}">${line.status}</span></td>
+            <td class="co-sku-cell" onclick="showAttribution('${r.sku}')">${r.sku}</td>
+            <td class="co-name-cell">${r.name}</td>
+            <td class="num co-num">${r.sliced || ''}</td>
+            <td class="num co-num">${supplyBadge}</td>
+            <td class="co-wk-sep"></td>
+            <td class="num" data-field="dmdW1">${r.dmdW1 || ''}</td>
+            <td class="num ${afterW1Class}" data-field="afterW1">${r.dmdW1 ? r.afterW1 : ''}</td>
+            <td class="num"><input type="number" class="co-cut-input" min="0"
+                data-sku="${r.sku}" data-week="wk1"
+                value="${r.cutW1 || ''}"
+                oninput="onCutInput(this)"></td>
+            <td class="num" data-field="goodW1">${goodW1Html}</td>
+            <td class="co-wk-sep"></td>
+            <td class="num" data-field="dmdW2">${r.dmdW2 || ''}</td>
+            <td class="num ${afterW2Class}" data-field="afterW2">${r.dmdW2 ? r.afterW2 : ''}</td>
+            <td class="num"><input type="number" class="co-cut-input" min="0"
+                data-sku="${r.sku}" data-week="wk2"
+                value="${r.cutW2 || ''}"
+                oninput="onCutInput(this)"></td>
+            <td class="num" data-field="goodW2">${goodW2Html}</td>
         `;
         tbody.appendChild(tr);
     }
 
-    // Shortages panel
-    const shortPanel = document.getElementById('co-shortages-panel');
-    const shortBody = document.getElementById('co-shortages-body');
-    if (data.shortages.length > 0) {
-        shortPanel.style.display = '';
-        let html = '<table class="net-table"><thead><tr><th>SKU</th><th class="num">Gap</th><th class="num">Wheels Avail</th><th class="num">Net</th></tr></thead><tbody>';
-        for (const s of data.shortages) {
-            html += `<tr class="shortage">
-                <td style="font-family:'Space Mono',monospace;font-size:10px">${s.sku}</td>
-                <td class="num" style="color:var(--red);font-weight:700">${s.gap}</td>
-                <td class="num">${s.wheels_available}</td>
-                <td class="num" style="color:var(--red)">${s.net}</td>
-            </tr>`;
+    // Summary bar
+    const el = id => document.getElementById(id);
+    el('co-total-demand').textContent = totalDmd.toLocaleString();
+    el('co-sku-count').textContent = skuCount;
+    el('co-wk1-needs').textContent = wk1Needs || '0';
+    el('co-wk1-needs').className = 'cal-summary-value ' + (wk1Needs > 0 ? 'inv-pending' : '');
+    el('co-wk2-needs').textContent = wk2Needs || '0';
+    el('co-wk2-needs').className = 'cal-summary-value ' + (wk2Needs > 0 ? 'inv-pending' : '');
+}
+
+function onCutInput(input) {
+    const sku = input.dataset.sku;
+    const week = input.dataset.week;
+    const val = parseInt(input.value) || 0;
+    coCuts[week][sku] = val > 0 ? val : undefined;
+    if (val === 0) delete coCuts[week][sku];
+
+    // Recalc just this row (fast path)
+    recalcRow(sku);
+
+    // Debounced save
+    clearTimeout(coSaveTimer);
+    coSaveTimer = setTimeout(saveCutQuantities, 800);
+
+    // Update summary
+    updateCoSummary();
+}
+
+function recalcRow(sku) {
+    if (!coData) return;
+    const info = coData.skus[sku];
+    if (!info) return;
+    const assignments = coData.assignments;
+
+    const wk1Demand = CutOrderCalc.resolve(coData.raw_components.wk1, assignments);
+    const wk2Demand = coData.wk2_demand || {};
+
+    const sliced = info.sliced || 0;
+    const dmdW1 = Math.round(wk1Demand[sku] || 0);
+    const dmdW2 = Math.round(wk2Demand[sku] || 0);
+    const cutW1 = parseInt(coCuts.wk1[sku]) || 0;
+    const cutW2 = parseInt(coCuts.wk2[sku]) || 0;
+    const afterW1 = sliced - dmdW1;
+    const goodW1 = (afterW1 + cutW1) >= 0;
+    const needW1 = goodW1 ? 0 : Math.abs(afterW1 + cutW1);
+    const afterW2 = (afterW1 + cutW1) - dmdW2;
+    const goodW2 = (afterW2 + cutW2) >= 0;
+    const needW2 = goodW2 ? 0 : Math.abs(afterW2 + cutW2);
+
+    const tr = document.querySelector(`tr[data-sku="${sku}"]`);
+    if (!tr) return;
+
+    const set = (field, val, cls) => {
+        const td = tr.querySelector(`[data-field="${field}"]`);
+        if (td) {
+            td.textContent = val;
+            if (cls !== undefined) td.className = 'num ' + cls;
         }
-        html += '</tbody></table>';
-        shortBody.innerHTML = html;
-    } else {
-        shortPanel.style.display = 'none';
+    };
+    const setHtml = (field, html) => {
+        const td = tr.querySelector(`[data-field="${field}"]`);
+        if (td) td.innerHTML = html;
+    };
+
+    set('afterW1', dmdW1 ? afterW1 : '', afterW1 >= 0 ? 'co-after-ok' : 'co-after-short');
+    setHtml('goodW1', dmdW1 === 0 ? '' : goodW1
+        ? '<span class="co-good-ok">OK</span>'
+        : `<span class="co-good-need">NEED ${needW1}</span>`);
+    set('afterW2', dmdW2 ? afterW2 : '', afterW2 >= 0 ? 'co-after-ok' : 'co-after-short');
+    setHtml('goodW2', dmdW2 === 0 ? '' : goodW2
+        ? '<span class="co-good-ok">OK</span>'
+        : `<span class="co-good-need">NEED ${needW2}</span>`);
+}
+
+function recalcCutOrder() {
+    renderCutOrderInteractive();
+}
+
+function updateCoSummary() {
+    if (!coData) return;
+    const rows = CutOrderCalc.calculate(coData, coCuts, coData.assignments);
+    let wk1Needs = 0, wk2Needs = 0;
+    for (const r of rows) {
+        if (!r.goodW1) wk1Needs++;
+        if (!r.goodW2 && r.dmdW2 > 0) wk2Needs++;
+    }
+    const el = id => document.getElementById(id);
+    el('co-wk1-needs').textContent = wk1Needs || '0';
+    el('co-wk1-needs').className = 'cal-summary-value ' + (wk1Needs > 0 ? 'inv-pending' : '');
+    el('co-wk2-needs').textContent = wk2Needs || '0';
+    el('co-wk2-needs').className = 'cal-summary-value ' + (wk2Needs > 0 ? 'inv-pending' : '');
+}
+
+async function saveCutQuantities() {
+    await api('/api/cut_quantities', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(coCuts),
+    });
+}
+
+function toggleCoAssignDrawer() {
+    // Assignments panel is always visible — no-op
+}
+
+function renderCoAssignPanel() {
+    if (!coData) return;
+    const body = document.getElementById('co-assign-body');
+    const assigns = coData.assignments;
+    const prCjam = assigns.pr_cjam || {};
+    const cexEc = assigns.cex_ec || {};
+    const curations = coData.curations || [];
+    const wk1Prcjam = coData.raw_components?.wk1?.prcjam_counts || {};
+    const wk1Cexec = coData.raw_components?.wk1?.cexec_counts || {};
+    const wk2 = coData.wk2_demand || {};
+
+    // Resolve wk2 back to curation counts using current assignments
+    // (wk2 is pre-resolved, so we reverse-lookup)
+    const wk2Prcjam = {};
+    const wk2Cexec = {};
+    // Estimate wk2 curation counts as proportion of wk1
+    const wk1Total = Object.values(wk1Prcjam).reduce((a, b) => a + b, 0) || 1;
+    for (const [cur, cnt] of Object.entries(wk1Prcjam)) {
+        wk2Prcjam[cur] = Math.round(cnt * 0.3); // Tue ~30% of Sat
+    }
+    for (const [cur, cnt] of Object.entries(wk1Cexec)) {
+        wk2Cexec[cur] = Math.round(cnt * 0.3);
     }
 
-    // Surplus candidates
-    const surpPanel = document.getElementById('co-surplus-panel');
-    const surpBody = document.getElementById('co-surplus-body');
-    if (data.surplus_candidates.length > 0) {
-        surpPanel.style.display = '';
-        let html = '<table class="net-table"><thead><tr><th>SKU</th><th class="num">Sliced</th><th class="num">Demand</th><th class="num">Net</th></tr></thead><tbody>';
-        for (const c of data.surplus_candidates) {
-            html += `<tr>
-                <td style="font-family:'Space Mono',monospace;font-size:10px;color:var(--green)">${c.sku}</td>
-                <td class="num">${c.sliced}</td>
-                <td class="num">${c.total_demand}</td>
-                <td class="num" style="color:var(--green);font-weight:600">+${c.net}</td>
-            </tr>`;
-        }
-        html += '</tbody></table>';
-        surpBody.innerHTML = html;
-    } else {
-        surpPanel.style.display = 'none';
+    let html = '<div class="co-assign-section">';
+    html += '<div class="co-assign-title">PR-CJAM</div>';
+    html += '<div class="co-assign-hdr-row"><span></span><span>W1</span><span>W2</span><span>Cheese</span></div>';
+    for (const cur of curations) {
+        const cheese = (prCjam[cur] || {}).cheese || '';
+        const w1 = wk1Prcjam[cur] || 0;
+        const w2 = wk2Prcjam[cur] || 0;
+        // Show all curations that have an assignment or demand
+        if (w1 === 0 && w2 === 0 && !cheese) continue;
+        html += `<div class="co-assign-row">
+            <span class="co-assign-suffix">${cur}</span>
+            <span class="co-assign-demand">${w1 || '-'}</span>
+            <span class="co-assign-demand co-assign-w2">${w2 || '-'}</span>
+            <input type="text" class="co-assign-input"
+                value="${cheese}" data-assign="prcjam" data-cur="${cur}"
+                onchange="onAssignChange(this)">
+        </div>`;
     }
+    html += '</div>';
+
+    html += '<div class="co-assign-section">';
+    html += '<div class="co-assign-title">CEX-EC</div>';
+    html += '<div class="co-assign-hdr-row"><span></span><span>W1</span><span>W2</span><span>Cheese</span></div>';
+    for (const cur of curations) {
+        const cheese = cexEc[cur] || '';
+        const w1 = wk1Cexec[cur] || 0;
+        const w2 = wk2Cexec[cur] || 0;
+        if (w1 === 0 && w2 === 0 && !cheese) continue;
+        html += `<div class="co-assign-row">
+            <span class="co-assign-suffix">${cur}</span>
+            <span class="co-assign-demand">${w1 || '-'}</span>
+            <span class="co-assign-demand co-assign-w2">${w2 || '-'}</span>
+            <input type="text" class="co-assign-input"
+                value="${cheese}" data-assign="cexec" data-cur="${cur}"
+                onchange="onAssignChange(this)">
+        </div>`;
+    }
+    html += '</div>';
+
+    body.innerHTML = html;
+}
+
+async function onAssignChange(input) {
+    const type = input.dataset.assign;
+    const cur = input.dataset.cur;
+    const sku = input.value.trim();
+
+    // Persist to server
+    await api('/api/assign', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({curation: cur, slot: type === 'prcjam' ? 'prcjam' : 'cexec', cheese: sku}),
+    });
+
+    // Update local assignments and recalc
+    if (type === 'prcjam') {
+        if (!coData.assignments.pr_cjam[cur]) coData.assignments.pr_cjam[cur] = {};
+        coData.assignments.pr_cjam[cur].cheese = sku;
+    } else {
+        coData.assignments.cex_ec[cur] = sku;
+    }
+
+    renderCutOrderInteractive();
+    log(`Assignment: ${type} ${cur} = ${sku}`, 'cyan');
+}
+
+function renderCutOrder(data) {
+    // Legacy compatibility — redirect to interactive if coData loaded
+    if (coData) { renderCutOrderInteractive(); return; }
 }
 
 async function showAttribution(sku) {
@@ -4406,7 +4696,7 @@ function renderRunwayMonthlyGrid(skus, labels) {
     html += '<th class="rw-th-num">Avail</th>';
     html += '<th class="rw-th-num rw-th-dmd">Dmd/mo</th>';
     html += `<th class="rw-th-runway" style="position:relative">
-        <div style="display:flex;justify-content:space-around;font-family:'Space Mono',monospace;font-size:10px;font-weight:600;letter-spacing:0.5px;color:var(--fg2)">`;
+        <div style="display:flex;justify-content:space-around;font-family:'Space Mono',monospace;font-size:12px;font-weight:600;letter-spacing:0.5px;color:var(--fg2)">`;
     for (const lbl of labels) html += `<span>${lbl}</span>`;
     html += `</div></th>`;
     html += '<th class="rw-th-weeks">Runway</th>';
@@ -4654,7 +4944,7 @@ function renderRunwayGrid(skus, labels) {
     html += '<th class="rw-th-num rw-th-dmd">Dmd/wk</th>';
     // Header with date labels at fixed positions
     html += `<th class="rw-th-runway" style="position:relative">
-        <div style="display:flex;justify-content:space-around;font-family:'Space Mono',monospace;font-size:10px;font-weight:600;letter-spacing:0.5px;color:var(--fg2)">`;
+        <div style="display:flex;justify-content:space-around;font-family:'Space Mono',monospace;font-size:12px;font-weight:600;letter-spacing:0.5px;color:var(--fg2)">`;
     for (let i = 0; i < labels.length; i++) {
         html += `<span>${labels[i]}</span>`;
     }
