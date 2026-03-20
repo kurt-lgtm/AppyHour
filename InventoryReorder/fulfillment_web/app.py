@@ -5198,6 +5198,40 @@ def shopify_sync():
         projected_additional = int(daily_rate * (hours_remaining / 24))
         STATE["first_order_projection_count"] = projected_additional
 
+    # --- MONG projection: add actual Shopify MONG + projected first orders ---
+    # First orders are NOT in Recharge (they're one-time Shopify orders that
+    # become subscriptions later), so we add them to the Recharge-based counts.
+    # Only MONG gets this treatment — other curations stay Recharge-only.
+    actual_mong_prcjam = sh_prcjam_counts.get(proj_curation, 0)
+    actual_mong_cexec = sh_cexec_counts.get(proj_curation, 0)
+    proj_add = STATE.get("first_order_projection_count", 0) if proj_enabled else 0
+
+    if proj_add > 0 or actual_mong_prcjam > 0:
+        existing_prcjam = dict(STATE.get("rmfg_prcjam_sat") or s.get("rmfg_prcjam_sat", {}))
+        existing_cexec = dict(STATE.get("rmfg_cexec_sat") or s.get("rmfg_cexec_sat", {}))
+
+        # PR-CJAM-MONG: actual Shopify MONG + full projection (all first orders get PR-CJAM)
+        mong_prcjam_add = actual_mong_prcjam + proj_add
+
+        # CEX-EC-MONG: use actual Shopify ratio for the projection portion
+        cexec_ratio = actual_mong_cexec / actual_mong_prcjam if actual_mong_prcjam > 0 else 0.0
+        mong_cexec_add = actual_mong_cexec + int(proj_add * cexec_ratio)
+
+        existing_prcjam[proj_curation] = existing_prcjam.get(proj_curation, 0) + mong_prcjam_add
+        existing_cexec[proj_curation] = existing_cexec.get(proj_curation, 0) + mong_cexec_add
+
+        STATE["rmfg_prcjam_sat"] = existing_prcjam
+        STATE["rmfg_cexec_sat"] = existing_cexec
+
+        STATE["mong_projection_detail"] = {
+            "actual_shopify_prcjam": actual_mong_prcjam,
+            "actual_shopify_cexec": actual_mong_cexec,
+            "projected_additional": proj_add,
+            "cexec_ratio": round(cexec_ratio, 3),
+            "total_prcjam_added": mong_prcjam_add,
+            "total_cexec_added": mong_cexec_add,
+        }
+
     # Merge only direct SKU demand from Shopify (not curation prcjam/cexec)
     # Subtract previous Shopify direct contribution, then add new
     old_sh_direct = STATE.get("rmfg_direct_sh", {})
@@ -5215,6 +5249,10 @@ def shopify_sync():
     fresh_s["shopify_unfulfilled"] = dict(unfulfilled_demand)
     fresh_s["rmfg_direct_sat"] = existing_direct
     fresh_s["rmfg_direct_sh"] = dict(sh_direct_demand)
+    # Persist MONG projection into prcjam/cexec counts (if modified above)
+    if STATE.get("mong_projection_detail"):
+        fresh_s["rmfg_prcjam_sat"] = STATE["rmfg_prcjam_sat"]
+        fresh_s["rmfg_cexec_sat"] = STATE["rmfg_cexec_sat"]
     fresh_s["shopify_first_order_demand"] = {
         sku: round(qty / num_weeks_with_data)
         for sku, qty in first_order_total.items() if qty > 0
