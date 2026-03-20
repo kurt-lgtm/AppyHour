@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Fulfillment Planner</title>
     <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/styles.css?v=54">
+    <link rel="stylesheet" href="/static/styles.css?v=56">
 </head>
 <body>
 
@@ -463,7 +463,7 @@
         <div class="co-body-flex">
             <div class="panel" id="co-lines-panel">
                 <div class="panel-body" style="padding:0">
-                    <div class="net-table-wrap">
+                    <div class="net-table-wrap co-table-wrap">
                         <table class="net-table co-calc-table" id="co-table">
                             <thead>
                                 <tr>
@@ -502,22 +502,31 @@
                 <span class="icon">&#128202;</span>
                 First-Order Projection
             </div>
-            <div class="panel-body" id="co-projection-body" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-                <label style="font-family:'Space Mono',monospace;font-size:10px;text-transform:uppercase;color:var(--fg2)">Active Curation</label>
-                <select id="co-proj-curation" class="settings-input" style="width:100px"></select>
-                <label style="font-family:'Space Mono',monospace;font-size:10px;text-transform:uppercase;color:var(--fg2)">Multiplier</label>
-                <input type="number" id="co-proj-multiplier" class="settings-input" style="width:60px" min="1" max="10" value="3">
-                <label style="font-family:'Space Mono',monospace;font-size:10px;text-transform:uppercase;color:var(--fg2)">
-                    <input type="checkbox" id="co-proj-enabled" checked> Enabled
-                </label>
-                <button class="btn btn-green btn-sm" onclick="saveProjectionSettings()">Save</button>
-                <span style="margin-left:12px"></span>
-                <label style="font-family:'Space Mono',monospace;font-size:10px;text-transform:uppercase;color:var(--fg2)">History Weeks</label>
-                <select id="co-shopify-weeks-back" class="settings-input" style="width:60px" onchange="saveShopifyWeeksBack()">
-                    <option value="4">4</option>
-                    <option value="6">6</option>
-                    <option value="8" selected>8</option>
-                </select>
+            <div class="panel-body co-proj-grid" id="co-projection-body">
+                <div class="co-proj-group">
+                    <label class="co-proj-label">Active Curation</label>
+                    <select id="co-proj-curation" class="settings-input" style="width:100px"></select>
+                </div>
+                <div class="co-proj-group">
+                    <label class="co-proj-label">Multiplier</label>
+                    <input type="number" id="co-proj-multiplier" class="settings-input" style="width:60px" min="1" max="10" value="3">
+                </div>
+                <div class="co-proj-group">
+                    <label class="co-proj-label">
+                        <input type="checkbox" id="co-proj-enabled" checked> Enabled
+                    </label>
+                </div>
+                <div class="co-proj-group">
+                    <button class="btn btn-green btn-sm" onclick="saveProjectionSettings()">Save</button>
+                </div>
+                <div class="co-proj-group">
+                    <label class="co-proj-label">History Weeks</label>
+                    <select id="co-shopify-weeks-back" class="settings-input" style="width:60px" onchange="saveShopifyWeeksBack()">
+                        <option value="4">4</option>
+                        <option value="6">6</option>
+                        <option value="8" selected>8</option>
+                    </select>
+                </div>
             </div>
             <!-- First-Order Overrides -->
             <div id="fo-overrides-section" style="padding:8px 12px;border-top:1px solid var(--border)">
@@ -997,6 +1006,6 @@
     <div id="mascot-speech-tail"></div>
 </div>
 
-<script src="/static/app.js?v=54"></script>
+<script src="/static/app.js?v=56"></script>
 </body>
 </html>

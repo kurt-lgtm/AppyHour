@@ -4099,6 +4099,11 @@ function renderCutOrderInteractive() {
 
         const tr = document.createElement('tr');
         tr.dataset.sku = r.sku;
+        // Row-level color affordance
+        const hasShortage = !r.goodW1 || (!r.goodW2 && r.dmdW2 > 0);
+        const allOk = r.goodW1 && (r.goodW2 || r.dmdW2 === 0) && (r.dmdW1 > 0 || r.dmdW2 > 0);
+        if (hasShortage) tr.className = 'co-row-need';
+        else if (allOk) tr.className = 'co-row-ok';
 
         const supplyBadge = r.supply > 0
             ? `<span class="co-supply-badge">+${r.supply}</span>` : '';
@@ -4252,18 +4257,9 @@ function renderCoAssignPanel() {
     const wk1Cexec = coData.raw_components?.wk1?.cexec_counts || {};
     const wk2 = coData.wk2_demand || {};
 
-    // Resolve wk2 back to curation counts using current assignments
-    // (wk2 is pre-resolved, so we reverse-lookup)
-    const wk2Prcjam = {};
-    const wk2Cexec = {};
-    // Estimate wk2 curation counts as proportion of wk1
-    const wk1Total = Object.values(wk1Prcjam).reduce((a, b) => a + b, 0) || 1;
-    for (const [cur, cnt] of Object.entries(wk1Prcjam)) {
-        wk2Prcjam[cur] = Math.round(cnt * 0.3); // Tue ~30% of Sat
-    }
-    for (const [cur, cnt] of Object.entries(wk1Cexec)) {
-        wk2Cexec[cur] = Math.round(cnt * 0.3);
-    }
+    // Use actual wk2 raw components from Recharge (not estimates)
+    const wk2Prcjam = coData.raw_components?.wk2?.prcjam_counts || {};
+    const wk2Cexec = coData.raw_components?.wk2?.cexec_counts || {};
 
     let html = '<div class="co-assign-section">';
     html += '<div class="co-assign-title">PR-CJAM</div>';

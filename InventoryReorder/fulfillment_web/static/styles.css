@@ -20,6 +20,8 @@
     --green:       #00e676;
     --green-dim:   rgba(0,230,118,0.08);
     --red:         #ff3b5c;
+    --red-rgb:     255,59,92;
+    --green-rgb:   0,230,118;
     --red-dim:     rgba(255,59,92,0.10);
     --yellow:      #d4960a;
     --yellow-dim:  rgba(212,150,10,0.08);
@@ -2079,65 +2081,74 @@ tr:hover .rw-hide-btn { opacity: 1; }
 /* ── Cut Order Calculator ──────────────────────────────────────────── */
 #cutorder-view { display: flex; flex-direction: column; }
 /* Side-by-side layout: table + assignment panel */
-.co-body-flex { display: flex; gap: 10px; }
+.co-body-flex { display: flex; gap: 12px; }
 .co-body-flex #co-lines-panel { flex: 1; min-width: 0; }
 .co-body-flex #co-assign-drawer { flex-shrink: 0; }
 
-/* Table cells */
-.co-calc-table { border-spacing: 0; table-layout: auto; width: auto; }
+/* Table — auto layout, stretches to fill */
+.co-calc-table { border-spacing: 0; table-layout: auto; width: auto; min-width: 100%; }
 .co-calc-table th {
-    white-space: nowrap; padding: 6px 18px;
-    font-family: 'Space Mono', monospace; font-size: 11px;
+    white-space: nowrap; padding: 6px 12px;
+    font-family: 'Space Mono', monospace; font-size: 10px;
     letter-spacing: -0.5px;
 }
-.co-calc-table td { padding: 4px 18px; }
+.co-calc-table td { padding: 4px 12px; }
+/* Week separators — equal spacing left and right */
 .co-calc-table .co-wk-sep {
-    width: 28px; padding: 0; background: transparent; border: none !important;
+    width: 1px; padding: 0 20px; background: transparent; border: none !important;
+}
+.co-calc-table .co-wk-sep::after {
+    content: ''; display: block; width: 1px; height: 100%;
+    background: rgba(255,255,255,0.08); margin: 0 auto;
 }
 .co-calc-table .co-input-hdr { color: var(--accent); }
+/* Category headers */
 .co-calc-table .co-cat-row td {
     font-family: 'Space Mono', monospace; font-size: 14px; font-weight: 700;
     color: var(--green); text-transform: uppercase; padding: 12px 5px 4px;
     border-bottom: 1px solid var(--border); letter-spacing: 1px;
+    border-left: 4px solid var(--green);
 }
 /* SKU cell */
 .co-sku-cell {
-    font-family: 'Space Mono', monospace; font-size: 12px;
+    font-family: 'Space Mono', monospace; font-size: 13px;
     cursor: pointer; white-space: nowrap;
 }
 .co-sku-cell:hover { color: var(--accent); text-decoration: underline; }
-/* Name cell — auto-size to content */
+/* Name cell — tab-sized gap after name before Avail */
 .co-name-cell {
-    font-family: 'DM Sans', sans-serif; font-size: 12px;
+    font-family: 'DM Sans', sans-serif; font-size: 13px;
     color: var(--fg2); white-space: nowrap;
-    padding-right: 16px !important;
+    padding-right: 32px !important;
 }
-/* Numeric cells — compact */
+/* Numeric cells — compact, right-aligned */
 .co-num {
-    font-family: 'Rajdhani', sans-serif; font-size: 14px; font-weight: 500;
-    white-space: nowrap;
+    font-family: 'Rajdhani', sans-serif; font-size: 16px; font-weight: 500;
+    white-space: nowrap; text-align: right;
 }
 .co-calc-table .num {
-    padding: 2px 3px; white-space: nowrap;
+    padding: 2px 6px; white-space: nowrap; text-align: right;
+    font-size: 15px;
 }
-/* Cut input */
+/* Cut input — fits 4+ chars */
 .co-cut-input {
-    width: 48px; text-align: right; padding: 2px 4px;
-    font-family: 'Rajdhani', sans-serif; font-size: 14px; font-weight: 600;
+    width: 60px; text-align: right; padding: 3px 6px;
+    font-family: 'Rajdhani', sans-serif; font-size: 16px; font-weight: 600;
     color: #4488ff; background: rgba(68,136,255,0.08);
     border: 1px solid rgba(68,136,255,0.25); border-radius: 3px;
 }
 .co-cut-input:focus {
     outline: none; border-color: var(--accent);
     background: rgba(68,136,255,0.15);
+    box-shadow: 0 0 6px rgba(68,136,255,0.3);
 }
 /* Status badges */
 .co-good-ok {
-    font-family: 'Space Mono', monospace; font-size: 11px; font-weight: 700;
+    font-family: 'Space Mono', monospace; font-size: 12px; font-weight: 700;
     color: var(--green);
 }
 .co-good-need {
-    font-family: 'Space Mono', monospace; font-size: 11px; font-weight: 700;
+    font-family: 'Space Mono', monospace; font-size: 12px; font-weight: 700;
     color: var(--red);
 }
 .co-after-ok { color: var(--green); }
@@ -2146,9 +2157,16 @@ tr:hover .rw-hide-btn { opacity: 1; }
     font-size: 12px; color: var(--accent); opacity: 0.8;
     font-family: 'Rajdhani', sans-serif; font-weight: 600;
 }
+/* Row-level color affordances */
+.co-row-need { background: rgba(var(--red-rgb), 0.05); }
+.co-row-ok { background: rgba(var(--green-rgb), 0.03); }
 .co-filter-toggle {
     font-family: 'Space Mono', monospace; font-size: 10px;
     color: var(--fg2); cursor: pointer; display: flex; align-items: center; gap: 4px;
+}
+/* Table scroll container */
+.co-table-wrap {
+    overflow-x: auto; overflow-y: auto;
 }
 
 /* ── Assignment Panel (always visible, right side) ──────────────── */
@@ -2164,12 +2182,13 @@ tr:hover .rw-hide-btn { opacity: 1; }
     padding-bottom: 8px; margin-bottom: 6px;
     border-bottom: 1px solid var(--border);
 }
-.co-assign-section { margin-bottom: 10px; }
+.co-assign-section { margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.co-assign-section:last-child { border-bottom: none; padding-bottom: 0; }
 .co-assign-title {
-    font-family: 'Space Mono', monospace; font-size: 14px; font-weight: 700;
+    font-family: 'Space Mono', monospace; font-size: 12px; font-weight: 700;
     text-transform: uppercase; color: var(--accent); letter-spacing: 1px;
     margin-bottom: 6px; padding-bottom: 4px;
-    border-bottom: 1px solid rgba(255,255,255,0.1);
+    border-bottom: 1px solid rgba(255,255,255,0.08);
 }
 .co-assign-row {
     display: flex; align-items: center; gap: 6px;
@@ -2205,3 +2224,15 @@ tr:hover .rw-hide-btn { opacity: 1; }
 .co-assign-hdr-row span:nth-child(3) { min-width: 35px; text-align: right; }
 .co-assign-hdr-row span:nth-child(4) { flex: 1; }
 .co-assign-w2 { color: var(--fg3); }
+
+/* ── Projection Settings Grid ──────────────────────────────────── */
+.co-proj-grid {
+    display: grid; grid-template-columns: auto auto auto auto auto;
+    gap: 8px 16px; align-items: center;
+}
+.co-proj-group { display: flex; align-items: center; gap: 6px; }
+.co-proj-label {
+    font-family: 'Space Mono', monospace; font-size: 10px;
+    text-transform: uppercase; color: var(--fg2);
+    white-space: nowrap; display: flex; align-items: center; gap: 4px;
+}

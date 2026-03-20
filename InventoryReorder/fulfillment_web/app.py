@@ -1730,16 +1730,23 @@ def parse_charges_queued(path, target_date=None):
                     demand[normalize_sku(rsku)] += rqty * qty
                 continue
 
-            if upper == "CEX-EC":
-                bare_skipped += qty
-                continue
-
             if upper.startswith("CEX-EC-"):
                 suffix = upper.split("CEX-EC-", 1)[1]
                 cexec_counts[suffix] += qty
                 resolved = resolve_cex_ec(suffix)
                 for rsku, rqty in resolved.items():
                     demand[normalize_sku(rsku)] += rqty * qty
+                continue
+
+            if upper == "CEX-EC":
+                # Resolve bare CEX-EC to box curation (e.g., MDT box → CEX-EC-MDT)
+                if curation and curation not in ("MONTHLY", None):
+                    cexec_counts[curation] += qty
+                    resolved = resolve_cex_ec(curation)
+                    for rsku, rqty in resolved.items():
+                        demand[normalize_sku(rsku)] += rqty * qty
+                else:
+                    bare_skipped += qty
                 continue
 
             # Resolve global extras (bare EX-EC, CEX-EM, EX-EM, etc.)
@@ -2014,9 +2021,17 @@ def load_rmfg():
     s = _s()
     s["rmfg_prcjam_sat"] = dict(merged_prcjam)
     s["rmfg_cexec_sat"] = dict(merged_cexec)
+    s["rmfg_direct_sat"] = dict(merged_direct)
     s["rmfg_monthly_box_counts"] = dict(merged_monthly_box)
+    # Per-source raw for attribution (persist for subtract-before-add on re-sync)
+    s["rmfg_prcjam_rc"] = rc_raw.get("prcjam_counts", {})
+    s["rmfg_cexec_rc"] = rc_raw.get("cexec_counts", {})
+    s["rmfg_direct_rc"] = rc_raw.get("direct_demand", {})
+    s["rmfg_prcjam_sh"] = dict(sh_prcjam)
+    s["rmfg_cexec_sh"] = dict(sh_cexec)
+    s["rmfg_direct_sh"] = dict(sh_direct)
     save_settings(s)
-    # Per-source raw for attribution
+    # Also keep in STATE
     STATE["rmfg_direct_rc"] = rc_raw.get("direct_demand", {})
     STATE["rmfg_prcjam_rc"] = rc_raw.get("prcjam_counts", {})
     STATE["rmfg_cexec_rc"] = rc_raw.get("cexec_counts", {})
@@ -3612,9 +3627,10 @@ def get_cut_order_interactive():
     inv_settings = s.get("inventory", {})
 
     # Wk1 (Saturday) raw components for client-side resolve
-    wk1_direct = STATE.get("rmfg_direct_sat", {})
-    wk1_prcjam = STATE.get("rmfg_prcjam_sat", {})
-    wk1_cexec = STATE.get("rmfg_cexec_sat", {})
+    # Fall back to persisted settings when STATE not yet populated this session
+    wk1_direct = STATE.get("rmfg_direct_sat") or s.get("rmfg_direct_sat", {})
+    wk1_prcjam = STATE.get("rmfg_prcjam_sat") or s.get("rmfg_prcjam_sat", {})
+    wk1_cexec = STATE.get("rmfg_cexec_sat") or s.get("rmfg_cexec_sat", {})
 
     # Also get RC vs SH breakdown for Wk1
     wk1_direct_rc = STATE.get("rmfg_direct_rc", {})
@@ -3723,6 +3739,10 @@ def get_cut_order_interactive():
                 "direct": wk1_direct,
                 "prcjam_counts": wk1_prcjam,
                 "cexec_counts": wk1_cexec,
+            },
+            "wk2": {
+                "prcjam_counts": STATE.get("rmfg_prcjam_wk2") or s.get("rmfg_prcjam_wk2", {}),
+                "cexec_counts": STATE.get("rmfg_cexec_wk2") or s.get("rmfg_cexec_wk2", {}),
             },
         },
         "wk2_demand": {k: int(round(v)) for k, v in wk2_demand.items()
@@ -4002,78 +4022,140 @@ def get_substitutions():
 
 @app.route("/api/run_all", methods=["POST"])
 def run_all():
-    """One-click: load folder + calculate + suggest fixes."""
-    data = request.json or {}
-    folder = data.get("folder", "")
+    """One-click pipeline: Dropbox → depletion → Recharge → Shopify → calculate."""
+    results = {}
 
-    # 1. Load folder
-    load_req = type('obj', (object,), {'json': data, 'method': 'POST'})()
-    with app.test_request_context(json=data):
-        load_resp = load_rmfg()
-        load_data = load_resp.get_json() if hasattr(load_resp, 'get_json') else json.loads(load_resp.data)
-        if not load_data.get("ok"):
-            return jsonify(load_data)
+    # 1. Dropbox sync (inventory snapshot)
+    db_result = None
+    try:
+        with app.test_request_context(json={}, content_type="application/json"):
+            db_resp = dropbox_sync()
+            if hasattr(db_resp, 'get_json'):
+                db_result = db_resp.get_json()
+            elif hasattr(db_resp, '__iter__') and len(db_resp) == 2:
+                db_result = db_resp[0].get_json() if hasattr(db_resp[0], 'get_json') else None
+    except Exception as e:
+        db_result = {"error": str(e)}
+    results["dropbox"] = db_result
 
-    # 2. Calculate
+    # 2. Apply depletion from shipments dated after the inventory snapshot
+    depletion_results = []
+    try:
+        import re as _re
+        base_dir = _get_project_dir()
+        shipments_dir = os.path.join(base_dir, "Shipments")
+        # Get inventory snapshot date from Dropbox sync result or STATE
+        snapshot_date_str = None
+        if db_result and isinstance(db_result, dict):
+            snapshot_date_str = db_result.get("snapshot_date", "")
+        if not snapshot_date_str:
+            snapshot_date_str = STATE.get("dropbox_snapshot_date", "")
+        # Parse snapshot date (try MM-DD-YY or YYYY-MM-DD)
+        snapshot_date = None
+        if snapshot_date_str:
+            try:
+                snapshot_date = datetime.date.fromisoformat(snapshot_date_str[:10])
+            except (ValueError, TypeError):
+                pass
+
+        if os.path.isdir(shipments_dir):
+            import glob as globmod
+            dep_files = sorted(globmod.glob(
+                os.path.join(shipments_dir, "*.xlsx")), key=os.path.getmtime)
+            s = _s()
+            translations = s.get("sku_translations", {})
+            inventory = s.get("inventory", {})
+            inv = STATE.get("rmfg_inventory", {})
+
+            for dep_path in dep_files:
+                fname = os.path.basename(dep_path)
+                # Extract date from filename (MM-DD-YY pattern)
+                date_match = _re.search(r'(\d{2})-(\d{2})-(\d{2})', fname)
+                if date_match and snapshot_date:
+                    mm, dd, yy = date_match.groups()
+                    file_date = datetime.date(2000 + int(yy), int(mm), int(dd))
+                    if file_date <= snapshot_date:
+                        continue  # skip files on or before snapshot date
+
+                product_totals, order_count, err = parse_depletion_xlsx(dep_path)
+                if err or not product_totals:
+                    continue
+                sku_totals, mapped, unmatched = map_depletion_to_skus(
+                    product_totals, translations, inventory)
+                if not sku_totals:
+                    continue
+
+                dep_label = fname
+                _take_snapshot(f"Pre-depletion: {dep_label}", source="depletion")
+                applied = {}
+                for sku, qty in sku_totals.items():
+                    before = inv.get(sku, 0)
+                    after = before - int(qty)
+                    inv[sku] = after
+                    applied[sku] = {"before": before, "after": after, "depleted": int(qty)}
+                STATE["rmfg_inventory"] = inv
+                _take_snapshot(f"Post-depletion: {dep_label}", source="depletion")
+                depletion_results.append({
+                    "file": dep_label,
+                    "order_count": order_count,
+                    "skus_affected": len(applied),
+                    "total_depleted": sum(int(q) for q in sku_totals.values()),
+                    "unmatched": unmatched,
+                })
+    except Exception as e:
+        depletion_results.append({"error": str(e)})
+    results["depletion"] = depletion_results
+
+    # 3. Recharge sync (queued charges from API, binned by week)
+    rc_result = None
+    s = _s()
+    rc_token = s.get("recharge_api_token", "")
+    if rc_token:
+        try:
+            with app.test_request_context(json={"force": True},
+                                          content_type="application/json"):
+                rc_resp = recharge_sync()
+                if hasattr(rc_resp, 'get_json'):
+                    rc_result = rc_resp.get_json()
+                elif hasattr(rc_resp, '__iter__') and len(rc_resp) == 2:
+                    rc_result = rc_resp[0].get_json() if hasattr(rc_resp[0], 'get_json') else None
+        except Exception as e:
+            rc_result = {"error": str(e)}
+    results["recharge_sync"] = rc_result
+
+    # 4. Shopify sync (unfulfilled orders, merged with Recharge)
+    sh_result = None
+    s = _s()
+    sh_token = s.get("shopify_access_token", "") or s.get("shopify_admin_token", "")
+    sh_domain = s.get("shopify_store_url", "") or s.get("shopify_domain", "")
+    if sh_token and sh_domain:
+        try:
+            with app.test_request_context(json={"force": True},
+                                          content_type="application/json"):
+                sh_resp = shopify_sync()
+                if hasattr(sh_resp, 'get_json'):
+                    sh_result = sh_resp.get_json()
+                elif hasattr(sh_resp, '__iter__') and len(sh_resp) == 2:
+                    sh_result = sh_resp[0].get_json() if hasattr(sh_resp[0], 'get_json') else None
+        except Exception as e:
+            sh_result = {"error": str(e)}
+    results["shopify_sync"] = sh_result
+
+    # 5. Calculate (combines inventory + demand)
+    calc_data = {}
     with app.test_request_context(json={}):
         calc_resp = calculate_rmfg()
         calc_data = calc_resp.get_json() if hasattr(calc_resp, 'get_json') else json.loads(calc_resp.data)
+    results["results"] = calc_data
 
-    # 3. Apply depletion from shipments XLSX (if found)
-    depletion_result = None
-    rmfg_folder = load_data.get("folder", folder)
-    if not os.path.isabs(rmfg_folder):
-        rmfg_folder = os.path.join(_get_project_dir(), rmfg_folder)
-    if os.path.isdir(rmfg_folder):
-        files = detect_rmfg_files(rmfg_folder)
-        dep_path = files.get("depletion")
-        if dep_path and os.path.exists(dep_path):
-            product_totals, order_count, err = parse_depletion_xlsx(dep_path)
-            if not err and product_totals:
-                s = _s()
-                translations = s.get("sku_translations", {})
-                inventory = s.get("inventory", {})
-                sku_totals, mapped, unmatched = map_depletion_to_skus(
-                    product_totals, translations, inventory)
-                if sku_totals:
-                    # Apply depletion to rmfg_inventory
-                    inv = STATE.get("rmfg_inventory", {})
-                    dep_label = os.path.basename(dep_path)
-                    _take_snapshot(f"Pre-depletion: {dep_label}", source="depletion")
-                    applied = {}
-                    for sku, qty in sku_totals.items():
-                        before = inv.get(sku, 0)
-                        after = before - int(qty)
-                        inv[sku] = after
-                        applied[sku] = {"before": before, "after": after, "depleted": int(qty)}
-                    STATE["rmfg_inventory"] = inv
-                    _take_snapshot(f"Post-depletion: {dep_label}", source="depletion")
-                    depletion_result = {
-                        "file": dep_label,
-                        "order_count": order_count,
-                        "skus_affected": len(applied),
-                        "total_depleted": sum(int(q) for q in sku_totals.values()),
-                        "unmatched": unmatched,
-                    }
-
-    # 4. Re-calculate after depletion (so numbers reflect post-shipment inventory)
-    if depletion_result:
-        with app.test_request_context(json={}):
-            calc_resp = calculate_rmfg()
-            calc_data = calc_resp.get_json() if hasattr(calc_resp, 'get_json') else json.loads(calc_resp.data)
-
-    # 5. Substitutions
+    # 6. Substitutions
     subs = []
     with app.test_request_context():
         sub_resp = get_substitutions()
         subs = sub_resp.get_json() if hasattr(sub_resp, 'get_json') else json.loads(sub_resp.data)
+    results["substitutions"] = subs
 
-    return jsonify({
-        "load": load_data,
-        "results": calc_data,
-        "substitutions": subs,
-        "depletion": depletion_result,
-    })
+    return jsonify(results)
 
 
 # ── List available RMFG folders ───────────────────────────────────────
@@ -4376,11 +4458,22 @@ def dropbox_sync():
     pot_total = sum(d.get("potential_yield", 0) for d in bw.values())
     wheel_skus = sum(1 for d in bw.values() if d.get("count", 0) > 0)
 
+    # Parse snapshot date from filename (e.g., "Product Inventory_3-14-26_V2.xlsx")
+    import re as _re
+    snapshot_date_str = ""
+    date_match = _re.search(r'(\d{1,2})-(\d{1,2})-(\d{2})', name)
+    if date_match:
+        mm, dd, yy = date_match.groups()
+        snapshot_date = datetime.date(2000 + int(yy), int(mm), int(dd))
+        snapshot_date_str = snapshot_date.isoformat()
+        STATE["dropbox_snapshot_date"] = snapshot_date_str
+
     return jsonify({
         "ok": True,
         "source": "dropbox",
         "file": name,
         "modified": newest.get("server_modified", ""),
+        "snapshot_date": snapshot_date_str,
         "inventory_count": len(inv),
         "cheese_count": ch_count,
         "wheel_skus": wheel_skus,
@@ -4726,6 +4819,9 @@ def _recharge_sync_foreground(api_token, req, save_to_state=False):
     STATE["rmfg_direct_sat"] = dict(week_direct[0])
     STATE["rmfg_prcjam_sat"] = dict(week_prcjam[0])
     STATE["rmfg_cexec_sat"] = dict(week_cexec[0])
+    # Week 2 raw components for assignment panel
+    STATE["rmfg_prcjam_wk2"] = dict(week_prcjam[1])
+    STATE["rmfg_cexec_wk2"] = dict(week_cexec[1])
 
     # Save to settings for persistence
     s["recharge_queued"] = {m: dict(skus)
@@ -4734,6 +4830,8 @@ def _recharge_sync_foreground(api_token, req, save_to_state=False):
     s["rmfg_direct_sat"] = dict(week_direct[0])
     s["rmfg_prcjam_sat"] = dict(week_prcjam[0])
     s["rmfg_cexec_sat"] = dict(week_cexec[0])
+    s["rmfg_prcjam_wk2"] = dict(week_prcjam[1])
+    s["rmfg_cexec_wk2"] = dict(week_cexec[1])
     # Persist per-week resolved demand
     s["rmfg_sat_demand"] = dict(week_demands[0])
     s["rmfg_tue_demand"] = dict(week_demands[1])
@@ -5043,10 +5141,22 @@ def shopify_sync():
             sh_prcjam_counts[proj_curation] += projected_additional
             sh_cexec_counts[proj_curation] += projected_additional
 
-    # Merge Shopify curation counts into STATE (additive with Recharge)
-    existing_prcjam = STATE.get("rmfg_prcjam_sat", {})
-    existing_cexec = STATE.get("rmfg_cexec_sat", {})
-    existing_direct = STATE.get("rmfg_direct_sat", {})
+    # Merge Shopify curation counts into STATE (replace previous Shopify, keep Recharge)
+    # Subtract previous Shopify contribution to avoid double-counting on re-sync
+    old_sh_prcjam = STATE.get("rmfg_prcjam_sh", {})
+    old_sh_cexec = STATE.get("rmfg_cexec_sh", {})
+    old_sh_direct = STATE.get("rmfg_direct_sh", {})
+    existing_prcjam = STATE.get("rmfg_prcjam_sat") or dict(s.get("rmfg_prcjam_sat", {}))
+    existing_cexec = STATE.get("rmfg_cexec_sat") or dict(s.get("rmfg_cexec_sat", {}))
+    existing_direct = STATE.get("rmfg_direct_sat") or dict(s.get("rmfg_direct_sat", {}))
+    # Remove old Shopify counts
+    for cur, cnt in old_sh_prcjam.items():
+        existing_prcjam[cur] = max(0, existing_prcjam.get(cur, 0) - cnt)
+    for cur, cnt in old_sh_cexec.items():
+        existing_cexec[cur] = max(0, existing_cexec.get(cur, 0) - cnt)
+    for sku, qty in old_sh_direct.items():
+        existing_direct[sku] = max(0, existing_direct.get(sku, 0) - qty)
+    # Add new Shopify counts
     for cur, cnt in sh_prcjam_counts.items():
         existing_prcjam[cur] = existing_prcjam.get(cur, 0) + cnt
     for cur, cnt in sh_cexec_counts.items():
@@ -5056,6 +5166,10 @@ def shopify_sync():
     STATE["rmfg_prcjam_sat"] = existing_prcjam
     STATE["rmfg_cexec_sat"] = existing_cexec
     STATE["rmfg_direct_sat"] = existing_direct
+    # Store current Shopify contribution for next sync subtraction
+    STATE["rmfg_prcjam_sh"] = dict(sh_prcjam_counts)
+    STATE["rmfg_cexec_sh"] = dict(sh_cexec_counts)
+    STATE["rmfg_direct_sh"] = dict(sh_direct_demand)
 
     # Save to settings
     s["shopify_api_demand"] = shopify_weekly
@@ -5063,6 +5177,9 @@ def shopify_sync():
     s["rmfg_prcjam_sat"] = existing_prcjam
     s["rmfg_cexec_sat"] = existing_cexec
     s["rmfg_direct_sat"] = existing_direct
+    s["rmfg_prcjam_sh"] = dict(sh_prcjam_counts)
+    s["rmfg_cexec_sh"] = dict(sh_cexec_counts)
+    s["rmfg_direct_sh"] = dict(sh_direct_demand)
     # Save first-order vs recurring split (weekly averages)
     s["shopify_first_order_demand"] = {
         sku: round(qty / num_weeks_with_data)
