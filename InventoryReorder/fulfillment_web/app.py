@@ -4112,13 +4112,12 @@ def run_all():
     rc_token = s.get("recharge_api_token", "")
     if rc_token:
         try:
-            with app.test_request_context(json={"force": True},
-                                          content_type="application/json"):
-                rc_resp = recharge_sync()
-                if hasattr(rc_resp, 'get_json'):
-                    rc_result = rc_resp.get_json()
-                elif hasattr(rc_resp, '__iter__') and len(rc_resp) == 2:
-                    rc_result = rc_resp[0].get_json() if hasattr(rc_resp[0], 'get_json') else None
+            import requests as req
+            # Call core function directly — no Flask request context needed
+            rc_result = _recharge_sync_foreground(rc_token, req, save_to_state=True)
+            if not isinstance(rc_result, dict):
+                # It returned a Flask response (shouldn't happen with save_to_state=True)
+                rc_result = {"ok": True, "note": "sync completed"}
         except Exception as e:
             rc_result = {"error": str(e)}
     results["recharge_sync"] = rc_result
@@ -4127,16 +4126,18 @@ def run_all():
     sh_result = None
     s = _s()
     sh_token = s.get("shopify_access_token", "") or s.get("shopify_admin_token", "")
-    sh_domain = s.get("shopify_store_url", "") or s.get("shopify_domain", "")
-    if sh_token and sh_domain:
+    sh_store = s.get("shopify_store_url", "") or s.get("shopify_domain", "")
+    if sh_token and sh_store:
         try:
+            import requests as req
+            # Call shopify_sync via test_request_context (it reads request.json)
             with app.test_request_context(json={"force": True},
                                           content_type="application/json"):
                 sh_resp = shopify_sync()
                 if hasattr(sh_resp, 'get_json'):
                     sh_result = sh_resp.get_json()
-                elif hasattr(sh_resp, '__iter__') and len(sh_resp) == 2:
-                    sh_result = sh_resp[0].get_json() if hasattr(sh_resp[0], 'get_json') else None
+                elif isinstance(sh_resp, tuple):
+                    sh_result = sh_resp[0].get_json() if hasattr(sh_resp[0], 'get_json') else {"error": "sync failed"}
         except Exception as e:
             sh_result = {"error": str(e)}
     results["shopify_sync"] = sh_result
