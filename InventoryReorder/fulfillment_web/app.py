@@ -1340,9 +1340,35 @@ def classify_order_window(ship_monday, ref_date=None):
 # ── Depletion File Parser ─────────────────────────────────────────────
 
 
+def _load_shipment_sku_map():
+    """Load SKU mapping from meal-type-export CSV in Shipments folder.
+    Returns {product_column_header: sku} e.g. {'AHB (S_REG): Sopressata': 'MT-SOP'}."""
+    import glob as globmod
+    base = _get_project_dir()
+    pattern = os.path.join(base, "Shipments", "meal-type-export*.csv")
+    files = sorted(globmod.glob(pattern), key=os.path.getmtime, reverse=True)
+    if not files:
+        return {}
+    mapping = {}
+    with open(files[0], encoding="utf-8-sig") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if len(row) >= 2:
+                sku = row[0].strip()
+                col_name = row[1].strip()
+                if sku and col_name:
+                    mapping[col_name] = sku
+                    # Also map stripped name (without prefix)
+                    if ": " in col_name:
+                        short = col_name.split(": ", 1)[1]
+                        mapping[short] = sku
+    return mapping
+
+
 def parse_depletion_xlsx(path):
     """Parse AHB_WeeklyProductionQuery XLSX depletion file.
-    Returns {product_name: total_qty} and order count."""
+    Returns {product_name: total_qty}, order_count, error.
+    Uses meal-type-export CSV for SKU mapping when available."""
     try:
         import openpyxl
     except ImportError as exc:
@@ -1350,26 +1376,33 @@ def parse_depletion_xlsx(path):
         traceback.print_exc()
         return {}, 0, f"openpyxl import failed: {exc}"
 
+    # Load SKU mapping from meal-type-export CSV
+    sku_map = _load_shipment_sku_map()
+
     wb = openpyxl.load_workbook(path, read_only=True)
     ws = wb.active
     headers = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
 
-    # Find AHB product columns
+    # Find AHB product columns and map to SKUs
     product_cols = []
     for i, h in enumerate(headers):
         if h and "AHB (S_REG):" in str(h):
-            name = str(h).split(": ", 1)[1].strip() if ": " in str(h) else str(h)
-            product_cols.append((i, name))
+            col_header = str(h).strip()
+            short_name = col_header.split(": ", 1)[1].strip() if ": " in col_header else col_header
+            # Resolve to SKU via meal-type-export mapping
+            sku = sku_map.get(col_header) or sku_map.get(short_name)
+            product_cols.append((i, sku or short_name, sku))
 
-    # Sum quantities per product
+    # Sum quantities per SKU (or product name if no SKU mapping)
     totals = defaultdict(int)
     order_count = 0
     for row in ws.iter_rows(min_row=2, values_only=True):
         order_count += 1
-        for idx, name in product_cols:
+        for idx, name, sku in product_cols:
             val = row[idx] if idx < len(row) else None
             if val and isinstance(val, (int, float)) and val > 0:
-                totals[name] += int(val)
+                key = sku if sku else name
+                totals[key] += int(val)
 
     wb.close()
     return dict(totals), order_count, None
@@ -1396,29 +1429,45 @@ def map_depletion_to_skus(product_totals, sku_translations, inventory):
         inv_names[short.lower()] = sku
         inv_names[name.lower()] = sku
 
+    # Build case-insensitive translation lookup
+    trans_lower = {k.lower(): v for k, v in sku_translations.items()}
+
     mapped = {}
     sku_totals = defaultdict(int)
     unmatched = []
 
+    # Check if product key is already a SKU (from meal-type-export mapping)
+    all_skus = set(inventory.keys()) | set(sku_translations.values())
+
     for product, qty in product_totals.items():
-        # Skip non-depletable items (tasting guides, etc.)
-        if "tasting guide" in product.lower():
+        # Skip non-depletable items (tasting guides, trays, etc.)
+        if "tasting guide" in product.lower() or "(tray)" in product.lower():
             continue
 
         sku = None
-        # 1. Exact translation
-        if product in sku_translations:
+        pl = product.lower()
+
+        # 0. Already a SKU (resolved by parse_depletion_xlsx via meal-type-export)
+        #    SKU pattern: 2-3 uppercase letters, dash, rest (e.g., CH-MSMG, AC-APMB, MT-SOP)
+        import re as _re
+        if _re.match(r'^[A-Z]{2,3}-\w+$', product):
+            sku = product
+        # 1. Exact translation (case-sensitive, then case-insensitive)
+        elif product in sku_translations:
             sku = sku_translations[product]
+        elif pl in trans_lower:
+            sku = trans_lower[pl]
         # 2. Exact inventory name match
-        elif product.lower() in inv_names:
-            sku = inv_names[product.lower()]
+        elif pl in inv_names:
+            sku = inv_names[pl]
         else:
-            # 3. Fuzzy match against inventory names
-            candidates = list(inv_names.keys())
-            matches = difflib.get_close_matches(product.lower(), candidates,
-                                                 n=1, cutoff=0.6)
+            # 3. Fuzzy match
+            all_candidates = dict(inv_names)
+            all_candidates.update(trans_lower)
+            matches = difflib.get_close_matches(pl, list(all_candidates.keys()),
+                                                 n=1, cutoff=0.55)
             if matches:
-                sku = inv_names[matches[0]]
+                sku = all_candidates[matches[0]]
 
         if sku:
             mapped[product] = sku
@@ -5121,77 +5170,64 @@ def shopify_sync():
                 unfulfilled_demand[nsku] += qty
                 sh_direct_demand[nsku] += qty
 
-    # First-order MONG projection: project daily rate to Monday 11:59 PM ET
-    # First orders are MONG curation → add to PR-CJAM-MONG and CEX-EC-MONG
+    # NOTE: Shopify prcjam/cexec counts are NOT merged into the main demand totals.
+    # Recharge is the authoritative source for subscription curation counts.
+    # Shopify unfulfilled orders overlap with Recharge queued charges (same subscriptions).
+    # Only direct SKU demand (non-curation items) from Shopify is merged.
+    # The prcjam/cexec counts are stored for attribution/debugging only.
+    STATE["shopify_prcjam_counts"] = dict(sh_prcjam_counts)
+    STATE["shopify_cexec_counts"] = dict(sh_cexec_counts)
+
+    # First-order projection stored for reference but not added to demand
     proj = s.get("first_order_projection", {})
     proj_enabled = proj.get("enabled", True)
     proj_curation = proj.get("active_curation", "MONG")
-
     if proj_enabled and first_order_count_3d > 0:
         daily_rate = first_order_count_3d / 3.0
-        # Find next Monday 11:59 PM ET
-        days_to_monday = (7 - now_et.weekday()) % 7  # 0=Mon already
+        try:
+            et = pytz.timezone("US/Eastern")
+        except Exception:
+            et = datetime.timezone(datetime.timedelta(hours=-4))
+        now_et = datetime.datetime.now(et)
+        days_to_monday = (7 - now_et.weekday()) % 7
         if days_to_monday == 0 and now_et.hour >= 23:
-            days_to_monday = 7  # next Monday if past 11:59 PM
+            days_to_monday = 7
         next_monday_midnight = (now_et + datetime.timedelta(days=days_to_monday)).replace(
             hour=23, minute=59, second=0, microsecond=0)
         hours_remaining = max(0, (next_monday_midnight - now_et).total_seconds() / 3600)
         projected_additional = int(daily_rate * (hours_remaining / 24))
+        STATE["first_order_projection_count"] = projected_additional
 
-        if projected_additional > 0:
-            sh_prcjam_counts[proj_curation] += projected_additional
-            sh_cexec_counts[proj_curation] += projected_additional
-
-    # Merge Shopify curation counts into STATE (replace previous Shopify, keep Recharge)
-    # Subtract previous Shopify contribution to avoid double-counting on re-sync
-    old_sh_prcjam = STATE.get("rmfg_prcjam_sh", {})
-    old_sh_cexec = STATE.get("rmfg_cexec_sh", {})
+    # Merge only direct SKU demand from Shopify (not curation prcjam/cexec)
+    # Subtract previous Shopify direct contribution, then add new
     old_sh_direct = STATE.get("rmfg_direct_sh", {})
-    existing_prcjam = STATE.get("rmfg_prcjam_sat") or dict(s.get("rmfg_prcjam_sat", {}))
-    existing_cexec = STATE.get("rmfg_cexec_sat") or dict(s.get("rmfg_cexec_sat", {}))
     existing_direct = STATE.get("rmfg_direct_sat") or dict(s.get("rmfg_direct_sat", {}))
-    # Remove old Shopify counts
-    for cur, cnt in old_sh_prcjam.items():
-        existing_prcjam[cur] = max(0, existing_prcjam.get(cur, 0) - cnt)
-    for cur, cnt in old_sh_cexec.items():
-        existing_cexec[cur] = max(0, existing_cexec.get(cur, 0) - cnt)
     for sku, qty in old_sh_direct.items():
         existing_direct[sku] = max(0, existing_direct.get(sku, 0) - qty)
-    # Add new Shopify counts
-    for cur, cnt in sh_prcjam_counts.items():
-        existing_prcjam[cur] = existing_prcjam.get(cur, 0) + cnt
-    for cur, cnt in sh_cexec_counts.items():
-        existing_cexec[cur] = existing_cexec.get(cur, 0) + cnt
     for sku, qty in sh_direct_demand.items():
         existing_direct[sku] = existing_direct.get(sku, 0) + qty
-    STATE["rmfg_prcjam_sat"] = existing_prcjam
-    STATE["rmfg_cexec_sat"] = existing_cexec
     STATE["rmfg_direct_sat"] = existing_direct
-    # Store current Shopify contribution for next sync subtraction
-    STATE["rmfg_prcjam_sh"] = dict(sh_prcjam_counts)
-    STATE["rmfg_cexec_sh"] = dict(sh_cexec_counts)
     STATE["rmfg_direct_sh"] = dict(sh_direct_demand)
 
-    # Save to settings
-    s["shopify_api_demand"] = shopify_weekly
-    s["shopify_unfulfilled"] = dict(unfulfilled_demand)
-    s["rmfg_prcjam_sat"] = existing_prcjam
-    s["rmfg_cexec_sat"] = existing_cexec
-    s["rmfg_direct_sat"] = existing_direct
-    s["rmfg_prcjam_sh"] = dict(sh_prcjam_counts)
-    s["rmfg_cexec_sh"] = dict(sh_cexec_counts)
-    s["rmfg_direct_sh"] = dict(sh_direct_demand)
-    # Save first-order vs recurring split (weekly averages)
-    s["shopify_first_order_demand"] = {
+    # Save to settings — re-read fresh to avoid overwriting Recharge data
+    fresh_s = load_settings()
+    fresh_s["shopify_api_demand"] = shopify_weekly
+    fresh_s["shopify_unfulfilled"] = dict(unfulfilled_demand)
+    fresh_s["rmfg_direct_sat"] = existing_direct
+    fresh_s["rmfg_direct_sh"] = dict(sh_direct_demand)
+    fresh_s["shopify_first_order_demand"] = {
         sku: round(qty / num_weeks_with_data)
         for sku, qty in first_order_total.items() if qty > 0
     }
-    s["shopify_recurring_demand"] = {
+    fresh_s["shopify_recurring_demand"] = {
         sku: round(qty / num_weeks_with_data)
         for sku, qty in recurring_total.items() if qty > 0
     }
-    save_settings(s)
-    STATE["saved"] = s
+    now = datetime.datetime.now()
+    fresh_s["shopify_last_sync_iso"] = now.isoformat()
+    save_settings(fresh_s)
+    STATE["shopify_last_sync"] = now
+    STATE["saved"] = fresh_s
 
     total_weekly = sum(shopify_weekly.values())
     total_unfulfilled = sum(unfulfilled_demand.values())
