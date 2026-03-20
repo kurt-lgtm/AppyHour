@@ -6135,17 +6135,16 @@ def auto_deplete():
                 search_dirs.append(candidate)
 
     dep_paths = []
-    seen = set()
+    seen_names = set()
     for search_dir in search_dirs:
         if not os.path.isdir(search_dir):
             continue
         for f in sorted(os.listdir(search_dir)):
             fl = f.lower()
             if f.endswith(".xlsx") and "weeklyproductionquery" in fl.replace("_", "").replace(" ", ""):
-                fp = os.path.join(search_dir, f)
-                if fp not in seen:
-                    seen.add(fp)
-                    dep_paths.append(fp)
+                if f not in seen_names:
+                    seen_names.add(f)
+                    dep_paths.append(os.path.join(search_dir, f))
 
     if not dep_paths:
         return jsonify({"ok": False, "skipped": True,
