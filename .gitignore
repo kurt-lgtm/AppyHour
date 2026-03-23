@@ -31,8 +31,7 @@ backups/
 image 1.svg
 stock-vector-*
 
-# Nested git repos
-GelPackCalculator/
+# Nested git repos — GelPackCalculator removed from ignore
 
 # OS
 .DS_Store
