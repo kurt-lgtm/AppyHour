@@ -4,10 +4,13 @@ Handles path setup, settings loading, and error formatting.
 """
 
 import json
+import logging
 import os
 import sys
 from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger("appyhour_mcp.utils")
 
 
 # ---------------------------------------------------------------------------
@@ -46,8 +49,12 @@ def get_gelcalc_settings() -> dict:
     """Load GelPackCalculator settings (cached)."""
     global _gelcalc_settings
     if _gelcalc_settings is None:
-        from gel_pack_shopify import load_settings
-        _gelcalc_settings = load_settings()
+        try:
+            from gel_pack_shopify import load_settings
+            _gelcalc_settings = load_settings()
+        except Exception:
+            logger.exception("Failed to load GelPackCalculator settings")
+            _gelcalc_settings = {}
     return _gelcalc_settings
 
 
@@ -102,3 +109,40 @@ def format_error(e: Exception, context: str = "") -> str:
 def to_json(data: Any, indent: int = 2) -> str:
     """Serialize data to a JSON string, handling common types."""
     return json.dumps(data, indent=indent, default=str)
+
+
+# ---------------------------------------------------------------------------
+# Shopify helpers (shared across shopify, order_edit, matrix_qc, shipping)
+# ---------------------------------------------------------------------------
+
+def get_shopify_auth() -> tuple:
+    """Get Shopify REST/GraphQL auth from InventoryReorder settings.
+
+    Returns (base_url, headers) tuple.
+    """
+    import requests  # noqa: F811 — deferred to avoid import at module level
+    settings = get_inventory_settings()
+    store = settings.get("shopify_store_url", "").strip()
+    token = settings.get("shopify_access_token", "").strip()
+    if not store or not token:
+        raise RuntimeError(
+            "Shopify credentials not configured in InventoryReorder settings."
+        )
+    base = f"https://{store}.myshopify.com/admin/api/2024-01"
+    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+    return base, headers
+
+
+def shopify_graphql(base: str, headers: dict, query: str, variables: Optional[dict] = None) -> dict:
+    """Execute a Shopify GraphQL query. Returns the 'data' key."""
+    import requests
+    url = f"{base}/graphql.json"
+    body = {"query": query}
+    if variables:
+        body["variables"] = variables
+    resp = requests.post(url, headers=headers, json=body, timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("errors"):
+        raise RuntimeError(f"GraphQL errors: {data['errors']}")
+    return data["data"]

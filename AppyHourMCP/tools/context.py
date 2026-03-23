@@ -7,7 +7,14 @@ as readable MCP resources and tools.
 import json
 from pathlib import Path
 
-MEMORY_DIR = Path.home() / ".claude" / "projects" / "C--Users-Work" / "memory"
+def _find_memory_dir():
+    """Derive Claude Code memory directory from home path."""
+    home = Path.home()
+    # Claude Code encodes the project path: colons become double-dash, separators become dash
+    home_encoded = str(home).replace("\\", "-").replace("/", "-").replace(":", "-")
+    return home / ".claude" / "projects" / home_encoded / "memory"
+
+MEMORY_DIR = _find_memory_dir()
 SETTINGS_PATH = Path(__file__).parent.parent.parent / "InventoryReorder" / "dist" / "inventory_reorder_settings.json"
 ERRORS_DIR = Path(__file__).parent.parent.parent / "InventoryReorder" / "Errors"
 

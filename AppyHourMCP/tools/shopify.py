@@ -1,32 +1,66 @@
 """
 Shopify Order MCP tools — fetch orders, batch thermal analysis, tag updates.
-Wraps the same logic as GelPackCalculator/app/routers/shopify.py.
+
+Uses InventoryReorder's static Admin API token for all Shopify API access
+(broader scopes than GelPackCalculator's OAuth client-credentials flow).
 """
 
 import json
+import logging
+import re
+import time
 from typing import Optional, List
+
+logger = logging.getLogger("appyhour_mcp.shopify")
 from pydantic import BaseModel, Field, ConfigDict
 
-from utils import get_gelcalc_settings, format_error, to_json
+import requests
+
+from utils import get_gelcalc_settings, get_shopify_auth, format_error, to_json
 
 
-# Lazy-loaded Shopify client singleton
-_client = None
+def _fetch_unfulfilled_orders(base, headers, tag=None, fields="id,name,tags,shipping_address,line_items,customer,email"):
+    """Fetch all unfulfilled orders with pagination. Optional tag filter."""
+    all_orders = []
+    url = f"{base}/orders.json"
+    params = {
+        "status": "open",
+        "fulfillment_status": "unfulfilled",
+        "limit": 250,
+        "fields": fields,
+    }
+    if tag:
+        params["tag"] = tag
+    page = 0
+    while url:
+        page += 1
+        resp = requests.get(url, headers=headers,
+                            params=params if page == 1 else None, timeout=30)
+        resp.raise_for_status()
+        orders = resp.json().get("orders", [])
+        all_orders.extend(orders)
+        link = resp.headers.get("Link", "")
+        url = None
+        if 'rel="next"' in link:
+            m = re.search(r'<([^>]+)>;\s*rel="next"', link)
+            if m:
+                url = m.group(1)
+        time.sleep(0.1)
+    return all_orders
 
 
-def _get_client():
-    """Get or create the ShopifyClient singleton."""
-    global _client
-    if _client is None:
-        from gel_pack_shopify import ShopifyClient
-        s = get_gelcalc_settings()
-        store = s.get("shopify_store", "")
-        cid = s.get("shopify_client_id", "")
-        csecret = s.get("shopify_client_secret", "")
-        if not all([store, cid, csecret]):
-            raise RuntimeError("Shopify credentials not configured in GelPackCalculator settings.")
-        _client = ShopifyClient(store, cid, csecret)
-    return _client
+def _graphql(base, headers, query, variables=None):
+    """Execute a Shopify GraphQL query."""
+    url = f"{base}/graphql.json"
+    body = {"query": query}
+    if variables:
+        body["variables"] = variables
+    resp = requests.post(url, headers=headers, json=body, timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("errors"):
+        raise RuntimeError(f"GraphQL errors: {data['errors']}")
+    return data["data"]
 
 
 def register(mcp):
@@ -93,17 +127,24 @@ def register(mcp):
         try:
             from gel_pack_shopify import GEL_TAG_SET, is_routing_tag
 
-            client = _get_client()
-            orders = client.fetch_orders_by_tags(
-                and_tags=params.and_tags,
-                or_tags=params.or_tags,
-                exclude_tags=params.exclude_tags,
+            base, headers = get_shopify_auth()
+            all_orders = _fetch_unfulfilled_orders(
+                base, headers,
+                fields="id,name,tags,shipping_address,customer,email",
             )
 
+            # Apply tag filters
             results = []
-            for o in orders[:params.limit]:
-                addr = o.get("shipping_address", {})
+            for o in all_orders:
                 tags = [t.strip() for t in o.get("tags", "").split(",") if t.strip()]
+                if params.and_tags and not all(t in tags for t in params.and_tags):
+                    continue
+                if params.or_tags and not any(t in tags for t in params.or_tags):
+                    continue
+                if params.exclude_tags and any(t in tags for t in params.exclude_tags):
+                    continue
+
+                addr = o.get("shipping_address", {})
                 results.append({
                     "id": o.get("id"),
                     "name": o.get("name", ""),
@@ -116,6 +157,8 @@ def register(mcp):
                     "routing_tags": [t for t in tags if is_routing_tag(t)],
                     "created_at": o.get("created_at", ""),
                 })
+                if len(results) >= params.limit:
+                    break
 
             return to_json({"orders": results, "count": len(results)})
         except Exception as e:
@@ -152,21 +195,33 @@ def register(mcp):
             from gel_pack_shopify import (
                 analyze_order, calc_surface_area, calc_r_total,
                 fetch_weather_by_zip, get_transit_type, state_from_code,
-                is_routing_tag, shorten_routing_tags,
-                GEL_TAG_SET, MELT_EFFICIENCY,
+                is_routing_tag, GEL_TAG_SET, MELT_EFFICIENCY,
                 DEFAULT_R_PER_INCH, DEFAULT_THICKNESS, DEFAULT_R_AIR_FILM,
                 DEFAULT_BOX_L, DEFAULT_BOX_W, DEFAULT_BOX_H,
                 TARGET_TEMP_DEFAULT, SAFETY_FACTOR_DEFAULT,
             )
 
-            client = _get_client()
+            base, headers = get_shopify_auth()
             s = get_gelcalc_settings()
 
-            orders = client.fetch_orders_by_tags(
-                and_tags=params.and_tags,
-                or_tags=params.or_tags,
-                exclude_tags=params.exclude_tags,
+            all_orders = _fetch_unfulfilled_orders(
+                base, headers,
+                fields="id,name,tags,shipping_address,customer,email",
             )
+
+            # Apply tag filters
+            filtered = []
+            for o in all_orders:
+                tags = [t.strip() for t in o.get("tags", "").split(",") if t.strip()]
+                if params.and_tags and not all(t in tags for t in params.and_tags):
+                    continue
+                if params.or_tags and not any(t in tags for t in params.or_tags):
+                    continue
+                if params.exclude_tags and any(t in tags for t in params.exclude_tags):
+                    continue
+                filtered.append(o)
+                if len(filtered) >= params.limit:
+                    break
 
             surface_area = calc_surface_area(
                 float(s.get("box_length", DEFAULT_BOX_L)),
@@ -182,7 +237,7 @@ def register(mcp):
             api_key = s.get("owm_api_key", "")
             results = []
 
-            for order in orders[:params.limit]:
+            for order in filtered:
                 try:
                     addr = order.get("shipping_address", {})
                     zip_code = addr.get("zip", "")
@@ -191,6 +246,7 @@ def register(mcp):
                     transit_type = get_transit_type(state_name) if state_name else "3-Day"
 
                     avg_temp, peak_temp = 75.0, 80.0
+                    weather_error = False
                     if api_key and zip_code:
                         try:
                             forecasts, _, _ = fetch_weather_by_zip(api_key, zip_code)
@@ -198,8 +254,9 @@ def register(mcp):
                                 temps = [t for _, t in forecasts]
                                 avg_temp = sum(temps) / len(temps)
                                 peak_temp = max(temps)
-                        except Exception:
-                            pass
+                        except Exception as wx:
+                            logger.warning("Weather fetch failed for %s: %s", zip_code, wx)
+                            weather_error = True
 
                     result = analyze_order(
                         outside_temp=avg_temp,
@@ -240,6 +297,7 @@ def register(mcp):
                         "risk": result["risk"],
                         "gel_tags": result["config_tags"],
                         "current_gel_tags": [t for t in tags if t in GEL_TAG_SET],
+                        "weather_estimated": weather_error,
                     })
                 except Exception as e:
                     results.append({
@@ -278,8 +336,18 @@ def register(mcp):
             JSON with the order_id and the final tag list after modification.
         """
         try:
-            client = _get_client()
-            order = client.get_order(params.order_id)
+            base, headers = get_shopify_auth()
+            gid = f"gid://shopify/Order/{params.order_id}"
+
+            # Get current tags
+            resp = requests.get(
+                f"{base}/orders/{params.order_id}.json",
+                headers=headers,
+                params={"fields": "id,tags"},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            order = resp.json().get("order", {})
             current = [t.strip() for t in order.get("tags", "").split(",") if t.strip()]
 
             new_tags = [t for t in current if t not in params.remove_tags]
@@ -287,7 +355,15 @@ def register(mcp):
                 if t not in new_tags:
                     new_tags.append(t)
 
-            client.update_order_tags(params.order_id, new_tags)
+            # Update via REST PUT
+            resp = requests.put(
+                f"{base}/orders/{params.order_id}.json",
+                headers=headers,
+                json={"order": {"id": params.order_id, "tags": ", ".join(new_tags)}},
+                timeout=30,
+            )
+            resp.raise_for_status()
+
             return to_json({"order_id": params.order_id, "tags": new_tags})
         except Exception as e:
             return format_error(e, "update_order_tags")

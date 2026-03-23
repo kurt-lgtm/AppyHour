@@ -51,9 +51,7 @@ def _load_shipments():
             if files:
                 analyze = _get_analyze()
                 return analyze.load_shipments(str(files[0]))
-        raise FileNotFoundError(
-            "No shipment data found. Run 'python ingest.py' in ShippingReports/ first."
-        )
+        return []  # No shipment data available
     analyze = _get_analyze()
     return analyze.load_shipments(str(output_file))
 
@@ -352,7 +350,7 @@ def register(mcp):
             if not force_2day_zips:
                 return to_json({"message": "No force_2day zip overrides configured", "tagged": 0})
 
-            TAG = "!FedEx 2Day - Dallas_AHB!"
+            TAG = gc.get("default_routing_tag", "!FedEx 2Day - Dallas_AHB!")
             ROUTING_PREFIXES = ("!ANY", "!NO ", "!FedEx", "!UPS", "!OnTrac")
 
             # Fetch unfulfilled orders
@@ -367,7 +365,7 @@ def register(mcp):
             while url:
                 resp = requests.get(url, headers=headers, params=params, timeout=60)
                 if resp.status_code != 200:
-                    break
+                    return to_json({"error": f"Shopify API returned {resp.status_code}: {resp.text[:200]}"})
                 data = resp.json()
                 all_orders.extend(data.get("orders", []))
                 url = None
