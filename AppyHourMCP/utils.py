@@ -133,6 +133,29 @@ def get_shopify_auth() -> tuple:
     return base, headers
 
 
+def active_line_items(order: dict) -> list:
+    """Return line items with net quantity > 0, excluding refunded/removed items.
+
+    Shopify keeps refunded line items at their original quantity — only
+    refund_line_items records show what was removed. This subtracts refunded
+    quantities so callers see only what was actually shipped or still pending.
+
+    Always use this when checking which SKUs are present on an order.
+    Requires order to be fetched with fields including 'line_items,refunds'.
+    """
+    refunded: dict = {}
+    for refund in order.get("refunds", []):
+        for rli in refund.get("refund_line_items", []):
+            lid = rli["line_item_id"]
+            refunded[lid] = refunded.get(lid, 0) + rli["quantity"]
+
+    return [
+        {**li, "quantity": li.get("quantity", 0) - refunded.get(li["id"], 0)}
+        for li in order.get("line_items", [])
+        if li.get("quantity", 0) - refunded.get(li["id"], 0) > 0
+    ]
+
+
 def shopify_graphql(base: str, headers: dict, query: str, variables: Optional[dict] = None) -> dict:
     """Execute a Shopify GraphQL query. Returns the 'data' key."""
     import requests
