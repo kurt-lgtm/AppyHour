@@ -12,6 +12,9 @@ let rmfgLoaded = false;  // true after RMFG folder is loaded
 let currentView = 'dashboard';
 let demandMode = localStorage.getItem('demandMode') || 'discrete';  // 'discrete' or 'churned'
 
+// Cached DOM references (set at DOMContentLoaded)
+let mascotEl = null;
+
 // Mascot state
 const mascot = {
     x: 60, y: 200,        // current position
@@ -33,6 +36,7 @@ const mascot = {
 
 // ── Init ─────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+    mascotEl = document.getElementById('mascot');
     loadAssignments();
     log('Fulfillment Planner loaded. Auto-running...', '');
     setMascotExpression('loading', 'Booting up...');
@@ -214,8 +218,15 @@ function initBgCanvas() {
             ctx.stroke();
         }
 
-        requestAnimationFrame(draw);
+        if (!document.hidden) {
+            requestAnimationFrame(draw);
+        }
     }
+
+    // Resume canvas when tab becomes visible again
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) requestAnimationFrame(draw);
+    });
 
     draw();
 }
@@ -233,7 +244,7 @@ function log(msg, style = '') {
     const el = document.getElementById('log');
     const ts = new Date().toLocaleTimeString('en-US', { hour12: false });
     const cls = style ? `log-${style}` : '';
-    el.innerHTML += `<div class="log-entry"><span class="log-time">[${ts}]</span> <span class="${cls}">${msg}</span></div>`;
+    el.insertAdjacentHTML('beforeend', `<div class="log-entry"><span class="log-time">[${ts}]</span> <span class="${cls}">${msg}</span></div>`);
     el.scrollTop = el.scrollHeight;
 }
 
@@ -242,7 +253,7 @@ function log(msg, style = '') {
 // ══════════════════════════════════════════════════════════════════════
 
 function mascotLoop(ts) {
-    const el = document.getElementById('mascot');
+    const el = mascotEl;
     const dt = 1; // frame
 
     mascot.wanderTimer--;
@@ -2129,6 +2140,16 @@ document.addEventListener('keydown', e => {
 // ══════════════════════════════════════════════════════════════════════
 
 let pickerCallback = null;  // Override for picker click in runway view
+
+function toggleMoreMenu() {
+    const menu = document.getElementById('toolbar-more-menu');
+    if (!menu) return;
+    menu.classList.toggle('open');
+    if (menu.classList.contains('open')) {
+        const close = e => { if (!document.getElementById('toolbar-more').contains(e.target)) { menu.classList.remove('open'); document.removeEventListener('click', close); } };
+        setTimeout(() => document.addEventListener('click', close), 0);
+    }
+}
 
 function switchView(view) {
     currentView = view;

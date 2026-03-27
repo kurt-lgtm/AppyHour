@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Fulfillment Planner</title>
     <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/styles.css?v=70">
+    <link rel="stylesheet" href="/static/styles.css?v=71">
 </head>
 <body>
 
@@ -32,17 +32,22 @@
         <button class="btn btn-green" onclick="syncShopify()">&#128722; Shopify</button>
         <button class="btn btn-blue" onclick="loadFolder()">&#128194; Load Folder</button>
         <button class="btn btn-blue" onclick="calculateRMFG()">&#128202; Calculate</button>
-        <button class="btn btn-dim btn-sm" id="demand-mode-btn" onclick="toggleDemandMode()" title="Toggle discrete/churned demand" style="border:1px solid var(--accent);font-family:'Space Mono',monospace;font-size:9px">DISCRETE</button>
+        <button class="btn btn-dim btn-sm btn-demand-mode" id="demand-mode-btn" onclick="toggleDemandMode()" title="Toggle discrete/churned demand">DISCRETE</button>
         <button class="btn btn-accent" onclick="autoAssign()">&#9889; Auto-Assign</button>
         <button class="btn btn-red" onclick="showSubstitutions()">&#128260; Substitutes</button>
         <button class="btn btn-yellow" onclick="wedPO()">&#128230; Wed PO</button>
-        <button class="btn btn-dim" onclick="varietyCheck()">&#128270; Variety</button>
         <button class="btn btn-accent" onclick="showSnapshots()">&#128247; Snapshots</button>
         <button class="btn btn-orange" onclick="uploadDepletion()">&#128200; Depletion</button>
-        <button class="btn btn-orange" onclick="scanForDepletions()" title="Scan Gmail Sent + Downloads for depletion files" style="font-size:11px">&#128231; Scan Email</button>
-        <button class="btn btn-dim" onclick="showWasteLedger()">&#128465; Waste</button>
-        <button class="btn btn-dim" onclick="showAuditLog()">&#128220; Audit</button>
-        <button class="btn btn-dim" onclick="showLeadTimes()">&#128666; Lead Times</button>
+        <button class="btn btn-orange" onclick="scanForDepletions()" title="Scan Gmail Sent + Downloads for depletion files">&#128231; Scan Email</button>
+        <div class="toolbar-more" id="toolbar-more">
+            <button class="btn btn-dim" onclick="toggleMoreMenu()" title="More tools">&#8943; More</button>
+            <div class="toolbar-more-menu" id="toolbar-more-menu">
+                <button class="btn btn-dim" onclick="varietyCheck();toggleMoreMenu()">&#128270; Variety</button>
+                <button class="btn btn-dim" onclick="showWasteLedger();toggleMoreMenu()">&#128465; Waste</button>
+                <button class="btn btn-dim" onclick="showAuditLog();toggleMoreMenu()">&#128220; Audit</button>
+                <button class="btn btn-dim" onclick="showLeadTimes();toggleMoreMenu()">&#128666; Lead Times</button>
+            </div>
+        </div>
         <input type="file" id="depletion-input" accept=".xlsx" style="display:none"
                onchange="handleDepletionFile(this)">
         <div class="toolbar-sep"></div>

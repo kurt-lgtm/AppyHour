@@ -74,6 +74,8 @@ body::before {
     z-index: 0;
     pointer-events: none;
     opacity: 1;
+    transform: translateZ(0);
+    will-change: transform;
 }
 
 /* ── Layout ──────────────────────────────────────────────────────── */
@@ -120,6 +122,7 @@ body::before {
     color: var(--fg);
     background: transparent;
     white-space: nowrap;
+    will-change: transform;
 }
 .btn:hover { transform: translateY(-1px); }
 .btn:active { transform: translateY(0); }
@@ -144,6 +147,46 @@ body::before {
     height: 24px;
     background: var(--border);
     margin: 0 6px;
+}
+
+/* Demand mode button */
+.btn-demand-mode {
+    border: 1px solid var(--accent) !important;
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+}
+
+/* More tools overflow dropdown */
+.toolbar-more {
+    position: relative;
+}
+.toolbar-more-menu {
+    display: none;
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    background: var(--bg2);
+    border: 1px solid var(--border-bright);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-lg);
+    z-index: 200;
+    min-width: 140px;
+    padding: 4px;
+    flex-direction: column;
+    gap: 2px;
+}
+.toolbar-more-menu.open {
+    display: flex;
+}
+.toolbar-more-menu .btn {
+    width: 100%;
+    text-align: left;
+    padding: 7px 12px;
+    border-radius: var(--radius-sm);
+}
+.toolbar-more-menu .btn:hover {
+    background: var(--surface2);
+    transform: none;
 }
 
 #score {
@@ -214,7 +257,8 @@ body::before {
     flex-direction: column;
     overflow: hidden;
     transition: border-color 0.2s;
-    animation: fadeIn 0.5s ease-out;
+    animation: fadeIn 0.5s ease-out both;
+    contain: layout style;
 }
 
 .panel:hover { border-color: var(--border-bright); }
@@ -234,6 +278,14 @@ body::before {
     from { opacity: 0; transform: translateY(4px); }
     to   { opacity: 1; transform: translateY(0); }
 }
+
+/* Staggered panel entry */
+.panel:nth-child(1) { animation-delay: 0ms; }
+.panel:nth-child(2) { animation-delay: 40ms; }
+.panel:nth-child(3) { animation-delay: 80ms; }
+.panel:nth-child(4) { animation-delay: 120ms; }
+.panel:nth-child(5) { animation-delay: 160ms; }
+.panel:nth-child(6) { animation-delay: 200ms; }
 
 .panel-header {
     display: flex;
@@ -316,6 +368,8 @@ body::before {
     filter: drop-shadow(0 2px 6px rgba(0,0,0,0.4))
            drop-shadow(0 8px 16px rgba(0,0,0,0.25));
     transition: transform 0.08s linear;
+    will-change: transform;
+    transform: translateZ(0);
 }
 #mascot.flipped { transform: scaleX(-1); }
 #mascot.pet { animation: petBounce 0.3s ease; }
