@@ -24,14 +24,19 @@ HEADERS = {"X-Shopify-Access-Token": TOKEN, "Content-Type": "application/json"}
 CUSTOM_BOX_PREFIXES = ("AHB-MCUST", "AHB-LCUST")
 
 # Swap definitions: old_sku -> (new_sku, $0_variant_gid)
+# March 30 2026 — RMFG_20260324 batch swaps
 SWAPS = {
-    "MT-BRAS": ("MT-SOP", "gid://shopify/ProductVariant/49467543257368"),
-    "CH-WWBC": ("CH-WMANG", "gid://shopify/ProductVariant/51478178824472"),
-    "CH-EBCC": ("CH-PBRIE", "gid://shopify/ProductVariant/51474205245720"),
-    "CH-FOWC": ("CH-BRZ", "gid://shopify/ProductVariant/49611711611160"),
-    "CH-IPRW": ("CH-PVEC", "gid://shopify/ProductVariant/50570542154008"),
-    "CH-ALPHA": ("CH-6COM", "gid://shopify/ProductVariant/51474250760472"),
+    "CH-BRZ": ("CH-WMANG", "gid://shopify/ProductVariant/51478178824472"),
 }
+
+# Per-SKU limits (None = unlimited)
+SWAP_LIMITS = {}
+
+# SKUs that can be swapped even without _rc_bundle (same product, paid or curation)
+SWAP_ANY = {"CH-BRZ"}
+
+# Tag filter — only process orders with this tag (set to "" for all unfulfilled)
+TAG_FILTER = "RMFG_20260324"
 
 
 def gql(query, variables=None):
@@ -55,6 +60,8 @@ def fetch_all_unfulfilled():
         "limit": 250,
         "fields": "id,name,tags,line_items,customer,email",
     }
+    if TAG_FILTER:
+        params["tag"] = TAG_FILTER
     page = 0
     while url:
         page += 1
@@ -74,14 +81,18 @@ def fetch_all_unfulfilled():
 
 
 def find_swap_orders(orders):
+    # Track per-SKU counts against limits
+    swap_counts = {sku: 0 for sku in SWAP_LIMITS}
     results = []
     for o in orders:
         tags = o.get("tags", "")
         if "reship" in tags.lower():
             continue
+        if TAG_FILTER and TAG_FILTER not in tags:
+            continue
         items = o.get("line_items", [])
 
-        # Must have a custom box
+        # Find box SKU if present
         box_sku = ""
         for li in items:
             s = (li.get("sku") or "").strip()
@@ -89,19 +100,22 @@ def find_swap_orders(orders):
             if s.startswith(CUSTOM_BOX_PREFIXES) and fq > 0:
                 box_sku = s
                 break
-        if not box_sku:
-            continue
 
-        # Find curation items matching swap SKUs
+        # Find items matching swap SKUs (respecting per-SKU limits)
         swaps_needed = []
         for li in items:
             sku = (li.get("sku") or "").strip()
             fq = li.get("fulfillable_quantity", li.get("quantity", 0))
             if fq <= 0 or sku not in SWAPS:
                 continue
+            # Check per-SKU limit
+            if sku in SWAP_LIMITS and swap_counts.get(sku, 0) >= SWAP_LIMITS[sku]:
+                continue
             props = li.get("properties") or []
-            if "_rc_bundle" in {p.get("name", "") for p in props}:
+            is_curation = "_rc_bundle" in {p.get("name", "") for p in props}
+            if is_curation or sku in SWAP_ANY:
                 swaps_needed.append(sku)
+                swap_counts[sku] = swap_counts.get(sku, 0) + 1
 
         if swaps_needed:
             cust = o.get("customer", {}) or {}
@@ -110,7 +124,7 @@ def find_swap_orders(orders):
                 "order": o["name"],
                 "id": o["id"],
                 "name": name,
-                "box_sku": box_sku,
+                "box_sku": box_sku or "(no box)",
                 "swaps": swaps_needed,
             })
     return results

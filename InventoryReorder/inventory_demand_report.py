@@ -24,16 +24,16 @@ from datetime import date
 # -- Paths --
 BASE = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PATH = os.path.join(BASE, "dist", "inventory_reorder_settings.json")
-INV_CSV = os.path.join(BASE, "Orders RMFG_20260314 - 3_14 Inv.csv")
+INV_CSV = os.path.join(BASE, "Orders RMFG_20260324 - Template Check.csv")
 SHIPMENTS = os.path.join(BASE, "Shipments")
-SAT_DEPLETION = os.path.join(SHIPMENTS, "AHB_WeeklyProductionQuery_03-16-26_vF.xlsx")
-TUE_DEPLETION = os.path.join(SHIPMENTS, "AHB_WeeklyProductionQuery_03-17-26_vF.xlsx")
+SAT_DEPLETION = ""  # No depletion file this week — template check already has net available
+TUE_DEPLETION = ""
 
 # Ship week boundaries
-WK1_START = date(2026, 3, 18)
-WK1_END = date(2026, 3, 23)
-WK2_START = date(2026, 3, 24)
-WK2_END = date(2026, 3, 30)
+WK1_START = date(2026, 3, 25)
+WK1_END = date(2026, 3, 28)
+WK2_START = date(2026, 3, 29)
+WK2_END = date(2026, 4, 4)
 
 PICKABLE_PREFIXES = ("CH-", "MT-", "AC-")
 
@@ -315,8 +315,8 @@ def fetch_recharge_api(api_token):
 # -- Step 4: Fetch Shopify orders for upcoming ship weeks --
 
 # Ship week tag dates (Monday of each week)
-WK1_SHIP_TAG = "_SHIP_2026-03-23"
-WK2_SHIP_TAG = "_SHIP_2026-03-30"
+WK1_SHIP_TAG = "_SHIP_2026-03-30"
+WK2_SHIP_TAG = "_SHIP_2026-04-06"
 
 
 def fetch_shopify_orders(settings):
@@ -347,13 +347,11 @@ def fetch_shopify_orders(settings):
         "Content-Type": "application/json",
     })
 
-    # Fetch recent open/unfulfilled orders
+    # Fetch all open/unfulfilled orders (no date cutoff — ship tag is the filter)
     import re
-    from datetime import datetime, timedelta
-    cutoff = (datetime.now() - timedelta(days=21)).isoformat()
     url = f"{store}/admin/api/2024-01/orders.json"
     params = {"status": "open", "fulfillment_status": "unfulfilled",
-              "limit": 250, "created_at_min": cutoff}
+              "limit": 250}
 
     all_orders = []
     while url:
@@ -417,7 +415,18 @@ def fetch_shopify_orders(settings):
                 box_sku = sku.upper()
 
         if box_sku:
-            # Subscription order — count curation + box type, NO pickable SKU demand
+            # Subscription order — count ALL pickable SKUs as Shopify demand.
+            # Recharge queued charges and Shopify unfulfilled orders are ADDITIVE:
+            # RC queued = not yet processed, SH unfulfilled = already processed.
+            target = wk1_addon if is_wk1 else wk2_addon
+            for item in line_items:
+                sku = (item.get("sku") or "").strip()
+                if not sku:
+                    continue
+                upper = sku.upper()
+                if any(upper.startswith(p) for p in PICKABLE_PREFIXES):
+                    qty = int(float(item.get("quantity", 1)))
+                    target[sku] += qty
             cur = resolve_curation(box_sku)
             is_lg = is_large_box(box_sku)
 

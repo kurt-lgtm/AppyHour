@@ -1774,7 +1774,11 @@ async function syncShopify() {
     setMascot('loading', 'Pulling Shopify orders...');
     log('Fetching unfulfilled Shopify orders...', 'cyan');
 
-    const data = await api('/api/shopify_sync', { method: 'POST' });
+    const data = await api('/api/shopify_sync', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({force: true})
+    });
     if (data.error) {
         setMascot('alert', 'Shopify sync failed');
         log(`Shopify error: ${data.error}`, 'red');
@@ -1814,7 +1818,7 @@ async function runAll() {
     let demandLoaded = false;
     if (rcStatus.configured) {
         log('Pulling demand from Recharge...', 'cyan');
-        demandLoaded = await syncRecharge();
+        demandLoaded = await syncRecharge({force: true});
     }
 
     if (!demandLoaded) {
@@ -1828,7 +1832,16 @@ async function runAll() {
         await syncShopify();
     }
 
-    // 3. Apply shipment depletion (auto-find WeeklyProductionQuery XLSX)
+    // 3a. Fetch depletion files from email
+    log('Fetching depletion files from email...', 'cyan');
+    const emailDep = await api('/api/fetch_depletions_email', { method: 'POST' });
+    if (emailDep.ok && emailDep.files && emailDep.files.length > 0) {
+        log(`Email: downloaded ${emailDep.files.length} depletion file(s): ${emailDep.files.join(', ')}`, 'green');
+    } else if (emailDep.error) {
+        log(`Email depletion fetch: ${emailDep.error}`, 'yellow');
+    }
+
+    // 3b. Apply shipment depletion (auto-find WeeklyProductionQuery XLSX)
     log('Checking for shipment depletion file...', 'cyan');
     const depResult = await api('/api/auto_deplete', { method: 'POST' });
     if (depResult.ok) {
@@ -1918,10 +1931,12 @@ async function showSubstitutions() {
                 const tagText = sub.covers_all ? 'FULL' : 'PARTIAL';
                 const noDemand = sub.no_demand ? ' (unused)' : '';
                 inner += `
-                    <div class="sub-item">
+                    <div class="sub-item" style="display:flex;align-items:center">
                         <span class="sub-item-sku">${sub.sku}</span>
-                        <span class="sub-item-info">headroom ${sub.headroom}, covers ${sub.can_cover}${noDemand}</span>
+                        <span class="sub-item-info" style="flex:1">headroom ${sub.headroom}, covers ${sub.can_cover}${noDemand}</span>
                         <span class="sub-item-tag ${tagClass}">${tagText}</span>
+                        <button class="btn btn-orange btn-sm" style="margin-left:6px;font-size:10px;padding:2px 8px"
+                                onclick="swapPreview('${s.sku}','${sub.sku}')">Swap</button>
                     </div>
                 `;
             });
@@ -1933,6 +1948,141 @@ async function showSubstitutions() {
     document.getElementById('subs-overlay').classList.add('visible');
     log(`${data.length} shortages with substitution options`, 'cyan');
     setMascot('thinking', `${data.length} shortages need subs`);
+}
+
+async function swapPreview(oldSku, newSku) {
+    log(`Previewing swap: ${oldSku} → ${newSku}...`, 'cyan');
+    setMascot('thinking', 'Finding swap targets...');
+
+    const data = await api('/api/swap_preview', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({old_sku: oldSku, new_sku: newSku}),
+    });
+
+    if (!data || data.error) {
+        log(`Swap preview error: ${data?.error || 'unknown'}`, 'red');
+        setMascot('alert', data?.error || 'Preview failed');
+        return;
+    }
+
+    const total = data.total || 0;
+    if (total === 0) {
+        log(`No orders to swap for ${oldSku}`, 'yellow');
+        setMascot('idle', 'No orders need swapping.');
+        return;
+    }
+
+    // Show confirmation dialog
+    const targets = data.targets || [];
+    let confirmHtml = `
+        <div style="padding:16px;max-width:500px">
+            <div style="font-family:'Space Mono',monospace;font-size:14px;font-weight:600;color:var(--accent);margin-bottom:12px">
+                Swap ${oldSku} → ${newSku}
+            </div>
+            <div style="font-size:12px;color:var(--fg2);margin-bottom:8px">
+                Ship tag: <span style="color:var(--fg)">${data.ship_tag}</span>
+            </div>
+            <div style="font-family:'Rajdhani',sans-serif;font-size:24px;font-weight:600;color:var(--orange);margin-bottom:12px">
+                ${total} orders
+            </div>
+            <div style="max-height:200px;overflow-y:auto;margin-bottom:16px;border:1px solid var(--border);border-radius:4px">
+    `;
+    targets.forEach(t => {
+        confirmHtml += `<div style="padding:4px 8px;border-bottom:1px solid var(--border);font-family:'Space Mono',monospace;font-size:10px">${t.order_name} (qty ${t.qty})</div>`;
+    });
+    confirmHtml += `</div>
+            <div style="display:flex;gap:8px">
+                <button class="btn btn-orange" onclick="swapExecute('${oldSku}','${newSku}','${data.ship_tag}','${data.new_variant_gid}')">Execute Swap</button>
+                <button class="btn btn-dim" onclick="closeSwapConfirm()">Cancel</button>
+            </div>
+        </div>`;
+
+    // Use subs overlay for the confirmation
+    const list = document.getElementById('subs-list');
+    list.innerHTML = confirmHtml;
+    setMascot('thinking', `${total} orders ready to swap`);
+}
+
+async function swapExecute(oldSku, newSku, shipTag, newVariantGid) {
+    log(`Executing swap: ${oldSku} → ${newSku} on ship ${shipTag}`, 'orange');
+    setMascot('loading', 'Swapping orders...');
+
+    const data = await api('/api/swap_execute', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            old_sku: oldSku,
+            new_sku: newSku,
+            ship_tag: shipTag,
+            new_variant_gid: newVariantGid,
+        }),
+    });
+
+    if (!data || data.error) {
+        log(`Swap start error: ${data?.error || 'unknown'}`, 'red');
+        setMascot('alert', 'Swap failed to start');
+        return;
+    }
+
+    // Poll for progress
+    const list = document.getElementById('subs-list');
+    while (true) {
+        await new Promise(r => setTimeout(r, 1000));
+        const status = await api('/api/swap_progress');
+        if (!status) break;
+
+        list.innerHTML = `
+            <div style="padding:16px">
+                <div style="font-family:'Space Mono',monospace;font-size:14px;font-weight:600;color:var(--accent);margin-bottom:8px">
+                    Swap: ${oldSku} → ${newSku}
+                </div>
+                <div style="font-size:12px;color:var(--fg)">${status.message || 'Working...'}</div>
+                <div style="margin-top:12px">
+                    <button class="btn btn-dim btn-sm" onclick="cancelSwap()">Cancel</button>
+                </div>
+            </div>
+        `;
+
+        if (!status.running) {
+            const result = status.result;
+            if (result && result.error) {
+                log(`Swap error: ${result.error}`, 'red');
+                setMascot('alert', 'Swap failed');
+            } else if (result) {
+                const msg = `Swap complete: ${result.success} ok, ${result.failed} failed`;
+                log(msg, result.failed > 0 ? 'orange' : 'green');
+                setMascot(result.failed > 0 ? 'alert' : 'happy', msg);
+
+                list.innerHTML = `
+                    <div style="padding:16px">
+                        <div style="font-family:'Space Mono',monospace;font-size:14px;font-weight:600;color:var(--green);margin-bottom:12px">
+                            Swap Complete
+                        </div>
+                        <div style="font-family:'Rajdhani',sans-serif;font-size:20px">
+                            <span style="color:var(--green)">${result.success} swapped</span>
+                            ${result.failed > 0 ? `<span style="color:var(--red);margin-left:12px">${result.failed} failed</span>` : ''}
+                        </div>
+                        ${result.errors.length > 0 ? `<div style="margin-top:8px;font-size:10px;color:var(--red)">${result.errors.join('<br>')}</div>` : ''}
+                        <div style="margin-top:12px">
+                            <button class="btn btn-dim" onclick="closeSubs()">Close</button>
+                        </div>
+                    </div>
+                `;
+            }
+            break;
+        }
+    }
+}
+
+async function cancelSwap() {
+    await api('/api/swap_cancel', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
+    log('Swap cancel requested', 'yellow');
+}
+
+function closeSwapConfirm() {
+    // Re-show the substitution list
+    showSubstitutions();
 }
 
 function closeSubs() {
@@ -2858,6 +3008,78 @@ let lastDepletionData = null;
 
 function uploadDepletion() {
     document.getElementById('depletion-input').click();
+}
+
+async function scanForDepletions() {
+    setMascot('loading', 'Scanning for depletion files...');
+    log('Scanning Gmail Sent + Downloads for depletion files...', 'cyan');
+
+    const data = await api('/api/depletion_scan', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({}),
+    });
+
+    if (!data || data.error) {
+        log('Scan error: ' + (data?.error || 'unknown'), 'red');
+        setMascot('alert', 'Scan failed!');
+        return;
+    }
+
+    if (data.count === 0) {
+        log('No new depletion files found', 'yellow');
+        setMascot('idle', 'No new depletion files.');
+        return;
+    }
+
+    log(`Found ${data.count} depletion file(s)`, 'green');
+    setMascot('happy', `Found ${data.count} file(s)!`);
+
+    // Show detected files in depletion drawer
+    const body = document.getElementById('depletion-drawer-body');
+    const title = document.getElementById('depletion-drawer-title');
+    title.textContent = `Detected Depletion Files (${data.count})`;
+
+    let html = '<div style="padding:12px">';
+    for (const f of data.files) {
+        const dateLabel = f.date_sent || f.date_modified || '';
+        const srcLabel = f.source === 'gmail_sent' ? '📧 Gmail Sent' : '📁 Downloads';
+        html += `<div style="display:flex;align-items:center;gap:12px;padding:8px;margin-bottom:6px;background:var(--surface);border-radius:6px;border:1px solid var(--border)">
+            <div style="flex:1">
+                <div style="font-family:'Space Mono',monospace;font-size:11px;font-weight:600;color:var(--fg)">${f.filename}</div>
+                <div style="font-size:10px;color:var(--fg2)">${srcLabel} · ${dateLabel}</div>
+            </div>
+            <button class="btn btn-green btn-sm" onclick="loadScannedDepletion('${f.path.replace(/\\/g, '\\\\')}', '${f.filename}')">Load & Preview</button>
+        </div>`;
+    }
+    html += '</div>';
+    body.innerHTML = html;
+
+    const drawer = document.getElementById('depletion-drawer');
+    drawer.style.display = 'block';
+    document.getElementById('depletion-apply-btn').disabled = true;
+}
+
+async function loadScannedDepletion(filePath, filename) {
+    setMascot('loading', 'Parsing depletion file...');
+    log(`Loading scanned depletion: ${filename}`, 'cyan');
+
+    const data = await api('/api/depletion_scan_and_parse', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({path: filePath, filename: filename}),
+    });
+
+    if (!data || data.error) {
+        log(`Parse error: ${data?.error || 'unknown'}`, 'red');
+        setMascot('alert', 'Parse failed!');
+        return;
+    }
+
+    lastDepletionData = data;
+    renderDepletionResults(data);
+    log(`Depletion parsed: ${data.order_count} orders, ${data.mapped_count} mapped, ${data.unmatched_count} unmatched`, 'green');
+    setMascot('happy', `${data.order_count} orders parsed!`);
 }
 
 async function handleDepletionFile(input) {
@@ -4059,8 +4281,27 @@ async function loadCutOrderInteractive() {
     coCuts = data.saved_cuts || {wk1: {}, wk2: {}};
     if (!coCuts.wk1) coCuts.wk1 = {};
     if (!coCuts.wk2) coCuts.wk2 = {};
+    // Update column headers with actual ship dates
+    if (data.ship_dates) {
+        const sd = data.ship_dates;
+        const hdrDmdW1 = document.getElementById('co-hdr-dmd-w1');
+        const hdrAfterW1 = document.getElementById('co-hdr-after-w1');
+        const hdrDmdW2 = document.getElementById('co-hdr-dmd-w2');
+        const hdrAfterW2 = document.getElementById('co-hdr-after-w2');
+        if (hdrDmdW1) hdrDmdW1.textContent = 'Dmd ' + sd.label_wk1;
+        if (hdrAfterW1) hdrAfterW1.textContent = 'After W1';
+        if (hdrDmdW2) hdrDmdW2.textContent = 'Dmd ' + sd.label_wk2;
+        if (hdrAfterW2) hdrAfterW2.textContent = 'After W2';
+    }
     renderCutOrderInteractive();
     renderCoAssignPanel();
+    // Show demand source indicator
+    const srcEl = document.getElementById('co-demand-source');
+    if (srcEl && data.demand_source) {
+        const src = data.demand_source;
+        srcEl.textContent = src === 'api' ? 'RC+SH API' : src === 'rmfg' ? 'RMFG Folder' : 'No data';
+        srcEl.style.color = src === 'api' ? 'var(--green, #00e676)' : src === 'none' ? 'var(--red, #ff3b5c)' : 'var(--orange, #ff8800)';
+    }
     log(`Cut order: ${Object.keys(data.skus).length} SKUs loaded`, 'green');
 }
 

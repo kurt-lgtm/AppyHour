@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Fulfillment Planner</title>
     <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/styles.css?v=56">
+    <link rel="stylesheet" href="/static/styles.css?v=70">
 </head>
 <body>
 
@@ -39,6 +39,7 @@
         <button class="btn btn-dim" onclick="varietyCheck()">&#128270; Variety</button>
         <button class="btn btn-accent" onclick="showSnapshots()">&#128247; Snapshots</button>
         <button class="btn btn-orange" onclick="uploadDepletion()">&#128200; Depletion</button>
+        <button class="btn btn-orange" onclick="scanForDepletions()" title="Scan Gmail Sent + Downloads for depletion files" style="font-size:11px">&#128231; Scan Email</button>
         <button class="btn btn-dim" onclick="showWasteLedger()">&#128465; Waste</button>
         <button class="btn btn-dim" onclick="showAuditLog()">&#128220; Audit</button>
         <button class="btn btn-dim" onclick="showLeadTimes()">&#128666; Lead Times</button>
@@ -449,6 +450,10 @@
                     <span class="cal-summary-label">SKUs</span>
                     <span class="cal-summary-value" id="co-sku-count">--</span>
                 </div>
+                <div class="cal-summary-item">
+                    <span class="cal-summary-label">Source</span>
+                    <span class="cal-summary-value" id="co-demand-source" style="font-size:11px">--</span>
+                </div>
             </div>
             <div class="inv-actions">
                 <label class="co-filter-toggle">
@@ -472,15 +477,15 @@
                                     <th class="num">Avail</th>
                                     <th class="num">Supply</th>
                                     <th class="co-wk-sep"></th>
-                                    <th class="num">Dmd W1</th>
-                                    <th class="num">After W1</th>
+                                    <th class="num"><span id="co-hdr-dmd-w1">Dmd W1</span></th>
+                                    <th class="num"><span id="co-hdr-after-w1">After W1</span></th>
                                     <th class="num co-input-hdr">Cut W1</th>
                                     <th class="num">Status</th>
                                     <th class="co-wk-sep"></th>
-                                    <th class="num">Dmd W2</th>
-                                    <th class="num">After W2</th>
+                                    <th class="num"><span id="co-hdr-dmd-w2">Dmd W2</span></th>
+                                    <th class="num"><span id="co-hdr-after-w2">After W2</span></th>
                                     <th class="num co-input-hdr">Cut W2</th>
-                                    <th class="num">Status</th>
+                                    <th class="num co-status-hdr">Status</th>
                                 </tr>
                             </thead>
                             <tbody id="co-body"></tbody>
@@ -1006,6 +1011,6 @@
     <div id="mascot-speech-tail"></div>
 </div>
 
-<script src="/static/app.js?v=56"></script>
+<script src="/static/app.js?v=62"></script>
 </body>
 </html>

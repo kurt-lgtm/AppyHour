@@ -1,9 +1,11 @@
-"""Scan unfulfilled Shopify orders for Class 2/3, 4B, and 6 errors.
+"""Scan unfulfilled Shopify orders for Class 2/3, 4B, 6, and ROT errors.
 
 Class 2/3: Box product with blank SKU
 Class 4B:  Duplicate food SKUs (same SKU on multiple line items) — excludes paid bundles (BL-)
            and customer-chosen duplicates (box_contents shows intentional qty > 1)
 Class 6:   Curation mismatch (food items from wrong curation vs box SKU suffix)
+Class ROT: Rotation bug — _SHIP prop date != ship tag date, or Recharge subscription SKU
+           no longer matches the box SKU (charge kept old items after rotation)
 """
 import requests, json, re, csv, time, os
 from collections import Counter
@@ -23,6 +25,36 @@ CURATION_RECIPES = settings.get("curation_recipes", {})
 FOOD_PREFIXES = ("CH-", "MT-", "AC-")
 CUSTOM_BOX_PREFIXES = ("AHB-MCUST", "AHB-LCUST")
 MONTHLY_BOXES = {"AHB-MED", "AHB-CMED", "AHB-LGE"}
+
+# Recharge API for rotation checks
+RC_TOKEN = settings.get("recharge_api_token", "")
+RC_BASE = "https://api.rechargeapps.com"
+RC_HEADERS = {
+    "X-Recharge-Access-Token": RC_TOKEN,
+    "X-Recharge-Version": "2021-11",
+    "Content-Type": "application/json",
+}
+_rc_sub_cache = {}
+
+
+def rc_get_subscription(sub_id):
+    """Fetch Recharge subscription by ID (cached)."""
+    if not RC_TOKEN or not sub_id:
+        return None
+    sub_id = str(sub_id)
+    if sub_id in _rc_sub_cache:
+        return _rc_sub_cache[sub_id]
+    try:
+        resp = requests.get(f"{RC_BASE}/subscriptions/{sub_id}",
+                            headers=RC_HEADERS, timeout=30)
+        if resp.status_code == 200:
+            sub = resp.json().get("subscription", {})
+            _rc_sub_cache[sub_id] = sub
+            return sub
+        _rc_sub_cache[sub_id] = None
+    except Exception:
+        _rc_sub_cache[sub_id] = None
+    return None
 
 # Product name -> SKU mapping for parsing box_contents
 _NAME_MAP_FILE = os.path.join(os.path.dirname(__file__), "product_name_to_sku.json")
@@ -275,6 +307,56 @@ def analyze_order(order):
                         errors.append(("6", f"Box says {box_curation} but items match {best_cur} "
                                            f"({best_pct:.0%} vs {expected_pct:.0%})"))
 
+    # ========== CLASS ROT: Rotation bug ==========
+    # Check 1: _SHIP prop date vs actual ship tag date mismatch
+    # Check 2: Recharge subscription SKU doesn't match box SKU
+    custom_boxes = custom_boxes if custom_boxes else [s for s in box_skus if s.startswith(CUSTOM_BOX_PREFIXES)]
+    if custom_boxes:
+        box_sku = custom_boxes[0]
+        # Extract _SHIP prop and _rc_bundle sub ID from box line item
+        ship_prop = None
+        rc_sub_id = None
+        for li in line_items:
+            if (li.get("sku") or "").strip() == box_sku:
+                for p in (li.get("properties") or []):
+                    if p.get("name") == "_SHIP":
+                        ship_prop = (p.get("value") or "").strip()
+                    if p.get("name") == "_rc_bundle":
+                        rc_sub_id = (p.get("value") or "").strip()
+                break
+        # Also check blank box line for sub ID
+        if not rc_sub_id:
+            for li in line_items:
+                if not (li.get("sku") or "").strip() and float(li.get("price", 0)) > 30:
+                    for p in (li.get("properties") or []):
+                        if p.get("name") == "_rc_bundle":
+                            rc_sub_id = (p.get("value") or "").strip()
+                    break
+
+        # Extract ship tag date from order tags
+        ship_tag_date = None
+        for t in tags.split(","):
+            t = t.strip()
+            if t.startswith("_SHIP_"):
+                ship_tag_date = t.replace("_SHIP_", "")
+                break
+
+        # Check 1: _SHIP prop doesn't match ship tag (stale charge from prior month)
+        if ship_prop and ship_tag_date and ship_prop != ship_tag_date:
+            errors.append(("ROT", f"_SHIP prop={ship_prop} but tag={ship_tag_date} "
+                                  f"(charge from old month carried forward)"))
+
+        # Check 2: Recharge subscription SKU rotated away from box SKU
+        elif rc_sub_id:
+            rc_sub = rc_get_subscription(rc_sub_id)
+            if rc_sub and rc_sub.get("status") == "active":
+                rc_sku = (rc_sub.get("sku") or "").strip()
+                if rc_sku and rc_sku != box_sku:
+                    rc_curation = get_curation_from_box(rc_sku)
+                    box_curation_name = get_curation_from_box(box_sku)
+                    errors.append(("ROT", f"Box={box_sku} but Recharge sub now={rc_sku} "
+                                          f"(rotated {box_curation_name}->{rc_curation})"))
+
     return errors
 
 
@@ -309,7 +391,8 @@ def main():
         print(f"  Class {cls}: {cnt}")
 
     # Write CSV
-    outfile = r"C:\Users\Work\Downloads\shopify-class236-4b-2026-03-12b.csv"
+    outfile = os.path.join(os.path.dirname(__file__),
+                           f"shopify-errors-{datetime.now().strftime('%Y-%m-%d')}.csv")
     fieldnames = ["class", "order", "customer", "email", "details"]
     with open(outfile, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)

@@ -10,9 +10,12 @@ Demand includes SUMIF for PR-CJAM/CEX-EC — change cheese SKU, demand updates.
 No borders. No zero rows.
 """
 
+import argparse
+import io
 import json
 import os
 import sys
+import time
 from collections import defaultdict
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -43,11 +46,35 @@ def main():
 
     # -- Load data --
     print("Loading inventory...")
-    inventory = load_inventory_csv(INV_CSV)
+    # Try standard inventory CSV first; fall back to template check format
+    try:
+        inventory = load_inventory_csv(INV_CSV)
+    except (KeyError, ValueError):
+        inventory = {}
+    # Template check fallback: "a" column = SKU, "Available M/DD" column = qty
+    if not inventory:
+        import csv as _csv
+        with open(INV_CSV, encoding="utf-8-sig") as _f:
+            reader = _csv.reader(_f)
+            hdr = next(reader)
+            # Find the "Available" column (partial match)
+            avail_col = next((i for i, h in enumerate(hdr) if "available" in (h or "").lower()), 4)
+            for row in reader:
+                sku = (row[0] if row else "").strip()
+                if sku and sku.startswith(PICKABLE_PREFIXES):
+                    try:
+                        inventory[sku] = int(float(row[avail_col] or 0))
+                    except (ValueError, IndexError):
+                        pass
+        print(f"  Loaded {len(inventory)} SKUs from template check (col {avail_col})")
 
     print("Parsing depletions...")
-    sat_dep, _, _, _, _ = parse_depletion_xlsx(SAT_DEPLETION, sku_translations)
-    tue_dep, _, _, _, _ = parse_depletion_xlsx(TUE_DEPLETION, sku_translations)
+    sat_dep = {}
+    tue_dep = {}
+    if SAT_DEPLETION:
+        sat_dep, _, _, _, _ = parse_depletion_xlsx(SAT_DEPLETION, sku_translations)
+    if TUE_DEPLETION:
+        tue_dep, _, _, _, _ = parse_depletion_xlsx(TUE_DEPLETION, sku_translations)
 
     available = {}
     all_skus = set(inventory.keys()) | set(sat_dep.keys()) | set(tue_dep.keys())
@@ -61,12 +88,92 @@ def main():
      rc_wk1_cmed_monthly, rc_wk2_cmed_monthly,
      rc_wk1_lge_monthly, rc_wk2_lge_monthly) = fetch_recharge_api(recharge_token)
 
+    # Diagnostic: WK1 vs WK2 Recharge charge counts
+    rc_wk1_total = sum(rc_wk1.values())
+    rc_wk2_total = sum(rc_wk2.values())
+    rc_wk1_curs = sum(rc_wk1_curations.values())
+    rc_wk2_curs = sum(rc_wk2_curations.values())
+    print(f"  Recharge WK1: {rc_wk1_total} pickable SKUs, {rc_wk1_curs} curation charges")
+    print(f"  Recharge WK2: {rc_wk2_total} pickable SKUs, {rc_wk2_curs} curation charges")
+
     print("Fetching Shopify orders...")
     (sh_wk1_addon, sh_wk2_addon,
      sh_wk1_curations, sh_wk2_curations,
      sh_wk1_large, sh_wk2_large,
      sh_wk1_med, sh_wk2_med,
      sh_wk1_lge, sh_wk2_lge) = fetch_shopify_orders(settings)
+
+    # -- First-order projection (MONG) --
+    # Count "Subscription First Order" tagged orders from last 3 days, project forward
+    import requests as _req
+    from datetime import datetime, timedelta
+
+    store_url = settings.get("shopify_store_url", "")
+    shop_token = settings.get("shopify_access_token", "")
+    if store_url and shop_token:
+        if not store_url.startswith("http"):
+            store_url = f"https://{store_url}.myshopify.com"
+        _cutoff = (datetime.now() - timedelta(days=3)).isoformat()
+        _fo_url = f"{store_url}/admin/api/2024-01/orders.json"
+        _fo_params = {"status": "any", "limit": 250, "created_at_min": _cutoff,
+                      "fields": "id,tags,line_items"}
+        _fo_orders = []
+        _fo_page_url = _fo_url
+        while _fo_page_url:
+            _fo_resp = _req.get(_fo_page_url, headers={
+                "X-Shopify-Access-Token": shop_token,
+                "Content-Type": "application/json",
+            }, params=_fo_params if _fo_page_url == _fo_url else None, timeout=30)
+            _fo_data = _fo_resp.json()
+            for _o in _fo_data.get("orders", []):
+                if "Subscription First Order" in (_o.get("tags") or ""):
+                    _fo_orders.append(_o)
+            _fo_page_url = None
+            _link = _fo_resp.headers.get("Link", "")
+            if 'rel="next"' in _link:
+                import re as _re
+                _m = _re.search(r'<([^>]+)>;\s*rel="next"', _link)
+                if _m:
+                    _fo_page_url = _m.group(1)
+            time.sleep(0.3)
+
+        _daily_rate = len(_fo_orders) / 3.0 if _fo_orders else 0
+        # Project to Friday (ship cutoff): days remaining from now
+        _days_to_friday = max(0, (5 - datetime.now().weekday()))  # 0=Mon, 4=Fri
+        _projected = int(_daily_rate * _days_to_friday)
+
+        # Build per-SKU profile from MONG first orders
+        _mong_fo = [o for o in _fo_orders if any(
+            "MONG" in (li.get("sku") or "") for li in o.get("line_items", []))]
+        _fo_skus = defaultdict(float)
+        if _mong_fo:
+            for _o in _mong_fo:
+                for _li in _o.get("line_items", []):
+                    _sku = (_li.get("sku") or "").strip()
+                    if _sku.startswith(PICKABLE_PREFIXES):
+                        _fo_skus[_sku] += (_li.get("quantity", 1)) / len(_mong_fo)
+
+        # Add projected demand to WK1 Shopify addon counts
+        _mong_pct = len(_mong_fo) / len(_fo_orders) if _fo_orders else 0
+        _mong_projected = int(_projected * _mong_pct)
+        print(f"  First-order projection: {len(_fo_orders)} in 3d, "
+              f"{_daily_rate:.0f}/day, {_projected} projected, "
+              f"{_mong_projected} MONG ({_mong_pct:.0%})")
+        for _sku, _rate in _fo_skus.items():
+            _add = int(_rate * _mong_projected)
+            if _add > 0:
+                sh_wk1_addon[_sku] = sh_wk1_addon.get(_sku, 0) + _add
+
+        # Add projected MONG first orders to curation counts too —
+        # each first order gets a PR-CJAM + (some fraction) CEX-EC
+        if _mong_projected > 0:
+            # Compute large box ratio BEFORE adding projection
+            _sh_mong_lg = sh_wk1_large.get("MONG", 0)
+            _sh_mong_total = sh_wk1_curations.get("MONG", 1)
+            _lg_ratio = _sh_mong_lg / _sh_mong_total if _sh_mong_total > 0 else 0.0
+            _proj_lg = int(_mong_projected * _lg_ratio)
+            sh_wk1_curations["MONG"] = sh_wk1_curations.get("MONG", 0) + _mong_projected
+            sh_wk1_large["MONG"] = sh_wk1_large.get("MONG", 0) + _proj_lg
 
     # Merge curation counts: Recharge + Shopify
     wk1_curations = defaultdict(int)
@@ -419,7 +526,8 @@ def main():
         FormulaRule(formula=[f'LEFT(L2,4)="NEED"'], fill=short_fill))
 
     # -- Save --
-    out_path = os.path.join(BASE, "cut_order_2026-03-21.xlsx")
+    ship_date = WK1_END.isoformat()
+    out_path = os.path.join(BASE, f"cut_order_{ship_date}.xlsx")
     wb.save(out_path)
     print(f"\nExcel written to: {out_path}")
     print(f"  {len(active_skus)} active SKUs (zeroes removed)")
@@ -427,6 +535,69 @@ def main():
     print(f"  Blue columns = your input (Cut Wk1, Cut Wk2)")
     print(f"  Change PR-CJAM/CEX-EC cheese SKU -> demand auto-updates")
 
+    return out_path
+
+
+# -- Upload to Google Drive --
+
+DRIVE_FOLDER_ID = "1TgvxK10tFAPJqhkYw-6u1Umnvp9wMJ3I"
+DRIVE_TOKEN_PATH = os.path.join(BASE, "dist", "drive_oauth_token.json")
+
+
+def upload_to_drive(file_path):
+    """Upload XLSX to shared Google Drive folder using OAuth credentials."""
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaIoBaseUpload
+
+    with open(DRIVE_TOKEN_PATH, encoding="utf-8") as f:
+        token_data = json.load(f)
+
+    creds = Credentials(
+        token=token_data["token"],
+        refresh_token=token_data["refresh_token"],
+        token_uri=token_data["token_uri"],
+        client_id=token_data["client_id"],
+        client_secret=token_data["client_secret"],
+        scopes=token_data["scopes"],
+    )
+    if creds.expired:
+        creds.refresh(Request())
+        token_data["token"] = creds.token
+        with open(DRIVE_TOKEN_PATH, "w") as f:
+            json.dump(token_data, f, indent=2)
+
+    drive = build("drive", "v3", credentials=creds)
+
+    file_name = os.path.basename(file_path)
+    with open(file_path, "rb") as fh:
+        media = MediaIoBaseUpload(
+            io.BytesIO(fh.read()),
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            resumable=True,
+        )
+        f = drive.files().create(
+            body={"name": file_name, "parents": [DRIVE_FOLDER_ID]},
+            media_body=media,
+            fields="id, webViewLink",
+            supportsAllDrives=True,
+        ).execute()
+
+    link = f.get("webViewLink", f"https://drive.google.com/file/d/{f['id']}")
+    print(f"  Uploaded: {link}")
+    return link
+
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Generate cut order XLSX")
+    parser.add_argument("--local", action="store_true", help="Generate locally, don't upload")
+    args = parser.parse_args()
+
+    out_path = main()
+    if not args.local:
+        try:
+            upload_to_drive(out_path)
+        except Exception as e:
+            print(f"  Upload failed: {e}")
+            print(f"  File saved locally: {out_path}")

@@ -17,6 +17,10 @@ import threading
 from collections import defaultdict
 from flask import Flask, render_template, jsonify, request, send_file
 
+# Ship date computation (shared with generate_cut_order.py)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from ship_dates import ship_dates_json
+
 # ── Constants ───────────────────────────────────────────────────────────
 
 SETTINGS_FILE = "inventory_reorder_settings.json"
@@ -2072,6 +2076,9 @@ def load_rmfg():
     s["rmfg_cexec_sat"] = dict(merged_cexec)
     s["rmfg_direct_sat"] = dict(merged_direct)
     s["rmfg_monthly_box_counts"] = dict(merged_monthly_box)
+    # Mark as RMFG-sourced — cut order calculator will prefer API data
+    s["demand_source"] = "rmfg"
+    s["demand_source_ts"] = datetime.datetime.now().isoformat()
     # Per-source raw for attribution (persist for subtract-before-add on re-sync)
     s["rmfg_prcjam_rc"] = rc_raw.get("prcjam_counts", {})
     s["rmfg_cexec_rc"] = rc_raw.get("cexec_counts", {})
@@ -3647,6 +3654,7 @@ def get_cut_order():
             "shortage_count": shortage_count,
             "total_skus": len([l for l in cut_lines if l["total_demand"] > 0]),
         },
+        "ship_dates": ship_dates_json(),
     })
 
 
@@ -3676,10 +3684,22 @@ def get_cut_order_interactive():
     inv_settings = s.get("inventory", {})
 
     # Wk1 (Saturday) raw components for client-side resolve
-    # Fall back to persisted settings when STATE not yet populated this session
-    wk1_direct = STATE.get("rmfg_direct_sat") or s.get("rmfg_direct_sat", {})
-    wk1_prcjam = STATE.get("rmfg_prcjam_sat") or s.get("rmfg_prcjam_sat", {})
-    wk1_cexec = STATE.get("rmfg_cexec_sat") or s.get("rmfg_cexec_sat", {})
+    # Only fall back to persisted settings if they were written by API sync
+    # (demand_source == "api"), not by RMFG folder load
+    settings_source = s.get("demand_source", "")
+    if STATE.get("rmfg_direct_sat") is not None:
+        wk1_direct = STATE["rmfg_direct_sat"]
+        wk1_prcjam = STATE.get("rmfg_prcjam_sat", {})
+        wk1_cexec = STATE.get("rmfg_cexec_sat", {})
+    elif settings_source == "api":
+        wk1_direct = s.get("rmfg_direct_sat", {})
+        wk1_prcjam = s.get("rmfg_prcjam_sat", {})
+        wk1_cexec = s.get("rmfg_cexec_sat", {})
+    else:
+        # No API data available — return empty (don't use stale RMFG folder data)
+        wk1_direct = {}
+        wk1_prcjam = {}
+        wk1_cexec = {}
 
     # Also get RC vs SH breakdown for Wk1
     wk1_direct_rc = STATE.get("rmfg_direct_rc", {})
@@ -3690,7 +3710,12 @@ def get_cut_order_interactive():
     wk1_cexec_sh = STATE.get("rmfg_cexec_sh", {})
 
     # Wk2 (Tuesday) — pre-resolved, not decomposable
-    wk2_demand = STATE.get("rmfg_tue_demand", {})
+    if STATE.get("rmfg_tue_demand") is not None:
+        wk2_demand = STATE["rmfg_tue_demand"]
+    elif settings_source == "api":
+        wk2_demand = s.get("rmfg_tue_demand", {})
+    else:
+        wk2_demand = {}
 
     # Compute bulk supply potential for AC- items
     bulk_supply = {}
@@ -3805,6 +3830,9 @@ def get_cut_order_interactive():
         "monthly_box_counts": monthly_counts,
         "curations": ALL_CURATIONS,
         "saved_cuts": saved_cuts,
+        "demand_source": STATE.get("demand_source") or settings_source or "none",
+        "demand_source_ts": STATE.get("demand_source_ts") or s.get("demand_source_ts", ""),
+        "ship_dates": ship_dates_json(),
     })
 
 
@@ -4067,6 +4095,122 @@ def get_substitutions():
     return jsonify(suggestions)
 
 
+# ── Swap Integration ──────────────────────────────────────────────────
+
+_swap_progress = {"running": False, "message": "", "result": None}
+_swap_cancel = [False]
+
+
+@app.route("/api/swap_preview", methods=["POST"])
+def swap_preview():
+    """Preview swap: find target orders and variant for old_sku → new_sku."""
+    from shopify_swap import find_swap_targets, lookup_variant_gid, execute_bulk_swap
+    from ship_dates import compute_ship_week
+
+    data = request.get_json(force=True)
+    old_sku = data.get("old_sku", "").strip()
+    new_sku = data.get("new_sku", "").strip()
+
+    if not old_sku or not new_sku:
+        return jsonify({"error": "old_sku and new_sku are required"}), 400
+
+    s = _s()
+    store = s.get("shopify_store_url", "")
+    token = s.get("shopify_access_token", "")
+    if not store or not token:
+        return jsonify({"error": "Shopify credentials not configured"}), 400
+
+    # Auto-detect ship tag from next ship date
+    ship_date = data.get("ship_date")
+    if not ship_date:
+        sw = compute_ship_week()
+        ship_date = sw["ship_tag_sat"]
+
+    # Look up new variant
+    new_gid = lookup_variant_gid(store, token, new_sku)
+    if not new_gid:
+        return jsonify({"error": f"Variant not found for {new_sku}"}), 404
+
+    # Find targets
+    targets = find_swap_targets(store, token, ship_date, old_sku)
+
+    # Dry run result
+    result = execute_bulk_swap(
+        store, token, targets, old_sku, new_gid, dry_run=True
+    )
+    result["ship_tag"] = ship_date
+    result["new_variant_gid"] = new_gid
+    result["old_sku"] = old_sku
+    result["new_sku"] = new_sku
+    return jsonify(result)
+
+
+@app.route("/api/swap_execute", methods=["POST"])
+def swap_execute():
+    """Execute swap in background thread. Poll /api/swap_progress for status."""
+    from shopify_swap import find_swap_targets, lookup_variant_gid, execute_bulk_swap
+
+    global _swap_progress, _swap_cancel
+
+    if _swap_progress["running"]:
+        return jsonify({"error": "A swap is already in progress"}), 409
+
+    data = request.get_json(force=True)
+    old_sku = data.get("old_sku", "").strip()
+    new_sku = data.get("new_sku", "").strip()
+    ship_tag = data.get("ship_tag", "")
+    new_variant_gid = data.get("new_variant_gid", "")
+
+    if not all([old_sku, new_sku, ship_tag, new_variant_gid]):
+        return jsonify({"error": "Missing required fields"}), 400
+
+    s = _s()
+    store = s.get("shopify_store_url", "")
+    token = s.get("shopify_access_token", "")
+
+    _swap_cancel[0] = False
+    _swap_progress.update({"running": True, "message": "Finding targets...", "result": None})
+
+    def _worker():
+        try:
+            targets = find_swap_targets(store, token, ship_tag, old_sku)
+            note = f"Swap {old_sku} -> {new_sku} (shortage substitution)"
+
+            def _progress(msg):
+                _swap_progress["message"] = msg
+
+            result = execute_bulk_swap(
+                store, token, targets, old_sku, new_variant_gid,
+                staff_note=note,
+                dry_run=False,
+                progress_callback=_progress,
+                cancel_flag=_swap_cancel,
+            )
+            _swap_progress["result"] = result
+        except Exception as e:
+            _swap_progress["result"] = {"error": str(e)}
+        finally:
+            _swap_progress["running"] = False
+            _swap_progress["message"] = "Done"
+
+    import threading
+    threading.Thread(target=_worker, daemon=True).start()
+    return jsonify({"started": True})
+
+
+@app.route("/api/swap_progress")
+def swap_progress():
+    """Poll for swap execution progress."""
+    return jsonify(_swap_progress)
+
+
+@app.route("/api/swap_cancel", methods=["POST"])
+def swap_cancel():
+    """Cancel an in-progress swap."""
+    _swap_cancel[0] = True
+    return jsonify({"ok": True})
+
+
 # ── Run All endpoint ──────────────────────────────────────────────────
 
 @app.route("/api/run_all", methods=["POST"])
@@ -4087,7 +4231,22 @@ def run_all():
         db_result = {"error": str(e)}
     results["dropbox"] = db_result
 
-    # 2. Apply depletion from shipments dated after the inventory snapshot
+    # 2a. Fetch depletion files from email (saves to Shipments/)
+    email_fetch_result = None
+    s = _s()
+    if s.get("smtp_user") and s.get("smtp_password"):
+        try:
+            with app.test_request_context(json={}, content_type="application/json"):
+                ef_resp = fetch_depletions_email()
+                if hasattr(ef_resp, 'get_json'):
+                    email_fetch_result = ef_resp.get_json()
+                elif isinstance(ef_resp, tuple):
+                    email_fetch_result = ef_resp[0].get_json() if hasattr(ef_resp[0], 'get_json') else None
+        except Exception as e:
+            email_fetch_result = {"error": str(e)}
+    results["email_depletion_fetch"] = email_fetch_result
+
+    # 2b. Apply depletion from shipments dated after the inventory snapshot
     depletion_results = []
     try:
         import re as _re
@@ -4144,6 +4303,27 @@ def run_all():
                     applied[sku] = {"before": before, "after": after, "depleted": int(qty)}
                 STATE["rmfg_inventory"] = inv
                 _take_snapshot(f"Post-depletion: {dep_label}", source="depletion")
+
+                # Log to depletion_history so Activity Log shows it
+                dep_s = _s()
+                dep_history = dep_s.setdefault("depletion_history", [])
+                dep_history.append({
+                    "date": datetime.datetime.now().isoformat(),
+                    "file": dep_label,
+                    "day": _detect_cycle_day(),
+                    "skus": {sku: int(q) for sku, q in sku_totals.items()},
+                    "total": sum(int(q) for q in sku_totals.values()),
+                    "total_orders": order_count,
+                })
+                dep_journal = dep_s.setdefault("inventory_journal", [])
+                dep_journal.append({
+                    "ts": datetime.datetime.now().isoformat(),
+                    "type": "depletion",
+                    "label": dep_label,
+                    "sku_deltas": {sku: -int(q) for sku, q in sku_totals.items()},
+                })
+                save_settings(dep_s)
+
                 depletion_results.append({
                     "file": dep_label,
                     "order_count": order_count,
@@ -4867,11 +5047,15 @@ def _recharge_sync_foreground(api_token, req, save_to_state=False):
 
     # Store raw components for cut order deferred resolution
     STATE["rmfg_direct_sat"] = dict(week_direct[0])
+    STATE["rmfg_direct_rc"] = dict(week_direct[0])  # Track RC contribution before SH merge
     STATE["rmfg_prcjam_sat"] = dict(week_prcjam[0])
     STATE["rmfg_cexec_sat"] = dict(week_cexec[0])
     # Week 2 raw components for assignment panel
     STATE["rmfg_prcjam_wk2"] = dict(week_prcjam[1])
     STATE["rmfg_cexec_wk2"] = dict(week_cexec[1])
+    # Mark demand as API-sourced (not RMFG folder)
+    STATE["demand_source"] = "api"
+    STATE["demand_source_ts"] = datetime.datetime.now().isoformat()
 
     # Save to settings for persistence
     s["recharge_queued"] = {m: dict(skus)
@@ -4882,6 +5066,8 @@ def _recharge_sync_foreground(api_token, req, save_to_state=False):
     s["rmfg_cexec_sat"] = dict(week_cexec[0])
     s["rmfg_prcjam_wk2"] = dict(week_prcjam[1])
     s["rmfg_cexec_wk2"] = dict(week_cexec[1])
+    s["demand_source"] = "api"
+    s["demand_source_ts"] = datetime.datetime.now().isoformat()
     # Persist per-week resolved demand
     s["rmfg_sat_demand"] = dict(week_demands[0])
     s["rmfg_tue_demand"] = dict(week_demands[1])
@@ -5023,18 +5209,38 @@ def shopify_sync():
                 url = m.group(1)
                 params = None
 
-    # Also pull currently unfulfilled orders (pending demand for this week)
+    # Pull unfulfilled orders filtered by _SHIP_ tag for current + next cycle.
+    # NOTE: created_at_min was too restrictive (14 days) — subscription orders
+    # are created months before shipping. Use _SHIP_ tag to identify demand.
+    ship_mon = current_ship_monday()
+    next_ship_mon = ship_mon + datetime.timedelta(days=7)
+    target_ship_tags = {
+        f"_SHIP_{ship_mon.isoformat()}",
+        f"_SHIP_{next_ship_mon.isoformat()}",
+    }
+
     unfulfilled_url = f"{store}/admin/api/{api_version}/orders.json"
-    unfulfilled_cutoff = (datetime.datetime.now() - datetime.timedelta(days=14)).isoformat()
+    # No created_at_min — subscription orders are created months before ship date.
+    # The unfulfilled set is naturally bounded (only open orders).
     uf_params = {"status": "open", "fulfillment_status": "unfulfilled",
-                 "limit": 250, "created_at_min": unfulfilled_cutoff}
+                 "limit": 250}
     unfulfilled_orders = []
     while unfulfilled_url:
-        resp = session.get(unfulfilled_url, params=uf_params, timeout=30)
+        for attempt in range(3):
+            resp = session.get(unfulfilled_url, params=uf_params, timeout=30)
+            if resp.status_code == 429:
+                retry_after = float(resp.headers.get("Retry-After", 2))
+                _time.sleep(retry_after)
+                continue
+            break
         if resp.status_code == 200:
             data = resp.json()
             uf_orders = data.get("orders", [])
-            unfulfilled_orders.extend(uf_orders)
+            # Filter to orders with a matching _SHIP_ tag
+            for o in uf_orders:
+                order_tags = o.get("tags", "") or ""
+                if any(st in order_tags for st in target_ship_tags):
+                    unfulfilled_orders.append(o)
             unfulfilled_url = None
             uf_params = None
             link = resp.headers.get("Link", "")
@@ -5170,11 +5376,9 @@ def shopify_sync():
                 unfulfilled_demand[nsku] += qty
                 sh_direct_demand[nsku] += qty
 
-    # NOTE: Shopify prcjam/cexec counts are NOT merged into the main demand totals.
-    # Recharge is the authoritative source for subscription curation counts.
-    # Shopify unfulfilled orders overlap with Recharge queued charges (same subscriptions).
-    # Only direct SKU demand (non-curation items) from Shopify is merged.
-    # The prcjam/cexec counts are stored for attribution/debugging only.
+    # Recharge queued charges and Shopify unfulfilled orders are ADDITIVE:
+    # RC queued = not yet processed charges, SH unfulfilled = already processed.
+    # Both prcjam/cexec counts and direct SKU demand are merged.
     STATE["shopify_prcjam_counts"] = dict(sh_prcjam_counts)
     STATE["shopify_cexec_counts"] = dict(sh_cexec_counts)
 
@@ -5198,41 +5402,46 @@ def shopify_sync():
         projected_additional = int(daily_rate * (hours_remaining / 24))
         STATE["first_order_projection_count"] = projected_additional
 
-    # --- MONG projection: add actual Shopify MONG + projected first orders ---
-    # First orders are NOT in Recharge (they're one-time Shopify orders that
-    # become subscriptions later), so we add them to the Recharge-based counts.
-    # Only MONG gets this treatment — other curations stay Recharge-only.
-    actual_mong_prcjam = sh_prcjam_counts.get(proj_curation, 0)
-    actual_mong_cexec = sh_cexec_counts.get(proj_curation, 0)
+    # --- Merge ALL Shopify prcjam/cexec into Recharge counts (additive) ---
+    # RC queued = not yet processed, SH unfulfilled = already processed.
+    existing_prcjam = dict(STATE.get("rmfg_prcjam_sat") or s.get("rmfg_prcjam_sat", {}))
+    existing_cexec = dict(STATE.get("rmfg_cexec_sat") or s.get("rmfg_cexec_sat", {}))
+
+    # Subtract previous Shopify prcjam/cexec contribution, then add new
+    old_sh_prcjam = STATE.get("rmfg_prcjam_sh", {})
+    old_sh_cexec = STATE.get("rmfg_cexec_sh", {})
+    for cur, ct in old_sh_prcjam.items():
+        existing_prcjam[cur] = max(0, existing_prcjam.get(cur, 0) - ct)
+    for cur, ct in old_sh_cexec.items():
+        existing_cexec[cur] = max(0, existing_cexec.get(cur, 0) - ct)
+
+    # Add current Shopify prcjam/cexec counts
+    for cur, ct in sh_prcjam_counts.items():
+        existing_prcjam[cur] = existing_prcjam.get(cur, 0) + ct
+    for cur, ct in sh_cexec_counts.items():
+        existing_cexec[cur] = existing_cexec.get(cur, 0) + ct
+
+    # First-order projection: add projected MONG on top
     proj_add = STATE.get("first_order_projection_count", 0) if proj_enabled else 0
-
-    if proj_add > 0 or actual_mong_prcjam > 0:
-        existing_prcjam = dict(STATE.get("rmfg_prcjam_sat") or s.get("rmfg_prcjam_sat", {}))
-        existing_cexec = dict(STATE.get("rmfg_cexec_sat") or s.get("rmfg_cexec_sat", {}))
-
-        # PR-CJAM-MONG: actual Shopify MONG + full projection (all first orders get PR-CJAM)
-        mong_prcjam_add = actual_mong_prcjam + proj_add
-
-        # CEX-EC-MONG: use actual Shopify ratio for the projection portion
+    if proj_add > 0:
+        actual_mong_prcjam = sh_prcjam_counts.get(proj_curation, 0)
+        actual_mong_cexec = sh_cexec_counts.get(proj_curation, 0)
         cexec_ratio = actual_mong_cexec / actual_mong_prcjam if actual_mong_prcjam > 0 else 0.0
-        mong_cexec_add = actual_mong_cexec + int(proj_add * cexec_ratio)
-
-        existing_prcjam[proj_curation] = existing_prcjam.get(proj_curation, 0) + mong_prcjam_add
-        existing_cexec[proj_curation] = existing_cexec.get(proj_curation, 0) + mong_cexec_add
-
-        STATE["rmfg_prcjam_sat"] = existing_prcjam
-        STATE["rmfg_cexec_sat"] = existing_cexec
-
+        existing_prcjam[proj_curation] = existing_prcjam.get(proj_curation, 0) + proj_add
+        existing_cexec[proj_curation] = existing_cexec.get(proj_curation, 0) + int(proj_add * cexec_ratio)
         STATE["mong_projection_detail"] = {
             "actual_shopify_prcjam": actual_mong_prcjam,
             "actual_shopify_cexec": actual_mong_cexec,
             "projected_additional": proj_add,
             "cexec_ratio": round(cexec_ratio, 3),
-            "total_prcjam_added": mong_prcjam_add,
-            "total_cexec_added": mong_cexec_add,
         }
 
-    # Merge only direct SKU demand from Shopify (not curation prcjam/cexec)
+    STATE["rmfg_prcjam_sat"] = existing_prcjam
+    STATE["rmfg_cexec_sat"] = existing_cexec
+    STATE["rmfg_prcjam_sh"] = dict(sh_prcjam_counts)
+    STATE["rmfg_cexec_sh"] = dict(sh_cexec_counts)
+
+    # Merge ALL direct SKU demand from Shopify (additive with Recharge)
     # Subtract previous Shopify direct contribution, then add new
     old_sh_direct = STATE.get("rmfg_direct_sh", {})
     existing_direct = STATE.get("rmfg_direct_sat") or dict(s.get("rmfg_direct_sat", {}))
@@ -5349,6 +5558,7 @@ def load_settings_inventory():
     })
 
 
+
 @app.route("/api/recharge_status")
 def recharge_status():
     """Check if Recharge API is configured and cache freshness."""
@@ -5367,6 +5577,28 @@ def recharge_status():
 # ══════════════════════════════════════════════════════════════════════════
 #  ACTION CALENDAR — multi-week task schedule (PO, MFG, Crossdock, Ship)
 # ══════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/debug_demand_split")
+def debug_demand_split():
+    """Show RC vs SH breakdown for prcjam, cexec, and direct demand."""
+    s = _s()
+    rc_direct = STATE.get("rmfg_direct_rc", {})
+    sh_direct = STATE.get("rmfg_direct_sh", {})
+    rc_prcjam = STATE.get("rmfg_prcjam_sat", {})
+    sh_prcjam = STATE.get("shopify_prcjam_counts", {})
+    rc_cexec = STATE.get("rmfg_cexec_sat", {})
+    sh_cexec = STATE.get("shopify_cexec_counts", {})
+    # RC prcjam = combined - shopify
+    rc_only_prcjam = {k: rc_prcjam.get(k, 0) - sh_prcjam.get(k, 0)
+                      for k in set(list(rc_prcjam) + list(sh_prcjam))}
+    rc_only_cexec = {k: rc_cexec.get(k, 0) - sh_cexec.get(k, 0)
+                     for k in set(list(rc_cexec) + list(sh_cexec))}
+    return jsonify({
+        "prcjam": {"combined": rc_prcjam, "shopify": sh_prcjam, "recharge": rc_only_prcjam},
+        "cexec": {"combined": rc_cexec, "shopify": sh_cexec, "recharge": rc_only_cexec},
+        "direct": {"recharge": rc_direct, "shopify": sh_direct},
+    })
+
 
 def _next_weekday(start, weekday):
     """Return the next date on or after `start` that falls on `weekday` (0=Mon)."""
@@ -6045,6 +6277,66 @@ def invoice_cost_history():
 # ── Depletion File Endpoints ──────────────────────────────────────────
 
 
+@app.route("/api/depletion_scan", methods=["POST"])
+def depletion_scan():
+    """Scan Gmail Sent + Downloads for new depletion XLSX files."""
+    from depletion_finder import find_all_depletion_files
+    s = _s()
+    user = s.get("smtp_user", "")
+    password = s.get("smtp_password", "")
+    applied = s.get("depletion_applied_files", [])
+    files = find_all_depletion_files(user, password, applied)
+    return jsonify({"files": files, "count": len(files)})
+
+
+@app.route("/api/depletion_scan_and_parse", methods=["POST"])
+def depletion_scan_and_parse():
+    """Download a detected depletion file and parse it for preview.
+
+    Expects JSON: {path: "/path/to/file.xlsx", filename: "..."}
+    """
+    import tempfile
+    data = request.get_json(force=True)
+    file_path = data.get("path", "")
+    filename = data.get("filename", "")
+
+    if not file_path or not os.path.isfile(file_path):
+        return jsonify({"error": f"File not found: {filename}"}), 400
+
+    # Validate path is within allowed directories (temp or Downloads)
+    abs_path = os.path.abspath(file_path)
+    allowed_prefixes = [
+        os.path.abspath(tempfile.gettempdir()),
+        os.path.abspath(os.path.expanduser("~/Downloads")),
+    ]
+    if not any(abs_path.startswith(p) for p in allowed_prefixes):
+        return jsonify({"error": "File path not in allowed directory"}), 403
+
+    product_totals, order_count, err = parse_depletion_xlsx(file_path)
+    if err:
+        return jsonify({"error": err}), 500
+
+    s = _s()
+    translations = s.get("sku_translations", {})
+    inventory = s.get("inventory", {})
+    sku_totals, mapped, unmatched = map_depletion_to_skus(
+        product_totals, translations, inventory)
+
+    return jsonify({
+        "ok": True,
+        "filename": filename,
+        "path": file_path,
+        "order_count": order_count,
+        "product_count": len(product_totals),
+        "total_units": sum(product_totals.values()),
+        "sku_totals": sku_totals,
+        "mapped": mapped,
+        "unmatched": unmatched,
+        "mapped_count": len(mapped),
+        "unmatched_count": len(unmatched),
+    })
+
+
 @app.route("/api/depletion_parse", methods=["POST"])
 def depletion_parse():
     """Parse an uploaded depletion XLSX file. Returns product totals + SKU mapping."""
@@ -6265,6 +6557,119 @@ def auto_deplete():
         "total_depleted": sum(a["depleted"] for a in total_applied.values()),
         "unmatched": all_unmatched,
     })
+
+
+@app.route("/api/fetch_depletions_email", methods=["POST"])
+def fetch_depletions_email():
+    """Download depletion XLSX attachments from Gmail via IMAP.
+
+    Searches for emails from kurt@elevatefoods.co with subjects matching
+    RMFG_ or Ship Date patterns, downloads XLSX attachments, and saves
+    them to the Shipments folder for auto_deplete to pick up.
+    """
+    import imaplib
+    import email as email_lib
+    from email.header import decode_header
+
+    s = _s()
+    imap_user = s.get("smtp_user", "")
+    imap_pass = s.get("smtp_password", "")
+    if not imap_user or not imap_pass:
+        return jsonify({"ok": False, "error": "SMTP credentials not configured in settings"}), 400
+
+    # Determine save directory
+    base = _get_project_dir()
+    shipments_dir = os.path.join(base, "Shipments")
+    os.makedirs(shipments_dir, exist_ok=True)
+
+    try:
+        conn = imaplib.IMAP4_SSL("imap.gmail.com", 993)
+        conn.login(imap_user, imap_pass)
+        conn.select('"[Gmail]/All Mail"')
+
+        # Search for depletion emails from the last 14 days
+        # Check both received (FROM kurt) and sent (FROM self) emails with XLSX attachments
+        cutoff = (datetime.datetime.now() - datetime.timedelta(days=14)).strftime("%d-%b-%Y")
+        _, msg_ids_kurt = conn.search(None, f'(FROM "kurt@elevatefoods.co" SINCE "{cutoff}")')
+        _, msg_ids_sent = conn.search(None, f'(FROM "{imap_user}" HAS "attachment" SINCE "{cutoff}")')
+        # Merge unique message IDs
+        all_ids = set()
+        if msg_ids_kurt[0]:
+            all_ids.update(msg_ids_kurt[0].split())
+        if msg_ids_sent[0]:
+            all_ids.update(msg_ids_sent[0].split())
+        msg_ids = [b' '.join(sorted(all_ids))] if all_ids else [b'']
+
+        if not msg_ids[0]:
+            conn.logout()
+            return jsonify({"ok": True, "files": [], "message": "No matching emails found"})
+
+        downloaded = []
+        skipped = []
+        for mid in msg_ids[0].split():
+            _, msg_data = conn.fetch(mid, "(RFC822)")
+            msg = email_lib.message_from_bytes(msg_data[0][1])
+
+            # Decode subject
+            subject_parts = decode_header(msg.get("Subject", ""))
+            subject = ""
+            for part, enc in subject_parts:
+                if isinstance(part, bytes):
+                    subject += part.decode(enc or "utf-8", errors="replace")
+                else:
+                    subject += str(part)
+
+            # Match depletion subjects: "TAG: RMFG_" or "Ship Date"
+            # Also allow sent emails — filter by attachment name instead
+            subj_upper = subject.upper()
+            from_hdr = (msg.get("From", "") or "").lower()
+            is_sent = imap_user.lower() in from_hdr
+            subject_matches = "RMFG_" in subj_upper or "SHIP DATE" in subj_upper
+            if not subject_matches and not is_sent:
+                continue
+
+            # Extract XLSX attachments (must be WeeklyProductionQuery for sent emails)
+            for part in msg.walk():
+                if part.get_content_maintype() == "multipart":
+                    continue
+                filename = part.get_filename()
+                if not filename or not filename.lower().endswith(".xlsx"):
+                    continue
+                # For sent emails without matching subject, require filename match
+                if is_sent and not subject_matches:
+                    if "weeklyproductionquery" not in filename.lower().replace("_", "").replace(" ", ""):
+                        continue
+
+                # Decode filename if needed
+                fn_parts = decode_header(filename)
+                clean_name = ""
+                for fp, enc in fn_parts:
+                    if isinstance(fp, bytes):
+                        clean_name += fp.decode(enc or "utf-8", errors="replace")
+                    else:
+                        clean_name += str(fp)
+
+                save_path = os.path.join(shipments_dir, clean_name)
+                if os.path.exists(save_path):
+                    skipped.append(clean_name)
+                    continue
+
+                payload = part.get_payload(decode=True)
+                if payload:
+                    with open(save_path, "wb") as fh:
+                        fh.write(payload)
+                    downloaded.append(clean_name)
+
+        conn.logout()
+        return jsonify({
+            "ok": True,
+            "files": downloaded,
+            "skipped": skipped,
+            "message": f"Downloaded {len(downloaded)} file(s), skipped {len(skipped)} existing"
+        })
+
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/api/depletion_map_sku", methods=["POST"])

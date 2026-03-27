@@ -2086,20 +2086,25 @@ tr:hover .rw-hide-btn { opacity: 1; }
 .co-body-flex #co-assign-drawer { flex-shrink: 0; }
 
 /* Table — auto layout, stretches to fill */
-.co-calc-table { border-spacing: 0; table-layout: auto; width: auto; min-width: 100%; }
+.co-calc-table { border-spacing: 0; border-collapse: collapse; table-layout: auto; width: auto; min-width: 100%; }
 .co-calc-table th {
-    white-space: nowrap; padding: 6px 12px;
+    white-space: nowrap; padding: 6px 14px;
     font-family: 'Space Mono', monospace; font-size: 10px;
     letter-spacing: -0.5px;
 }
-.co-calc-table td { padding: 4px 12px; }
-/* Week separators — equal spacing left and right */
+.co-calc-table td { padding: 4px 14px; }
+/* Week separators — collapsed, spacing via adjacent column padding */
 .co-calc-table .co-wk-sep {
-    width: 1px; padding: 0 20px; background: transparent; border: none !important;
+    display: none;
 }
-.co-calc-table .co-wk-sep::after {
-    content: ''; display: block; width: 1px; height: 100%;
-    background: rgba(255,255,255,0.08); margin: 0 auto;
+/* Extra left padding at group boundaries */
+.co-calc-table th:nth-child(3),
+.co-calc-table td:nth-child(3),
+.co-calc-table th:nth-child(6),
+.co-calc-table td:nth-child(6),
+.co-calc-table th:nth-child(11),
+.co-calc-table td:nth-child(11) {
+    padding-left: 110px !important;
 }
 .co-calc-table .co-input-hdr { color: var(--accent); }
 /* Category headers */
@@ -2111,29 +2116,30 @@ tr:hover .rw-hide-btn { opacity: 1; }
 }
 /* SKU cell */
 .co-sku-cell {
-    font-family: 'Space Mono', monospace; font-size: 13px;
+    font-family: 'Space Mono', monospace; font-size: 11px;
     cursor: pointer; white-space: nowrap;
 }
 .co-sku-cell:hover { color: var(--accent); text-decoration: underline; }
 /* Name cell — tab-sized gap after name before Avail */
 .co-name-cell {
-    font-family: 'DM Sans', sans-serif; font-size: 13px;
+    font-family: 'DM Sans', sans-serif; font-size: 11px;
     color: var(--fg2); white-space: nowrap;
-    padding-right: 32px !important;
+    padding-right: 12px !important;
 }
-/* Numeric cells — compact, right-aligned */
+/* Avail / Supply cells — distinct font */
 .co-num {
-    font-family: 'Rajdhani', sans-serif; font-size: 16px; font-weight: 500;
+    font-family: 'Space Mono', monospace; font-size: 12px; font-weight: 600;
     white-space: nowrap; text-align: right;
 }
+/* Week data numeric cells (Dmd, After, Status) */
 .co-calc-table .num {
-    padding: 2px 6px; white-space: nowrap; text-align: right;
-    font-size: 15px;
+    padding: 2px 14px; white-space: nowrap; text-align: right;
+    font-family: 'Rajdhani', sans-serif; font-size: 13px; font-weight: 500;
 }
 /* Cut input — fits 4+ chars */
 .co-cut-input {
     width: 60px; text-align: right; padding: 3px 6px;
-    font-family: 'Rajdhani', sans-serif; font-size: 16px; font-weight: 600;
+    font-family: 'Rajdhani', sans-serif; font-size: 13px; font-weight: 600;
     color: #4488ff; background: rgba(68,136,255,0.08);
     border: 1px solid rgba(68,136,255,0.25); border-radius: 3px;
 }
@@ -2151,6 +2157,8 @@ tr:hover .rw-hide-btn { opacity: 1; }
     font-family: 'Space Mono', monospace; font-size: 12px; font-weight: 700;
     color: var(--red);
 }
+td[data-field="goodW2"] { padding-left: 20px; }
+.co-status-hdr { padding-left: 20px; }
 .co-after-ok { color: var(--green); }
 .co-after-short { color: var(--red); font-weight: 700; }
 .co-supply-badge {

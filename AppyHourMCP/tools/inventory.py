@@ -3,6 +3,7 @@ Inventory & Forecasting MCP tools — subscription demand, forecasts, reorder al
 Wraps the same logic as GelPackCalculator/app/routers/inventory.py.
 """
 
+import asyncio
 import json
 from typing import Optional
 from pydantic import BaseModel, Field, ConfigDict
@@ -76,7 +77,7 @@ def register(mcp):
         """
         try:
             rc = _get_recharge()
-            subs = rc.get_active_subscriptions()
+            subs = await asyncio.to_thread(rc.get_active_subscriptions)
             skus = rc.aggregate_sku_quantities(subs)
             return to_json({"subscription_count": len(subs), "skus": skus})
         except Exception as e:
@@ -105,7 +106,7 @@ def register(mcp):
         try:
             rc = _get_recharge()
             mod = _get_module()
-            charges = rc.get_queued_charges()
+            charges = await asyncio.to_thread(rc.get_queued_charges)
             resolved = mod.resolve_queued_charges(charges)
             return to_json({"charges_count": len(charges), "by_month": resolved})
         except Exception as e:
@@ -140,12 +141,12 @@ def register(mcp):
             rc = _get_recharge()
             settings = mod.load_settings()
 
-            subs = rc.get_active_subscriptions()
+            subs = await asyncio.to_thread(rc.get_active_subscriptions)
             cohorts = rc.build_cohorts_from_subscriptions(subs)
 
             retention = settings.get("retention_matrix", {})
             recipes = settings.get("curation_recipes", {})
-            charges = rc.get_queued_charges()
+            charges = await asyncio.to_thread(rc.get_queued_charges)
             resolved = mod.resolve_queued_charges(charges)
 
             first_month = next(iter(resolved.values()), {})
@@ -187,12 +188,12 @@ def register(mcp):
             rc = _get_recharge()
             settings = mod.load_settings()
 
-            subs = rc.get_active_subscriptions()
+            subs = await asyncio.to_thread(rc.get_active_subscriptions)
             cohorts = rc.build_cohorts_from_subscriptions(subs)
 
             retention = settings.get("retention_matrix", {})
             recipes = settings.get("curation_recipes", {})
-            charges = rc.get_queued_charges()
+            charges = await asyncio.to_thread(rc.get_queued_charges)
             resolved = mod.resolve_queued_charges(charges)
             first_month = next(iter(resolved.values()), {})
 
