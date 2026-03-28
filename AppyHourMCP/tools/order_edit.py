@@ -9,6 +9,7 @@ import json
 import re
 import time
 import csv
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict
 from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict
@@ -227,29 +228,33 @@ def register(mcp):
                     "preview": preview,
                 })
 
-            # Execute swaps
+            # Execute swaps — run 8 orders concurrently to stay within MCP timeout
             results = []
             errors_list = []
-            for i, (order, swap_skus) in enumerate(targets):
+
+            def _do_swap(order, swap_skus):
                 oid = order["id"]
                 name = order.get("name", "")
                 order_gid = f"gid://shopify/Order/{oid}"
-
                 email = ""
                 cust = order.get("customer")
                 if cust:
                     email = cust.get("email", "") or ""
                 if not email:
                     email = order.get("email", "") or ""
-
                 swap_map = {s: params.swaps[s] for s in swap_skus}
-                try:
-                    swapped = _swap_order_skus(base, headers, order_gid, swap_map, variant_gids)
-                    results.append({"order": name, "email": email, "swaps": swapped})
-                except Exception as e:
-                    errors_list.append({"order": name, "error": str(e)})
+                swapped = _swap_order_skus(base, headers, order_gid, swap_map, variant_gids)
+                return {"order": name, "email": email, "swaps": swapped}
 
-                time.sleep(0.1)
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                futures = {pool.submit(_do_swap, order, swap_skus): order.get("name", "")
+                           for order, swap_skus in targets}
+                for future in as_completed(futures):
+                    name = futures[future]
+                    try:
+                        results.append(future.result())
+                    except Exception as e:
+                        errors_list.append({"order": name, "error": str(e)})
 
             # Write CSV
             today = datetime.now().strftime("%Y-%m-%d")
