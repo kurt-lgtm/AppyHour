@@ -1264,6 +1264,201 @@ def cmd_sync(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Phase 4: Gift redemption merge + finalize
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def identify_gift_orders(orders: list[OrderRow]) -> tuple[list[OrderRow], list[OrderRow]]:
+    """Split orders into regular and gift redemption lists."""
+    regular: list[OrderRow] = []
+    gift: list[OrderRow] = []
+    for o in orders:
+        if "gift redemption" in o.tags.lower():
+            gift.append(o)
+        else:
+            regular.append(o)
+    return regular, gift
+
+
+def merge_gift_xlsx(main_path: str | Path, gift_path: str | Path) -> str:
+    """Merge a separate gift redemption XLSX into the main matrix.
+
+    Both files must have Access_LIVE tab with the same column layout.
+    Gift orders are appended to the main file. Returns path to merged file.
+    """
+    main_wb = openpyxl.load_workbook(str(main_path))
+    main_ws = main_wb["Access_LIVE"]
+
+    gift_wb = openpyxl.load_workbook(str(gift_path), data_only=True, read_only=True)
+    gift_ws = gift_wb["Access_LIVE"]
+
+    # Get existing order IDs to avoid duplicates
+    existing_oids: set[str] = set()
+    for row in main_ws.iter_rows(min_row=2, max_col=1, values_only=True):
+        oid = str(row[0] or "").strip()
+        if oid:
+            existing_oids.add(oid)
+
+    # Append gift rows
+    added = 0
+    skipped = 0
+    for row in gift_ws.iter_rows(min_row=2, values_only=True):
+        oid = str(row[0] or "").strip()
+        if not oid:
+            continue
+        if oid in existing_oids:
+            skipped += 1
+            continue
+        main_ws.append(list(row))
+        existing_oids.add(oid)
+        added += 1
+
+    gift_wb.close()
+
+    # Save merged file
+    src = Path(main_path)
+    out_path = src.parent / f"{src.stem}_MERGED{src.suffix}"
+    main_wb.save(str(out_path))
+    main_wb.close()
+
+    print(f"  Gift merge: {added} orders added, {skipped} duplicates skipped")
+    print(f"  Saved: {_GREEN}{out_path.name}{_RESET}")
+
+    return str(out_path)
+
+
+def finalize_xlsx(xlsx_path: str | Path) -> str:
+    """Apply final formatting fixes and save as email-ready file.
+
+    Fixes:
+    - OrderIDs stored as numbers (not text)
+    - Zips stored as text with leading zeroes
+    - Sort by OrderID ascending
+    - Validate tab name is Access_LIVE
+    """
+    wb = openpyxl.load_workbook(str(xlsx_path))
+    ws = wb["Access_LIVE"]
+
+    # Find column indices
+    headers = [str(ws.cell(1, c).value or "") for c in range(1, ws.max_column + 1)]
+    oid_col = 1  # Column A
+    zip_col = None
+    for i, h in enumerate(headers):
+        if h.lower().strip() == "zip":
+            zip_col = i + 1
+            break
+
+    # Read all data rows
+    data_rows: list[tuple[int, list]] = []  # (numeric_oid, row_values)
+    for r in range(2, ws.max_row + 1):
+        row_vals = [ws.cell(r, c).value for c in range(1, ws.max_column + 1)]
+        oid_raw = row_vals[0]
+        if oid_raw is None:
+            continue
+        try:
+            numeric_oid = int(float(str(oid_raw)))
+        except (ValueError, TypeError):
+            numeric_oid = 0
+        data_rows.append((numeric_oid, row_vals))
+
+    # Sort by OrderID
+    data_rows.sort(key=lambda x: x[0])
+
+    # Clear existing data and rewrite sorted
+    for r in range(2, ws.max_row + 1):
+        for c in range(1, ws.max_column + 1):
+            ws.cell(r, c).value = None
+
+    fixes_applied: list[str] = []
+    zip_fixes = 0
+    for idx, (numeric_oid, row_vals) in enumerate(data_rows):
+        r = idx + 2
+
+        for c, val in enumerate(row_vals):
+            ws.cell(r, c + 1).value = val
+
+        # Fix OrderID: ensure stored as number
+        ws.cell(r, oid_col).value = numeric_oid
+
+        # Fix Zip: ensure stored as text with leading zeroes
+        if zip_col:
+            raw_zip = row_vals[zip_col - 1]
+            if raw_zip is not None:
+                z = str(raw_zip).strip().split("-")[0].split(".")[0]
+                if z.isdigit() and len(z) < 5:
+                    z = z.zfill(5)
+                    ws.cell(r, zip_col).value = z
+                    zip_fixes += 1
+                elif isinstance(raw_zip, (int, float)):
+                    ws.cell(r, zip_col).value = str(int(raw_zip)).zfill(5)
+                    zip_fixes += 1
+
+    if zip_fixes:
+        fixes_applied.append(f"Fixed {zip_fixes} zip codes (leading zeroes)")
+
+    was_sorted = (
+        all(data_rows[i][0] <= data_rows[i + 1][0] for i in range(len(data_rows) - 1)) if len(data_rows) > 1 else True
+    )
+    if not was_sorted:
+        fixes_applied.append("Sorted orders by OrderID ascending")
+
+    # Save as FINAL
+    src = Path(xlsx_path)
+    out_path = src.parent / f"{src.stem}_FINAL{src.suffix}"
+    wb.save(str(out_path))
+    wb.close()
+
+    print(f"\n{_BOLD}  Finalized XLSX{_RESET}")
+    print(f"  Orders: {len(data_rows)}")
+    if fixes_applied:
+        for fix in fixes_applied:
+            print(f"  {_GREEN}+ {fix}{_RESET}")
+    else:
+        print(f"  {_GREEN}No fixes needed — file was clean{_RESET}")
+    print(f"  Saved: {_GREEN}{out_path.name}{_RESET}")
+
+    return str(out_path)
+
+
+def cmd_finalize(
+    xlsx_path: str,
+    gift_path: Optional[str] = None,
+) -> bool:
+    """Merge gift orders (if provided) and finalize XLSX for RMFG."""
+    print(f"  Loading {Path(xlsx_path).name}...")
+    orders, _, _ = parse_matrix(xlsx_path)
+    regular, gift_orders = identify_gift_orders(orders)
+
+    print(f"  {len(regular)} regular orders, {len(gift_orders)} gift redemption orders")
+
+    working_path = xlsx_path
+
+    # Merge separate gift sheet if provided
+    if gift_path:
+        print(f"\n  Merging gift sheet: {Path(gift_path).name}")
+        working_path = merge_gift_xlsx(working_path, gift_path)
+
+    # MFG validation on final file
+    mfg_translations = load_mfg_translations()
+    if mfg_translations:
+        final_orders, _, _ = parse_matrix(working_path)
+        result = check_mfg_onboarding(final_orders, mfg_translations)
+        icon = _check_icon(result.passed)
+        print(f"\n  [{icon}] {result.name}: {result.message}")
+        if not result.passed:
+            for d in result.details:
+                print(f"       {d}")
+            print(f"\n  {_RED}BLOCKED — onboard missing SKUs at RMFG before sending{_RESET}")
+            return False
+
+    # Apply final formatting
+    final_path = finalize_xlsx(working_path)
+
+    print(f"\n  {_GREEN}Ready to email to RMFG: {Path(final_path).name}{_RESET}")
+    return True
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # CLI commands
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -1486,6 +1681,11 @@ def main() -> None:
     )
     p_sync.add_argument("--workers", type=int, default=5, help="Concurrent workers (default: 5)")
 
+    # finalize
+    p_fin = sub.add_parser("finalize", help="Merge gift orders + format fixes + MFG validation")
+    p_fin.add_argument("xlsx", help="Path to AHB_WeeklyProductionQuery XLSX file")
+    p_fin.add_argument("--gift", "-g", help="Separate gift redemption XLSX to merge")
+
     # full
     p_full = sub.add_parser("full", help="Run full pipeline: validate + check + swap")
     p_full.add_argument("xlsx", help="Path to AHB_WeeklyProductionQuery XLSX file")
@@ -1501,6 +1701,8 @@ def main() -> None:
         ok = cmd_swap(args.xlsx, getattr(args, "inventory", None))
     elif args.command == "sync-shopify":
         ok = cmd_sync(args.xlsx, args.tag, mode=args.mode, dry_run=not args.execute, workers=args.workers)
+    elif args.command == "finalize":
+        ok = cmd_finalize(args.xlsx, gift_path=getattr(args, "gift", None))
     elif args.command == "full":
         ok = cmd_full(args.xlsx, getattr(args, "inventory", None))
     else:
