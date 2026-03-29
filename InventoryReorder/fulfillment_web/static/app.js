@@ -2486,6 +2486,55 @@ async function loadSwapHistory() {
     }
 }
 
+async function loadTagSkus() {
+    const shipTag = document.getElementById('swap-ship-tag').value;
+    if (!shipTag) { log('Select a ship tag first', 'orange'); return; }
+
+    setMascot('loading', 'Loading SKUs by tag...');
+    try {
+        const resp = await fetch(`/api/swap/tag-skus?ship_tag=${encodeURIComponent(shipTag)}`);
+        const data = await resp.json();
+        if (data.error) { setMascot('alert', data.error); return; }
+
+        // Build modal content
+        const prefixOrder = ['CH', 'MT', 'AC', 'TR', 'PK', 'OTHER'];
+        let html = `<div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--accent);margin-bottom:8px">${data.order_count} orders tagged ${data.ship_tag}</div>`;
+
+        for (const prefix of prefixOrder) {
+            const items = (data.prefixes || {})[prefix];
+            if (!items || !items.length) continue;
+            const total = data.totals[prefix] || 0;
+            html += `<div style="margin-bottom:12px">`;
+            html += `<div style="font-family:'Space Mono',monospace;font-size:12px;font-weight:600;color:var(--accent);margin-bottom:4px">${prefix} (${total} units)</div>`;
+            html += `<table class="data-table" style="width:100%;font-size:11px"><thead><tr><th>SKU</th><th>Qty</th><th>Orders</th></tr></thead><tbody>`;
+            for (const item of items) {
+                html += `<tr><td>${item.sku}</td><td style="font-family:'Rajdhani',sans-serif">${item.qty}</td><td>${item.order_count}</td></tr>`;
+            }
+            html += `</tbody></table></div>`;
+        }
+
+        // Show in preview area
+        document.getElementById('swap-preview-body').innerHTML = '';
+        document.getElementById('swap-preview-count').textContent = `${data.order_count} orders`;
+        const previewPanel = document.querySelector('#swapmanager-view .panel-body[style*="max-height"]');
+        if (previewPanel) previewPanel.innerHTML = html;
+        document.getElementById('swap-summary').innerHTML = `${Object.keys(data.prefixes || {}).length} prefix groups | ${Object.values(data.totals || {}).reduce((a,b) => a+b, 0)} total units`;
+
+        // Store for CSV export
+        swapPreviewData = [];
+        for (const [prefix, items] of Object.entries(data.prefixes || {})) {
+            for (const item of items) {
+                swapPreviewData.push({ order_name: prefix, old_sku: item.sku, new_sku: '', qty: item.qty });
+            }
+        }
+
+        setMascot('happy', `${data.order_count} orders, ${Object.values(data.totals || {}).reduce((a,b) => a+b, 0)} SKU units`);
+    } catch (e) {
+        setMascot('alert', 'Failed to load tag SKUs');
+        log('Tag SKU error: ' + e.message, 'red');
+    }
+}
+
 async function loadCalendar() {
     log('Loading action calendar...', 'cyan');
     setMascot('loading', 'Building calendar...');

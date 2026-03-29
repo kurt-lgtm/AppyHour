@@ -27,7 +27,15 @@ SETTINGS_FILE = "inventory_reorder_settings.json"
 CURATION_ORDER = ["MONG", "MDT", "OWC", "SPN", "ALPN", "ISUN", "HHIGH"]
 EXTRA_CURATIONS = ["NMS", "BYO", "SS"]
 ALL_CURATIONS = CURATION_ORDER + EXTRA_CURATIONS
-WHEEL_TO_SLICE_FACTOR = 2.67
+WHEEL_TO_SLICE_FACTOR = 2.67  # Default fallback
+
+
+def _yield_factor(sku: str) -> float:
+    """Per-SKU wheel-to-slice factor from adjusted_conversion_factors, fallback to default."""
+    s = STATE.get("saved", {})
+    factors = s.get("adjusted_conversion_factors", {})
+    return float(factors.get(sku, WHEEL_TO_SLICE_FACTOR))
+
 
 # SKUs excluded from PR-CJAM and CEX-EC assignment candidates
 ASSIGNMENT_EXCLUDE = {"CH-MAFT"}
@@ -231,7 +239,7 @@ def calculate():
             c = int(wd.get("count", 0))
             t = wd.get("target_sku", "")
             if t and w > 0 and c > 0:
-                inv[t] = inv.get(t, 0) + int(w * c * WHEEL_TO_SLICE_FACTOR)
+                inv[t] = inv.get(t, 0) + int(w * c * _yield_factor(t))
 
     for po in open_pos:
         sku = po.get("sku", "")
@@ -791,7 +799,7 @@ def suggest_fixes():
             if isinstance(wd, dict) and wd.get("target_sku") == r["sku"]:
                 w = float(wd.get("weight_lbs", 0))
                 c = int(wd.get("count", 0))
-                p = int(w * c * WHEEL_TO_SLICE_FACTOR)
+                p = int(w * c * _yield_factor(r["sku"]))
                 if p > 0:
                     fixes.append(f"MFG: Cut {wsku} ({c} wheels = ~{p} units)")
         for po in open_pos:
@@ -944,7 +952,7 @@ def order_list():
                 if isinstance(wd, dict) and wd.get("target_sku") == sku:
                     w = float(wd.get("weight_lbs", 0))
                     c = int(wd.get("count", 0))
-                    avail += int(w * c * WHEEL_TO_SLICE_FACTOR)
+                    avail += int(w * c * _yield_factor(sku))
         # Add open POs
         for po in open_pos:
             if po.get("sku") == sku and po.get("status", "").lower() in ("open", "ordered"):
@@ -3584,7 +3592,7 @@ def get_cut_order():
         pcs_from_cut = 0
 
         if gap > 0 and wheel_count > 0 and wheel_weight > 0:
-            slices_per_wheel = int(wheel_weight * WHEEL_TO_SLICE_FACTOR)
+            slices_per_wheel = int(wheel_weight * _yield_factor(sku))
             wheels_to_cut = min(math.ceil(gap / slices_per_wheel), wheel_count)
             pcs_from_cut = wheels_to_cut * slices_per_wheel
 
@@ -3892,7 +3900,7 @@ def export_cut_order_csv():
         wtc = 0
         pfc = 0
         if gap > 0 and wc > 0 and ww > 0:
-            spw = int(ww * WHEEL_TO_SLICE_FACTOR)
+            spw = int(ww * _yield_factor(sku))
             wtc = min(math.ceil(gap / spw), wc)
             pfc = wtc * spw
         net = sliced + pfc - demand
@@ -4763,6 +4771,93 @@ def swap_export_csv():
         as_attachment=True,
         download_name=f"swap_export_{datetime.datetime.now().strftime('%Y-%m-%d')}.csv",
     )
+
+
+@app.route("/api/swap/tag-skus")
+def swap_tag_skus():
+    """Fetch all SKUs on unfulfilled orders for a ship tag, grouped by prefix.
+
+    Query params: ship_tag (required)
+    Returns: {prefixes: {CH: [{sku, qty, order_count}, ...], ...}, totals: {...}}
+    """
+    import requests as req
+
+    ship_tag = request.args.get("ship_tag", "").strip()
+    if not ship_tag:
+        return jsonify({"error": "ship_tag required"}), 400
+
+    s = _s()
+    store = s.get("shopify_store_url", "")
+    token = s.get("shopify_access_token", "")
+    if not store or not token:
+        return jsonify({"error": "Shopify credentials not configured"}), 400
+
+    base = f"https://{store}.myshopify.com/admin/api/2024-01"
+    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+
+    # Fetch unfulfilled orders, filter by tag
+    sku_data = defaultdict(lambda: {"qty": 0, "orders": set()})
+    url = f"{base}/orders.json"
+    params = {
+        "status": "open",
+        "fulfillment_status": "unfulfilled",
+        "limit": 250,
+        "fields": "id,name,tags,line_items",
+    }
+    page = 0
+    order_count = 0
+    while url:
+        page += 1
+        resp = req.get(url, headers=headers,
+                       params=params if page == 1 else None, timeout=30)
+        resp.raise_for_status()
+        for o in resp.json().get("orders", []):
+            tags = [t.strip() for t in (o.get("tags") or "").split(",")]
+            if ship_tag not in tags:
+                continue
+            order_count += 1
+            for li in o.get("line_items", []):
+                sku = (li.get("sku") or "").strip()
+                fq = li.get("fulfillable_quantity", li.get("quantity", 0))
+                if sku and fq > 0:
+                    sku_data[sku]["qty"] += fq
+                    sku_data[sku]["orders"].add(o["name"])
+        link = resp.headers.get("Link", "")
+        url = None
+        if 'rel="next"' in link:
+            m = re.search(r'<([^>]+)>;\s*rel="next"', link)
+            if m:
+                url = m.group(1)
+        import time
+        time.sleep(0.1)
+
+    # Group by prefix
+    target_prefixes = ("TR-", "CH-", "AC-", "MT-", "PK-")
+    prefixes = defaultdict(list)
+    for sku, info in sorted(sku_data.items()):
+        prefix = "OTHER"
+        for p in target_prefixes:
+            if sku.startswith(p):
+                prefix = p.rstrip("-")
+                break
+        prefixes[prefix].append({
+            "sku": sku,
+            "qty": info["qty"],
+            "order_count": len(info["orders"]),
+        })
+
+    # Sort each group by qty descending
+    for group in prefixes.values():
+        group.sort(key=lambda x: -x["qty"])
+
+    totals = {k: sum(item["qty"] for item in v) for k, v in prefixes.items()}
+
+    return jsonify({
+        "ship_tag": ship_tag,
+        "order_count": order_count,
+        "prefixes": dict(prefixes),
+        "totals": totals,
+    })
 
 
 # ── Run All endpoint ──────────────────────────────────────────────────
@@ -6093,7 +6188,7 @@ def load_settings_inventory():
             c = int(wd.get("count", 0))
             t = wd.get("target_sku", "")
             if t and w > 0 and c > 0:
-                inv[t] = inv.get(t, 0) + int(w * c * WHEEL_TO_SLICE_FACTOR)
+                inv[t] = inv.get(t, 0) + int(w * c * _yield_factor(t))
 
     # Add open POs
     for po in s.get("open_pos", []):
@@ -6266,11 +6361,11 @@ def action_calendar():
                     if isinstance(wd, dict) and wd.get("target_sku") == sku:
                         w = float(wd.get("weight_lbs", 0))
                         c = int(wd.get("count", 0))
-                        mfg_possible += int(w * c * WHEEL_TO_SLICE_FACTOR)
+                        mfg_possible += int(w * c * _yield_factor(sku))
                         wheel_weight = w
 
             if mfg_possible >= deficit:
-                per_wheel = int(wheel_weight * WHEEL_TO_SLICE_FACTOR) if wheel_weight > 0 else 1
+                per_wheel = int(wheel_weight * _yield_factor(sku)) if wheel_weight > 0 else 1
                 wheels_needed = math.ceil(deficit / max(1, per_wheel))
                 week_mfg_lines.append({
                     "sku": sku, "deficit": deficit,
@@ -7594,7 +7689,7 @@ def reconcile_inventory():
             wheels_cut = max(0, wheel_fri - wheel_mon)
             if wheels_cut > 0:
                 weight_lbs = fri_pot.get(sku, mon_pot.get(sku, {})).get("weight_lbs", 0)
-                expected_cutting = round(wheels_cut * weight_lbs * WHEEL_TO_SLICE_FACTOR)
+                expected_cutting = round(wheels_cut * weight_lbs * _yield_factor(sku))
                 actual_gain = qty_mon - qty_fri + depletion_total
                 cutting_disc = round(actual_gain - expected_cutting)
         pct = round((diff / expected * 100), 1) if expected > 0 else (
@@ -7694,7 +7789,7 @@ def detect_production_events(old_snap, new_snap, depletion_between):
         wheels_cut = max(0, old_wheels - new_wheels)
         if wheels_cut > 0:
             weight_lbs = old_pot.get(sku, new_pot.get(sku, {})).get("weight_lbs", 0)
-            expected_sliced_gain = round(wheels_cut * weight_lbs * WHEEL_TO_SLICE_FACTOR)
+            expected_sliced_gain = round(wheels_cut * weight_lbs * _yield_factor(sku))
             old_sliced = old_inv.get(sku, 0)
             new_sliced = new_inv.get(sku, 0)
             actual_sliced_gain = new_sliced - old_sliced + depletion_between.get(sku, 0)
