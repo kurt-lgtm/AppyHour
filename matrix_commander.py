@@ -126,7 +126,13 @@ def parse_matrix(xlsx_path: str | Path) -> tuple[list[OrderRow], list[str], dict
         - unmapped_names: {product_name: fallback_sku} for names not in NAME_TO_SKU
     """
     wb = openpyxl.load_workbook(str(xlsx_path), data_only=True, read_only=True)
-    ws = wb["Access_LIVE"]
+    # Handle both RMFG download (Worksheet) and formatted files (Access_LIVE)
+    if "Access_LIVE" in wb.sheetnames:
+        ws = wb["Access_LIVE"]
+    elif "Worksheet" in wb.sheetnames:
+        ws = wb["Worksheet"]
+    else:
+        ws = wb[wb.sheetnames[0]]
 
     # Read headers
     headers: list[str] = []
@@ -158,11 +164,19 @@ def parse_matrix(xlsx_path: str | Path) -> tuple[list[OrderRow], list[str], dict
         if count > 1:
             duplicate_cols.append(f"{name} (×{count})")
 
+    # Detect ProductionDay column (may not exist in RMFG downloads)
+    prod_day_idx: int | None = None
+    for i, h in enumerate(headers):
+        if h.lower().strip() == "productionday":
+            prod_day_idx = i
+            break
+
     # Parse data rows
     orders: list[OrderRow] = []
+    min_cols = 13  # At minimum: OrderID through Notes
     for row in ws.iter_rows(min_row=2):
         cells = [cell.value for cell in row]
-        if len(cells) < 14:
+        if len(cells) < min_cols:
             continue
         order_id = str(cells[0] or "").strip()
         if not order_id:
@@ -180,6 +194,10 @@ def parse_matrix(xlsx_path: str | Path) -> tuple[list[OrderRow], list[str], dict
                     except (ValueError, TypeError):
                         pass
 
+        prod_day = ""
+        if prod_day_idx is not None and prod_day_idx < len(cells):
+            prod_day = str(cells[prod_day_idx] or "")
+
         orders.append(
             OrderRow(
                 order_id=order_id,
@@ -195,7 +213,7 @@ def parse_matrix(xlsx_path: str | Path) -> tuple[list[OrderRow], list[str], dict
                 zip_code=str(cells[10] or ""),
                 tags=str(cells[11] or ""),
                 notes=str(cells[12] or ""),
-                production_day=str(cells[13] or ""),
+                production_day=prod_day,
                 assignments=assignments,
             )
         )
@@ -1327,31 +1345,95 @@ def merge_gift_xlsx(main_path: str | Path, gift_path: str | Path) -> str:
     return str(out_path)
 
 
-def finalize_xlsx(xlsx_path: str | Path) -> str:
-    """Apply final formatting fixes and save as email-ready file.
+def finalize_xlsx(
+    xlsx_path: str | Path,
+    ship_day: str = "SAT",
+    ship_date: str = "",
+) -> str:
+    """Apply final formatting fixes to RMFG download and save as email-ready file.
 
-    Fixes:
-    - OrderIDs stored as numbers (not text)
+    Handles both RMFG Translator downloads (tab=Worksheet, no ProductionDay)
+    and already-formatted files (tab=Access_LIVE, has ProductionDay).
+
+    Transformations:
+    - Rename tab to Access_LIVE if needed
+    - Insert ProductionDay column at position N if missing
+    - OrderIDs stored as numbers, sorted ascending
     - Zips stored as text with leading zeroes
-    - Sort by OrderID ascending
-    - Validate tab name is Access_LIVE
+    - Auto-size columns
+    - Rename file to AHB_WeeklyProductionQuery_MM-DD-YY_vF.xlsx
     """
-    wb = openpyxl.load_workbook(str(xlsx_path))
-    ws = wb["Access_LIVE"]
+    from openpyxl.utils import get_column_letter
 
-    # Find column indices
-    headers = [str(ws.cell(1, c).value or "") for c in range(1, ws.max_column + 1)]
-    oid_col = 1  # Column A
+    wb = openpyxl.load_workbook(str(xlsx_path))
+    fixes_applied: list[str] = []
+
+    # Step 1: Find or rename the data sheet
+    if "Access_LIVE" in wb.sheetnames:
+        ws = wb["Access_LIVE"]
+    elif "Worksheet" in wb.sheetnames:
+        ws = wb["Worksheet"]
+        ws.title = "Access_LIVE"
+        fixes_applied.append("Renamed tab 'Worksheet' -> 'Access_LIVE'")
+    else:
+        # Use first sheet
+        ws = wb[wb.sheetnames[0]]
+        old_name = ws.title
+        ws.title = "Access_LIVE"
+        fixes_applied.append(f"Renamed tab '{old_name}' -> 'Access_LIVE'")
+
+    # Read headers
+    max_col = ws.max_column
+    headers = [str(ws.cell(1, c).value or "") for c in range(1, max_col + 1)]
+
+    # Step 2: Check if ProductionDay column exists
+    has_prod_day = any(h.lower().strip() == "productionday" for h in headers)
+    prod_day_col = None  # 1-indexed
+
+    if not has_prod_day:
+        # Insert ProductionDay as column N (col 14, after Notes at col 13)
+        # Find where Notes is (should be col 13 / index 12)
+        notes_idx = None
+        for i, h in enumerate(headers):
+            if h.lower().strip() == "notes":
+                notes_idx = i
+                break
+
+        insert_at = (notes_idx + 2) if notes_idx is not None else 14  # 1-indexed
+
+        # Insert column
+        ws.insert_cols(insert_at)
+        ws.cell(1, insert_at).value = "ProductionDay"
+        prod_day_col = insert_at
+
+        # Fill all data rows with ship_day
+        for r in range(2, ws.max_row + 1):
+            oid = ws.cell(r, 1).value
+            if oid is not None:
+                ws.cell(r, insert_at).value = ship_day.upper()
+
+        fixes_applied.append(f"Inserted ProductionDay column at col {get_column_letter(insert_at)} ({ship_day})")
+        max_col = ws.max_column
+        # Re-read headers after insert
+        headers = [str(ws.cell(1, c).value or "") for c in range(1, max_col + 1)]
+    else:
+        for i, h in enumerate(headers):
+            if h.lower().strip() == "productionday":
+                prod_day_col = i + 1
+                break
+
+    # Find key column indices
+    oid_col = 1
     zip_col = None
     for i, h in enumerate(headers):
         if h.lower().strip() == "zip":
             zip_col = i + 1
             break
 
-    # Read all data rows
-    data_rows: list[tuple[int, list]] = []  # (numeric_oid, row_values)
+    # Step 3: Read all data rows, fix values, sort
+    data_rows: list[tuple[int, list]] = []
     for r in range(2, ws.max_row + 1):
-        row_vals = [ws.cell(r, c).value for c in range(1, ws.max_column + 1)]
+        row_vals = [ws.cell(r, c).value for c in range(1, max_col + 1)]
         oid_raw = row_vals[0]
         if oid_raw is None:
             continue
@@ -1361,61 +1443,99 @@ def finalize_xlsx(xlsx_path: str | Path) -> str:
             numeric_oid = 0
         data_rows.append((numeric_oid, row_vals))
 
-    # Sort by OrderID
-    data_rows.sort(key=lambda x: x[0])
+    # Sort by OrderID ascending
+    was_sorted = (
+        all(data_rows[i][0] <= data_rows[i + 1][0] for i in range(len(data_rows) - 1)) if len(data_rows) > 1 else True
+    )
 
-    # Clear existing data and rewrite sorted
+    data_rows.sort(key=lambda x: x[0])
+    if not was_sorted:
+        fixes_applied.append("Sorted orders by OrderID ascending")
+
+    # Step 4: Clear and rewrite sorted + fixed data
     for r in range(2, ws.max_row + 1):
-        for c in range(1, ws.max_column + 1):
+        for c in range(1, max_col + 1):
             ws.cell(r, c).value = None
 
-    fixes_applied: list[str] = []
     zip_fixes = 0
     for idx, (numeric_oid, row_vals) in enumerate(data_rows):
         r = idx + 2
-
         for c, val in enumerate(row_vals):
             ws.cell(r, c + 1).value = val
 
-        # Fix OrderID: ensure stored as number
+        # Fix OrderID: numeric
         ws.cell(r, oid_col).value = numeric_oid
 
-        # Fix Zip: ensure stored as text with leading zeroes
+        # Fix Zip: text with leading zeroes
         if zip_col:
             raw_zip = row_vals[zip_col - 1]
             if raw_zip is not None:
                 z = str(raw_zip).strip().split("-")[0].split(".")[0]
-                if z.isdigit() and len(z) < 5:
-                    z = z.zfill(5)
-                    ws.cell(r, zip_col).value = z
-                    zip_fixes += 1
-                elif isinstance(raw_zip, (int, float)):
-                    ws.cell(r, zip_col).value = str(int(raw_zip)).zfill(5)
+                if isinstance(raw_zip, (int, float)) or (z.isdigit() and len(z) < 5):
+                    ws.cell(r, zip_col).value = str(int(float(str(raw_zip)))).zfill(5)
                     zip_fixes += 1
 
     if zip_fixes:
         fixes_applied.append(f"Fixed {zip_fixes} zip codes (leading zeroes)")
 
-    was_sorted = (
-        all(data_rows[i][0] <= data_rows[i + 1][0] for i in range(len(data_rows) - 1)) if len(data_rows) > 1 else True
-    )
-    if not was_sorted:
-        fixes_applied.append("Sorted orders by OrderID ascending")
+    # Step 5: Auto-size columns
+    for col_idx in range(1, max_col + 1):
+        max_len = len(str(ws.cell(1, col_idx).value or ""))
+        # Sample first 20 rows for width
+        for r in range(2, min(22, len(data_rows) + 2)):
+            val = ws.cell(r, col_idx).value
+            if val is not None:
+                max_len = max(max_len, len(str(val)))
+        ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 2, 40)
+    fixes_applied.append("Auto-sized columns")
 
-    # Save as FINAL
+    # Step 6: Generate output filename
+    if ship_date:
+        # ship_date should be like "2026-03-24" or "03-24-26"
+        try:
+            from datetime import datetime as dt
+
+            if len(ship_date) == 10 and ship_date[4] == "-":
+                d = dt.strptime(ship_date, "%Y-%m-%d")
+            else:
+                d = dt.strptime(ship_date, "%m-%d-%y")
+            date_str = d.strftime("%m-%d-%y")
+        except ValueError:
+            date_str = ship_date.replace("-", "")[:8]
+    else:
+        # Try to extract date from RMFG tag in first order's tags
+        date_str = ""
+        if data_rows:
+            tags_col = None
+            for i, h in enumerate(headers):
+                if h.lower().strip() == "tags":
+                    tags_col = i
+                    break
+            if tags_col is not None:
+                tags = str(data_rows[0][1][tags_col] or "")
+                import re
+
+                m = re.search(r"RMFG_(\d{4})(\d{2})(\d{2})", tags)
+                if m:
+                    date_str = f"{m.group(2)}-{m.group(3)}-{m.group(1)[2:]}"
+        if not date_str:
+            from datetime import datetime as dt
+
+            date_str = dt.now().strftime("%m-%d-%y")
+
     src = Path(xlsx_path)
-    out_path = src.parent / f"{src.stem}_FINAL{src.suffix}"
+    out_name = f"AHB_WeeklyProductionQuery_{date_str}_vF.xlsx"
+    out_path = src.parent / out_name
     wb.save(str(out_path))
     wb.close()
 
+    fixes_applied.append(f"Renamed to {out_name}")
+
     print(f"\n{_BOLD}  Finalized XLSX{_RESET}")
     print(f"  Orders: {len(data_rows)}")
-    if fixes_applied:
-        for fix in fixes_applied:
-            print(f"  {_GREEN}+ {fix}{_RESET}")
-    else:
-        print(f"  {_GREEN}No fixes needed — file was clean{_RESET}")
-    print(f"  Saved: {_GREEN}{out_path.name}{_RESET}")
+    for fix in fixes_applied:
+        print(f"  {_GREEN}+ {fix}{_RESET}")
+    print(f"\n  Saved: {_GREEN}{out_path.name}{_RESET}")
 
     return str(out_path)
 
@@ -1423,13 +1543,11 @@ def finalize_xlsx(xlsx_path: str | Path) -> str:
 def cmd_finalize(
     xlsx_path: str,
     gift_path: Optional[str] = None,
+    ship_day: str = "SAT",
+    ship_date: str = "",
 ) -> bool:
     """Merge gift orders (if provided) and finalize XLSX for RMFG."""
     print(f"  Loading {Path(xlsx_path).name}...")
-    orders, _, _ = parse_matrix(xlsx_path)
-    regular, gift_orders = identify_gift_orders(orders)
-
-    print(f"  {len(regular)} regular orders, {len(gift_orders)} gift redemption orders")
 
     working_path = xlsx_path
 
@@ -1451,8 +1569,8 @@ def cmd_finalize(
             print(f"\n  {_RED}BLOCKED — onboard missing SKUs at RMFG before sending{_RESET}")
             return False
 
-    # Apply final formatting
-    final_path = finalize_xlsx(working_path)
+    # Apply final formatting (tab rename, ProductionDay, sort, zips, file naming)
+    final_path = finalize_xlsx(working_path, ship_day=ship_day, ship_date=ship_date)
 
     print(f"\n  {_GREEN}Ready to email to RMFG: {Path(final_path).name}{_RESET}")
     return True
@@ -1683,8 +1801,10 @@ def main() -> None:
 
     # finalize
     p_fin = sub.add_parser("finalize", help="Merge gift orders + format fixes + MFG validation")
-    p_fin.add_argument("xlsx", help="Path to AHB_WeeklyProductionQuery XLSX file")
+    p_fin.add_argument("xlsx", help="Path to RMFG download or production XLSX file")
     p_fin.add_argument("--gift", "-g", help="Separate gift redemption XLSX to merge")
+    p_fin.add_argument("--day", "-d", choices=["SAT", "TUE"], default="SAT", help="Production day (default: SAT)")
+    p_fin.add_argument("--date", help="Ship date for filename (e.g. 2026-03-24 or 03-24-26)")
 
     # full
     p_full = sub.add_parser("full", help="Run full pipeline: validate + check + swap")
@@ -1702,7 +1822,12 @@ def main() -> None:
     elif args.command == "sync-shopify":
         ok = cmd_sync(args.xlsx, args.tag, mode=args.mode, dry_run=not args.execute, workers=args.workers)
     elif args.command == "finalize":
-        ok = cmd_finalize(args.xlsx, gift_path=getattr(args, "gift", None))
+        ok = cmd_finalize(
+            args.xlsx,
+            gift_path=getattr(args, "gift", None),
+            ship_day=args.day,
+            ship_date=getattr(args, "date", "") or "",
+        )
     elif args.command == "full":
         ok = cmd_full(args.xlsx, getattr(args, "inventory", None))
     else:
