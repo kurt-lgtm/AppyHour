@@ -87,12 +87,32 @@ Compare total demand per SKU against the inventory CSV. If short:
 - Let operator decide whether to proceed or adjust
 
 ### Check 5: Matrix Format (BLOCKING)
-- Tab name must be `Access_LIVE`
-- Column N (14) must be `ProductionDay` with `SAT` or `TUE`
-- OrderIDs must be numeric (no `#`, no commas)
-- Zip codes must preserve leading zeroes (text format)
-- No duplicate product columns
-- Product column headers: `AHB (S_REG): Product Name`
+These match the existing QC checker in the cold chain app (`gel_pack_webview.py:qc_check_file`):
+
+- **Tab name** must be `Access_LIVE` (not renamed or on wrong sheet)
+- **Column 14** must be `ProductionDay` with value `SAT` or `TUE`
+- **OrderIDs** must be numeric (no `#`, no commas)
+- **Zip codes** must be stored as text to preserve leading zeroes — if stored as number, leading zeros are lost (e.g., `01234` becomes `1234`). Also flag 4-digit zips that need a leading zero.
+- **No duplicate product columns** in the header row
+- **No duplicate OrderIDs** — same order appearing multiple times
+- **OrderIDs sorted** smallest to largest
+- **Product column headers** must match format: `AHB (S_REG): Product Name`
+- **Low item count** — flag orders with fewer than 10 items (excluding Reship-tagged and Tray orders)
+
+### Check 6: Routing & Tag Validation (WARNING)
+These are currently handled by the cold chain app's QC checker but should also be validated here:
+
+- Every order must have at least one routing tag (e.g., `!ANY - Dallas_AHB!`)
+- **Exclusive carrier tags** can't combine on the same order
+- **Tuesday-specific**: No Anaheim/OnTrac routing on Tuesdays (OnTrac doesn't ship Tuesday)
+- **Tuesday-specific**: CA and FL orders require `!FedEx 2Day OneRate` tag
+- **Unknown `!` tags** — any bang-prefixed tag not in the known set should be flagged
+- **Gift Redemption orders** should be detected and excluded from routing checks (they ship separately)
+
+### Check 7: SKU Column Completeness (BLOCKING)
+- Every product column `AHB (S_REG): Product Name` must map to a known SKU via `NAME_TO_SKU`
+- If a product name doesn't map, the tool can't track demand for that product
+- The current mapping has 96 entries (see `AppyHourMCP/tools/constants.py`)
 
 ---
 
@@ -146,7 +166,7 @@ For orders shipping AFTER the restock date, allocate against restocked quantitie
 
 ---
 
-## Part 6: Gift Redemption Integration (P2 — Nice to Have)
+## Part 6: Gift Redemption Integration (P1 — Should Have)
 
 **Problem:** Gift redemption orders are currently processed in a separate React tool, then manually merged with the main matrix.
 
@@ -230,7 +250,7 @@ The Python prototype that implements validation + inventory checking:
 | Pre-output validation gate | **P1** | Catches errors before they hit Shopify/RMFG |
 | Shopify sync (replace Matrixify) | **P1** | Eliminates slow upload + post-fix cycle |
 | Swap suggestions | **P2** | Reduces shortage investigation from 60 min to 2 min |
-| Gift redemption merge | **P2** | Eliminates separate tool + manual merge |
+| Gift redemption merge | **P1** | Eliminates separate tool + manual merge — needed for vacation handoff |
 
 ## Questions for Developer
 
