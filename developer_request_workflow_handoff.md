@@ -2,11 +2,25 @@
 
 ## Context
 
-The weekly fulfillment process currently requires 2-3 hours of manual work between the React tool generating its output and the final matrix being emailed to RMFG. Most of that time is spent on inventory checks, shortage resolution, Shopify syncing (via Matrixify), gift redemption processing, QC validation, and sheet merging.
+The weekly fulfillment process currently requires 2-3 hours of manual work across **4 separate tools**:
+1. **React fulfillment tool** — generates Matrixify upload CSV (child SKUs → parent SKUs)
+2. **Matrixify** — uploads the CSV to Shopify (slow, ~30-60 min for 2,500 orders)
+3. **RMFG Translator portal** (translator.robbinsmfginc.com) — reads Shopify orders by tag, generates the production matrix XLSX
+4. **Gift redemption React tool** — separate tool for gift orders that Shopify can't edit
 
-**The goal: Make the React tool the single unified pipeline that handles everything.** One tool, one run, one output. An operator with minimal training should be able to run the full Saturday fulfillment in under 30 minutes.
+Plus manual steps: inventory upload to Shopify, shortage investigation, Shopify API swaps, downloading from RMFG portal, reformatting the XLSX (rename tab, add ProductionDay column, fix zips, sort orders, auto-space columns), merging gift sheet, renaming file, MFG name validation, and emailing.
 
-I built a Python prototype (`matrix_commander.py`) that implements the validation and inventory checking logic. This document describes what needs to be built into the React tool, using the prototype as a spec. The prototype is available for reference but should NOT be a separate tool — everything below should live in the React app.
+**The goal: Replace ALL of this with one unified React tool.** The tool should:
+- Accept inventory CSV (not read Shopify)
+- Allocate child SKUs to parents (existing logic)
+- Sync to Shopify directly via GraphQL (replace Matrixify)
+- Generate the RMFG matrix XLSX directly (replace the RMFG Translator portal)
+- Handle gift redemption in the same run (replace the separate gift tool)
+- Validate everything before output (MFG names, CEX-EC counts, format)
+
+One tool, one run, one output. An operator with minimal training should be able to run the full Saturday fulfillment in under 30 minutes.
+
+I built a Python prototype (`matrix_commander.py`) that implements the validation, inventory checking, Shopify sync, and finalize logic. This document describes what needs to be built into the React tool, using the prototype as a spec.
 
 ---
 
@@ -141,6 +155,59 @@ These are currently handled by the cold chain app's QC checker but should also b
 
 ---
 
+## Part 4b: Generate RMFG Matrix Directly — Replace RMFG Translator Portal (P1 — Should Have)
+
+**Problem:** After syncing to Shopify, I currently go to the RMFG Translator portal (translator.robbinsmfginc.com), filter by RMFG tag, download the matrix, and then manually reformat it:
+- Rename tab `Worksheet` → `Access_LIVE`
+- Insert `ProductionDay` column at position N with `SAT` or `TUE`
+- Fix zip codes (leading zeroes lost), sort orders by OrderID ascending
+- Auto-space columns for readability
+- Merge with gift redemption sheet (gift orders sorted in with regular orders)
+- Rename file to `AHB_WeeklyProductionQuery_MM-DD-YY_vF.xlsx`
+- Validate all SKUs against MFG translations
+
+This takes 20-30 minutes of tedious manual work every fulfillment day.
+
+**Change:** The React tool should generate the RMFG matrix XLSX directly, skipping the portal entirely.
+
+**What the tool already knows at this point:**
+- Which orders have which child SKUs (from the allocation step)
+- Order metadata (address, tags, phone, email) from Shopify
+- Routing + gel tags (already on Shopify from cold chain app)
+- MFG name translations (from the translations CSV — 227 entries mapping SKU → `AHB (S_REG): Product Name`)
+
+**Output format (must match exactly):**
+- Tab name: `Access_LIVE`
+- Column layout:
+  - Col A: OrderID (numeric, sorted ascending)
+  - Col B: Name (customer name)
+  - Col C: Distribution Type ("SHIPPING")
+  - Col D: Total (item count)
+  - Col E: Phone Number
+  - Col F: Email
+  - Col G: Address
+  - Col H: Address 2
+  - Col I: City
+  - Col J: State
+  - Col K: Zip (text format, leading zeroes preserved)
+  - Col L: Tags (comma-separated Shopify tags)
+  - Col M: Notes
+  - Col N: ProductionDay (`SAT` or `TUE`)
+  - Col O+: Product columns `AHB (S_REG): Product Name` with 1/0 values
+- File name: `AHB_WeeklyProductionQuery_MM-DD-YY_vF.xlsx` (date = ship week tag date)
+- Gift redemption orders included (they ship from RMFG regardless)
+- All product column headers must match MFG translations exactly
+- Columns auto-sized for readability
+
+**MFG Translations mapping** (SKU → column header):
+The canonical list is exported from https://translator.robbinsmfginc.com/ as a CSV. The tool should either:
+- Accept this CSV as input (updated weekly when new products onboarded), or
+- Pull it from the portal API if available
+
+**This is the highest-impact change** — it eliminates the RMFG portal dependency entirely and removes all manual reformatting.
+
+---
+
 ## Part 5: Shortage Resolution with Swap Suggestions (P2 — Nice to Have)
 
 When inventory check finds shortages, suggest swaps from these families:
@@ -203,10 +270,12 @@ Step 4: Review the pre-output dashboard
         - Demand summary: spot-check totals look reasonable
 
 Step 5: Click "Run" (or "Generate & Sync")
-        - Tool generates Matrixify CSV + Production Matrix XLSX
-        - Tool syncs $0 variants to Shopify directly (or uploads via Matrixify)
-        - Gift orders processed and merged automatically
-        - Final XLSX validated and saved
+        - Tool syncs $0 variants to Shopify directly (replaces Matrixify)
+        - Tool generates RMFG matrix XLSX directly (replaces RMFG Translator portal)
+        - Gift orders included in matrix, excluded from Shopify sync
+        - Final XLSX: tab renamed, ProductionDay added, sorted, formatted
+        - File named: AHB_WeeklyProductionQuery_MM-DD-YY_vF.xlsx
+        - All validated and saved
 
 Step 6: Email Production Matrix XLSX to RMFG
         (Attach file, send — 1 minute. Or auto-email if built in.)
@@ -249,6 +318,7 @@ The Python prototype that implements validation + inventory checking:
 | Demand summary output | **P0** | Enables pre-upload validation |
 | Pre-output validation gate | **P1** | Catches errors before they hit Shopify/RMFG |
 | Shopify sync (replace Matrixify) | **P1** | Eliminates slow upload + post-fix cycle |
+| Generate RMFG matrix directly | **P1** | Eliminates RMFG portal + all manual reformatting |
 | Swap suggestions | **P2** | Reduces shortage investigation from 60 min to 2 min |
 | Gift redemption merge | **P1** | Eliminates separate tool + manual merge — needed for vacation handoff |
 
