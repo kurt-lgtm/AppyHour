@@ -20,7 +20,7 @@ NAME_TO_SKU = {
     "Everything Flatbreads": "AC-EFLAT",
     "Fig Lemon Honey & Honey Preserves": "AC-FLH",
     "Gooseberry Elderflower Mini Jam": "AC-GBEF",
-    "Hazelnuts": "AC-HAZEL",
+    "Hazelnuts": "AC-RHAZ",
     "Lemon Feta & Olive Mix": "AC-LFOLIVE",
     "Membrillo Quince Paste": "AC-MEMB",
     "Peach Bellini Preserves": "AC-PBLINI",
@@ -77,7 +77,7 @@ NAME_TO_SKU = {
     "Ubriaco Pinot Rose": "CH-UROSE",
     "Ubriacone": "CH-UCONE",
     "Wensleydale with Mango & Ginger": "CH-WMANG",
-    "Wooly Wooly Black Garlic": "CH-WWBG",
+    "Wooly Wooly Black Garlic": "CH-WWBC",
     "Wooly Wooly Diablo": "CH-WWDI",
     # Meat (MT-) — verified against Shopify product catalog
     "Applewood Smoked Speck": "MT-ASPK",
