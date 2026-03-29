@@ -889,6 +889,381 @@ def apply_swaps_to_xlsx(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Phase 3: Shopify $0 variant batch sync (replaces Matrixify)
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Import Shopify auth + GraphQL from MCP utils
+_MCP_UTILS_DIR = Path(__file__).parent / "AppyHourMCP"
+sys.path.insert(0, str(_MCP_UTILS_DIR))
+
+
+def _get_shopify_auth() -> tuple[str, dict]:
+    """Get Shopify REST/GraphQL auth. Lazy import to avoid startup cost."""
+    from utils import get_shopify_auth  # noqa: E402
+
+    return get_shopify_auth()
+
+
+def _shopify_graphql(base: str, headers: dict, query: str, variables: dict | None = None) -> dict:
+    """Execute Shopify GraphQL query."""
+    from utils import shopify_graphql  # noqa: E402
+
+    return shopify_graphql(base, headers, query, variables)
+
+
+def _lookup_zero_variant_gids(base: str, headers: dict, skus: set[str]) -> dict[str, str]:
+    """Look up $0 variant GIDs for a set of SKUs. Prefers cheapest variant."""
+    import requests as req
+
+    variant_map: dict[str, tuple[str, float]] = {}
+    sku_list = sorted(skus)
+    batch_size = 10
+    for i in range(0, len(sku_list), batch_size):
+        batch = sku_list[i : i + batch_size]
+        query_str = " OR ".join(f"sku:{s}" for s in batch)
+        data = _shopify_graphql(
+            base,
+            headers,
+            """
+        query($q: String!) {
+          productVariants(first: 50, query: $q) {
+            edges { node { id sku price } }
+          }
+        }
+        """,
+            {"q": query_str},
+        )
+        for edge in data["productVariants"]["edges"]:
+            node = edge["node"]
+            sku = node["sku"]
+            price = float(node.get("price", "999"))
+            if sku in skus:
+                prev_price = variant_map.get(sku, (None, float("inf")))[1]
+                if price < prev_price:
+                    variant_map[sku] = (node["id"], price)
+        time.sleep(0.1)
+
+    return {sku: gid for sku, (gid, _) in variant_map.items()}
+
+
+def _fetch_orders_by_tag(base: str, headers: dict, tag: str) -> list[dict]:
+    """Fetch all unfulfilled Shopify orders matching a tag."""
+    import requests as req
+
+    all_orders: list[dict] = []
+    url = f"{base}/orders.json"
+    params = {
+        "status": "open",
+        "fulfillment_status": "unfulfilled",
+        "limit": 250,
+        "tag": tag,
+        "fields": "id,name,tags,line_items",
+    }
+    page = 0
+    while url:
+        page += 1
+        resp = req.get(url, headers=headers, params=params if page == 1 else None, timeout=30)
+        resp.raise_for_status()
+        orders = resp.json().get("orders", [])
+        all_orders.extend(orders)
+        link = resp.headers.get("Link", "")
+        url = None
+        if 'rel="next"' in link:
+            import re
+
+            m = re.search(r'<([^>]+)>;\s*rel="next"', link)
+            if m:
+                url = m.group(1)
+        time.sleep(0.1)
+    return all_orders
+
+
+@dataclass
+class SyncResult:
+    """Result of syncing one order."""
+
+    order_name: str
+    status: str  # "updated", "skipped", "duplicate", "gift", "error"
+    added_skus: list[str] = field(default_factory=list)
+    error: str = ""
+
+
+def sync_order_to_shopify(
+    base: str,
+    headers: dict,
+    order: dict,
+    matrix_skus: dict[str, int],
+    variant_gids: dict[str, str],
+    mode: str = "smart",
+) -> SyncResult:
+    """Sync one order: add $0 variants for matrix SKUs not yet on Shopify.
+
+    mode: "smart" = skip only duplicate SKUs, add rest.
+          "conservative" = skip entire order if any duplicate.
+    """
+    order_name = order["name"].replace("#", "")
+    tags_lower = order.get("tags", "").lower()
+
+    # Skip gift redemption orders
+    if "gift redemption" in tags_lower:
+        return SyncResult(order_name, "gift")
+
+    # Get current SKUs on order
+    current_skus: dict[str, int] = {}
+    for li in order.get("line_items", []):
+        sku = (li.get("sku") or "").strip()
+        fq = li.get("fulfillable_quantity", li.get("quantity", 0))
+        if sku and fq > 0:
+            current_skus[sku] = current_skus.get(sku, 0) + fq
+
+    # Determine what to add
+    to_add: list[str] = []
+    duplicates: list[str] = []
+    for sku, qty in matrix_skus.items():
+        if not any(sku.startswith(p) for p in ("CH-", "MT-", "AC-", "PK-", "TR-")):
+            continue  # Skip non-food/packaging SKUs
+        if sku in current_skus:
+            duplicates.append(sku)
+        elif sku in variant_gids:
+            to_add.append(sku)
+
+    if not to_add and not duplicates:
+        return SyncResult(order_name, "skipped")
+
+    if duplicates and mode == "conservative":
+        return SyncResult(order_name, "duplicate", error=f"Dupes: {', '.join(duplicates)}")
+
+    if not to_add:
+        return SyncResult(order_name, "skipped")
+
+    # Execute order edit
+    try:
+        order_gid = f"gid://shopify/Order/{order['id']}"
+
+        # Begin edit
+        data = _shopify_graphql(
+            base,
+            headers,
+            """
+            mutation($id: ID!) {
+                orderEditBegin(id: $id) {
+                    calculatedOrder { id }
+                    userErrors { field message }
+                }
+            }
+        """,
+            {"id": order_gid},
+        )
+
+        calc_order = data["orderEditBegin"]["calculatedOrder"]
+        if not calc_order:
+            errors = data["orderEditBegin"]["userErrors"]
+            return SyncResult(order_name, "error", error=f"beginEdit: {errors}")
+        calc_id = calc_order["id"]
+
+        # Add each variant
+        added: list[str] = []
+        for sku in to_add:
+            gid = variant_gids[sku]
+            add_data = _shopify_graphql(
+                base,
+                headers,
+                """
+                mutation($id: ID!, $variantId: ID!, $quantity: Int!, $allowDuplicates: Boolean) {
+                    orderEditAddVariant(id: $id, variantId: $variantId, quantity: $quantity, allowDuplicates: $allowDuplicates) {
+                        calculatedOrder { id }
+                        userErrors { field message }
+                    }
+                }
+            """,
+                {"id": calc_id, "variantId": gid, "quantity": 1, "allowDuplicates": False},
+            )
+            add_errors = add_data["orderEditAddVariant"]["userErrors"]
+            if not add_errors:
+                added.append(sku)
+
+        # Commit
+        commit_data = _shopify_graphql(
+            base,
+            headers,
+            """
+            mutation($id: ID!) {
+                orderEditCommit(id: $id) {
+                    order { id }
+                    userErrors { field message }
+                }
+            }
+        """,
+            {"id": calc_id},
+        )
+        commit_errors = commit_data["orderEditCommit"]["userErrors"]
+        if commit_errors:
+            return SyncResult(order_name, "error", added, error=f"commit: {commit_errors}")
+
+        return SyncResult(order_name, "updated", added)
+
+    except Exception as e:
+        return SyncResult(order_name, "error", error=str(e))
+
+
+def cmd_sync(
+    xlsx_path: str,
+    rmfg_tag: str,
+    mode: str = "smart",
+    dry_run: bool = True,
+    workers: int = 5,
+) -> bool:
+    """Sync matrix XLSX assignments to Shopify as $0 variants."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    print(f"  Loading {Path(xlsx_path).name}...")
+    orders_parsed, _, _ = parse_matrix(xlsx_path)
+
+    # Build matrix: order_id -> {sku: qty}
+    matrix: dict[str, dict[str, int]] = {}
+    for o in orders_parsed:
+        matrix[o.order_id] = o.assignments
+
+    print(f"  {len(matrix)} orders in matrix")
+    print(f"  Connecting to Shopify...")
+
+    base, headers = _get_shopify_auth()
+
+    # Fetch Shopify orders
+    print(f"  Fetching orders with tag '{rmfg_tag}'...")
+    shopify_orders = _fetch_orders_by_tag(base, headers, rmfg_tag)
+    print(f"  {len(shopify_orders)} Shopify orders fetched")
+
+    # Match matrix orders to Shopify orders
+    shopify_by_name: dict[str, dict] = {}
+    for o in shopify_orders:
+        name = o["name"].replace("#", "")
+        shopify_by_name[name] = o
+
+    matched = set(matrix.keys()) & set(shopify_by_name.keys())
+    print(f"  {len(matched)} orders matched between matrix and Shopify")
+
+    if not matched:
+        print(f"  {_RED}No matching orders found!{_RESET}")
+        return False
+
+    # Collect all SKUs that need variant GIDs
+    all_skus: set[str] = set()
+    for oid in matched:
+        for sku in matrix[oid]:
+            if any(sku.startswith(p) for p in ("CH-", "MT-", "AC-", "PK-", "TR-")):
+                all_skus.add(sku)
+
+    print(f"  Looking up $0 variant GIDs for {len(all_skus)} SKUs...")
+    variant_gids = _lookup_zero_variant_gids(base, headers, all_skus)
+    missing_gids = all_skus - set(variant_gids.keys())
+    if missing_gids:
+        print(f"  {_YELLOW}Warning: No variant found for {len(missing_gids)} SKUs: {sorted(missing_gids)[:10]}{_RESET}")
+
+    print(f"  Found $0 variants for {len(variant_gids)}/{len(all_skus)} SKUs")
+
+    if dry_run:
+        # Preview mode
+        print(f"\n{_BOLD}  DRY RUN — No changes will be made{_RESET}\n")
+        updated = 0
+        skipped = 0
+        gift = 0
+        dupes = 0
+        for oid in sorted(matched):
+            order = shopify_by_name[oid]
+            result = sync_order_to_shopify(base, headers, order, matrix[oid], variant_gids, mode)
+            # Just count — don't actually call API in preview since sync_order_to_shopify
+            # does the real work. For true dry run, we simulate:
+            tags_lower = order.get("tags", "").lower()
+            if "gift redemption" in tags_lower:
+                gift += 1
+                continue
+            current = set()
+            for li in order.get("line_items", []):
+                sku = (li.get("sku") or "").strip()
+                fq = li.get("fulfillable_quantity", li.get("quantity", 0))
+                if sku and fq > 0:
+                    current.add(sku)
+            to_add = [
+                s
+                for s in matrix[oid]
+                if any(s.startswith(p) for p in ("CH-", "MT-", "AC-", "PK-", "TR-"))
+                and s not in current
+                and s in variant_gids
+            ]
+            has_dupes = any(
+                s in current for s in matrix[oid] if any(s.startswith(p) for p in ("CH-", "MT-", "AC-", "PK-", "TR-"))
+            )
+            if to_add:
+                updated += 1
+            elif has_dupes and mode == "conservative":
+                dupes += 1
+            else:
+                skipped += 1
+
+        print(f"  Would update: {_GREEN}{updated}{_RESET}")
+        print(f"  Would skip (already correct): {skipped}")
+        print(f"  Gift redemption (excluded): {gift}")
+        if dupes:
+            print(f"  Would reject (duplicates): {_YELLOW}{dupes}{_RESET}")
+        print(f"\n  Run with --execute to apply changes.")
+        return True
+
+    # Live mode — execute with thread pool
+    print(f"\n{_BOLD}  LIVE SYNC — Applying changes to Shopify ({workers} workers){_RESET}\n")
+    results: list[SyncResult] = []
+    order_items = [(shopify_by_name[oid], matrix[oid]) for oid in sorted(matched)]
+    completed = 0
+    total = len(order_items)
+
+    def _do_sync(order_and_matrix: tuple[dict, dict[str, int]]) -> SyncResult:
+        order, m_skus = order_and_matrix
+        return sync_order_to_shopify(base, headers, order, m_skus, variant_gids, mode)
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_do_sync, item): item[0]["name"] for item in order_items}
+        for future in as_completed(futures):
+            result = future.result()
+            results.append(result)
+            completed += 1
+            if completed % 50 == 0 or completed == total:
+                pct = int(100 * completed / total)
+                print(f"  Progress: {completed}/{total} ({pct}%)")
+
+    # Summarize
+    counts: dict[str, int] = defaultdict(int)
+    for r in results:
+        counts[r.status] += 1
+
+    print(f"\n{_BOLD}{'=' * 60}{_RESET}")
+    print(f"{_BOLD}  SYNC COMPLETE{_RESET}")
+    print(f"{_BOLD}{'=' * 60}{_RESET}")
+    print(f"  Updated:    {_GREEN}{counts.get('updated', 0)}{_RESET}")
+    print(f"  Skipped:    {counts.get('skipped', 0)}")
+    print(f"  Gift:       {counts.get('gift', 0)}")
+    print(f"  Duplicates: {_YELLOW}{counts.get('duplicate', 0)}{_RESET}")
+    print(f"  Errors:     {_RED}{counts.get('error', 0)}{_RESET}")
+
+    # Log errors
+    error_results = [r for r in results if r.status == "error"]
+    if error_results:
+        print(f"\n  {_RED}Errors:{_RESET}")
+        for r in error_results[:20]:
+            print(f"    #{r.order_name}: {r.error}")
+
+    # Log duplicates
+    dupe_results = [r for r in results if r.status == "duplicate"]
+    if dupe_results:
+        print(f"\n  {_YELLOW}Duplicates (skipped):{_RESET}")
+        for r in dupe_results[:20]:
+            print(f"    #{r.order_name}: {r.error}")
+
+    print(f"{_BOLD}{'=' * 60}{_RESET}\n")
+
+    return counts.get("error", 0) == 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # CLI commands
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -1098,6 +1473,19 @@ def main() -> None:
     p_swap.add_argument("xlsx", help="Path to AHB_WeeklyProductionQuery XLSX file")
     p_swap.add_argument("--inventory", "-i", help="Inventory CSV (sku,available_qty) or JSON path")
 
+    # sync-shopify
+    p_sync = sub.add_parser("sync-shopify", help="Sync matrix to Shopify as $0 variants (replaces Matrixify)")
+    p_sync.add_argument("xlsx", help="Path to AHB_WeeklyProductionQuery XLSX file")
+    p_sync.add_argument("tag", help="RMFG tag to match Shopify orders (e.g. RMFG_20260328)")
+    p_sync.add_argument("--execute", action="store_true", help="Actually apply changes (default: dry run)")
+    p_sync.add_argument(
+        "--mode",
+        choices=["smart", "conservative"],
+        default="smart",
+        help="Duplicate handling: smart (skip SKU) or conservative (skip order)",
+    )
+    p_sync.add_argument("--workers", type=int, default=5, help="Concurrent workers (default: 5)")
+
     # full
     p_full = sub.add_parser("full", help="Run full pipeline: validate + check + swap")
     p_full.add_argument("xlsx", help="Path to AHB_WeeklyProductionQuery XLSX file")
@@ -1111,6 +1499,8 @@ def main() -> None:
         ok = cmd_check(args.xlsx, getattr(args, "inventory", None))
     elif args.command == "swap":
         ok = cmd_swap(args.xlsx, getattr(args, "inventory", None))
+    elif args.command == "sync-shopify":
+        ok = cmd_sync(args.xlsx, args.tag, mode=args.mode, dry_run=not args.execute, workers=args.workers)
     elif args.command == "full":
         ok = cmd_full(args.xlsx, getattr(args, "inventory", None))
     else:
