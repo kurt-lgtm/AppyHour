@@ -26,6 +26,7 @@
         <button class="btn btn-accent view-btn" id="view-cutorder" onclick="switchView('cutorder')">&#9986; Cut Order</button>
         <button class="btn btn-accent view-btn" id="view-invoices" onclick="switchView('invoices')">&#128196; Invoices</button>
         <button class="btn btn-accent view-btn" id="view-settings" onclick="switchView('settings')">&#9881; Settings</button>
+        <button class="btn btn-accent view-btn" id="view-swapmanager" onclick="switchView('swapmanager')">&#9674; Swaps</button>
         <div class="toolbar-sep"></div>
         <button class="btn btn-green" onclick="syncDropbox()">&#9729; Dropbox</button>
         <button class="btn btn-green" onclick="syncRecharge({force:true})">&#128176; Recharge</button>
@@ -827,6 +828,93 @@
     </div>
 </div>
 
+    <div id="swapmanager-view" style="display:none;padding:12px">
+        <!-- Config bar -->
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap">
+            <label style="font-family:'Space Mono',monospace;font-size:11px;font-weight:600;color:var(--accent)">SHIP TAG</label>
+            <select id="swap-ship-tag" class="settings-input" style="width:220px;font-family:'DM Sans',sans-serif">
+                <option value="">-- Load tags --</option>
+            </select>
+            <button class="btn btn-dim btn-sm" onclick="loadSwapShipTags()">&#8635; Refresh</button>
+            <div style="margin-left:auto;display:flex;gap:4px">
+                <button class="btn btn-accent btn-sm swap-mode-btn active" id="swap-mode-manual" onclick="setSwapMode('manual')">Manual</button>
+                <button class="btn btn-dim btn-sm swap-mode-btn" id="swap-mode-matrix" onclick="setSwapMode('matrix')">Matrix</button>
+            </div>
+        </div>
+
+        <div style="display:flex;gap:12px;min-height:500px">
+            <!-- Left sidebar -->
+            <div style="width:260px;flex-shrink:0">
+                <!-- Manual mode: swap pairs -->
+                <div class="panel" id="swap-pairs-panel">
+                    <div class="panel-header"><span class="icon">&#9674;</span> Swap Pairs</div>
+                    <div class="panel-body" id="swap-pairs-list" style="max-height:300px;overflow-y:auto"></div>
+                    <div style="padding:8px">
+                        <div style="display:flex;gap:4px;margin-bottom:6px">
+                            <input type="text" id="swap-old-sku" class="settings-input" placeholder="Old SKU" style="width:50%;font-size:12px">
+                            <input type="text" id="swap-new-sku" class="settings-input" placeholder="New SKU" style="width:50%;font-size:12px">
+                        </div>
+                        <button class="btn btn-green btn-sm" onclick="addSwapPair()" style="width:100%">+ Add Pair</button>
+                    </div>
+                </div>
+
+                <!-- Matrix mode: upload -->
+                <div class="panel" id="swap-matrix-panel" style="display:none">
+                    <div class="panel-header"><span class="icon">&#128196;</span> Matrix Upload</div>
+                    <div class="panel-body">
+                        <div id="swap-upload-zone" style="border:2px dashed var(--accent);border-radius:6px;padding:24px;text-align:center;cursor:pointer;margin:8px" onclick="document.getElementById('swap-matrix-file').click()">
+                            <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--accent)">Drop Excel here or click</div>
+                            <div style="font-size:10px;color:#888;margin-top:4px" id="swap-matrix-filename">No file selected</div>
+                            <input type="file" id="swap-matrix-file" accept=".xlsx,.xls" style="display:none" onchange="handleMatrixFile(this)">
+                        </div>
+                        <button class="btn btn-blue btn-sm" onclick="uploadMatrix()" style="width:calc(100% - 16px);margin:0 8px 8px">Analyze Matrix</button>
+                    </div>
+                </div>
+
+                <!-- History -->
+                <div class="panel" style="margin-top:8px">
+                    <div class="panel-header"><span class="icon">&#128220;</span> Swap History</div>
+                    <div class="panel-body" id="swap-history-list" style="max-height:200px;overflow-y:auto;font-size:11px"></div>
+                </div>
+            </div>
+
+            <!-- Main preview area -->
+            <div style="flex:1;display:flex;flex-direction:column">
+                <div class="panel" style="flex:1">
+                    <div class="panel-header">
+                        <span class="icon">&#128202;</span> Preview
+                        <span id="swap-preview-count" style="margin-left:8px;font-family:'Rajdhani',sans-serif;font-size:14px;color:var(--accent)"></span>
+                    </div>
+                    <div class="panel-body" style="overflow-y:auto;max-height:400px">
+                        <table class="data-table" id="swap-preview-table" style="width:100%">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Order</th>
+                                    <th>Remove</th>
+                                    <th>Add</th>
+                                    <th>Qty</th>
+                                </tr>
+                            </thead>
+                            <tbody id="swap-preview-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Summary + actions -->
+                <div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap">
+                    <div id="swap-summary" style="font-family:'Space Mono',monospace;font-size:11px;color:#aaa;flex:1"></div>
+                    <button class="btn btn-blue btn-sm" onclick="previewSwaps()">Preview</button>
+                    <button class="btn btn-green btn-sm" onclick="executeSwaps()" id="swap-execute-btn" disabled>Execute Shopify</button>
+                    <button class="btn btn-orange btn-sm" onclick="syncRechargeSwaps()" id="swap-rc-btn" disabled>Sync Recharge</button>
+                    <button class="btn btn-dim btn-sm" onclick="exportSwapCsv()">Export CSV</button>
+                    <button class="btn btn-dim btn-sm" onclick="cancelSwap()" id="swap-cancel-btn" style="display:none">Cancel</button>
+                </div>
+                <div id="swap-status" style="font-family:'Space Mono',monospace;font-size:11px;color:var(--accent);margin-top:6px"></div>
+            </div>
+        </div>
+    </div>
+
 <!-- Free-roaming mascot — "Wedge" — kawaii cheese block character -->
 <svg id="mascot" viewBox="0 0 180 240">
   <defs>
@@ -1016,6 +1104,6 @@
     <div id="mascot-speech-tail"></div>
 </div>
 
-<script src="/static/app.js?v=62"></script>
+<script src="/static/app.js?v=63"></script>
 </body>
 </html>

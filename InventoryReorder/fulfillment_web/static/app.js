@@ -2164,6 +2164,7 @@ function switchView(view) {
         cutorder: document.getElementById('cutorder-view'),
         runway: document.getElementById('runway-view'),
         log: document.getElementById('log-view'),
+        swapmanager: document.getElementById('swapmanager-view'),
     };
 
     Object.values(views).forEach(v => { if (v) v.style.display = 'none'; });
@@ -2177,6 +2178,312 @@ function switchView(view) {
     else if (view === 'cutorder') loadCutOrder();
     else if (view === 'runway') loadRunway();
     else if (view === 'log') loadActivityLog();
+    else if (view === 'swapmanager') loadSwapManager();
+}
+
+// ── Swap Manager ────────────────────────────────────────────────────────
+
+let swapPairs = [];
+let swapPreviewData = [];
+let swapPreviewPairs = [];  // pairs with GIDs from last preview
+let swapMode = 'manual';
+let swapManagerLoaded = false;
+
+function loadSwapManager() {
+    if (!swapManagerLoaded) {
+        loadSwapShipTags();
+        loadSwapHistory();
+        swapManagerLoaded = true;
+    }
+}
+
+async function loadSwapShipTags() {
+    setMascot('loading', 'Loading ship tags...');
+    try {
+        const resp = await fetch('/api/swap/ship-tags');
+        const data = await resp.json();
+        const sel = document.getElementById('swap-ship-tag');
+        sel.innerHTML = '<option value="">-- Select --</option>';
+        (data.tags || []).forEach(t => {
+            const opt = document.createElement('option');
+            opt.value = t;
+            opt.textContent = t;
+            sel.appendChild(opt);
+        });
+        setMascot('happy', `${data.tags?.length || 0} ship tags found`);
+    } catch (e) {
+        setMascot('alert', 'Failed to load ship tags');
+        log('Ship tag load failed: ' + e.message, 'red');
+    }
+}
+
+function setSwapMode(mode) {
+    swapMode = mode;
+    document.getElementById('swap-pairs-panel').style.display = mode === 'manual' ? '' : 'none';
+    document.getElementById('swap-matrix-panel').style.display = mode === 'matrix' ? '' : 'none';
+    document.querySelectorAll('.swap-mode-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById(`swap-mode-${mode}`).classList.add('active');
+    document.getElementById(`swap-mode-${mode}`).className = 'btn btn-accent btn-sm swap-mode-btn active';
+    const other = mode === 'manual' ? 'matrix' : 'manual';
+    document.getElementById(`swap-mode-${other}`).className = 'btn btn-dim btn-sm swap-mode-btn';
+}
+
+function addSwapPair() {
+    const oldSku = document.getElementById('swap-old-sku').value.trim().toUpperCase();
+    const newSku = document.getElementById('swap-new-sku').value.trim().toUpperCase();
+    if (!oldSku || !newSku) return;
+    swapPairs.push({ old_sku: oldSku, new_sku: newSku });
+    document.getElementById('swap-old-sku').value = '';
+    document.getElementById('swap-new-sku').value = '';
+    renderSwapPairs();
+}
+
+function removeSwapPair(idx) {
+    swapPairs.splice(idx, 1);
+    renderSwapPairs();
+}
+
+function renderSwapPairs() {
+    const el = document.getElementById('swap-pairs-list');
+    if (!swapPairs.length) {
+        el.innerHTML = '<div style="padding:8px;color:#666;font-size:11px">No swap pairs added</div>';
+        return;
+    }
+    el.innerHTML = swapPairs.map((p, i) => `
+        <div style="display:flex;align-items:center;gap:6px;padding:4px 8px;border-bottom:1px solid var(--bg2)">
+            <span style="font-family:'DM Sans',sans-serif;font-size:12px;color:#ff5555">${p.old_sku}</span>
+            <span style="color:#666">&rarr;</span>
+            <span style="font-family:'DM Sans',sans-serif;font-size:12px;color:var(--green)">${p.new_sku}</span>
+            <button class="btn btn-dim" style="margin-left:auto;padding:2px 6px;font-size:10px" onclick="removeSwapPair(${i})">&times;</button>
+        </div>
+    `).join('');
+}
+
+function handleMatrixFile(input) {
+    const file = input.files[0];
+    document.getElementById('swap-matrix-filename').textContent = file ? file.name : 'No file selected';
+}
+
+async function uploadMatrix() {
+    const shipTag = document.getElementById('swap-ship-tag').value;
+    if (!shipTag) { log('Select a ship tag first', 'orange'); return; }
+    const fileInput = document.getElementById('swap-matrix-file');
+    if (!fileInput.files.length) { log('Select an Excel file first', 'orange'); return; }
+
+    setMascot('loading', 'Analyzing matrix...');
+    const fd = new FormData();
+    fd.append('file', fileInput.files[0]);
+    fd.append('ship_tag', shipTag);
+
+    try {
+        const resp = await fetch('/api/swap/matrix-upload', { method: 'POST', body: fd });
+        const data = await resp.json();
+        if (data.error) { setMascot('alert', data.error); return; }
+
+        // Populate swap pairs from suggested swaps
+        swapPairs = (data.suggested_swaps || []).map(s => ({
+            old_sku: s.old_sku,
+            new_sku: s.new_sku,
+        }));
+        setSwapMode('manual');
+        renderSwapPairs();
+
+        log(`Matrix: ${data.matrix_orders} orders, ${data.common_orders} matched. ${data.suggested_swaps?.length || 0} swaps detected.`, 'cyan');
+        setMascot('happy', `${data.suggested_swaps?.length || 0} swaps detected`);
+
+        // Auto-preview
+        if (swapPairs.length) previewSwaps();
+    } catch (e) {
+        setMascot('alert', 'Matrix upload failed');
+        log('Matrix upload error: ' + e.message, 'red');
+    }
+}
+
+async function previewSwaps() {
+    const shipTag = document.getElementById('swap-ship-tag').value;
+    if (!shipTag) { log('Select a ship tag first', 'orange'); return; }
+    if (!swapPairs.length) { log('Add at least one swap pair', 'orange'); return; }
+
+    setMascot('loading', 'Previewing swaps...');
+    try {
+        const resp = await fetch('/api/swap/multi-preview', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ship_tag: shipTag, swaps: swapPairs }),
+        });
+        const data = await resp.json();
+        if (data.error) { setMascot('alert', data.error); return; }
+
+        swapPreviewData = data.all_targets || [];
+        swapPreviewPairs = (data.pairs || []).filter(p => p.new_variant_gid && p.count > 0);
+        renderSwapPreview(data);
+        document.getElementById('swap-execute-btn').disabled = !swapPreviewData.length;
+        setMascot('happy', `${data.total_orders} orders to swap`);
+    } catch (e) {
+        setMascot('alert', 'Preview failed');
+        log('Preview error: ' + e.message, 'red');
+    }
+}
+
+function renderSwapPreview(data) {
+    const tbody = document.getElementById('swap-preview-body');
+    const targets = data.all_targets || [];
+    tbody.innerHTML = targets.map((t, i) => `
+        <tr>
+            <td>${i + 1}</td>
+            <td>${t.order_name}</td>
+            <td style="color:#ff5555">${t.old_sku}</td>
+            <td style="color:var(--green)">${t.new_sku}</td>
+            <td>${t.qty}</td>
+        </tr>
+    `).join('');
+
+    // Summary
+    const pairs = data.pairs || [];
+    const summaryParts = pairs.map(p =>
+        `${p.old_sku}&rarr;${p.new_sku}: ${p.count}${p.error ? ' <span style="color:#ff5555">(' + p.error + ')</span>' : ''}`
+    );
+    document.getElementById('swap-summary').innerHTML = `${data.total_orders} orders, ${pairs.length} rules | ${summaryParts.join(' | ')}`;
+    document.getElementById('swap-preview-count').textContent = `${data.total_orders} orders`;
+}
+
+async function executeSwaps() {
+    const shipTag = document.getElementById('swap-ship-tag').value;
+    if (!shipTag || !swapPairs.length) return;
+    if (!swapPreviewPairs.length) { log('Run Preview first', 'orange'); return; }
+
+    if (!confirm(`Execute ${swapPreviewData.length} swaps on Shopify? This cannot be undone.`)) return;
+
+    setMascot('loading', 'Executing swaps...');
+    document.getElementById('swap-execute-btn').disabled = true;
+    document.getElementById('swap-cancel-btn').style.display = '';
+
+    try {
+        const pairsWithGids = swapPreviewPairs.map(p => ({
+            old_sku: p.old_sku, new_sku: p.new_sku, new_variant_gid: p.new_variant_gid,
+        }));
+
+        const resp = await fetch('/api/swap/multi-execute', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ship_tag: shipTag, pairs: pairsWithGids }),
+        });
+        const data = await resp.json();
+        if (!data.started) { setMascot('alert', data.error || 'Failed to start'); return; }
+
+        pollSwapProgress();
+    } catch (e) {
+        setMascot('alert', 'Execute failed: ' + e.message);
+        document.getElementById('swap-execute-btn').disabled = false;
+        document.getElementById('swap-cancel-btn').style.display = 'none';
+    }
+}
+
+function pollSwapProgress() {
+    const statusEl = document.getElementById('swap-status');
+    const poll = async () => {
+        try {
+            const resp = await fetch('/api/swap_progress');
+            const data = await resp.json();
+            statusEl.textContent = data.message || '';
+
+            if (data.running) {
+                setTimeout(poll, 1000);
+            } else {
+                document.getElementById('swap-cancel-btn').style.display = 'none';
+                if (data.result) {
+                    if (data.result.error) {
+                        setMascot('alert', data.result.error);
+                        log('Swap error: ' + data.result.error, 'red');
+                    } else {
+                        const r = data.result;
+                        setMascot('celebrate', `${r.total_success} swapped, ${r.total_failed} failed`);
+                        log(`Swap complete: ${r.total_success} success, ${r.total_failed} failed`, 'green');
+                        document.getElementById('swap-rc-btn').disabled = false;
+                    }
+                }
+                document.getElementById('swap-execute-btn').disabled = false;
+                loadSwapHistory();
+            }
+        } catch (e) {
+            statusEl.textContent = 'Poll error: ' + e.message;
+            setTimeout(poll, 2000);
+        }
+    };
+    poll();
+}
+
+async function cancelSwap() {
+    await fetch('/api/swap_cancel', { method: 'POST' });
+    log('Swap cancellation requested', 'orange');
+}
+
+async function syncRechargeSwaps() {
+    const shipTag = document.getElementById('swap-ship-tag').value;
+    if (!shipTag || !swapPairs.length) return;
+
+    setMascot('loading', 'Syncing Recharge...');
+    try {
+        const resp = await fetch('/api/swap/recharge-sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ship_tag: shipTag, swaps: swapPairs }),
+        });
+        const data = await resp.json();
+        if (data.error) { setMascot('alert', data.error); return; }
+        setMascot('happy', `${data.updated} Recharge selections updated`);
+        log(`Recharge sync: ${data.updated} updated, ${(data.errors || []).length} errors`, data.updated > 0 ? 'green' : 'orange');
+    } catch (e) {
+        setMascot('alert', 'Recharge sync failed');
+        log('RC sync error: ' + e.message, 'red');
+    }
+}
+
+async function exportSwapCsv() {
+    if (!swapPreviewData.length) { log('No preview data to export', 'orange'); return; }
+    try {
+        const resp = await fetch('/api/swap/export-csv', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ rows: swapPreviewData }),
+        });
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `swap_export_${new Date().toISOString().slice(0,10)}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+        log('CSV exported', 'green');
+    } catch (e) {
+        log('CSV export failed: ' + e.message, 'red');
+    }
+}
+
+async function loadSwapHistory() {
+    try {
+        const resp = await fetch('/api/swap/history');
+        const data = await resp.json();
+        const el = document.getElementById('swap-history-list');
+        const hist = data.history || [];
+        if (!hist.length) {
+            el.innerHTML = '<div style="padding:8px;color:#666">No swap history</div>';
+            return;
+        }
+        el.innerHTML = hist.slice(0, 20).map(h => {
+            const dt = h.date ? h.date.slice(0, 10) : '?';
+            const tag = h.ship_tag || '';
+            const cnt = h.total_orders || 0;
+            const pairs = (h.swaps || []).map(s => `${s.old_sku}&rarr;${s.new_sku}`).join(', ');
+            const rc = h.recharge_synced ? ' <span style="color:var(--green)">RC</span>' : '';
+            return `<div style="padding:4px 8px;border-bottom:1px solid var(--bg2)">
+                <span style="color:var(--accent)">${dt}</span> ${tag} &mdash; ${cnt} orders${rc}
+                <div style="color:#888;font-size:10px">${pairs}</div>
+            </div>`;
+        }).join('');
+    } catch (e) {
+        // Silently fail �� history is non-critical
+    }
 }
 
 async function loadCalendar() {

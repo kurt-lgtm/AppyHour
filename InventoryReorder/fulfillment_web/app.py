@@ -4099,6 +4099,7 @@ def get_substitutions():
 
 _swap_progress = {"running": False, "message": "", "result": None}
 _swap_cancel = [False]
+_swap_lock = threading.Lock()
 
 
 @app.route("/api/swap_preview", methods=["POST"])
@@ -4152,8 +4153,10 @@ def swap_execute():
 
     global _swap_progress, _swap_cancel
 
-    if _swap_progress["running"]:
-        return jsonify({"error": "A swap is already in progress"}), 409
+    with _swap_lock:
+        if _swap_progress["running"]:
+            return jsonify({"error": "A swap is already in progress"}), 409
+        _swap_progress.update({"running": True, "message": "Starting...", "result": None})
 
     data = request.get_json(force=True)
     old_sku = data.get("old_sku", "").strip()
@@ -4169,7 +4172,6 @@ def swap_execute():
     token = s.get("shopify_access_token", "")
 
     _swap_cancel[0] = False
-    _swap_progress.update({"running": True, "message": "Finding targets...", "result": None})
 
     def _worker():
         try:
@@ -4209,6 +4211,558 @@ def swap_cancel():
     """Cancel an in-progress swap."""
     _swap_cancel[0] = True
     return jsonify({"ok": True})
+
+
+# ── Swap Manager (multi-swap, matrix upload, history) ────────────────
+
+def _load_sku_mappings():
+    """Load sku_mappings.json (cached in STATE)."""
+    if "sku_mappings" not in STATE:
+        p = os.path.join(os.path.dirname(__file__), "sku_mappings.json")
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as f:
+                STATE["sku_mappings"] = json.load(f)
+        else:
+            STATE["sku_mappings"] = {"name_to_sku": {}, "zero_dollar_variants": {}}
+    return STATE["sku_mappings"]
+
+
+@app.route("/api/swap/ship-tags")
+def swap_ship_tags():
+    """Return distinct _SHIP_* tags from unfulfilled orders."""
+    import requests as req
+
+    s = _s()
+    store = s.get("shopify_store_url", "")
+    token = s.get("shopify_access_token", "")
+    if not store or not token:
+        return jsonify({"error": "Shopify credentials not configured"}), 400
+
+    base = f"https://{store}.myshopify.com/admin/api/2024-01"
+    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+
+    tags = set()
+    url = f"{base}/orders.json"
+    params = {
+        "status": "open",
+        "fulfillment_status": "unfulfilled",
+        "limit": 250,
+        "fields": "tags",
+    }
+    page = 0
+    while url:
+        page += 1
+        resp = req.get(url, headers=headers,
+                       params=params if page == 1 else None, timeout=30)
+        resp.raise_for_status()
+        for o in resp.json().get("orders", []):
+            for t in (o.get("tags") or "").split(","):
+                t = t.strip()
+                if t.startswith("_SHIP_"):
+                    tags.add(t)
+        link = resp.headers.get("Link", "")
+        url = None
+        if 'rel="next"' in link:
+            m = re.search(r'<([^>]+)>;\s*rel="next"', link)
+            if m:
+                url = m.group(1)
+        import time
+        time.sleep(0.1)
+
+    return jsonify({"tags": sorted(tags, reverse=True)})
+
+
+@app.route("/api/swap/multi-preview", methods=["POST"])
+def swap_multi_preview():
+    """Preview N swap pairs at once.
+
+    Body: {ship_tag: str, swaps: [{old_sku, new_sku}, ...]}
+    Returns per-pair target counts and combined preview table.
+    """
+    from shopify_swap import find_swap_targets, lookup_variant_gid
+
+    data = request.get_json(force=True)
+    ship_tag = data.get("ship_tag", "").strip()
+    swaps = data.get("swaps", [])
+
+    if not ship_tag or not swaps:
+        return jsonify({"error": "ship_tag and swaps[] required"}), 400
+
+    s = _s()
+    store = s.get("shopify_store_url", "")
+    token = s.get("shopify_access_token", "")
+    if not store or not token:
+        return jsonify({"error": "Shopify credentials not configured"}), 400
+
+    results = []
+    all_targets = []
+    for pair in swaps:
+        old_sku = pair.get("old_sku", "").strip()
+        new_sku = pair.get("new_sku", "").strip()
+        if not old_sku or not new_sku:
+            continue
+
+        new_gid = lookup_variant_gid(store, token, new_sku)
+        if not new_gid:
+            results.append({
+                "old_sku": old_sku, "new_sku": new_sku,
+                "error": f"Variant not found for {new_sku}",
+                "targets": [],
+            })
+            continue
+
+        targets = find_swap_targets(store, token, ship_tag, old_sku)
+        pair_result = {
+            "old_sku": old_sku,
+            "new_sku": new_sku,
+            "new_variant_gid": new_gid,
+            "count": len(targets),
+            "targets": [
+                {"order_name": t["order_name"], "qty": t["qty"]}
+                for t in targets
+            ],
+        }
+        results.append(pair_result)
+        for t in targets:
+            all_targets.append({
+                "order_name": t["order_name"],
+                "old_sku": old_sku,
+                "new_sku": new_sku,
+                "qty": t["qty"],
+            })
+
+    return jsonify({
+        "ship_tag": ship_tag,
+        "pairs": results,
+        "all_targets": all_targets,
+        "total_orders": len(all_targets),
+    })
+
+
+@app.route("/api/swap/multi-execute", methods=["POST"])
+def swap_multi_execute():
+    """Execute N swap pairs in background thread.
+
+    Body: {ship_tag, pairs: [{old_sku, new_sku, new_variant_gid}, ...]}
+    Poll /api/swap_progress for status.
+    """
+    from shopify_swap import find_swap_targets, execute_bulk_swap
+
+    global _swap_progress, _swap_cancel
+
+    with _swap_lock:
+        if _swap_progress["running"]:
+            return jsonify({"error": "A swap is already in progress"}), 409
+        _swap_progress.update({"running": True, "message": "Starting...", "result": None})
+
+    data = request.get_json(force=True)
+    ship_tag = data.get("ship_tag", "")
+    pairs = data.get("pairs", [])
+
+    if not ship_tag or not pairs:
+        return jsonify({"error": "ship_tag and pairs[] required"}), 400
+
+    s = _s()
+    store = s.get("shopify_store_url", "")
+    token = s.get("shopify_access_token", "")
+
+    _swap_cancel[0] = False
+
+    def _worker():
+        try:
+            combined_results = []
+            combined_errors = []
+            total_success = 0
+            total_failed = 0
+
+            for i, pair in enumerate(pairs, 1):
+                if _swap_cancel[0]:
+                    combined_errors.append("Cancelled by user")
+                    break
+
+                old_sku = pair["old_sku"]
+                new_sku = pair["new_sku"]
+                new_gid = pair["new_variant_gid"]
+
+                _swap_progress["message"] = f"Pair {i}/{len(pairs)}: {old_sku} → {new_sku} — finding targets..."
+
+                targets = find_swap_targets(store, token, ship_tag, old_sku)
+                note = f"Swap {old_sku} -> {new_sku} (shortage substitution)"
+
+                def _progress(msg, pair_num=i, total=len(pairs)):
+                    _swap_progress["message"] = f"Pair {pair_num}/{total}: {msg}"
+
+                result = execute_bulk_swap(
+                    store, token, targets, old_sku, new_gid,
+                    staff_note=note, dry_run=False,
+                    progress_callback=_progress, cancel_flag=_swap_cancel,
+                )
+                total_success += result.get("success", 0)
+                total_failed += result.get("failed", 0)
+                combined_results.append({
+                    "old_sku": old_sku, "new_sku": new_sku,
+                    "orders": result.get("success", 0),
+                    "failed": result.get("failed", 0),
+                })
+                combined_errors.extend(result.get("errors", []))
+
+            # Save to swap history
+            history_entry = {
+                "date": datetime.datetime.now().isoformat(timespec="seconds"),
+                "ship_tag": ship_tag,
+                "swaps": combined_results,
+                "total_orders": total_success,
+                "total_failed": total_failed,
+                "recharge_synced": False,
+            }
+            s_inner = _s()
+            hist = s_inner.setdefault("swap_history", [])
+            hist.insert(0, history_entry)
+            # Keep last 50 entries
+            if len(hist) > 50:
+                del hist[50:]
+            save_settings(s_inner)
+
+            _swap_progress["result"] = {
+                "total_success": total_success,
+                "total_failed": total_failed,
+                "pairs": combined_results,
+                "errors": combined_errors[:20],
+            }
+        except Exception as e:
+            _swap_progress["result"] = {"error": str(e)}
+        finally:
+            _swap_progress["running"] = False
+            _swap_progress["message"] = "Done"
+
+    threading.Thread(target=_worker, daemon=True).start()
+    return jsonify({"started": True})
+
+
+@app.route("/api/swap/matrix-upload", methods=["POST"])
+def swap_matrix_upload():
+    """Upload production matrix Excel, detect discrepancies vs Shopify.
+
+    Returns swap pairs auto-detected from matrix vs unfulfilled orders.
+    """
+    import openpyxl
+    import requests as req
+
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    f = request.files["file"]
+    if not f.filename.endswith((".xlsx", ".xls")):
+        return jsonify({"error": "Must be .xlsx file"}), 400
+
+    ship_tag = request.form.get("ship_tag", "").strip()
+    if not ship_tag:
+        return jsonify({"error": "ship_tag required"}), 400
+
+    mappings = _load_sku_mappings()
+    name_to_sku = mappings.get("name_to_sku", {})
+
+    # Parse Excel matrix
+    try:
+        wb = openpyxl.load_workbook(f, data_only=True)
+        ws = wb["Access_LIVE"]
+    except KeyError:
+        return jsonify({"error": "Sheet 'Access_LIVE' not found in workbook"}), 400
+    except Exception as e:
+        return jsonify({"error": f"Invalid Excel file: {e}"}), 400
+    col_headers = {}
+    for c in range(1, ws.max_column + 1):
+        h = str(ws.cell(1, c).value or "")
+        if h.startswith("AHB") and ": " in h:
+            col_headers[c] = h.split(": ", 1)[1]
+
+    matrix = {}
+    for r in range(2, ws.max_row + 1):
+        oid = str(ws.cell(r, 1).value or "").strip()
+        if not oid:
+            continue
+        skus = {}
+        for c, name in col_headers.items():
+            val = ws.cell(r, c).value
+            if val and str(val).strip() not in ("", "0", "None"):
+                sku = name_to_sku.get(name, f"??-{name[:15]}")
+                try:
+                    skus[sku] = int(float(str(val)))
+                except (ValueError, TypeError):
+                    continue
+        if skus:
+            matrix[oid] = skus
+
+    # Fetch Shopify orders for this ship tag
+    s = _s()
+    store = s.get("shopify_store_url", "")
+    token = s.get("shopify_access_token", "")
+    base = f"https://{store}.myshopify.com/admin/api/2024-01"
+    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+
+    orders = []
+    url = f"{base}/orders.json"
+    params = {
+        "status": "open", "fulfillment_status": "unfulfilled",
+        "limit": 250, "fields": "id,name,line_items",
+    }
+    page = 0
+    while url:
+        page += 1
+        resp = req.get(url, headers=headers,
+                       params=params if page == 1 else None, timeout=30)
+        resp.raise_for_status()
+        batch = resp.json().get("orders", [])
+        # Filter to orders with this ship tag
+        for o in batch:
+            tags = [t.strip() for t in (o.get("tags") or "").split(",")]
+            if ship_tag in tags:
+                orders.append(o)
+        link = resp.headers.get("Link", "")
+        url = None
+        if 'rel="next"' in link:
+            m = re.search(r'<([^>]+)>;\s*rel="next"', link)
+            if m:
+                url = m.group(1)
+        import time
+        time.sleep(0.1)
+
+    # Build Shopify SKU map per order
+    shopify = {}
+    for o in orders:
+        name = o["name"].replace("#", "")
+        skus = {}
+        for li in o.get("line_items", []):
+            sku = (li.get("sku") or "").strip()
+            fq = li.get("fulfillable_quantity", li.get("quantity", 0))
+            if sku and fq > 0:
+                skus[sku] = skus.get(sku, 0) + fq
+        shopify[name] = skus
+
+    # Detect discrepancies
+    food_prefixes = ("CH-", "MT-", "AC-")
+    remove_counts = defaultdict(int)
+    add_counts = defaultdict(int)
+    common = set(matrix.keys()) & set(shopify.keys())
+
+    for oid in common:
+        m_food = {s for s in matrix[oid] if s.startswith(food_prefixes)}
+        s_food = {s for s in shopify[oid] if s.startswith(food_prefixes)}
+        for sku in s_food - m_food:
+            remove_counts[sku] += 1
+        for sku in m_food - s_food:
+            add_counts[sku] += 1
+
+    # Build suggested swap pairs (most removed → most added)
+    removes = sorted(remove_counts.items(), key=lambda x: -x[1])
+    adds = sorted(add_counts.items(), key=lambda x: -x[1])
+    suggested_swaps = []
+    used_adds = set()
+    for rem_sku, rem_count in removes:
+        # Find best matching add (same prefix preferred)
+        prefix = rem_sku.split("-")[0] + "-"
+        best_add = None
+        for add_sku, add_count in adds:
+            if add_sku not in used_adds and add_sku.startswith(prefix):
+                best_add = add_sku
+                break
+        if not best_add:
+            for add_sku, add_count in adds:
+                if add_sku not in used_adds:
+                    best_add = add_sku
+                    break
+        if best_add:
+            used_adds.add(best_add)
+            suggested_swaps.append({
+                "old_sku": rem_sku,
+                "new_sku": best_add,
+                "remove_count": rem_count,
+                "add_count": add_counts[best_add],
+            })
+
+    return jsonify({
+        "matrix_orders": len(matrix),
+        "shopify_orders": len(shopify),
+        "common_orders": len(common),
+        "removes": dict(remove_counts),
+        "adds": dict(add_counts),
+        "suggested_swaps": suggested_swaps,
+    })
+
+
+@app.route("/api/swap/recharge-sync", methods=["POST"])
+def swap_recharge_sync():
+    """Sync swap to Recharge bundle_selections for unconverted charges.
+
+    Body: {ship_tag, swaps: [{old_sku, new_sku}, ...]}
+    """
+    import requests as req
+
+    data = request.get_json(force=True)
+    ship_tag = data.get("ship_tag", "")
+    swaps = data.get("swaps", [])
+
+    if not ship_tag or not swaps:
+        return jsonify({"error": "ship_tag and swaps[] required"}), 400
+
+    s = _s()
+    rc_token = s.get("recharge_api_token", "")
+    if not rc_token:
+        return jsonify({"error": "Recharge API token not configured"}), 400
+
+    rc_headers = {
+        "X-Recharge-Access-Token": rc_token,
+        "Content-Type": "application/json",
+        "X-Recharge-Version": "2021-11",
+    }
+    rc_base = "https://api.rechargeapps.com"
+
+    # Build swap map and resolve variant IDs for new SKUs
+    swap_map = {p["old_sku"]: p["new_sku"] for p in swaps}
+    mappings = _load_sku_mappings()
+    zero_variants = mappings.get("zero_dollar_variants", {})
+
+    # Build numeric variant ID map for Recharge (needs numeric, not GID)
+    from shopify_swap import lookup_variant_gid
+    store = s.get("shopify_store_url", "")
+    shopify_token = s.get("shopify_access_token", "")
+    variant_id_map = {}  # new_sku -> numeric variant ID
+    for new_sku in set(swap_map.values()):
+        gid = zero_variants.get(new_sku)
+        if not gid and store and shopify_token:
+            gid = lookup_variant_gid(store, shopify_token, new_sku)
+        if gid:
+            # Extract numeric ID from GID like "gid://shopify/ProductVariant/12345"
+            variant_id_map[new_sku] = gid.split("/")[-1] if "/" in gid else gid
+
+    # Parse ship date from tag
+    ship_date_str = ship_tag.replace("_SHIP_", "")
+
+    # Fetch queued charges around ship date
+    params = {
+        "status": "queued",
+        "limit": 250,
+        "sort_by": "id-asc",
+        "scheduled_at_min": ship_date_str,
+        "scheduled_at_max": ship_date_str,
+    }
+
+    updated = 0
+    errors = []
+    cursor = None
+
+    while True:
+        if cursor:
+            params["cursor"] = cursor
+        resp = req.get(f"{rc_base}/charges", headers=rc_headers,
+                       params=params, timeout=30)
+        if resp.status_code == 429:
+            import time
+            time.sleep(float(resp.headers.get("Retry-After", "2")))
+            continue
+        resp.raise_for_status()
+        body = resp.json()
+        charges = body.get("charges", [])
+
+        for charge in charges:
+            # Get bundle selections for this charge's subscription
+            line_items = charge.get("line_items", [])
+            for li in line_items:
+                sub_id = li.get("purchase_item_id") or li.get("subscription_id")
+                if not sub_id:
+                    continue
+
+                # Check if any item SKU matches our swap sources
+                has_swap_sku = False
+                for item_prop in li.get("properties", []):
+                    pass  # SKUs are in bundle_selections, not properties
+
+                # Fetch bundle selections
+                bs_resp = req.get(
+                    f"{rc_base}/bundle_selections",
+                    headers=rc_headers,
+                    params={"purchase_item_ids": sub_id},
+                    timeout=30,
+                )
+                if bs_resp.status_code != 200:
+                    continue
+                selections = bs_resp.json().get("bundle_selections", [])
+
+                for bs in selections:
+                    items = bs.get("items", [])
+                    changed = False
+                    new_items = []
+                    for item in items:
+                        sku = item.get("sku", "")
+                        if sku in swap_map:
+                            new_sku = swap_map[sku]
+                            updated_item = {**item, "sku": new_sku}
+                            if new_sku in variant_id_map:
+                                updated_item["external_variant_id"] = variant_id_map[new_sku]
+                            new_items.append(updated_item)
+                            changed = True
+                        else:
+                            new_items.append(item)
+
+                    if changed:
+                        try:
+                            put_resp = req.put(
+                                f"{rc_base}/bundle_selections/{bs['id']}",
+                                headers=rc_headers,
+                                json={"items": new_items},
+                                timeout=30,
+                            )
+                            put_resp.raise_for_status()
+                            updated += 1
+                        except Exception as e:
+                            errors.append(f"BS {bs['id']}: {e}")
+
+        cursor = body.get("next_cursor")
+        if not cursor or not charges:
+            break
+        import time
+        time.sleep(0.5)
+
+    # Update history to mark recharge synced
+    hist = s.get("swap_history", [])
+    if hist and hist[0].get("ship_tag") == ship_tag:
+        hist[0]["recharge_synced"] = True
+        save_settings(s)
+
+    return jsonify({"updated": updated, "errors": errors[:20]})
+
+
+@app.route("/api/swap/history")
+def swap_history():
+    """Return swap history."""
+    s = _s()
+    return jsonify({"history": s.get("swap_history", [])})
+
+
+@app.route("/api/swap/export-csv", methods=["POST"])
+def swap_export_csv():
+    """Export last swap result as CSV download."""
+    data = request.get_json(force=True)
+    rows = data.get("rows", [])
+
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=["order_name", "old_sku", "new_sku", "qty"])
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({
+            "order_name": row.get("order_name", ""),
+            "old_sku": row.get("old_sku", ""),
+            "new_sku": row.get("new_sku", ""),
+            "qty": row.get("qty", 1),
+        })
+
+    output.seek(0)
+    return send_file(
+        io.BytesIO(output.getvalue().encode("utf-8")),
+        mimetype="text/csv",
+        as_attachment=True,
+        download_name=f"swap_export_{datetime.datetime.now().strftime('%Y-%m-%d')}.csv",
+    )
 
 
 # ── Run All endpoint ──────────────────────────────────────────────────

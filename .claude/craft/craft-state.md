@@ -1,29 +1,39 @@
-# Craft State — Enrich Gorgias Rows + Fix Ops Summary Pipeline
+# Craft State — Swap Manager
 
 ## Feature
-Enrich Gorgias-synced rows (941+), fix SUMPRODUCT cost formulas, build Shipments tab pipeline
+Swap Manager page integrated into AppyHour fulfillment_web Flask SPA
 
 ## Mode
 FULL
 
 ## Current Phase
-COMPLETE
+Phase 9: Code Review (in progress, background agent)
 
 ## Plan Path
-User-provided plan in conversation. Tasks tracked via TaskCreate.
+.claude/plans/2026-03-29-swap-manager.md
 
-## Steps
-1. ✓ Fix SUMPRODUCT cost formula bug — write numeric values in column B (not $-prefixed text)
-2. ✓ Build row enrichment function for rows 941+ missing fields
-3. ✓ Build Shipments tab pipeline — count Shopify fulfilled orders by FC tag per week
-4. ✓ Register new MCP tools and verify end-to-end
-5. ✓ Code review — fixed HIGH issues (province mapping, Gorgias search, logging)
-
-## Resume Directive
-All tasks complete. Ready for commit.
+## Impact Brief
+- 4 files created/modified
+- Extends existing shopify_swap.py + 4 swap routes
+- New: 7 multi-swap routes, JS view, HTML panel, sku_mappings.json
 
 ## Key Decisions
-- ops_summary_builder.py line 336: `f"${cost:.1f}"` → plain numeric `cost`
-- Enrichment searches Gorgias by order number, Shopify for carrier/FC
-- Shipments pipeline queries Shopify fulfilled orders by FC tag prefixes
-- Cost rows 70/71 also need numeric values (not $-prefixed text)
+- Flask HTTP architecture (not pywebview bridge)
+- Routes added directly in app.py swap section (no separate module)
+- Reuse shopify_swap.py functions (find_swap_targets, execute_bulk_swap, lookup_variant_gid)
+- Same _swap_progress / _swap_cancel background thread pattern
+- sku_mappings.json as single source for NAME_TO_SKU
+
+## Completed
+- Phase 1.1: Quick Discover → FULL mode
+- Phase 2: Deep Discover — app.py 8284 lines, app.js 5309 lines, Flask+SPA
+- Phase 3: Plan v2 (post-critic) — extend existing, don't rebuild
+- Phase 3b: Plan Critic — found existing shopify_swap.py + 4 routes
+- Phase 4: Created sku_mappings.json (67 name→SKU, 10 variant GIDs)
+- Phase 5: Added 7 new routes to app.py (~350 lines)
+- Phase 6: Built UI — HTML panel + toolbar button + ~300 lines JS
+- Phase 7-8: Verified — JSON valid, Python syntax OK, JS balanced, 116 routes load
+
+## Resume Directive
+Code review running in background. After review, fix any CRITICAL/HIGH issues.
+Then Phase 10: Simplify + deliver.
