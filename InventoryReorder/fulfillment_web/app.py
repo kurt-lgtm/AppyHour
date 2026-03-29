@@ -4860,6 +4860,186 @@ def swap_tag_skus():
     })
 
 
+# ── Shipping Invoice Sync ────────────────────────────────────────────
+
+_ship_invoice_state = {"running": False, "progress": "", "result": None}
+
+
+@app.route("/api/shipping/sync-invoices", methods=["POST"])
+def shipping_sync_invoices():
+    """Download shipping invoices (FedEx/OnTrac) from Gmail via IMAP, parse, and ingest."""
+    global _ship_invoice_state
+    if _ship_invoice_state["running"]:
+        return jsonify({"error": "Shipping invoice sync already running"}), 409
+
+    s = _s()
+    smtp_user = s.get("smtp_user", "")
+    smtp_pass = s.get("smtp_password", "")
+    if not smtp_user or not smtp_pass:
+        return jsonify({"error": "Email credentials not configured (Settings > smtp_user/smtp_password)"}), 400
+
+    _ship_invoice_state.update({"running": True, "progress": "Starting...", "result": None})
+
+    def _worker():
+        import imaplib
+        import email as email_mod
+        from email.header import decode_header
+
+        try:
+            app_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            invoice_dir = os.path.join(app_root, "GelPackCalculator", "Invoices")
+            os.makedirs(invoice_dir, exist_ok=True)
+            existing_files = set(os.listdir(invoice_dir))
+
+            _ship_invoice_state["progress"] = "Connecting to Gmail IMAP..."
+            conn = imaplib.IMAP4_SSL("imap.gmail.com", 993)
+            conn.login(smtp_user, smtp_pass)
+            conn.select('"[Gmail]/All Mail"')
+
+            _ship_invoice_state["progress"] = "Searching for shipping invoices..."
+            since_date = s.get("shipping_invoice_since", "01-Jan-2026")
+            _, msg_ids = conn.search(None, f'(FROM "accounting@robbinsmfginc.com" SINCE "{since_date}")')
+            ids = msg_ids[0].split()
+
+            _ship_invoice_state["progress"] = f"Found {len(ids)} emails. Scanning attachments..."
+            downloaded = []
+            skipped = 0
+
+            for msg_id in ids:
+                _, data = conn.fetch(msg_id, "(RFC822)")
+                raw = data[0][1]
+                msg = email_mod.message_from_bytes(raw)
+
+                subject = ""
+                raw_subj = msg.get("Subject", "")
+                decoded_parts = decode_header(raw_subj)
+                for part, enc in decoded_parts:
+                    if isinstance(part, bytes):
+                        subject += part.decode(enc or "utf-8", errors="replace")
+                    else:
+                        subject += part
+
+                subj_upper = subject.upper()
+                is_shipping = ("FEDEX" in subj_upper and "INVOICE" in subj_upper) or \
+                              ("ONTRAC" in subj_upper and "INVOICE" in subj_upper) or \
+                              ("SHIPPING" in subj_upper and "BREAKDOWN" in subj_upper)
+                if not is_shipping:
+                    continue
+
+                for part in msg.walk():
+                    if part.get_content_maintype() == "multipart":
+                        continue
+                    filename = part.get_filename()
+                    if not filename:
+                        continue
+
+                    decoded_fn = decode_header(filename)
+                    clean_fn = ""
+                    for fnpart, enc in decoded_fn:
+                        if isinstance(fnpart, bytes):
+                            clean_fn += fnpart.decode(enc or "utf-8", errors="replace")
+                        else:
+                            clean_fn += fnpart
+
+                    ext = os.path.splitext(clean_fn)[1].lower()
+                    if ext not in (".csv", ".xlsx", ".xls"):
+                        continue
+                    if clean_fn in existing_files:
+                        skipped += 1
+                        continue
+
+                    payload = part.get_payload(decode=True)
+                    if payload:
+                        filepath = os.path.join(invoice_dir, clean_fn)
+                        with open(filepath, "wb") as f:
+                            f.write(payload)
+                        downloaded.append(clean_fn)
+                        _ship_invoice_state["progress"] = f"Downloaded: {clean_fn}"
+
+            conn.logout()
+
+            _ship_invoice_state["progress"] = "Parsing downloaded invoices..."
+            parse_results = {"ontrac": 0, "fedex": 0, "files": 0}
+
+            shipping_root = os.path.join(app_root, "ShippingReports")
+            if os.path.isdir(shipping_root):
+                sys.path.insert(0, shipping_root)
+                try:
+                    from parsers.ontrac import parse_ontrac_csv
+                    from parsers.fedex import parse_fedex_xlsx
+                    import glob as globmod
+
+                    for fp in globmod.glob(os.path.join(invoice_dir, "*OnTrac*Shipping*Breakdown*.csv")):
+                        try:
+                            shipments = parse_ontrac_csv(fp)
+                            parse_results["ontrac"] += len(shipments)
+                            parse_results["files"] += 1
+                        except Exception:
+                            pass
+                    for fp in globmod.glob(os.path.join(invoice_dir, "*FedEx*Shipping*Breakdown*.XLSX")):
+                        try:
+                            shipments = parse_fedex_xlsx(fp)
+                            parse_results["fedex"] += len(shipments)
+                            parse_results["files"] += 1
+                        except Exception:
+                            pass
+                except ImportError:
+                    parse_results["error"] = "ShippingReports parsers not found"
+
+            _ship_invoice_state["result"] = {
+                "downloaded": downloaded,
+                "skipped": skipped,
+                "total_emails": len(ids),
+                "parsed": parse_results,
+                "invoice_dir": invoice_dir,
+            }
+        except Exception as e:
+            _ship_invoice_state["result"] = {"error": str(e)}
+        finally:
+            _ship_invoice_state["running"] = False
+            _ship_invoice_state["progress"] = "Done"
+
+    threading.Thread(target=_worker, daemon=True).start()
+    return jsonify({"started": True})
+
+
+@app.route("/api/shipping/sync-progress")
+def shipping_sync_progress():
+    """Poll shipping invoice sync progress."""
+    return jsonify(_ship_invoice_state)
+
+
+@app.route("/api/shipping/invoice-files")
+def shipping_invoice_files():
+    """List downloaded shipping invoice files."""
+    app_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    invoice_dir = os.path.join(app_root, "GelPackCalculator", "Invoices")
+    if not os.path.isdir(invoice_dir):
+        return jsonify({"files": [], "dir": invoice_dir})
+
+    files = []
+    for fn in sorted(os.listdir(invoice_dir)):
+        ext = os.path.splitext(fn)[1].lower()
+        if ext in (".csv", ".xlsx", ".xls"):
+            fp = os.path.join(invoice_dir, fn)
+            stat = os.stat(fp)
+            carrier = "unknown"
+            if "ontrac" in fn.lower():
+                carrier = "OnTrac"
+            elif "fedex" in fn.lower():
+                carrier = "FedEx"
+            elif "ups" in fn.lower() or fn.startswith("Invoice_"):
+                carrier = "UPS"
+            files.append({
+                "name": fn,
+                "carrier": carrier,
+                "size_kb": round(stat.st_size / 1024, 1),
+                "modified": datetime.datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+            })
+
+    return jsonify({"files": files, "dir": invoice_dir, "count": len(files)})
+
+
 # ── Morning Briefing ─────────────────────────────────────────────────
 
 @app.route("/api/briefing")

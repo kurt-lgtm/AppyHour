@@ -357,6 +357,7 @@
                 <button class="btn btn-orange" onclick="autoMapAll()">&#9889; Auto-Map</button>
                 <button class="btn btn-blue" onclick="showCostAnalytics()">&#128200; Cost Analytics</button>
                 <button class="btn btn-accent" onclick="showReconciliation()">&#9878; Reconcile Inventory</button>
+                <button class="btn btn-dim" onclick="syncShippingInvoices()">&#128230; Shipping Invoices</button>
             </div>
         </div>
 
@@ -418,6 +419,12 @@
                 </div>
             </div>
             <div class="cal-drawer-body" id="inv-recon-body"></div>
+        </div>
+
+        <!-- Shipping Invoice Files -->
+        <div style="margin-top:8px;padding:0 12px">
+            <div id="shipping-sync-status" style="font-family:'Space Mono',monospace;font-size:11px;color:var(--accent);margin-bottom:4px"></div>
+            <div id="shipping-files-list"></div>
         </div>
 
         <!-- SKU Mapper Overlay -->

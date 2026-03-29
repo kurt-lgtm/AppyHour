@@ -2892,6 +2892,72 @@ let petClickTimer = null;
 let invoicesData = [];
 let currentInvoiceId = null;
 
+// ── Shipping Invoice Sync ───────────────────────────────────────────
+
+async function syncShippingInvoices() {
+    setMascot('loading', 'Syncing shipping invoices from Gmail...');
+    try {
+        const resp = await fetch('/api/shipping/sync-invoices', { method: 'POST' });
+        const data = await resp.json();
+        if (data.error) { setMascot('alert', data.error); return; }
+        pollShippingSync();
+    } catch (e) {
+        setMascot('alert', 'Sync failed: ' + e.message);
+    }
+}
+
+function pollShippingSync() {
+    const poll = async () => {
+        try {
+            const resp = await fetch('/api/shipping/sync-progress');
+            const data = await resp.json();
+            const el = document.getElementById('shipping-sync-status');
+            if (el) el.textContent = data.progress || '';
+
+            if (data.running) {
+                setTimeout(poll, 1500);
+            } else if (data.result) {
+                if (data.result.error) {
+                    setMascot('alert', data.result.error);
+                    log('Shipping sync error: ' + data.result.error, 'red');
+                } else {
+                    const r = data.result;
+                    setMascot('happy', `${r.downloaded.length} new files, ${r.skipped} skipped`);
+                    log(`Shipping invoices: ${r.downloaded.length} downloaded, ${r.skipped} existing, parsed ${r.parsed.files} files (OnTrac: ${r.parsed.ontrac}, FedEx: ${r.parsed.fedex})`, 'green');
+                    loadShippingFiles();
+                }
+            }
+        } catch (e) {
+            setTimeout(poll, 3000);
+        }
+    };
+    poll();
+}
+
+async function loadShippingFiles() {
+    try {
+        const resp = await fetch('/api/shipping/invoice-files');
+        const data = await resp.json();
+        const el = document.getElementById('shipping-files-list');
+        if (!el) return;
+        const files = data.files || [];
+        if (!files.length) {
+            el.innerHTML = '<div style="padding:8px;color:#666;font-size:11px">No shipping invoice files found</div>';
+            return;
+        }
+        let html = `<div style="font-family:'Space Mono',monospace;font-size:10px;color:#666;margin-bottom:4px">${files.length} files in ${data.dir}</div>`;
+        html += '<table class="data-table" style="width:100%;font-size:11px"><thead><tr><th>File</th><th>Carrier</th><th>Size</th><th>Date</th></tr></thead><tbody>';
+        for (const f of files) {
+            const color = f.carrier === 'FedEx' ? '#a78bfa' : f.carrier === 'OnTrac' ? 'var(--accent)' : '#888';
+            html += `<tr><td style="max-width:250px;overflow:hidden;text-overflow:ellipsis">${f.name}</td><td style="color:${color}">${f.carrier}</td><td>${f.size_kb}KB</td><td>${f.modified.slice(0,10)}</td></tr>`;
+        }
+        html += '</tbody></table>';
+        el.innerHTML = html;
+    } catch (e) {
+        // Non-critical
+    }
+}
+
 async function loadInvoices() {
     log('Loading invoice data...', '');
     const status = await api('/api/invoice_status');
