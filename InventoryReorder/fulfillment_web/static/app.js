@@ -2535,6 +2535,121 @@ async function loadTagSkus() {
     }
 }
 
+// ── Morning Briefing ────────────────────────────────────────────────
+
+async function loadBriefing() {
+    try {
+        const data = await fetch('/api/briefing').then(r => r.json());
+        const el = document.getElementById('briefing-banner');
+        if (!el) return;
+
+        const actions = data.actions || [];
+        const critical = data.critical || [];
+        const ship = data.ship || {};
+
+        let cls = 'briefing-ok';
+        if (critical.length > 3) cls = 'briefing-critical';
+        else if (critical.length > 0) cls = 'briefing-warn';
+
+        let html = `<div class="briefing-header">`;
+        html += `<span class="briefing-day">${data.day}</span>`;
+        html += `<span class="briefing-ship">Next ship: ${ship.sat || '?'} <span style="color:#666">${ship.ship_tag || ''}</span></span>`;
+        if (data.po_needed) html += `<span class="briefing-badge">PO DAY</span>`;
+        html += `<button class="btn btn-dim" style="margin-left:auto;padding:2px 8px;font-size:10px" onclick="this.parentElement.parentElement.style.display='none'">✕</button>`;
+        html += `</div>`;
+        html += `<div class="briefing-actions">`;
+        for (const a of actions) {
+            html += `<div class="briefing-action">${a}</div>`;
+        }
+        html += `</div>`;
+
+        if (data.last_depletion && data.last_depletion.date) {
+            html += `<div class="briefing-meta">Last depletion: ${data.last_depletion.date} (${data.last_depletion.total} units) · Reship: ${data.last_depletion.reship_pct}%</div>`;
+        }
+
+        el.className = `briefing-banner ${cls}`;
+        el.innerHTML = html;
+        el.style.display = '';
+    } catch (e) {
+        // Briefing is non-critical — silently fail
+    }
+}
+
+// ── Smart Wednesday PO ──────────────────────────────────────────────
+
+let _smartPoData = null;
+
+async function loadSmartPo() {
+    setMascot('loading', 'Building smart PO...');
+    try {
+        const data = await fetch('/api/smart_po').then(r => r.json());
+        _smartPoData = data;
+        renderSmartPo(data);
+        setMascot('happy', `${data.total_skus} SKUs across ${data.vendors?.length || 0} vendors — $${data.grand_total}`);
+    } catch (e) {
+        setMascot('alert', 'Smart PO failed');
+        log('Smart PO error: ' + e.message, 'red');
+    }
+}
+
+function renderSmartPo(data) {
+    const el = document.getElementById('smart-po-panel');
+    if (!el) return;
+
+    const vendors = data.vendors || [];
+    if (!vendors.length) {
+        el.innerHTML = '<div style="padding:12px;color:var(--green);font-family:\'Space Mono\',monospace;font-size:12px">No shortages — no PO needed this week</div>';
+        return;
+    }
+
+    let html = `<div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--accent);margin-bottom:8px;padding:0 8px">${data.total_skus} SKUs · ${vendors.length} vendors · Grand total: $${data.grand_total.toLocaleString()}</div>`;
+
+    for (const v of vendors) {
+        html += `<div class="smart-po-vendor">`;
+        html += `<div class="smart-po-vendor-header">`;
+        html += `<span>${v.vendor}</span>`;
+        html += `<span>${v.sku_count} SKUs · ${v.total_units} units · $${v.total_cost.toLocaleString()}</span>`;
+        html += `<button class="btn btn-green btn-sm" style="padding:2px 8px;font-size:10px" onclick="exportVendorPo('${v.vendor}')">Export</button>`;
+        html += `</div>`;
+        html += `<table class="data-table" style="width:100%;font-size:11px"><thead><tr>`;
+        html += `<th>SKU</th><th>Deficit</th><th>Open PO</th><th>Order Qty</th><th>Cases</th><th>$/unit</th><th>Line $</th>`;
+        html += `</tr></thead><tbody>`;
+        for (const l of v.lines) {
+            html += `<tr>`;
+            html += `<td>${l.sku}</td>`;
+            html += `<td style="color:#ff5555;font-family:'Rajdhani',sans-serif">${l.deficit}</td>`;
+            html += `<td style="color:${l.existing_po > 0 ? 'var(--accent)' : '#666'}">${l.existing_po || '—'}</td>`;
+            html += `<td style="font-family:'Rajdhani',sans-serif;font-weight:600">${l.order_qty}</td>`;
+            html += `<td>${l.cases}×${l.case_qty}</td>`;
+            html += `<td>$${l.unit_cost.toFixed(2)}</td>`;
+            html += `<td>$${l.line_cost.toFixed(2)}</td>`;
+            html += `</tr>`;
+        }
+        html += `</tbody></table></div>`;
+    }
+
+    el.innerHTML = html;
+}
+
+function exportVendorPo(vendorName) {
+    if (!_smartPoData) return;
+    const v = _smartPoData.vendors.find(x => x.vendor === vendorName);
+    if (!v) return;
+
+    let csv = 'SKU,Deficit,Open PO,Order Qty,Cases,Case Qty,Unit Cost,Line Cost\\n';
+    for (const l of v.lines) {
+        csv += `${l.sku},${l.deficit},${l.existing_po},${l.order_qty},${l.cases},${l.case_qty},${l.unit_cost},${l.line_cost}\\n`;
+    }
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `PO_${vendorName.replace(/\\s+/g, '_')}_${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    log(`Exported PO for ${vendorName}`, 'green');
+}
+
 async function loadCalendar() {
     log('Loading action calendar...', 'cyan');
     setMascot('loading', 'Building calendar...');
@@ -5205,6 +5320,7 @@ async function loadRunway() {
         renderRunway(data);
         // Fetch shortage actions and attach to rows
         loadRunwayActions();
+        loadBriefing();
     } catch (e) {
         log('Runway load failed: ' + e.message, 'red');
     }

@@ -4860,6 +4860,204 @@ def swap_tag_skus():
     })
 
 
+# ── Morning Briefing ─────────────────────────────────────────────────
+
+@app.route("/api/briefing")
+def get_briefing():
+    """Generate a morning briefing summary from existing data.
+
+    Returns day of week, critical SKUs, upcoming ship dates, open PO ETAs,
+    depletion stats, and action items.
+    """
+    from ship_dates import compute_ship_week
+
+    s = _s()
+    today = datetime.date.today()
+    day_name = today.strftime("%A")
+
+    # Ship dates
+    sw = compute_ship_week(today)
+    ship_info = {
+        "sat": sw.get("wk1_sat", ""),
+        "tue": sw.get("wk1_tue", ""),
+        "ship_tag": sw.get("ship_tag_sat", ""),
+    }
+
+    # Shortage SKUs from last calculate
+    inv = STATE.get("rmfg_inventory", {})
+    sat_demand = STATE.get("rmfg_sat_demand", {})
+    critical_skus = []
+    tight_skus = []
+    if inv and sat_demand:
+        all_skus = set(inv.keys()) | set(sat_demand.keys())
+        for sku in sorted(all_skus):
+            if not sku.startswith(("CH-", "MT-", "AC-")):
+                continue
+            avail = inv.get(sku, 0)
+            demand = int(round(sat_demand.get(sku, 0)))
+            if demand <= 0:
+                continue
+            net = avail - demand
+            if net < 0:
+                critical_skus.append({"sku": sku, "deficit": abs(net), "avail": avail, "demand": demand})
+            elif net < demand * 0.2:
+                tight_skus.append({"sku": sku, "net": net, "avail": avail, "demand": demand})
+
+    # Open POs with upcoming ETAs
+    open_pos = s.get("open_pos", [])
+    upcoming_pos = []
+    for po in open_pos:
+        if po.get("status", "").lower() in ("open", "ordered"):
+            eta = po.get("eta", "")
+            upcoming_pos.append({
+                "sku": po.get("sku", ""),
+                "qty": po.get("qty", 0),
+                "eta": eta,
+                "vendor": po.get("vendor", ""),
+            })
+    upcoming_pos.sort(key=lambda x: x["eta"] or "9999")
+
+    # Depletion history — last entry
+    dep_hist = s.get("depletion_history", [])
+    last_depletion = dep_hist[-1] if dep_hist else None
+    reship_pct = s.get("reship_buffer_pct", 0)
+
+    # Wednesday PO needed?
+    is_wednesday = today.weekday() == 2
+    po_needed = is_wednesday and len(critical_skus) > 0
+
+    # Build action items
+    actions = []
+    if critical_skus:
+        skus_str = ", ".join(c["sku"] for c in critical_skus[:5])
+        actions.append(f"{len(critical_skus)} SKU(s) in shortage: {skus_str}")
+    if tight_skus:
+        actions.append(f"{len(tight_skus)} SKU(s) running tight")
+    if po_needed:
+        actions.append("Wednesday PO needed — check Cut Order view")
+    if upcoming_pos:
+        next_po = upcoming_pos[0]
+        actions.append(f"Next PO arriving: {next_po['sku']} ({next_po['qty']} units) ETA {next_po['eta']}")
+    if not actions:
+        actions.append("All clear — no immediate actions needed")
+
+    return jsonify({
+        "day": day_name,
+        "date": today.isoformat(),
+        "ship": ship_info,
+        "critical": critical_skus[:10],
+        "tight": tight_skus[:10],
+        "upcoming_pos": upcoming_pos[:5],
+        "last_depletion": {
+            "date": last_depletion.get("date", "") if last_depletion else None,
+            "total": last_depletion.get("total", 0) if last_depletion else 0,
+            "reship_pct": reship_pct,
+        },
+        "actions": actions,
+        "po_needed": po_needed,
+    })
+
+
+# ── Smart Wednesday PO ───────────────────────────────────────────────
+
+@app.route("/api/smart_po")
+def smart_po():
+    """Auto-draft PO lines grouped by vendor with costs and open PO offsets.
+
+    Extends wed_po with vendor_catalog enrichment and open PO deductions.
+    """
+    s = _s()
+    vendor_catalog = s.get("vendor_catalog", {})
+    open_pos = s.get("open_pos", [])
+    inv = STATE.get("rmfg_inventory")
+    sat_demand = STATE.get("rmfg_sat_demand")
+    bulk_weights = STATE.get("bulk_weights", {})
+
+    # Build shortage list (same logic as wed_po)
+    shortage_rows = []
+    if inv and sat_demand:
+        all_ch = set(k for k in inv if k.startswith(("CH-", "MT-", "AC-")))
+        all_ch.update(k for k in sat_demand if k.startswith(("CH-", "MT-", "AC-")))
+        for sku in all_ch:
+            avail = inv.get(sku, 0)
+            demand = int(round(sat_demand.get(sku, 0)))
+            net = avail - demand
+            if net < 0:
+                bw = bulk_weights.get(sku, {})
+                potential = bw.get("potential_yield", 0)
+                if potential > 0 and avail + potential >= demand:
+                    continue
+                effective_net = net + potential
+                shortage_rows.append({
+                    "sku": sku, "net": effective_net,
+                    "avail": avail, "demand": demand,
+                    "potential": potential,
+                })
+
+    # Build open PO index (sku -> total open qty)
+    open_po_qty = defaultdict(int)
+    for po in open_pos:
+        if po.get("status", "").lower() in ("open", "ordered"):
+            open_po_qty[po.get("sku", "")] += int(po.get("qty", 0))
+
+    # Build PO lines grouped by vendor
+    vendor_groups = defaultdict(list)
+    for r in shortage_rows:
+        sku = r["sku"]
+        deficit = abs(r["net"])
+        existing = open_po_qty.get(sku, 0)
+        remaining_deficit = max(0, deficit - existing)
+
+        vi = vendor_catalog.get(sku, {})
+        vendor = vi.get("vendor", "Unknown")
+        unit_cost = float(vi.get("unit_cost", 0))
+        case_qty = int(vi.get("case_qty", 1)) or 1
+        moq = int(vi.get("moq", 0))
+
+        if remaining_deficit <= 0:
+            continue
+
+        # Round up to case qty, respect MOQ
+        cases = math.ceil(remaining_deficit / case_qty)
+        order_qty = max(cases * case_qty, moq)
+        line_cost = round(order_qty * unit_cost, 2)
+
+        vendor_groups[vendor].append({
+            "sku": sku,
+            "deficit": deficit,
+            "existing_po": existing,
+            "remaining_deficit": remaining_deficit,
+            "order_qty": order_qty,
+            "cases": math.ceil(order_qty / case_qty),
+            "case_qty": case_qty,
+            "unit_cost": unit_cost,
+            "line_cost": line_cost,
+            "moq": moq,
+        })
+
+    # Sort lines within each vendor by deficit
+    for lines in vendor_groups.values():
+        lines.sort(key=lambda x: -x["deficit"])
+
+    # Build vendor summaries
+    vendors = []
+    for vendor in sorted(vendor_groups.keys()):
+        lines = vendor_groups[vendor]
+        vendors.append({
+            "vendor": vendor,
+            "lines": lines,
+            "total_cost": round(sum(l["line_cost"] for l in lines), 2),
+            "total_units": sum(l["order_qty"] for l in lines),
+            "sku_count": len(lines),
+        })
+
+    return jsonify({
+        "vendors": vendors,
+        "total_skus": sum(v["sku_count"] for v in vendors),
+        "grand_total": round(sum(v["total_cost"] for v in vendors), 2),
+    })
+
+
 # ── Run All endpoint ──────────────────────────────────────────────────
 
 @app.route("/api/run_all", methods=["POST"])
