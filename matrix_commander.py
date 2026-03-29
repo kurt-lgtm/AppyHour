@@ -680,6 +680,215 @@ def print_demand_summary(demand: dict[str, int]) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Phase 2: Interactive swap resolution
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class SwapDecision:
+    """One approved swap: replace short_sku with replacement_sku on N orders."""
+
+    short_sku: str
+    replacement_sku: str
+    qty: int  # number of units to swap
+
+
+def interactive_swap_resolution(
+    shortages: list[ShortageItem],
+    inventory: dict[str, float],
+    demand: dict[str, int],
+) -> list[SwapDecision]:
+    """Interactively resolve shortages with swap recommendations.
+
+    For each shortage with swap candidates, prompts the user to accept,
+    pick an alternative, or skip. Returns list of approved swaps.
+    """
+    if not shortages:
+        return []
+
+    decisions: list[SwapDecision] = []
+    # Track running inventory adjustments from prior swaps
+    inv_adj: dict[str, int] = {}  # sku -> units consumed by swaps
+    demand_adj: dict[str, int] = {}  # sku -> units added by swaps
+
+    print(f"\n{_BOLD}{'=' * 60}{_RESET}")
+    print(f"{_BOLD}  SWAP RESOLUTION — {len(shortages)} shortage(s){_RESET}")
+    print(f"{_BOLD}{'=' * 60}{_RESET}")
+
+    for s in shortages:
+        if not s.swap_candidates:
+            print(f"\n  {_RED}{s.sku}{_RESET} ({s.product_name}): short {s.shortage}")
+            print(f"    {_YELLOW}No swap candidates available — manual resolution needed{_RESET}")
+            continue
+
+        # Recalculate candidate surplus with running adjustments
+        live_candidates: list[tuple[str, int]] = []
+        for alt_sku, _orig_surplus in s.swap_candidates:
+            alt_avail = inventory.get(alt_sku, 0) - inv_adj.get(alt_sku, 0)
+            alt_demand = demand.get(alt_sku, 0) + demand_adj.get(alt_sku, 0)
+            surplus = int(alt_avail) - alt_demand
+            if surplus > 0:
+                live_candidates.append((alt_sku, surplus))
+
+        if not live_candidates:
+            print(f"\n  {_RED}{s.sku}{_RESET} ({s.product_name}): short {s.shortage}")
+            print(f"    {_YELLOW}Swap candidates exhausted by prior swaps — manual resolution needed{_RESET}")
+            continue
+
+        print(f"\n  {_RED}{s.sku}{_RESET} ({s.product_name})")
+        print(f"    Demand: {s.demand}  Available: {s.available}  {_RED}Short: {s.shortage}{_RESET}")
+        if s.family:
+            print(f"    Family: {s.family}")
+        print()
+        for idx, (alt_sku, surplus) in enumerate(live_candidates, 1):
+            alt_name = SKU_TO_NAME.get(alt_sku, alt_sku)
+            can_cover = min(surplus, s.shortage)
+            marker = " <-- recommended" if idx == 1 else ""
+            print(f"    {idx}) {alt_sku} ({alt_name}): {surplus} surplus, covers {can_cover}{marker}")
+        print(f"    s) Skip — handle manually")
+        print()
+
+        choice = input(f"    Choice [1/{'/'.join(str(i) for i in range(2, len(live_candidates) + 1))}/s]: ").strip()
+
+        if choice.lower() == "s" or choice == "":
+            print(f"    {_YELLOW}Skipped{_RESET}")
+            continue
+
+        try:
+            pick = int(choice) - 1
+            if 0 <= pick < len(live_candidates):
+                alt_sku, surplus = live_candidates[pick]
+                swap_qty = min(surplus, s.shortage)
+                alt_name = SKU_TO_NAME.get(alt_sku, alt_sku)
+                decisions.append(
+                    SwapDecision(
+                        short_sku=s.sku,
+                        replacement_sku=alt_sku,
+                        qty=swap_qty,
+                    )
+                )
+                # Update running adjustments
+                inv_adj[alt_sku] = inv_adj.get(alt_sku, 0) + swap_qty
+                demand_adj[alt_sku] = demand_adj.get(alt_sku, 0) + swap_qty
+                print(f"    {_GREEN}Approved: {s.sku} -> {alt_sku} ({swap_qty} units){_RESET}")
+                if swap_qty < s.shortage:
+                    print(f"    {_YELLOW}Partial: still short {s.shortage - swap_qty} units{_RESET}")
+            else:
+                print(f"    {_YELLOW}Invalid choice, skipped{_RESET}")
+        except ValueError:
+            print(f"    {_YELLOW}Invalid input, skipped{_RESET}")
+
+    if decisions:
+        print(f"\n{_BOLD}  Swap Summary: {len(decisions)} swap(s) approved{_RESET}")
+        for d in decisions:
+            short_name = SKU_TO_NAME.get(d.short_sku, d.short_sku)
+            repl_name = SKU_TO_NAME.get(d.replacement_sku, d.replacement_sku)
+            print(f"    {d.short_sku} ({short_name}) -> {d.replacement_sku} ({repl_name}): {d.qty} units")
+    else:
+        print(f"\n  {_YELLOW}No swaps approved.{_RESET}")
+
+    print(f"{_BOLD}{'=' * 60}{_RESET}\n")
+    return decisions
+
+
+def apply_swaps_to_xlsx(
+    xlsx_path: str | Path,
+    decisions: list[SwapDecision],
+    orders: list[OrderRow],
+) -> str:
+    """Apply approved swaps to the XLSX and save as a new file.
+
+    For each swap decision, finds orders that have the short_sku assigned
+    and replaces it with the replacement_sku (up to the swap qty).
+    Saves to a new file with _FIXED suffix.
+
+    Returns the output file path.
+    """
+    wb = openpyxl.load_workbook(str(xlsx_path))
+    ws = wb["Access_LIVE"]
+
+    # Build column index maps: product_name -> col_index, sku -> col_index
+    headers: list[str] = []
+    for cell in ws[1]:
+        headers.append(str(cell.value or ""))
+
+    sku_to_col: dict[str, int] = {}
+    for idx, h in enumerate(headers):
+        if h.startswith("AHB") and ": " in h:
+            prod_name = h.split(": ", 1)[1]
+            sku = NAME_TO_SKU.get(prod_name)
+            if sku:
+                sku_to_col[sku] = idx + 1  # openpyxl is 1-indexed
+
+    # Build order_id -> row_number map
+    oid_col = 1  # Column A = OrderID
+    oid_to_row: dict[str, int] = {}
+    for row_num in range(2, ws.max_row + 1):
+        oid = str(ws.cell(row_num, oid_col).value or "").strip()
+        if oid:
+            oid_to_row[oid] = row_num
+
+    swap_log: list[str] = []
+    for decision in decisions:
+        short_col = sku_to_col.get(decision.short_sku)
+        repl_col = sku_to_col.get(decision.replacement_sku)
+
+        if not short_col:
+            swap_log.append(f"  SKIP: No column for {decision.short_sku}")
+            continue
+        if not repl_col:
+            swap_log.append(f"  SKIP: No column for {decision.replacement_sku}")
+            continue
+
+        remaining = decision.qty
+        swapped_orders = 0
+
+        # Find orders with the short SKU assigned
+        for o in orders:
+            if remaining <= 0:
+                break
+            if decision.short_sku not in o.assignments:
+                continue
+
+            row_num = oid_to_row.get(o.order_id)
+            if not row_num:
+                continue
+
+            qty = o.assignments[decision.short_sku]
+            swap_amt = min(qty, remaining)
+
+            # Remove from short column
+            old_val = ws.cell(row_num, short_col).value or 0
+            new_short_val = max(0, int(old_val) - swap_amt)
+            ws.cell(row_num, short_col).value = new_short_val if new_short_val > 0 else None
+
+            # Add to replacement column
+            old_repl = ws.cell(row_num, repl_col).value or 0
+            ws.cell(row_num, repl_col).value = int(old_repl) + swap_amt
+
+            remaining -= swap_amt
+            swapped_orders += 1
+
+        swap_log.append(
+            f"  {decision.short_sku} -> {decision.replacement_sku}: "
+            f"{decision.qty - remaining}/{decision.qty} swapped across {swapped_orders} orders"
+        )
+
+    # Save to new file
+    src = Path(xlsx_path)
+    out_path = src.parent / f"{src.stem}_FIXED{src.suffix}"
+    wb.save(str(out_path))
+    wb.close()
+
+    print(f"\n{_BOLD}  Swaps Applied to XLSX{_RESET}")
+    for line in swap_log:
+        print(line)
+    print(f"\n  Saved: {_GREEN}{out_path.name}{_RESET}")
+
+    return str(out_path)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # CLI commands
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -720,24 +929,7 @@ def cmd_check(xlsx_path: str, inventory_path: Optional[str] = None) -> bool:
     """Run inventory cross-check and shortage report."""
     print(f"  Loading {Path(xlsx_path).name}...")
     orders, _, _ = parse_matrix(xlsx_path)
-
-    # Load inventory
-    if inventory_path:
-        p = Path(inventory_path)
-        if p.suffix == ".json":
-            print(f"  Loading inventory from {p.name} (JSON)...")
-            with open(p, encoding="utf-8") as f:
-                raw = json.load(f)
-            if "inventory" in raw:
-                inventory = {sku: d.get("qty", 0) for sku, d in raw["inventory"].items()}
-            else:
-                inventory = {k: v for k, v in raw.items()}
-        else:
-            print(f"  Loading inventory from {p.name} (CSV)...")
-            inventory = load_inventory_csv(p)
-    else:
-        print("  Loading inventory from settings JSON...")
-        inventory = load_inventory_settings()
+    inventory = _load_inventory(inventory_path)
 
     if not inventory:
         print(f"  {_RED}No inventory data loaded! Provide --inventory or check settings.{_RESET}")
@@ -752,14 +944,63 @@ def cmd_check(xlsx_path: str, inventory_path: Optional[str] = None) -> bool:
     return len(shortages) == 0
 
 
+def _load_inventory(inventory_path: Optional[str]) -> dict[str, float]:
+    """Load inventory from CSV, JSON, or settings. Shared by cmd_check/cmd_full/cmd_swap."""
+    if inventory_path:
+        p = Path(inventory_path)
+        if p.suffix == ".json":
+            with open(p, encoding="utf-8") as f:
+                raw = json.load(f)
+            if "inventory" in raw:
+                return {sku: d.get("qty", 0) for sku, d in raw["inventory"].items()}
+            return {k: v for k, v in raw.items()}
+        return load_inventory_csv(p)
+    return load_inventory_settings()
+
+
+def cmd_swap(xlsx_path: str, inventory_path: Optional[str] = None) -> bool:
+    """Run inventory check + interactive swap resolution standalone."""
+    print(f"  Loading {Path(xlsx_path).name}...")
+    orders, _, _ = parse_matrix(xlsx_path)
+    inventory = _load_inventory(inventory_path)
+
+    if not inventory:
+        print(f"  {_RED}No inventory data loaded!{_RESET}")
+        return False
+
+    print(f"  Loaded {len(inventory)} SKUs from inventory source.")
+    demand = compute_demand(orders)
+    shortages = find_shortages(demand, inventory)
+    print_inventory_report(demand, inventory, shortages)
+
+    if not shortages:
+        print(f"  {_GREEN}No shortages — no swaps needed.{_RESET}")
+        return True
+
+    decisions = interactive_swap_resolution(shortages, inventory, demand)
+    if decisions:
+        fixed_path = apply_swaps_to_xlsx(xlsx_path, decisions, orders)
+        # Re-check
+        fixed_orders, _, _ = parse_matrix(fixed_path)
+        fixed_demand = compute_demand(fixed_orders)
+        remaining = find_shortages(fixed_demand, inventory)
+        if remaining:
+            print(f"  {_YELLOW}{len(remaining)} shortage(s) remain after swaps{_RESET}")
+            return False
+        print(f"  {_GREEN}All shortages resolved!{_RESET}")
+        return True
+
+    return False
+
+
 def cmd_full(xlsx_path: str, inventory_path: Optional[str] = None) -> bool:
-    """Run full Phase 1: validate + inventory check."""
+    """Run full pipeline: validate + inventory check + swap resolution."""
     print(f"\n{_BOLD}{'#' * 60}{_RESET}")
-    print(f"{_BOLD}  MATRIX COMMANDER — Full Phase 1 Pipeline{_RESET}")
+    print(f"{_BOLD}  MATRIX COMMANDER — Full Pipeline{_RESET}")
     print(f"{_BOLD}{'#' * 60}{_RESET}\n")
 
     # Step 1: Validate
-    print(f"  {_CYAN}[Step 1/2] Validation{_RESET}")
+    print(f"  {_CYAN}[Step 1/3] Validation{_RESET}")
     print(f"  Loading {Path(xlsx_path).name}...")
     orders, product_columns, unmapped = parse_matrix(xlsx_path)
 
@@ -781,22 +1022,10 @@ def cmd_full(xlsx_path: str, inventory_path: Optional[str] = None) -> bool:
     validation_passed = print_validation_report(results, len(orders))
 
     # Step 2: Inventory check
-    print(f"  {_CYAN}[Step 2/2] Inventory Cross-Check{_RESET}")
+    print(f"  {_CYAN}[Step 2/3] Inventory Cross-Check{_RESET}")
+    inventory = _load_inventory(inventory_path)
 
-    if inventory_path:
-        p = Path(inventory_path)
-        if p.suffix == ".json":
-            with open(p, encoding="utf-8") as f:
-                raw = json.load(f)
-            if "inventory" in raw:
-                inventory = {sku: d.get("qty", 0) for sku, d in raw["inventory"].items()}
-            else:
-                inventory = {k: v for k, v in raw.items()}
-        else:
-            inventory = load_inventory_csv(p)
-    else:
-        inventory = load_inventory_settings()
-
+    shortages: list[ShortageItem] = []
     if inventory:
         print(f"  Loaded {len(inventory)} SKUs from inventory source.")
         demand = compute_demand(orders)
@@ -809,12 +1038,33 @@ def cmd_full(xlsx_path: str, inventory_path: Optional[str] = None) -> bool:
         print_demand_summary(demand)
         inventory_ok = True
 
+    # Step 3: Swap resolution (if shortages found and validation passed)
+    fixed_path = None
+    if shortages and validation_passed:
+        print(f"  {_CYAN}[Step 3/3] Swap Resolution{_RESET}")
+        decisions = interactive_swap_resolution(shortages, inventory, demand)
+        if decisions:
+            fixed_path = apply_swaps_to_xlsx(xlsx_path, decisions, orders)
+            # Re-check inventory after swaps
+            print(f"\n  {_CYAN}Re-checking inventory after swaps...{_RESET}")
+            fixed_orders, _, _ = parse_matrix(fixed_path)
+            fixed_demand = compute_demand(fixed_orders)
+            remaining_shortages = find_shortages(fixed_demand, inventory)
+            if remaining_shortages:
+                print(f"  {_YELLOW}{len(remaining_shortages)} shortage(s) remain after swaps{_RESET}")
+                inventory_ok = False
+            else:
+                print(f"  {_GREEN}All shortages resolved!{_RESET}")
+                inventory_ok = True
+
     # Final summary
     print(f"\n{_BOLD}{'#' * 60}{_RESET}")
     if validation_passed and inventory_ok:
         print(f"  {_GREEN}READY — All checks passed, no shortages.{_RESET}")
+        if fixed_path:
+            print(f"  {_GREEN}Fixed file: {Path(fixed_path).name}{_RESET}")
     elif validation_passed and not inventory_ok:
-        print(f"  {_YELLOW}REVIEW — Validation passed but shortages found.{_RESET}")
+        print(f"  {_YELLOW}REVIEW — Validation passed but shortages remain.{_RESET}")
     else:
         print(f"  {_RED}BLOCKED — Validation failures must be resolved.{_RESET}")
     print(f"{_BOLD}{'#' * 60}{_RESET}\n")
@@ -843,8 +1093,13 @@ def main() -> None:
     p_chk.add_argument("xlsx", help="Path to AHB_WeeklyProductionQuery XLSX file")
     p_chk.add_argument("--inventory", "-i", help="Inventory CSV (sku,available_qty) or JSON path")
 
+    # swap
+    p_swap = sub.add_parser("swap", help="Interactive shortage swap resolution")
+    p_swap.add_argument("xlsx", help="Path to AHB_WeeklyProductionQuery XLSX file")
+    p_swap.add_argument("--inventory", "-i", help="Inventory CSV (sku,available_qty) or JSON path")
+
     # full
-    p_full = sub.add_parser("full", help="Run full pipeline: validate + inventory check")
+    p_full = sub.add_parser("full", help="Run full pipeline: validate + check + swap")
     p_full.add_argument("xlsx", help="Path to AHB_WeeklyProductionQuery XLSX file")
     p_full.add_argument("--inventory", "-i", help="Inventory CSV (sku,available_qty) or JSON path")
 
@@ -854,6 +1109,8 @@ def main() -> None:
         ok = cmd_validate(args.xlsx)
     elif args.command == "check":
         ok = cmd_check(args.xlsx, getattr(args, "inventory", None))
+    elif args.command == "swap":
+        ok = cmd_swap(args.xlsx, getattr(args, "inventory", None))
     elif args.command == "full":
         ok = cmd_full(args.xlsx, getattr(args, "inventory", None))
     else:
