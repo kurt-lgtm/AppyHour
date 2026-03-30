@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Matrix Commander</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=Space+Mono:wght@400;700&family=Rajdhani:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/styles.css?v=1">
+</head>
+<body>
+<div id="app">
+
+  <!-- Header -->
+  <header id="header">
+    <div class="header-left">
+      <h1>MATRIX COMMANDER</h1>
+      <span class="version">v1.0</span>
+    </div>
+    <div class="header-right">
+      <div class="config-group">
+        <label>Ship Day</label>
+        <select id="shipDay">
+          <option value="SAT" selected>SAT</option>
+          <option value="TUE">TUE</option>
+        </select>
+      </div>
+      <div class="config-group">
+        <label>Ship Date</label>
+        <input type="date" id="shipDate">
+      </div>
+    </div>
+  </header>
+
+  <!-- Generate Section -->
+  <section id="generate-section">
+    <div class="generate-row">
+      <div class="config-group">
+        <label>RMFG Tag</label>
+        <input type="text" id="rmfgTag" placeholder="RMFG_20260328">
+      </div>
+      <button id="btnGenerate" class="btn primary">Generate from Shopify</button>
+    </div>
+    <div class="or-divider"><span>OR</span></div>
+  </section>
+
+  <!-- Upload Section -->
+  <section id="upload-section">
+    <div class="drop-zone" id="mainDrop" data-type="main">
+      <div class="drop-icon">+</div>
+      <div class="drop-label">Drop RMFG XLSX</div>
+      <div class="drop-file" id="mainFileName"></div>
+    </div>
+    <div class="drop-zone secondary" id="giftDrop" data-type="gift">
+      <div class="drop-icon">+</div>
+      <div class="drop-label">Drop Gift XLSX (optional)</div>
+      <div class="drop-file" id="giftFileName"></div>
+    </div>
+    <button id="btnValidate" class="btn" disabled>Validate Upload</button>
+  </section>
+
+  <!-- Validation Panel -->
+  <section id="validation-panel" class="panel hidden">
+    <h2>VALIDATION</h2>
+    <div class="stats-row">
+      <div class="stat"><span class="stat-num" id="orderCount">0</span><span class="stat-label">Orders</span></div>
+      <div class="stat"><span class="stat-num" id="regularCount">0</span><span class="stat-label">Regular</span></div>
+      <div class="stat"><span class="stat-num" id="giftCount">0</span><span class="stat-label">Gift</span></div>
+    </div>
+    <div id="checksList"></div>
+  </section>
+
+  <!-- Inventory Panel -->
+  <section id="inventory-panel" class="panel hidden">
+    <h2>INVENTORY</h2>
+    <div class="inventory-controls">
+      <button id="btnLoadInventory" class="btn">Load from Settings</button>
+      <label class="btn file-btn">
+        Upload CSV
+        <input type="file" id="inventoryFile" accept=".csv" hidden>
+      </label>
+    </div>
+    <div class="stats-row">
+      <div class="stat"><span class="stat-num" id="skuCount">0</span><span class="stat-label">SKUs</span></div>
+      <div class="stat"><span class="stat-num" id="shortageCount">0</span><span class="stat-label">Shortages</span></div>
+    </div>
+    <div id="inventoryTable" class="table-container"></div>
+  </section>
+
+  <!-- Swap Panel -->
+  <section id="swap-panel" class="panel hidden">
+    <h2>SWAP RESOLUTION</h2>
+    <div id="swapList"></div>
+  </section>
+
+  <!-- Actions -->
+  <section id="actions-panel" class="panel hidden">
+    <h2>ACTIONS</h2>
+    <div class="action-buttons">
+      <button id="btnFinalize" class="btn primary">Finalize XLSX</button>
+    </div>
+    <div id="finalResult"></div>
+  </section>
+
+  <!-- Status Bar -->
+  <footer id="statusBar">
+    <span id="statusText">Ready</span>
+  </footer>
+
+</div>
+
+<script src="/static/app.js?v=1"></script>
+</body>
+</html>
