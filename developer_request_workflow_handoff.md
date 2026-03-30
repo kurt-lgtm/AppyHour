@@ -50,6 +50,27 @@ AC-DTCH,540
 
 ---
 
+## Part 1b: Unify PR-CJAM and Second-Pass Allocations (P0 — Must Have)
+
+**Problem:** The React tool currently generates TWO separate uploads:
+1. First: PR-CJAM assignments (cheese + jam pairings)
+2. Second: All other parents (CEX-EC, AHB-MED, AHB-LGE, EX-EC, EX-EA, etc.)
+
+The second pass must wait for the first to finish uploading via Matrixify before it can run, because it needs to see what PR-CJAM items are already on Shopify to avoid duplicating a cheese. **This two-pass workflow is the #1 reason uploads take so long** — it doubles the Matrixify wait time.
+
+**Change:** Generate ALL assignments in a single pass. One output CSV containing PR-CJAM + CEX-EC + AHB-MED/LGE + EX-EC + EX-EA + everything.
+
+**Why this is now safe:** We're replacing Matrixify with direct Shopify sync (GraphQL order edit API). The sync reads current order line items before each edit and skips any SKU that's already on the order. Duplicate detection happens at sync time, not at generation time. So there's no need to split into two passes.
+
+**What changes in the React tool:**
+1. Run PR-CJAM allocation and all other allocations together in one pass
+2. Output one combined CSV (same format, just all rows together)
+3. The sync tool handles the rest — it won't add CH-MAU3 twice even if PR-CJAM-MONG and CEX-EC-MONG both resolve to it
+
+**Impact:** Cuts total sync time from 60+ minutes (two Matrixify uploads with wait) to ~5 minutes (one direct sync pass). This is the CEO's "uploads take too long" concern resolved.
+
+---
+
 ## Part 2: Demand Summary Output (P0 — Must Have)
 
 After allocation, the tool should output a summary of what it allocated:
@@ -343,12 +364,13 @@ The Python prototype that implements validation + inventory checking:
 | Change | Priority | Why |
 |--------|----------|-----|
 | Inventory CSV input | **P0** | Eliminates manual Shopify upload, root cause of bad allocations |
+| Unify PR-CJAM + second pass | **P0** | Cuts upload time from 60+ min to 5 min — CEO's top concern |
 | Demand summary output | **P0** | Enables pre-upload validation |
-| Pre-output validation gate | **P1** | Catches errors before they hit Shopify/RMFG |
-| Shopify sync (replace Matrixify) | **P1** | Eliminates slow upload + post-fix cycle |
+| Shopify sync (replace Matrixify) | **P1** | Direct GraphQL, 5-10x faster, built-in duplicate protection |
 | Generate RMFG matrix directly | **P1** | Eliminates RMFG portal + all manual reformatting |
-| Swap suggestions | **P2** | Reduces shortage investigation from 60 min to 2 min |
+| Pre-output validation gate | **P1** | Catches errors before they hit Shopify/RMFG |
 | Gift redemption merge | **P1** | Eliminates separate tool + manual merge — needed for vacation handoff |
+| Swap suggestions | **P2** | Reduces shortage investigation from 60 min to 2 min |
 
 ## Questions for Developer
 
