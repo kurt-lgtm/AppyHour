@@ -52,10 +52,13 @@ AC-TCRISP,445
 - If a SKU is NOT in the CSV, treat it as 0 (don't fall back to Shopify inventory)
 - The tool should validate that all SKUs it needs are present in the CSV and warn if any are missing
 
-I will generate this CSV from my planning tools, which calculate real availability:
-`last confirmed inventory + cut order yields + expected intakes - depletions`
+**This CSV is already generated automatically** by our fulfillment planning app at:
+`http://localhost:5187/api/export_inventory_csv`
 
-This number is accurate, accounts for restocks, and doesn't have the paid/$0 splitting problem.
+The app calculates real availability by replaying an inventory journal:
+`last Dropbox snapshot + cut order yields + production - depletions (Sat + Tue)`
+
+This number is accurate, accounts for restocks via open POs, and doesn't have the paid/$0 splitting problem. The React tool just needs to accept this file — no inventory calculation logic needed on your end.
 
 ### 2. Return a Demand Summary
 
@@ -74,15 +77,14 @@ PK-TCUST,2357,"AHB-MED: 1847, AHB-LGE: 510"
 
 This lets me cross-check total demand against my inventory before uploading anything. If I see a problem, I can fix it before it hits Shopify — not after.
 
-### 3. Keep the Matrixify Upload CSV Format the Same
+### 3. Output Format
 
-No changes needed to the output format. The same CSV structure works:
-
+The Matrixify upload CSV format can stay the same for now:
 ```
 Line: Product ID, Line: Product Handle, Line: Command, Line: Quantity, Line: Type, Command, Name, ID, product_id, product_name, child_sku, parent_sku
 ```
 
-I'm building a tool on my end that will process this output (validate, check for issues, and sync to Shopify). The upload format stays the same.
+I have a tool (Matrix Commander) that processes this output, validates it, and syncs to Shopify directly — replacing Matrixify uploads entirely. So the React tool's job is just: accept inventory CSV → allocate → output the assignment CSV + demand summary. Everything downstream is handled.
 
 ---
 
