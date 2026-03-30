@@ -3,6 +3,7 @@ Fulfillment Planner -- Flask + pywebview
 Gamified weekly cheese fulfillment planning.
 Shares settings JSON with inventory_reorder.py.
 """
+
 from __future__ import annotations
 
 import json
@@ -42,39 +43,54 @@ ASSIGNMENT_EXCLUDE = {"CH-MAFT"}
 
 # Global extra assignment slots (single SKU across all curations)
 GLOBAL_EXTRA_SLOTS = {
-    "EX-EC":  {"category": "Cheese",        "prefix": "CH-"},
-    "CEX-EM": {"category": "Meat",          "prefix": "MT-"},
-    "EX-EM":  {"category": "Meat",          "prefix": "MT-"},
+    "EX-EC": {"category": "Cheese", "prefix": "CH-"},
+    "CEX-EM": {"category": "Meat", "prefix": "MT-"},
+    "EX-EM": {"category": "Meat", "prefix": "MT-"},
     "CEX-EA": {"category": "Accompaniment", "prefix": "AC-"},
-    "EX-EA":  {"category": "Accompaniment", "prefix": "AC-"},
+    "EX-EA": {"category": "Accompaniment", "prefix": "AC-"},
 }
 
 MONTHLY_BOX_TYPES = ["AHB-MED", "AHB-CMED", "AHB-LGE"]
 MONTHLY_BOX_SLOTS = {
     "AHB-MED": [
-        ("Cheese 1", "CH-"), ("Cheese 2", "CH-"),
-        ("Meat 1", "MT-"), ("Meat 2", "MT-"),
+        ("Cheese 1", "CH-"),
+        ("Cheese 2", "CH-"),
+        ("Meat 1", "MT-"),
+        ("Meat 2", "MT-"),
         ("Crackers", "AC-"),
-        ("Accompaniment 1", "AC-"), ("Accompaniment 2", "AC-"),
-        ("PR-CJAM-GEN Cheese", "CH-"), ("PR-CJAM-GEN Jam", "AC-"),
+        ("Accompaniment 1", "AC-"),
+        ("Accompaniment 2", "AC-"),
+        ("PR-CJAM-GEN Cheese", "CH-"),
+        ("PR-CJAM-GEN Jam", "AC-"),
     ],
     "AHB-CMED": [
-        ("Cheese 1", "CH-"), ("Cheese 2", "CH-"),
-        ("Cheese 3", "CH-"), ("Cheese 4", "CH-"),
+        ("Cheese 1", "CH-"),
+        ("Cheese 2", "CH-"),
+        ("Cheese 3", "CH-"),
+        ("Cheese 4", "CH-"),
         ("Crackers", "AC-"),
-        ("Accompaniment 1", "AC-"), ("Accompaniment 2", "AC-"),
-        ("PR-CJAM-GEN Cheese", "CH-"), ("PR-CJAM-GEN Jam", "AC-"),
+        ("Accompaniment 1", "AC-"),
+        ("Accompaniment 2", "AC-"),
+        ("PR-CJAM-GEN Cheese", "CH-"),
+        ("PR-CJAM-GEN Jam", "AC-"),
     ],
     "AHB-LGE": [
-        ("Cheese 1", "CH-"), ("Cheese 2", "CH-"), ("Cheese 3", "CH-"),
-        ("Meat 1", "MT-"), ("Meat 2", "MT-"), ("Meat 3", "MT-"),
+        ("Cheese 1", "CH-"),
+        ("Cheese 2", "CH-"),
+        ("Cheese 3", "CH-"),
+        ("Meat 1", "MT-"),
+        ("Meat 2", "MT-"),
+        ("Meat 3", "MT-"),
         ("Crackers", "AC-"),
-        ("Accompaniment 1", "AC-"), ("Accompaniment 2", "AC-"),
-        ("PR-CJAM-GEN Cheese", "CH-"), ("PR-CJAM-GEN Jam", "AC-"),
+        ("Accompaniment 1", "AC-"),
+        ("Accompaniment 2", "AC-"),
+        ("PR-CJAM-GEN Cheese", "CH-"),
+        ("PR-CJAM-GEN Jam", "AC-"),
     ],
 }
 
 # ── Helpers ──────────────────────────────────────────────────────────
+
 
 def _inv_qty(data):
     """Extract qty from an inventory entry (dict or raw int)."""
@@ -83,8 +99,9 @@ def _inv_qty(data):
 
 # ── Settings persistence (shared with main app) ────────────────────────
 
+
 def _get_app_dir():
-    if getattr(sys, 'frozen', False):
+    if getattr(sys, "frozen", False):
         # Frozen exe: settings live next to the executable
         return os.path.dirname(sys.executable)
     base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -96,7 +113,7 @@ def _get_app_dir():
 
 def _get_project_dir():
     """Return the project root dir (for RMFG folders, Shipments, etc.)."""
-    if getattr(sys, 'frozen', False):
+    if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -127,6 +144,7 @@ def save_settings(data):
             # Backup before overwrite
             bak_path = path + ".bak"
             import shutil
+
             shutil.copy2(path, bak_path)
             os.replace(tmp_path, path)
         else:
@@ -138,8 +156,8 @@ def save_settings(data):
 
 # ── Constraint checking ────────────────────────────────────────────────
 
-def check_constraint(curation, prcjam_cheese, cexec_cheese,
-                     recipes, pr_cjam, cex_ec):
+
+def check_constraint(curation, prcjam_cheese, cexec_cheese, recipes, pr_cjam, cex_ec):
     if curation not in CURATION_ORDER:
         return "OK"
     idx = CURATION_ORDER.index(curation)
@@ -169,11 +187,13 @@ def check_constraint(curation, prcjam_cheese, cexec_cheese,
 # ── Flask app ───────────────────────────────────────────────────────────
 
 # PyInstaller frozen support: templates/static live next to the exe in _MEIPASS
-if getattr(sys, 'frozen', False):
+if getattr(sys, "frozen", False):
     _bundle_dir = sys._MEIPASS
-    app = Flask(__name__,
-                template_folder=os.path.join(_bundle_dir, 'templates'),
-                static_folder=os.path.join(_bundle_dir, 'static'))
+    app = Flask(
+        __name__,
+        template_folder=os.path.join(_bundle_dir, "templates"),
+        static_folder=os.path.join(_bundle_dir, "static"),
+    )
 else:
     app = Flask(__name__)
 STATE = {"saved": {}, "csv_demand": {}}
@@ -193,23 +213,25 @@ def index():
 def get_data():
     """Return all data needed for the UI."""
     s = _s()
-    return jsonify({
-        "inventory": s.get("inventory", {}),
-        "wheel_inventory": s.get("wheel_inventory", {}),
-        "open_pos": s.get("open_pos", []),
-        "pr_cjam": s.get("pr_cjam", {}),
-        "cex_ec": s.get("cex_ec", {}),
-        "cexec_splits": s.get("cexec_splits", {}),
-        "curation_recipes": s.get("curation_recipes", {}),
-        "recharge_queued": s.get("recharge_queued", {}),
-        "recharge_queued_resolved": s.get("recharge_queued_resolved", {}),
-        "shopify_api_demand": s.get("shopify_api_demand", {}),
-        "manual_demand": s.get("manual_demand", {}),
-        "vendor_catalog": s.get("vendor_catalog", {}),
-        "global_extras": s.get("global_extras", {}),
-        "curations": ALL_CURATIONS,
-        "curation_order": CURATION_ORDER,
-    })
+    return jsonify(
+        {
+            "inventory": s.get("inventory", {}),
+            "wheel_inventory": s.get("wheel_inventory", {}),
+            "open_pos": s.get("open_pos", []),
+            "pr_cjam": s.get("pr_cjam", {}),
+            "cex_ec": s.get("cex_ec", {}),
+            "cexec_splits": s.get("cexec_splits", {}),
+            "curation_recipes": s.get("curation_recipes", {}),
+            "recharge_queued": s.get("recharge_queued", {}),
+            "recharge_queued_resolved": s.get("recharge_queued_resolved", {}),
+            "shopify_api_demand": s.get("shopify_api_demand", {}),
+            "manual_demand": s.get("manual_demand", {}),
+            "vendor_catalog": s.get("vendor_catalog", {}),
+            "global_extras": s.get("global_extras", {}),
+            "curations": ALL_CURATIONS,
+            "curation_order": CURATION_ORDER,
+        }
+    )
 
 
 @app.route("/api/calculate", methods=["POST"])
@@ -311,8 +333,7 @@ def calculate():
     # 3. Results
     all_ch = set()
     all_ch.update(k for k in inv if k.startswith("CH-"))
-    all_ch.update(d_direct.keys(), d_prcjam.keys(),
-                  d_cexec.keys(), d_exec.keys())
+    all_ch.update(d_direct.keys(), d_prcjam.keys(), d_cexec.keys(), d_exec.keys())
 
     results = []
     shortage_count = 0
@@ -337,23 +358,28 @@ def calculate():
         else:
             status = "OK"
 
-        results.append({
-            "sku": sku, "available": avail,
-            "direct": dd, "prcjam": dp, "cexec": dc, "exec": de,
-            "total_demand": total, "net": net, "status": status,
-        })
+        results.append(
+            {
+                "sku": sku,
+                "available": avail,
+                "direct": dd,
+                "prcjam": dp,
+                "cexec": dc,
+                "exec": de,
+                "total_demand": total,
+                "net": net,
+                "status": status,
+            }
+        )
 
-    status_order = {"SHORTAGE": 0, "TIGHT": 1, "OK": 2,
-                    "SURPLUS": 3, "NO DEMAND": 4}
+    status_order = {"SHORTAGE": 0, "TIGHT": 1, "OK": 2, "SURPLUS": 3, "NO DEMAND": 4}
     results.sort(key=lambda r: (status_order.get(r["status"], 9), r["net"]))
 
     # Assignment demands per curation
     assign_demands = {}
     for cur in ALL_CURATIONS:
-        pr_qty = sum(int(md.get("pr_cjam", {}).get(cur, 0))
-                     for md in rq_resolved.values())
-        ec_qty = sum(int(md.get("cex_ec", {}).get(cur, 0))
-                     for md in rq_resolved.values())
+        pr_qty = sum(int(md.get("pr_cjam", {}).get(cur, 0)) for md in rq_resolved.values())
+        ec_qty = sum(int(md.get("cex_ec", {}).get(cur, 0)) for md in rq_resolved.values())
         assign_demands[cur] = {"pr_qty": pr_qty, "ec_qty": ec_qty}
 
     # Shelf life
@@ -372,11 +398,14 @@ def calculate():
         days = (earliest - today).days
         qty = data.get("qty", 0)
         if days <= 14 and qty > 0:
-            shelf_items.append({
-                "sku": sku, "days_left": days, "qty": qty,
-                "action": "EXPIRED" if days < 0 else
-                          "USE NOW" if days <= 7 else "Prioritize",
-            })
+            shelf_items.append(
+                {
+                    "sku": sku,
+                    "days_left": days,
+                    "qty": qty,
+                    "action": "EXPIRED" if days < 0 else "USE NOW" if days <= 7 else "Prioritize",
+                }
+            )
 
     # Multi-week projections (weeks 2, 3, 4)
     weeks = []
@@ -402,28 +431,35 @@ def calculate():
             else:
                 status = "OK"
             entry = {
-                "sku": sku, "carry_fwd": carry,
-                "demand": demand, "net": proj_net,
-                "status": status, "proj_net": proj_net,
+                "sku": sku,
+                "carry_fwd": carry,
+                "demand": demand,
+                "net": proj_net,
+                "status": status,
+                "proj_net": proj_net,
             }
             week_results.append(entry)
 
-        weeks.append({
-            "week": week_num,
-            "results": week_results,
-            "shortages": week_shortages,
-        })
+        weeks.append(
+            {
+                "week": week_num,
+                "results": week_results,
+                "shortages": week_shortages,
+            }
+        )
         prev = {r["sku"]: r for r in week_results}
 
-    return jsonify({
-        "results": results,
-        "shortages": shortage_count,
-        "total_skus": len([r for r in results if r["total_demand"] > 0]),
-        "total_units": sum(r["total_demand"] for r in results),
-        "assign_demands": assign_demands,
-        "shelf_life": shelf_items,
-        "weeks": weeks,
-    })
+    return jsonify(
+        {
+            "results": results,
+            "shortages": shortage_count,
+            "total_skus": len([r for r in results if r["total_demand"] > 0]),
+            "total_units": sum(r["total_demand"] for r in results),
+            "assign_demands": assign_demands,
+            "shelf_life": shelf_items,
+            "weeks": weeks,
+        }
+    )
 
 
 @app.route("/api/assignments")
@@ -444,17 +480,21 @@ def get_assignments():
         pr_ch = info.get("cheese", "") if isinstance(info, dict) else str(info)
         ec_ch = cex_ec.get(cur, "")
         sp = splits.get(cur, {})
-        split_text = (" / ".join(f"{int(float(v)*100)}% {k}"
-                                 for k, v in sp.items()) if sp else "")
+        split_text = " / ".join(f"{int(float(v) * 100)}% {k}" for k, v in sp.items()) if sp else ""
         constraint = check_constraint(cur, pr_ch, ec_ch, recipes, pr_cjam, cex_ec)
         pr_qty = int(prcjam_counts.get(cur, 0))
         ec_qty = int(cexec_counts.get(cur, 0))
-        rows.append({
-            "curation": cur, "prcjam_cheese": pr_ch,
-            "cexec_cheese": ec_ch, "split": split_text,
-            "constraint": constraint,
-            "pr_qty": pr_qty, "ec_qty": ec_qty,
-        })
+        rows.append(
+            {
+                "curation": cur,
+                "prcjam_cheese": pr_ch,
+                "cexec_cheese": ec_ch,
+                "split": split_text,
+                "constraint": constraint,
+                "pr_qty": pr_qty,
+                "ec_qty": ec_qty,
+            }
+        )
     return jsonify(rows)
 
 
@@ -471,9 +511,11 @@ def set_assignment():
     cex_ec = s.get("cex_ec", {})
 
     # Validate constraint
-    test_pr = cheese if slot == "prcjam" else (
-        pr_cjam.get(cur, {}).get("cheese", "")
-        if isinstance(pr_cjam.get(cur), dict) else "")
+    test_pr = (
+        cheese
+        if slot == "prcjam"
+        else (pr_cjam.get(cur, {}).get("cheese", "") if isinstance(pr_cjam.get(cur), dict) else "")
+    )
     test_ec = cheese if slot == "cexec" else cex_ec.get(cur, "")
     constraint = check_constraint(cur, test_pr, test_ec, recipes, pr_cjam, cex_ec)
 
@@ -509,9 +551,11 @@ def get_candidates(curation, slot):
         qty = data.get("qty", 0) if isinstance(data, dict) else 0
         if qty <= 0:
             continue
-        test_pr = sku if slot == "prcjam" else (
-            pr_cjam.get(curation, {}).get("cheese", "")
-            if isinstance(pr_cjam.get(curation), dict) else "")
+        test_pr = (
+            sku
+            if slot == "prcjam"
+            else (pr_cjam.get(curation, {}).get("cheese", "") if isinstance(pr_cjam.get(curation), dict) else "")
+        )
         test_ec = sku if slot == "cexec" else cex_ec.get(curation, "")
         c = check_constraint(curation, test_pr, test_ec, recipes, pr_cjam, cex_ec)
         candidates.append({"sku": sku, "qty": qty, "constraint": c})
@@ -629,10 +673,13 @@ def auto_assign():
         est = sum(int(md.get("pr_cjam", {}).get(cur, 0)) for md in rq.values())
         if est == 0:
             est = 50
-        cands = [(sk, q - consumed.get(sk, 0))
-                 for sk, q in headroom.items()
-                 if q - consumed.get(sk, 0) >= est and sk not in used
-                 and check_constraint(cur, sk, "", recipes, pr_cjam, cex_ec) == "OK"]
+        cands = [
+            (sk, q - consumed.get(sk, 0))
+            for sk, q in headroom.items()
+            if q - consumed.get(sk, 0) >= est
+            and sk not in used
+            and check_constraint(cur, sk, "", recipes, pr_cjam, cex_ec) == "OK"
+        ]
         cands.sort(key=lambda x: -x[1])
         if cands:
             best = cands[0][0]
@@ -650,10 +697,13 @@ def auto_assign():
         if est == 0:
             est = 20
         pr_ch = new_pr.get(cur, {}).get("cheese", "")
-        cands = [(sk, q - consumed.get(sk, 0))
-                 for sk, q in headroom.items()
-                 if q - consumed.get(sk, 0) >= est and sk != pr_ch
-                 and check_constraint(cur, pr_ch, sk, recipes, pr_cjam, cex_ec) == "OK"]
+        cands = [
+            (sk, q - consumed.get(sk, 0))
+            for sk, q in headroom.items()
+            if q - consumed.get(sk, 0) >= est
+            and sk != pr_ch
+            and check_constraint(cur, pr_ch, sk, recipes, pr_cjam, cex_ec) == "OK"
+        ]
         cands.sort(key=lambda x: -x[1])
         if cands:
             best = cands[0][0]
@@ -675,6 +725,7 @@ def auto_assign():
 
 # ── Global Extras ─────────────────────────────────────────────────────
 
+
 @app.route("/api/global_extras")
 def get_global_extras():
     """Return current global extra assignments with on-hand qty."""
@@ -687,8 +738,7 @@ def get_global_extras():
         qty = 0
         if sku:
             qty = _inv_qty(inventory.get(sku, {}))
-        result[slot] = {"sku": sku, "qty": qty,
-                        "category": meta["category"], "prefix": meta["prefix"]}
+        result[slot] = {"sku": sku, "qty": qty, "category": meta["category"], "prefix": meta["prefix"]}
     return jsonify(result)
 
 
@@ -804,7 +854,7 @@ def suggest_fixes():
                     fixes.append(f"MFG: Cut {wsku} ({c} wheels = ~{p} units)")
         for po in open_pos:
             if po.get("sku") == r["sku"] and po.get("status") == "Open":
-                fixes.append(f"PO: {po.get('qty','?')} units ETA {po.get('eta','?')}")
+                fixes.append(f"PO: {po.get('qty', '?')} units ETA {po.get('eta', '?')}")
         if not fixes:
             fixes.append("Recipe swap, partial sub, or Wednesday PO")
         suggestions.append({"sku": r["sku"], "deficit": deficit, "fixes": fixes})
@@ -844,7 +894,7 @@ def variety_check():
             nb = CURATION_ORDER[j]
             overlap = cur_cheeses.get(cur, set()) & cur_cheeses.get(nb, set())
             for sku in overlap:
-                issues.append(f"{sku} in {cur} and {nb} ({j-i} apart)")
+                issues.append(f"{sku} in {cur} and {nb} ({j - i} apart)")
 
     pr_map = defaultdict(list)
     for cur in ALL_CURATIONS:
@@ -886,11 +936,14 @@ def wed_po():
                     continue
                 # Reduce deficit by potential yield (partial coverage)
                 effective_net = net + potential
-                shortage_rows.append({
-                    "sku": sku, "net": effective_net,
-                    "status": "SHORTAGE",
-                    "potential": potential,
-                })
+                shortage_rows.append(
+                    {
+                        "sku": sku,
+                        "net": effective_net,
+                        "status": "SHORTAGE",
+                        "potential": potential,
+                    }
+                )
     else:
         calc_resp = calculate()
         calc_data = calc_resp.get_json()
@@ -903,11 +956,16 @@ def wed_po():
         vi = vendor_catalog.get(r["sku"], {})
         cq = int(vi.get("case_qty", 1)) or 1
         cases = math.ceil(buf / cq)
-        lines.append({
-            "sku": r["sku"], "deficit": deficit,
-            "order_qty": cases * cq, "cases": cases,
-            "case_qty": cq, "vendor": vi.get("vendor", "?"),
-        })
+        lines.append(
+            {
+                "sku": r["sku"],
+                "deficit": deficit,
+                "order_qty": cases * cq,
+                "cases": cases,
+                "case_qty": cq,
+                "vendor": vi.get("vendor", "?"),
+            }
+        )
     lines.sort(key=lambda x: -x["deficit"])
     return jsonify(lines)
 
@@ -987,19 +1045,21 @@ def order_list():
         if isinstance(inv_entry, dict):
             sku_name = inv_entry.get("name", "")
 
-        lines.append({
-            "sku": sku,
-            "name": sku_name,
-            "category": category,
-            "demand": d["demand"],
-            "avail": d["avail"],
-            "deficit": deficit,
-            "order_qty": cases * cq,
-            "cases": cases,
-            "case_qty": cq,
-            "vendor": vi.get("vendor", ""),
-            "unit_cost": vi.get("unit_cost", ""),
-        })
+        lines.append(
+            {
+                "sku": sku,
+                "name": sku_name,
+                "category": category,
+                "demand": d["demand"],
+                "avail": d["avail"],
+                "deficit": deficit,
+                "order_qty": cases * cq,
+                "cases": cases,
+                "case_qty": cq,
+                "vendor": vi.get("vendor", ""),
+                "unit_cost": vi.get("unit_cost", ""),
+            }
+        )
 
     # Sort by category then deficit
     cat_order = {"Cheese": 0, "Accompaniment": 1, "Meat": 2, "Pairing": 3, "Other": 4}
@@ -1015,19 +1075,41 @@ def order_list_csv():
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Category", "SKU", "Name", "Demand", "Available", "Deficit",
-                     "Order Qty", "Cases", "Case Qty", "Vendor", "Unit Cost"])
+    writer.writerow(
+        [
+            "Category",
+            "SKU",
+            "Name",
+            "Demand",
+            "Available",
+            "Deficit",
+            "Order Qty",
+            "Cases",
+            "Case Qty",
+            "Vendor",
+            "Unit Cost",
+        ]
+    )
     for r in lines:
-        writer.writerow([
-            r["category"], r["sku"], r["name"], r["demand"], r["avail"],
-            r["deficit"], r["order_qty"], r["cases"], r["case_qty"],
-            r["vendor"], r["unit_cost"],
-        ])
+        writer.writerow(
+            [
+                r["category"],
+                r["sku"],
+                r["name"],
+                r["demand"],
+                r["avail"],
+                r["deficit"],
+                r["order_qty"],
+                r["cases"],
+                r["case_qty"],
+                r["vendor"],
+                r["unit_cost"],
+            ]
+        )
 
     buf = io.BytesIO(output.getvalue().encode("utf-8-sig"))
     today = datetime.date.today().strftime("%Y%m%d")
-    return send_file(buf, mimetype="text/csv", as_attachment=True,
-                     download_name=f"order_list_{today}.csv")
+    return send_file(buf, mimetype="text/csv", as_attachment=True, download_name=f"order_list_{today}.csv")
 
 
 ## email_po moved to "Email Wednesday PO" section below
@@ -1107,11 +1189,13 @@ def import_csv():
         return jsonify({"error": f"Unrecognized CSV format. Headers: {headers}"}), 400
 
     STATE["csv_demand"] = dict(imported)
-    return jsonify({
-        "rows": rows,
-        "skus": len([k for k in imported if k.startswith("CH-")]),
-        "units": sum(imported.values()),
-    })
+    return jsonify(
+        {
+            "rows": rows,
+            "skus": len([k for k in imported if k.startswith("CH-")]),
+            "units": sum(imported.values()),
+        }
+    )
 
 
 @app.route("/api/export_csv")
@@ -1121,37 +1205,62 @@ def export_csv():
     if inv:
         with app.test_request_context(json={}):
             calc_resp = calculate_rmfg()
-            data = calc_resp.get_json() if hasattr(calc_resp, 'get_json') \
-                else json.loads(calc_resp.data)
+            data = calc_resp.get_json() if hasattr(calc_resp, "get_json") else json.loads(calc_resp.data)
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["SKU", "Available", "Sat Demand", "NET Sat",
-                         "Tue Demand", "NET Tue", "Next Sat Demand",
-                         "NET Final", "Total Demand", "Status"])
+        writer.writerow(
+            [
+                "SKU",
+                "Available",
+                "Sat Demand",
+                "NET Sat",
+                "Tue Demand",
+                "NET Tue",
+                "Next Sat Demand",
+                "NET Final",
+                "Total Demand",
+                "Status",
+            ]
+        )
         for r in data["results"]:
-            writer.writerow([
-                r["sku"], r["available"],
-                r.get("sat_demand", 0), r.get("net_sat", r["net"]),
-                r.get("tue_demand", 0), r.get("net_tue", 0),
-                r.get("next_sat_demand", 0), r.get("net_final", 0),
-                r["total_demand"], r["status"],
-            ])
+            writer.writerow(
+                [
+                    r["sku"],
+                    r["available"],
+                    r.get("sat_demand", 0),
+                    r.get("net_sat", r["net"]),
+                    r.get("tue_demand", 0),
+                    r.get("net_tue", 0),
+                    r.get("next_sat_demand", 0),
+                    r.get("net_final", 0),
+                    r["total_demand"],
+                    r["status"],
+                ]
+            )
     else:
         calc_resp = calculate()
         data = calc_resp.get_json()
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["SKU", "Available", "Direct", "PRCJAM", "CEXEC",
-                         "EXEC", "Total Demand", "NET", "Status"])
+        writer.writerow(["SKU", "Available", "Direct", "PRCJAM", "CEXEC", "EXEC", "Total Demand", "NET", "Status"])
         for r in data["results"]:
-            writer.writerow([r["sku"], r["available"], r["direct"],
-                             r["prcjam"], r["cexec"], r["exec"],
-                             r["total_demand"], r["net"], r["status"]])
+            writer.writerow(
+                [
+                    r["sku"],
+                    r["available"],
+                    r["direct"],
+                    r["prcjam"],
+                    r["cexec"],
+                    r["exec"],
+                    r["total_demand"],
+                    r["net"],
+                    r["status"],
+                ]
+            )
 
     mem = io.BytesIO(output.getvalue().encode("utf-8"))
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    return send_file(mem, mimetype="text/csv", as_attachment=True,
-                     download_name=f"fulfillment_net_{ts}.csv")
+    return send_file(mem, mimetype="text/csv", as_attachment=True, download_name=f"fulfillment_net_{ts}.csv")
 
 
 @app.route("/api/split", methods=["POST"])
@@ -1179,11 +1288,21 @@ def set_split():
 EQUIV = {"CH-BRIE": "CH-EBRIE"}
 SKIP_PREFIXES = ("AHB-", "BL-", "PK-", "TR-", "EX-")
 KNOWN_CURATIONS = {
-    "MONG", "MDT", "OWC", "SPN", "ALPN", "ALPT",
-    "ISUN", "HHIGH", "NMS", "BYO", "SS", "GEN", "MS",
+    "MONG",
+    "MDT",
+    "OWC",
+    "SPN",
+    "ALPN",
+    "ALPT",
+    "ISUN",
+    "HHIGH",
+    "NMS",
+    "BYO",
+    "SS",
+    "GEN",
+    "MS",
 }
-_MONTHLY_PATTERNS = {"AHB-MED", "AHB-LGE", "AHB-CMED", "AHB-CUR-MS", "AHB-BVAL",
-                     "AHB-MCUST-MS", "AHB-MCUST-NMS"}
+_MONTHLY_PATTERNS = {"AHB-MED", "AHB-LGE", "AHB-CMED", "AHB-CUR-MS", "AHB-BVAL", "AHB-MCUST-MS", "AHB-MCUST-NMS"}
 
 
 def normalize_sku(sku):
@@ -1300,7 +1419,7 @@ def resolve_demand(direct_demand, prcjam_counts, cexec_counts, pr_cjam, cex_ec, 
 
 def parse_ship_tag(tags_str: str):
     """Extract _SHIP_YYYY-MM-DD Monday date from order tags. Returns date or None."""
-    m = re.search(r'_SHIP_(\d{4}-\d{2}-\d{2})', tags_str or "")
+    m = re.search(r"_SHIP_(\d{4}-\d{2}-\d{2})", tags_str or "")
     if m:
         try:
             return datetime.date.fromisoformat(m.group(1))
@@ -1356,6 +1475,7 @@ def _load_shipment_sku_map():
     """Load SKU mapping from meal-type-export CSV in Shipments folder.
     Returns {product_column_header: sku} e.g. {'AHB (S_REG): Sopressata': 'MT-SOP'}."""
     import glob as globmod
+
     base = _get_project_dir()
     pattern = os.path.join(base, "Shipments", "meal-type-export*.csv")
     files = sorted(globmod.glob(pattern), key=os.path.getmtime, reverse=True)
@@ -1385,6 +1505,7 @@ def parse_depletion_xlsx(path):
         import openpyxl
     except ImportError as exc:
         import traceback
+
         traceback.print_exc()
         return {}, 0, f"openpyxl import failed: {exc}"
 
@@ -1462,7 +1583,8 @@ def map_depletion_to_skus(product_totals, sku_translations, inventory):
         # 0. Already a SKU (resolved by parse_depletion_xlsx via meal-type-export)
         #    SKU pattern: 2-3 uppercase letters, dash, rest (e.g., CH-MSMG, AC-APMB, MT-SOP)
         import re as _re
-        if _re.match(r'^[A-Z]{2,3}-\w+$', product):
+
+        if _re.match(r"^[A-Z]{2,3}-\w+$", product):
             sku = product
         # 1. Exact translation (case-sensitive, then case-insensitive)
         elif product in sku_translations:
@@ -1476,8 +1598,7 @@ def map_depletion_to_skus(product_totals, sku_translations, inventory):
             # 3. Fuzzy match
             all_candidates = dict(inv_names)
             all_candidates.update(trans_lower)
-            matches = difflib.get_close_matches(pl, list(all_candidates.keys()),
-                                                 n=1, cutoff=0.55)
+            matches = difflib.get_close_matches(pl, list(all_candidates.keys()), n=1, cutoff=0.55)
             if matches:
                 sku = all_candidates[matches[0]]
 
@@ -1491,6 +1612,7 @@ def map_depletion_to_skus(product_totals, sku_translations, inventory):
 
 
 # ── File detection ────────────────────────────────────────────────────
+
 
 def detect_rmfg_files(folder):
     """Auto-detect RMFG data files in a folder."""
@@ -1533,9 +1655,8 @@ def detect_rmfg_files(folder):
 
 # ── Inventory loading ─────────────────────────────────────────────────
 
-def load_inventory_from_files(template_path, product_inv_path,
-                              po_additions=None, incoming=None,
-                              corrections=None):
+
+def load_inventory_from_files(template_path, product_inv_path, po_additions=None, incoming=None, corrections=None):
     """Load inventory from Template Check + Product Inventory fallback."""
     inv = {}
 
@@ -1603,6 +1724,7 @@ def load_inventory_from_files(template_path, product_inv_path,
 
 
 # ── Demand parsers ────────────────────────────────────────────────────
+
 
 def parse_order_dashboard(path):
     """Parse Shopify order-dashboard. Returns demand dicts + counts.
@@ -1919,6 +2041,7 @@ def parse_march_charges(path, start_day, end_day, year=2026, month=3):
 
 # ── Load RMFG folder endpoint ─────────────────────────────────────────
 
+
 @app.route("/api/load_rmfg", methods=["POST"])
 def load_rmfg():
     """Load all data from an RMFG folder. Auto-detects files."""
@@ -1943,8 +2066,11 @@ def load_rmfg():
 
     # 1. Load inventory
     inv = load_inventory_from_files(
-        files["template_check"], files["product_inventory"],
-        po_additions, incoming, corrections,
+        files["template_check"],
+        files["product_inventory"],
+        po_additions,
+        incoming,
+        corrections,
     )
     ch_count = sum(1 for k in inv if k.startswith("CH-"))
     log_lines.append(f"Inventory: {len(inv)} SKUs ({ch_count} cheese)")
@@ -1987,9 +2113,7 @@ def load_rmfg():
     dashboard_tue = dashboard_info.get("tue_demand", {})
     if dashboard_tue:
         tue_demand = dict(dashboard_tue)
-        log_lines.append(
-            f"Tuesday: {sum(dashboard_tue.values())} units from ship tag split"
-        )
+        log_lines.append(f"Tuesday: {sum(dashboard_tue.values())} units from ship tag split")
     elif dashboard_info.get("first_order_demand"):
         # Prefer Shopify rolling average over static multiplier
         s = _s()
@@ -2005,32 +2129,23 @@ def load_rmfg():
                 if merged.get(sku, 0) > 0
             }
             log_lines.append(
-                f"Tuesday estimate: Shopify rolling avg "
-                f"({len(merged)} SKUs, {len(fo_overrides)} overrides)"
+                f"Tuesday estimate: Shopify rolling avg ({len(merged)} SKUs, {len(fo_overrides)} overrides)"
             )
         else:
             # Legacy fallback: x3 multiplier
             proj = s.get("first_order_projection", {})
             multiplier = proj.get("multiplier", 3) if proj.get("enabled", True) else 3
-            tue_demand = {
-                sku: qty * multiplier
-                for sku, qty in dashboard_info["first_order_demand"].items()
-            }
+            tue_demand = {sku: qty * multiplier for sku, qty in dashboard_info["first_order_demand"].items()}
             log_lines.append(
-                f"Tuesday estimate: {dashboard_info['first_order_count']} "
-                f"first orders × {multiplier} (no Shopify data)"
+                f"Tuesday estimate: {dashboard_info['first_order_count']} first orders × {multiplier} (no Shopify data)"
             )
 
     # 4. Next Saturday demand (MARCH CHARGES)
     next_sat_demand = {}
     next_sat_charges = 0
     if files["march_charges"]:
-        next_sat_demand, next_sat_charges = parse_march_charges(
-            files["march_charges"], 8, 14
-        )
-        log_lines.append(
-            f"Next Saturday: {next_sat_charges} charges (3/8-3/14)"
-        )
+        next_sat_demand, next_sat_charges = parse_march_charges(files["march_charges"], 8, 14)
+        log_lines.append(f"Next Saturday: {next_sat_charges} charges (3/8-3/14)")
     else:
         warnings.append("No MARCH CHARGES CSV found")
 
@@ -2041,8 +2156,7 @@ def load_rmfg():
     STATE["rmfg_next_sat_demand"] = next_sat_demand
     STATE["rmfg_dashboard"] = dashboard_info
     STATE["rmfg_folder"] = folder
-    STATE["rmfg_files"] = {k: os.path.basename(v) if v else None
-                           for k, v in files.items()}
+    STATE["rmfg_files"] = {k: os.path.basename(v) if v else None for k, v in files.items()}
 
     # Store raw unresolved components for deferred resolution
     # Merge Shopify (dashboard) + Recharge (charges_queued) raw components
@@ -2108,6 +2222,7 @@ def load_rmfg():
 
     # Auto-detect meal-type-export CSV for SKU translations
     import glob as globmod
+
     base_dir = _get_project_dir()
     mte_pattern = os.path.join(base_dir, "Shipments", "meal-type-export*.csv")
     mte_files = sorted(globmod.glob(mte_pattern), key=os.path.getmtime, reverse=True)
@@ -2137,16 +2252,18 @@ def load_rmfg():
     folder_name = os.path.basename(folder)
     _take_snapshot(f"RMFG: {folder_name}", source="rmfg_folder")
 
-    return jsonify({
-        "ok": True,
-        "files": STATE["rmfg_files"],
-        "log": log_lines,
-        "warnings": warnings,
-        "inventory_count": len(inv),
-        "cheese_count": ch_count,
-        "sat_skus": len(sat_demand),
-        "sat_units": sum(sat_demand.values()),
-    })
+    return jsonify(
+        {
+            "ok": True,
+            "files": STATE["rmfg_files"],
+            "log": log_lines,
+            "warnings": warnings,
+            "inventory_count": len(inv),
+            "cheese_count": ch_count,
+            "sat_skus": len(sat_demand),
+            "sat_units": sum(sat_demand.values()),
+        }
+    )
 
 
 # ── Demand Mode (Discrete vs Churned) ─────────────────────────────────
@@ -2175,13 +2292,12 @@ def apply_churn_to_demand(demand, recurring_demand, churn_rates, weeks_out=0):
         for track, rates in churn_rates.items():
             if isinstance(rates, dict):
                 # Use month_2_plus or month_3_plus as the steady-state rate
-                r = rates.get("month_2_plus", rates.get("month_3_plus",
-                    rates.get("month_1", 0.12)))
+                r = rates.get("month_2_plus", rates.get("month_3_plus", rates.get("month_1", 0.12)))
                 monthly_rates.append(r)
         avg_monthly = sum(monthly_rates) / len(monthly_rates) if monthly_rates else 0.12
         # Compound weekly: (1 - monthly)^(weeks/4.33)
         weekly_retention = (1 - avg_monthly) ** (1 / 4.33)
-        cancel_rate = 1 - weekly_retention ** weeks_out
+        cancel_rate = 1 - weekly_retention**weeks_out
 
     adjusted = {}
     for sku, qty in demand.items():
@@ -2194,9 +2310,16 @@ def apply_churn_to_demand(demand, recurring_demand, churn_rates, weeks_out=0):
     return adjusted
 
 
-def apply_unified_forecast(demand, recurring_demand, first_order_demand,
-                           churn_rates, shopify_trend_data, repeat_rate,
-                           reship_buffer_pct, weeks_out=0):
+def apply_unified_forecast(
+    demand,
+    recurring_demand,
+    first_order_demand,
+    churn_rates,
+    shopify_trend_data,
+    repeat_rate,
+    reship_buffer_pct,
+    weeks_out=0,
+):
     """Unified forecast: churn + trend + first-order repeat + addon + reship.
 
     Returns {sku: adjusted_qty} for a given weeks_out horizon.
@@ -2205,8 +2328,7 @@ def apply_unified_forecast(demand, recurring_demand, first_order_demand,
     monthly_rates = []
     for track, rates in churn_rates.items():
         if isinstance(rates, dict):
-            r = rates.get("month_2_plus", rates.get("month_3_plus",
-                rates.get("month_1", 0.12)))
+            r = rates.get("month_2_plus", rates.get("month_3_plus", rates.get("month_1", 0.12)))
             monthly_rates.append(r)
     avg_monthly = sum(monthly_rates) / len(monthly_rates) if monthly_rates else 0.12
     weekly_retention = (1 - avg_monthly) ** (1 / 4.33)
@@ -2226,7 +2348,7 @@ def apply_unified_forecast(demand, recurring_demand, first_order_demand,
         trend_adj = (1 + slope / wavg) if wavg > 0 else 1.0
 
         # Subscription decays with retention^weeks_out
-        sub_proj = sub * (weekly_retention ** weeks_out)
+        sub_proj = sub * (weekly_retention**weeks_out)
         first_proj = first * repeat_rate * trend_adj
         addon_proj = addon * trend_adj
 
@@ -2237,6 +2359,7 @@ def apply_unified_forecast(demand, recurring_demand, first_order_demand,
 
 
 # ── Full calculate using RMFG data ────────────────────────────────────
+
 
 @app.route("/api/calculate_rmfg", methods=["POST"])
 def calculate_rmfg():
@@ -2262,9 +2385,7 @@ def calculate_rmfg():
         pr_cjam = s.get("pr_cjam", {})
         cex_ec = s.get("cex_ec", {})
         splits = s.get("cexec_splits", {})
-        sat_demand, attribution = resolve_demand(
-            raw_direct, raw_prcjam, raw_cexec, pr_cjam, cex_ec, splits
-        )
+        sat_demand, attribution = resolve_demand(raw_direct, raw_prcjam, raw_cexec, pr_cjam, cex_ec, splits)
         STATE["rmfg_sat_demand"] = sat_demand
         STATE["rmfg_attribution"] = attribution
 
@@ -2272,8 +2393,9 @@ def calculate_rmfg():
     # populate raw components for the cut order interactive view.
     # Treat all demand as "direct" since it was already resolved by recharge_sync.
     if STATE.get("rmfg_direct_sat") is None and sat_demand:
-        STATE["rmfg_direct_sat"] = {k: v for k, v in sat_demand.items()
-                                     if any(k.startswith(p) for p in ("CH-", "MT-", "AC-"))}
+        STATE["rmfg_direct_sat"] = {
+            k: v for k, v in sat_demand.items() if any(k.startswith(p) for p in ("CH-", "MT-", "AC-"))
+        }
         STATE["rmfg_prcjam_sat"] = STATE.get("rmfg_prcjam_sat") or {}
         STATE["rmfg_cexec_sat"] = STATE.get("rmfg_cexec_sat") or {}
 
@@ -2328,8 +2450,7 @@ def calculate_rmfg():
 
         sat_demand = dict(settings_demand)
         # Estimate Tuesday as ~30% of Saturday
-        tue_demand = {sku: max(1, int(q * 0.3))
-                      for sku, q in sat_demand.items() if q > 0}
+        tue_demand = {sku: max(1, int(q * 0.3)) for sku, q in sat_demand.items() if q > 0}
         next_sat_demand = dict(sat_demand)
 
         # Populate raw component STATE for cut order interactive view
@@ -2425,21 +2546,31 @@ def calculate_rmfg():
         else:
             status = "OK"
 
-        results.append({
-            "sku": sku, "available": avail,
-            "sat_demand": d_sat, "net_sat": net_sat,
-            "tue_demand": d_tue, "net_tue": net_tue,
-            "next_sat_demand": d_next, "net_final": net_final,
-            "total_demand": total, "net": net_sat,
-            "potential": potential, "wheel_count": wheel_count,
-            "net_with_potential": net_with_potential,
-            "status": status,
-            # Keep compat fields for the existing UI
-            "direct": d_sat, "prcjam": 0, "cexec": 0, "exec": 0,
-        })
+        results.append(
+            {
+                "sku": sku,
+                "available": avail,
+                "sat_demand": d_sat,
+                "net_sat": net_sat,
+                "tue_demand": d_tue,
+                "net_tue": net_tue,
+                "next_sat_demand": d_next,
+                "net_final": net_final,
+                "total_demand": total,
+                "net": net_sat,
+                "potential": potential,
+                "wheel_count": wheel_count,
+                "net_with_potential": net_with_potential,
+                "status": status,
+                # Keep compat fields for the existing UI
+                "direct": d_sat,
+                "prcjam": 0,
+                "cexec": 0,
+                "exec": 0,
+            }
+        )
 
-    status_order = {"SHORTAGE": 0, "TIGHT": 1, "OK": 2,
-                    "SURPLUS": 3, "NO DEMAND": 4}
+    status_order = {"SHORTAGE": 0, "TIGHT": 1, "OK": 2, "SURPLUS": 3, "NO DEMAND": 4}
     results.sort(key=lambda r: (status_order.get(r["status"], 9), r["net"]))
 
     # Dashboard info for assignment panel
@@ -2467,12 +2598,16 @@ def calculate_rmfg():
             st = "TIGHT"
         else:
             st = "OK"
-        tue_results.append({
-            "sku": r["sku"], "carry_fwd": carry,
-            "demand": demand, "net": proj, "status": st,
-        })
-    weeks.append({"week": 2, "label": "Tuesday", "results": tue_results,
-                  "shortages": tue_shortages})
+        tue_results.append(
+            {
+                "sku": r["sku"],
+                "carry_fwd": carry,
+                "demand": demand,
+                "net": proj,
+                "status": st,
+            }
+        )
+    weeks.append({"week": 2, "label": "Tuesday", "results": tue_results, "shortages": tue_shortages})
 
     # Week 3 = Next Saturday
     nsat_results = []
@@ -2492,12 +2627,16 @@ def calculate_rmfg():
             st = "TIGHT"
         else:
             st = "OK"
-        nsat_results.append({
-            "sku": r["sku"], "carry_fwd": carry,
-            "demand": demand, "net": proj, "status": st,
-        })
-    weeks.append({"week": 3, "label": "Next Sat", "results": nsat_results,
-                  "shortages": nsat_shortages})
+        nsat_results.append(
+            {
+                "sku": r["sku"],
+                "carry_fwd": carry,
+                "demand": demand,
+                "net": proj,
+                "status": st,
+            }
+        )
+    weeks.append({"week": 3, "label": "Next Sat", "results": nsat_results, "shortages": nsat_shortages})
 
     # Weeks 4-5 (Sat +3, Sat +4) — carry forward from previous week
     prev_week = {r["sku"]: r for r in nsat_results}
@@ -2520,14 +2659,18 @@ def calculate_rmfg():
                 st = "TIGHT"
             else:
                 st = "OK"
-            wk_results.append({
-                "sku": r["sku"], "carry_fwd": carry,
-                "demand": demand, "net": proj, "status": st,
-            })
-        weeks.append({"week": week_num,
-                      "label": f"Sat +{week_num - 1}",
-                      "results": wk_results,
-                      "shortages": wk_shortages})
+            wk_results.append(
+                {
+                    "sku": r["sku"],
+                    "carry_fwd": carry,
+                    "demand": demand,
+                    "net": proj,
+                    "status": st,
+                }
+            )
+        weeks.append(
+            {"week": week_num, "label": f"Sat +{week_num - 1}", "results": wk_results, "shortages": wk_shortages}
+        )
         prev_week = {r["sku"]: r for r in wk_results}
 
     # Shelf life
@@ -2548,25 +2691,30 @@ def calculate_rmfg():
         days = (earliest - today).days
         qty = data.get("qty", 0)
         if days <= 14 and qty > 0:
-            shelf_items.append({
-                "sku": sku, "days_left": days, "qty": qty,
-                "action": "EXPIRED" if days < 0 else
-                          "USE NOW" if days <= 7 else "Prioritize",
-            })
+            shelf_items.append(
+                {
+                    "sku": sku,
+                    "days_left": days,
+                    "qty": qty,
+                    "action": "EXPIRED" if days < 0 else "USE NOW" if days <= 7 else "Prioritize",
+                }
+            )
 
-    return jsonify({
-        "results": results,
-        "shortages": shortage_count,
-        "total_skus": len([r for r in results if r["total_demand"] > 0]),
-        "total_units": sum(r["total_demand"] for r in results),
-        "prcjam_counts": prcjam_counts,
-        "cexec_counts": cexec_counts,
-        "weeks": weeks,
-        "shelf_life": shelf_items,
-        "assign_demands": {},
-        "churn_info": churn_info,
-        "attribution": attribution,
-    })
+    return jsonify(
+        {
+            "results": results,
+            "shortages": shortage_count,
+            "total_skus": len([r for r in results if r["total_demand"] > 0]),
+            "total_units": sum(r["total_demand"] for r in results),
+            "prcjam_counts": prcjam_counts,
+            "cexec_counts": cexec_counts,
+            "weeks": weeks,
+            "shelf_life": shelf_items,
+            "assign_demands": {},
+            "churn_info": churn_info,
+            "attribution": attribution,
+        }
+    )
 
 
 # ── Inventory Runway ──────────────────────────────────────────────────
@@ -2578,8 +2726,7 @@ def _runway_saturdays(num_weeks=4):
     days_to_sat = (5 - today.weekday()) % 7
     if days_to_sat == 0:
         days_to_sat = 7
-    return [today + datetime.timedelta(days=days_to_sat + 7 * i)
-            for i in range(num_weeks)]
+    return [today + datetime.timedelta(days=days_to_sat + 7 * i) for i in range(num_weeks)]
 
 
 def _fmtd(d):
@@ -2596,6 +2743,7 @@ def _split_monthly_to_weekly(monthly_data, saturdays):
     Each Saturday gets a proportional share: monthly_qty / saturdays_in_that_month.
     """
     import calendar
+
     # Pre-compute how many Saturdays are in each month
     sats_per_month = {}
     for sat in saturdays:
@@ -2604,8 +2752,7 @@ def _split_monthly_to_weekly(monthly_data, saturdays):
             # Count Saturdays in this month
             year, month = sat.year, sat.month
             days_in_month = calendar.monthrange(year, month)[1]
-            count = sum(1 for d in range(1, days_in_month + 1)
-                        if datetime.date(year, month, d).weekday() == 5)
+            count = sum(1 for d in range(1, days_in_month + 1) if datetime.date(year, month, d).weekday() == 5)
             sats_per_month[key] = count
 
     week_demands = [defaultdict(float) for _ in saturdays]
@@ -2626,14 +2773,14 @@ def _extract_curation_counts(monthly_data, saturdays):
     Returns [{curation: count}, ...] per Saturday.
     """
     import calendar
+
     sats_per_month = {}
     for sat in saturdays:
         key = sat.strftime("%Y-%m")
         if key not in sats_per_month:
             year, month = sat.year, sat.month
             days_in_month = calendar.monthrange(year, month)[1]
-            count = sum(1 for d in range(1, days_in_month + 1)
-                        if datetime.date(year, month, d).weekday() == 5)
+            count = sum(1 for d in range(1, days_in_month + 1) if datetime.date(year, month, d).weekday() == 5)
             sats_per_month[key] = count
 
     week_counts = [defaultdict(float) for _ in saturdays]
@@ -2697,11 +2844,12 @@ def _build_queued_runway_demand(recharge_queued, pr_cjam, cex_ec, splits, saturd
             # CEX-EC: distribute across curations with large boxes
             if upper.startswith("CEX-EC") or upper == "CEX-EC":
                 # Only large boxes get CEX-EC
-                large_curs = {c: n for c, n in box_counts.items()
-                              if any(raw.get(f"AHB-LCUST-{c}", 0) > 0
-                                     for _ in [1])
-                              # Simpler: check recharge_queued for LCUST
-                              }
+                large_curs = {
+                    c: n
+                    for c, n in box_counts.items()
+                    if any(raw.get(f"AHB-LCUST-{c}", 0) > 0 for _ in [1])
+                    # Simpler: check recharge_queued for LCUST
+                }
                 # Fallback: distribute across all curations
                 if upper == "CEX-EC" and total_boxes > 0:
                     # CEX-EC goes to large box curations
@@ -2724,10 +2872,7 @@ def _build_queued_runway_demand(recharge_queued, pr_cjam, cex_ec, splits, saturd
     week_demands = []
     all_attribution = {}
     for wi in range(len(saturdays)):
-        resolved, attr = resolve_demand(
-            week_direct[wi], week_prcjam[wi], week_cexec[wi],
-            pr_cjam, cex_ec, splits
-        )
+        resolved, attr = resolve_demand(week_direct[wi], week_prcjam[wi], week_cexec[wi], pr_cjam, cex_ec, splits)
         week_demands.append(resolved)
         # Merge attribution (accumulate)
         for sku, a in attr.items():
@@ -2735,14 +2880,11 @@ def _build_queued_runway_demand(recharge_queued, pr_cjam, cex_ec, splits, saturd
                 all_attribution[sku] = {"direct": 0, "prcjam": {}, "cexec": {}}
             all_attribution[sku]["direct"] += a["direct"]
             for c, v in a["prcjam"].items():
-                all_attribution[sku]["prcjam"][c] = \
-                    all_attribution[sku]["prcjam"].get(c, 0) + v
+                all_attribution[sku]["prcjam"][c] = all_attribution[sku]["prcjam"].get(c, 0) + v
             for c, v in a["cexec"].items():
-                all_attribution[sku]["cexec"][c] = \
-                    all_attribution[sku]["cexec"].get(c, 0) + v
+                all_attribution[sku]["cexec"][c] = all_attribution[sku]["cexec"].get(c, 0) + v
 
-    return week_demands, week_direct, week_prcjam, week_cexec, \
-        curation_box_counts, all_attribution
+    return week_demands, week_direct, week_prcjam, week_cexec, curation_box_counts, all_attribution
 
 
 @app.route("/api/runway", methods=["POST"])
@@ -2768,8 +2910,7 @@ def get_runway():
     monthly_rates = []
     for track, rates in churn_rates.items():
         if isinstance(rates, dict):
-            r = rates.get("month_2_plus", rates.get("month_3_plus",
-                rates.get("month_1", 0.12)))
+            r = rates.get("month_2_plus", rates.get("month_3_plus", rates.get("month_1", 0.12)))
             monthly_rates.append(r)
     avg_monthly = sum(monthly_rates) / len(monthly_rates) if monthly_rates else 0.12
     avg_churn_weekly = round(1 - (1 - avg_monthly) ** (1 / 4.33), 4)
@@ -2800,10 +2941,9 @@ def get_runway():
 
     if recharge_queued:
         # NEW PATH: Recharge queued charges → weekly demand
-        week_demands, week_direct, week_prcjam, week_cexec, \
-            curation_box_counts, attribution = _build_queued_runway_demand(
-                recharge_queued, pr_cjam, cex_ec, splits, saturdays
-            )
+        week_demands, week_direct, week_prcjam, week_cexec, curation_box_counts, attribution = (
+            _build_queued_runway_demand(recharge_queued, pr_cjam, cex_ec, splits, saturdays)
+        )
 
         # --- Demand model ---
         # Recurring = Recharge queued (actual scheduled charges) — NO prediction
@@ -2836,10 +2976,9 @@ def get_runway():
                 if pred > 0:
                     predictive_weekly[nsku] = pred
                 # Split predictive into first-order vs addon
-                fo = first_order_overrides.get(nsku,
-                     first_order_overrides.get(sku,
-                     shopify_first.get(nsku,
-                     shopify_first.get(sku, 0))))
+                fo = first_order_overrides.get(
+                    nsku, first_order_overrides.get(sku, shopify_first.get(nsku, shopify_first.get(sku, 0)))
+                )
                 fo = min(fo, pred)  # can't exceed total predictive
                 if fo > 0:
                     first_order_weekly[nsku] = fo
@@ -2892,17 +3031,14 @@ def get_runway():
         first_order_split = dict(first_order_demand)
         addon_split = {}
         # Build 4 weekly windows from legacy data
-        week_demands = [sat_demand_resolved, tue_demand,
-                        sat_demand_resolved, sat_demand_resolved]
+        week_demands = [sat_demand_resolved, tue_demand, sat_demand_resolved, sat_demand_resolved]
 
     # --- Collect all pickable SKUs ---
     RUNWAY_PREFIXES = ("CH-", "MT-", "AC-", "TR-")
     all_skus = set()
-    all_skus.update(k for k in inv
-                    if any(k.startswith(p) for p in RUNWAY_PREFIXES))
+    all_skus.update(k for k in inv if any(k.startswith(p) for p in RUNWAY_PREFIXES))
     for wd in week_demands:
-        all_skus.update(k for k in wd
-                        if any(k.startswith(p) for p in RUNWAY_PREFIXES))
+        all_skus.update(k for k in wd if any(k.startswith(p) for p in RUNWAY_PREFIXES))
 
     # Compute weekly retention for churn decay on recurring demand
     weekly_retention = (1 - avg_monthly) ** (1 / 4.33)
@@ -2950,7 +3086,7 @@ def get_runway():
 
         for wi in range(NUM_WEEKS):
             # Recurring decays with weekly retention (cancellations/skips)
-            f_recurring = rec_qty * (weekly_retention ** wi)
+            f_recurring = rec_qty * (weekly_retention**wi)
 
             f_demand = max(0, int(round(f_recurring + f_predictive)))
 
@@ -2967,13 +3103,15 @@ def get_runway():
             else:
                 status = "OK"
 
-            forecast_weeks.append({
-                "label": week_labels[wi],
-                "demand": f_demand,
-                "carry_in": f_carry_in,
-                "carry_out": f_out,
-                "status": status,
-            })
+            forecast_weeks.append(
+                {
+                    "label": week_labels[wi],
+                    "demand": f_demand,
+                    "carry_in": f_carry_in,
+                    "carry_out": f_out,
+                    "status": status,
+                }
+            )
 
             f_carry = max(0, f_out)
 
@@ -3012,34 +3150,37 @@ def get_runway():
         fo_wk = first_order_split.get(sku, 0)
         addon_wk = addon_split.get(sku, 0)
 
-        sku_rows.append({
-            "sku": sku,
-            "name": sku_name,
-            "category": category,
-            "available": avail,
-            "potential": potential,
-            "forecast": {
-                "weeks": forecast_weeks,
-                "runway_weeks": round(f_runway, 1),
-            },
-            "demand_per_wk": demand_per_wk,
-            "recurring_per_wk": int(round(rec_qty)),
-            "predicted_per_wk": int(round(f_predictive)),
-            "first_order_per_wk": fo_wk,
-            "addon_per_wk": addon_wk,
-            "attribution": attr,
-            "worst_status": worst_status,
-        })
+        sku_rows.append(
+            {
+                "sku": sku,
+                "name": sku_name,
+                "category": category,
+                "available": avail,
+                "potential": potential,
+                "forecast": {
+                    "weeks": forecast_weeks,
+                    "runway_weeks": round(f_runway, 1),
+                },
+                "demand_per_wk": demand_per_wk,
+                "recurring_per_wk": int(round(rec_qty)),
+                "predicted_per_wk": int(round(f_predictive)),
+                "first_order_per_wk": fo_wk,
+                "addon_per_wk": addon_wk,
+                "attribution": attr,
+                "worst_status": worst_status,
+            }
+        )
 
     # Sort by shortest forecast runway (worst first)
-    sku_rows.sort(key=lambda r: (
-        {"SHORTAGE": 0, "TIGHT": 1, "OK": 2}.get(r["worst_status"], 2),
-        r["forecast"]["runway_weeks"],
-    ))
+    sku_rows.sort(
+        key=lambda r: (
+            {"SHORTAGE": 0, "TIGHT": 1, "OK": 2}.get(r["worst_status"], 2),
+            r["forecast"]["runway_weeks"],
+        )
+    )
 
     # Build assignment summary with unit counts from curation box counts
-    curation_order = ["MONG", "MDT", "OWC", "SPN", "ALPN", "ISUN", "HHIGH",
-                      "NMS", "BYO", "SS", "MS"]
+    curation_order = ["MONG", "MDT", "OWC", "SPN", "ALPN", "ISUN", "HHIGH", "NMS", "BYO", "SS", "MS"]
     # Sum curation box counts across all weeks for display
     total_cur_boxes = defaultdict(float)
     if recharge_queued:
@@ -3065,28 +3206,33 @@ def get_runway():
             ce_units = int(round(cexec_counts_raw.get(cur, 0)))
 
         if pj_units > 0 or ce_units > 0 or pj_cheese or ce_sku:
-            assignments.append({
-                "curation": cur,
-                "prcjam": pj_cheese,
-                "prcjam_units": pj_units,
-                "cexec": ce_sku,
-                "cexec_units": ce_units,
-            })
+            assignments.append(
+                {
+                    "curation": cur,
+                    "prcjam": pj_cheese,
+                    "prcjam_units": pj_units,
+                    "cexec": ce_sku,
+                    "cexec_units": ce_units,
+                }
+            )
 
-    return jsonify({
-        "skus": sku_rows,
-        "week_labels": week_labels,
-        "model_params": {
-            "repeat_rate": repeat_rate,
-            "reship_pct": reship_pct,
-            "avg_churn_weekly": avg_churn_weekly,
-            "total_forecast": total_forecast,
-        },
-        "assignments": assignments,
-    })
+    return jsonify(
+        {
+            "skus": sku_rows,
+            "week_labels": week_labels,
+            "model_params": {
+                "repeat_rate": repeat_rate,
+                "reship_pct": reship_pct,
+                "avg_churn_weekly": avg_churn_weekly,
+                "total_forecast": total_forecast,
+            },
+            "assignments": assignments,
+        }
+    )
 
 
 # ── Monthly Runway (4-month horizon) ─────────────────────────────────
+
 
 @app.route("/api/runway_monthly", methods=["POST"])
 def get_runway_monthly():
@@ -3106,8 +3252,7 @@ def get_runway_monthly():
     monthly_rates = []
     for track, rates in churn_rates.items():
         if isinstance(rates, dict):
-            r = rates.get("month_2_plus", rates.get("month_3_plus",
-                rates.get("month_1", 0.12)))
+            r = rates.get("month_2_plus", rates.get("month_3_plus", rates.get("month_1", 0.12)))
             monthly_rates.append(r)
     avg_monthly = sum(monthly_rates) / len(monthly_rates) if monthly_rates else 0.12
     weekly_retention = (1 - avg_monthly) ** (1 / 4.33)
@@ -3135,10 +3280,9 @@ def get_runway_monthly():
     first_order_overrides = s.get("first_order_overrides", {})
 
     if recharge_queued:
-        week_demands, _, _, _, curation_box_counts, attribution = \
-            _build_queued_runway_demand(
-                recharge_queued, pr_cjam, cex_ec, splits, saturdays
-            )
+        week_demands, _, _, _, curation_box_counts, attribution = _build_queued_runway_demand(
+            recharge_queued, pr_cjam, cex_ec, splits, saturdays
+        )
         shopify_first = s.get("shopify_first_order_demand", {})
         shopify_recurring = s.get("shopify_recurring_demand", {})
 
@@ -3213,7 +3357,7 @@ def get_runway_monthly():
         f_carry = avail + potential
         weekly_demands = []
         for wi in range(NUM_WEEKS):
-            f_recurring = rec_qty * (weekly_retention ** wi)
+            f_recurring = rec_qty * (weekly_retention**wi)
             f_demand = max(0, int(round(f_recurring + f_predictive)))
             weekly_demands.append(f_demand)
             f_carry = max(0, f_carry - f_demand)
@@ -3240,13 +3384,15 @@ def get_runway_monthly():
             sat_date = saturdays[wk_start]
             label = sat_date.strftime("%b")
             month_labels.append(label)
-            months.append({
-                "label": label,
-                "demand": month_demand,
-                "carry_in": max(0, carry_in),
-                "carry_out": carry_out,
-                "status": status,
-            })
+            months.append(
+                {
+                    "label": label,
+                    "demand": month_demand,
+                    "carry_in": max(0, carry_in),
+                    "carry_out": carry_out,
+                    "status": status,
+                }
+            )
             supply = max(0, carry_out)
 
         # Runway months (fractional)
@@ -3291,74 +3437,74 @@ def get_runway_monthly():
         total_supply += avail
         total_potential += potential
         if potential > 0 and total_demand_all > 0:
-            total_potential_committed += min(potential,
-                max(0, total_demand_all - avail))
+            total_potential_committed += min(potential, max(0, total_demand_all - avail))
         month1_demand_total += months[0]["demand"] if months else 0
 
-        worst = min({"SHORTAGE": 0, "TIGHT": 1, "OK": 2}.get(m["status"], 2)
-                    for m in months)
+        worst = min({"SHORTAGE": 0, "TIGHT": 1, "OK": 2}.get(m["status"], 2) for m in months)
         worst_status = ["SHORTAGE", "TIGHT", "OK"][worst]
 
-        sku_rows.append({
-            "sku": sku,
-            "name": sku_name,
-            "available": avail,
-            "potential": potential,
-            "months": months,
-            "runway_months": round(f_runway, 1),
-            "demand_per_month": int(round(total_demand_all / 4)),
-            "velocity": round(velocity, 1),
-            "velocity_trend": round(vel_trend, 1),
-            "reorder_week": reorder_week,
-            "worst_status": worst_status,
-        })
+        sku_rows.append(
+            {
+                "sku": sku,
+                "name": sku_name,
+                "available": avail,
+                "potential": potential,
+                "months": months,
+                "runway_months": round(f_runway, 1),
+                "demand_per_month": int(round(total_demand_all / 4)),
+                "velocity": round(velocity, 1),
+                "velocity_trend": round(vel_trend, 1),
+                "reorder_week": reorder_week,
+                "worst_status": worst_status,
+            }
+        )
 
     # Sort by worst first
-    sku_rows.sort(key=lambda r: (
-        {"SHORTAGE": 0, "TIGHT": 1, "OK": 2}.get(r["worst_status"], 2),
-        r["runway_months"],
-    ))
+    sku_rows.sort(
+        key=lambda r: (
+            {"SHORTAGE": 0, "TIGHT": 1, "OK": 2}.get(r["worst_status"], 2),
+            r["runway_months"],
+        )
+    )
 
     # Global stats
     skus_with_demand = [r for r in sku_rows if r["demand_per_month"] > 0]
-    avg_runway = (sum(r["runway_months"] for r in skus_with_demand) /
-                  len(skus_with_demand)) if skus_with_demand else 0
+    avg_runway = (sum(r["runway_months"] for r in skus_with_demand) / len(skus_with_demand)) if skus_with_demand else 0
     at_risk = sum(1 for r in sku_rows if r["runway_months"] < 2)
-    reorder_soon = sum(1 for r in sku_rows if r["reorder_week"] is not None
-                       and r["runway_months"] < 1)
+    reorder_soon = sum(1 for r in sku_rows if r["reorder_week"] is not None and r["runway_months"] < 1)
     overstock = sum(1 for r in sku_rows if r["runway_months"] > 3)
-    coverage = round((total_supply + total_potential) / month1_demand_total * 100
-                      if month1_demand_total > 0 else 0)
-    wheel_util = round(total_potential_committed / total_potential * 100
-                       if total_potential > 0 else 0)
+    coverage = round((total_supply + total_potential) / month1_demand_total * 100 if month1_demand_total > 0 else 0)
+    wheel_util = round(total_potential_committed / total_potential * 100 if total_potential > 0 else 0)
 
     # Deduplicate month labels
     seen = set()
     unique_labels = []
-    for m in (sku_rows[0]["months"] if sku_rows else []):
+    for m in sku_rows[0]["months"] if sku_rows else []:
         if m["label"] not in seen:
             unique_labels.append(m["label"])
             seen.add(m["label"])
 
-    return jsonify({
-        "skus": sku_rows,
-        "month_labels": unique_labels,
-        "stats": {
-            "avg_runway": round(avg_runway, 1),
-            "at_risk": at_risk,
-            "reorder_soon": reorder_soon,
-            "velocity": round(total_velocity, 0),
-            "velocity_trend": round(total_velocity_trend / velocity_count, 1)
-                              if velocity_count else 0,
-            "coverage_pct": coverage,
-            "overstock": overstock,
-            "wheel_util_pct": wheel_util,
-            "skus_tracked": len(skus_with_demand),
-        },
-    })
+    return jsonify(
+        {
+            "skus": sku_rows,
+            "month_labels": unique_labels,
+            "stats": {
+                "avg_runway": round(avg_runway, 1),
+                "at_risk": at_risk,
+                "reorder_soon": reorder_soon,
+                "velocity": round(total_velocity, 0),
+                "velocity_trend": round(total_velocity_trend / velocity_count, 1) if velocity_count else 0,
+                "coverage_pct": coverage,
+                "overstock": overstock,
+                "wheel_util_pct": wheel_util,
+                "skus_tracked": len(skus_with_demand),
+            },
+        }
+    )
 
 
 # ── Activity Log ──────────────────────────────────────────────────────
+
 
 @app.route("/api/activity_log")
 def activity_log():
@@ -3382,11 +3528,16 @@ def activity_log():
         summary = f"{day_label} fulfillment — {total} units"
         if reship:
             summary += f" ({reship} reships)"
-        events.append({
-            "type": "DEPLETION", "date": date, "direction": "out",
-            "summary": summary, "total_units": -total,
-            "skus": sku_list,
-        })
+        events.append(
+            {
+                "type": "DEPLETION",
+                "date": date,
+                "direction": "out",
+                "summary": summary,
+                "total_units": -total,
+                "skus": sku_list,
+            }
+        )
 
     # Open POs (inflow when received, action when submitted)
     for po in s.get("open_pos", []):
@@ -3399,19 +3550,27 @@ def activity_log():
             date = po.get("received_date", eta)
             if date < cutoff:
                 continue
-            events.append({
-                "type": "PO_RECEIVED", "date": date, "direction": "in",
-                "summary": f"PO received from {vendor} — {qty} units",
-                "total_units": qty,
-                "skus": [{"sku": sku, "qty": qty}],
-            })
+            events.append(
+                {
+                    "type": "PO_RECEIVED",
+                    "date": date,
+                    "direction": "in",
+                    "summary": f"PO received from {vendor} — {qty} units",
+                    "total_units": qty,
+                    "skus": [{"sku": sku, "qty": qty}],
+                }
+            )
         elif eta and eta >= cutoff:
-            events.append({
-                "type": "PO_OPEN", "date": eta, "direction": "status",
-                "summary": f"PO open — {qty} {sku} from {vendor} (ETA {eta})",
-                "total_units": qty,
-                "skus": [{"sku": sku, "qty": qty}],
-            })
+            events.append(
+                {
+                    "type": "PO_OPEN",
+                    "date": eta,
+                    "direction": "status",
+                    "summary": f"PO open — {qty} {sku} from {vendor} (ETA {eta})",
+                    "total_units": qty,
+                    "skus": [{"sku": sku, "qty": qty}],
+                }
+            )
 
     # Production yields (inflow)
     for y in s.get("production_yield_history", []):
@@ -3420,12 +3579,16 @@ def activity_log():
             continue
         sku = y.get("sku", "")
         actual = y.get("actual", 0)
-        events.append({
-            "type": "PRODUCTION", "date": date, "direction": "in",
-            "summary": f"Production yield — {actual} units of {sku}",
-            "total_units": actual,
-            "skus": [{"sku": sku, "qty": actual}],
-        })
+        events.append(
+            {
+                "type": "PRODUCTION",
+                "date": date,
+                "direction": "in",
+                "summary": f"Production yield — {actual} units of {sku}",
+                "total_units": actual,
+                "skus": [{"sku": sku, "qty": actual}],
+            }
+        )
 
     # Transfers (inflow/outflow depending on perspective)
     for t in s.get("transfer_history", []):
@@ -3436,12 +3599,16 @@ def activity_log():
         qty = t.get("qty", 0)
         from_wh = t.get("from_warehouse", "")
         to_wh = t.get("to_warehouse", "")
-        events.append({
-            "type": "TRANSFER", "date": date, "direction": "in",
-            "summary": f"Transfer {from_wh} → {to_wh} — {qty} {sku}",
-            "total_units": qty,
-            "skus": [{"sku": sku, "qty": qty}],
-        })
+        events.append(
+            {
+                "type": "TRANSFER",
+                "date": date,
+                "direction": "in",
+                "summary": f"Transfer {from_wh} → {to_wh} — {qty} {sku}",
+                "total_units": qty,
+                "skus": [{"sku": sku, "qty": qty}],
+            }
+        )
 
     # Waste ledger (outflow)
     for w in s.get("waste_ledger", []):
@@ -3451,12 +3618,16 @@ def activity_log():
         sku = w.get("sku", "")
         qty = w.get("qty", 0)
         reason = w.get("reason", "")
-        events.append({
-            "type": "WASTE", "date": date, "direction": "out",
-            "summary": f"Waste — {qty} {sku} ({reason})",
-            "total_units": -qty,
-            "skus": [{"sku": sku, "qty": -qty}],
-        })
+        events.append(
+            {
+                "type": "WASTE",
+                "date": date,
+                "direction": "out",
+                "summary": f"Waste — {qty} {sku} ({reason})",
+                "total_units": -qty,
+                "skus": [{"sku": sku, "qty": -qty}],
+            }
+        )
 
     # Reconciliation events (status)
     for r in s.get("reconciliation_history", []):
@@ -3465,11 +3636,16 @@ def activity_log():
             continue
         mismatches = r.get("mismatches", 0)
         checked = r.get("skus_checked", 0)
-        events.append({
-            "type": "RECONCILIATION", "date": date, "direction": "status",
-            "summary": f"Reconciliation — {checked} SKUs checked, {mismatches} mismatches",
-            "total_units": 0, "skus": [],
-        })
+        events.append(
+            {
+                "type": "RECONCILIATION",
+                "date": date,
+                "direction": "status",
+                "summary": f"Reconciliation — {checked} SKUs checked, {mismatches} mismatches",
+                "total_units": 0,
+                "skus": [],
+            }
+        )
 
     # Sort newest first
     events.sort(key=lambda e: e["date"], reverse=True)
@@ -3478,15 +3654,18 @@ def activity_log():
     total_in = sum(e["total_units"] for e in events if e["direction"] == "in")
     total_out = sum(e["total_units"] for e in events if e["direction"] == "out")
 
-    return jsonify({
-        "events": events,
-        "total_in": total_in,
-        "total_out": total_out,
-        "event_count": len(events),
-    })
+    return jsonify(
+        {
+            "events": events,
+            "total_in": total_in,
+            "total_out": total_out,
+            "event_count": len(events),
+        }
+    )
 
 
 # ── First-Order Overrides ─────────────────────────────────────────────
+
 
 @app.route("/api/first_order_override", methods=["POST"])
 def set_first_order_override():
@@ -3527,6 +3706,7 @@ def get_first_order_overrides():
 
 # ── Cut Order ─────────────────────────────────────────────────────────
 
+
 @app.route("/api/cut_order", methods=["POST"])
 def get_cut_order():
     """Generate cut order from current demand, inventory, and wheel data."""
@@ -3543,9 +3723,7 @@ def get_cut_order():
     raw_cexec = STATE.get("rmfg_cexec_sat", {})
 
     if raw_direct or raw_prcjam or raw_cexec:
-        sat_demand, attribution = resolve_demand(
-            raw_direct, raw_prcjam, raw_cexec, pr_cjam, cex_ec, splits
-        )
+        sat_demand, attribution = resolve_demand(raw_direct, raw_prcjam, raw_cexec, pr_cjam, cex_ec, splits)
     else:
         sat_demand = STATE.get("rmfg_sat_demand", {})
         attribution = STATE.get("rmfg_attribution", {})
@@ -3558,10 +3736,12 @@ def get_cut_order():
     rc_prcjam = STATE.get("rmfg_prcjam_rc", {})
     rc_cexec = STATE.get("rmfg_cexec_rc", {})
 
-    sh_demand, _ = resolve_demand(sh_direct, sh_prcjam, sh_cexec,
-                                   pr_cjam, cex_ec, splits) if sh_direct or sh_prcjam else ({}, {})
-    rc_demand, _ = resolve_demand(rc_direct, rc_prcjam, rc_cexec,
-                                   pr_cjam, cex_ec, splits) if rc_direct or rc_prcjam else ({}, {})
+    sh_demand, _ = (
+        resolve_demand(sh_direct, sh_prcjam, sh_cexec, pr_cjam, cex_ec, splits) if sh_direct or sh_prcjam else ({}, {})
+    )
+    rc_demand, _ = (
+        resolve_demand(rc_direct, rc_prcjam, rc_cexec, pr_cjam, cex_ec, splits) if rc_direct or rc_prcjam else ({}, {})
+    )
 
     # Collect all CH-* with demand or inventory
     all_ch = set()
@@ -3640,30 +3820,31 @@ def get_cut_order():
             total_pcs_from_cut += pcs_from_cut
 
     # Sort: shortages first, then by gap descending
-    cut_lines.sort(key=lambda r: (
-        {"SHORTAGE": 0, "MFG": 1, "OK": 2, "SURPLUS": 3, "NO DEMAND": 4}.get(r["status"], 9),
-        -r["gap"]
-    ))
+    cut_lines.sort(
+        key=lambda r: ({"SHORTAGE": 0, "MFG": 1, "OK": 2, "SURPLUS": 3, "NO DEMAND": 4}.get(r["status"], 9), -r["gap"])
+    )
     surplus_candidates.sort(key=lambda r: -r["net"])
 
-    return jsonify({
-        "cut_lines": cut_lines,
-        "shortages": shortages,
-        "surplus_candidates": surplus_candidates[:15],
-        "assignments": {
-            "pr_cjam": pr_cjam,
-            "cex_ec": cex_ec,
-            "cexec_splits": splits,
-        },
-        "summary": {
-            "total_demand": total_demand,
-            "total_wheels_to_cut": total_wheels_to_cut,
-            "total_pcs_from_cut": total_pcs_from_cut,
-            "shortage_count": shortage_count,
-            "total_skus": len([l for l in cut_lines if l["total_demand"] > 0]),
-        },
-        "ship_dates": ship_dates_json(),
-    })
+    return jsonify(
+        {
+            "cut_lines": cut_lines,
+            "shortages": shortages,
+            "surplus_candidates": surplus_candidates[:15],
+            "assignments": {
+                "pr_cjam": pr_cjam,
+                "cex_ec": cex_ec,
+                "cexec_splits": splits,
+            },
+            "summary": {
+                "total_demand": total_demand,
+                "total_wheels_to_cut": total_wheels_to_cut,
+                "total_pcs_from_cut": total_pcs_from_cut,
+                "shortage_count": shortage_count,
+                "total_skus": len([l for l in cut_lines if l["total_demand"] > 0]),
+            },
+            "ship_dates": ship_dates_json(),
+        }
+    )
 
 
 @app.route("/api/demand_breakdown/<sku>")
@@ -3783,8 +3964,7 @@ def get_cut_order_interactive():
         entry["wk2_demand"] = int(round(wk2_demand.get(sku, 0)))
 
         # Skip if no inventory, no demand, no supply potential
-        has_demand = (wk1_direct.get(sku, 0) > 0 or entry["wk2_demand"] > 0
-                      or sku in str(pr_cjam) or sku in str(cex_ec))
+        has_demand = wk1_direct.get(sku, 0) > 0 or entry["wk2_demand"] > 0 or sku in str(pr_cjam) or sku in str(cex_ec)
         has_supply = sliced > 0 or entry.get("wheel_potential", 0) > 0 or entry.get("bulk_potential", 0) > 0
         if not has_demand and not has_supply:
             continue
@@ -3814,34 +3994,37 @@ def get_cut_order_interactive():
     # Saved cut quantities
     saved_cuts = s.get("cut_quantities", {"wk1": {}, "wk2": {}})
 
-    return jsonify({
-        "skus": skus,
-        "raw_components": {
-            "wk1": {
-                "direct": wk1_direct,
-                "prcjam_counts": wk1_prcjam,
-                "cexec_counts": wk1_cexec,
+    return jsonify(
+        {
+            "skus": skus,
+            "raw_components": {
+                "wk1": {
+                    "direct": wk1_direct,
+                    "prcjam_counts": wk1_prcjam,
+                    "cexec_counts": wk1_cexec,
+                },
+                "wk2": {
+                    "prcjam_counts": STATE.get("rmfg_prcjam_wk2") or s.get("rmfg_prcjam_wk2", {}),
+                    "cexec_counts": STATE.get("rmfg_cexec_wk2") or s.get("rmfg_cexec_wk2", {}),
+                },
             },
-            "wk2": {
-                "prcjam_counts": STATE.get("rmfg_prcjam_wk2") or s.get("rmfg_prcjam_wk2", {}),
-                "cexec_counts": STATE.get("rmfg_cexec_wk2") or s.get("rmfg_cexec_wk2", {}),
+            "wk2_demand": {
+                k: int(round(v)) for k, v in wk2_demand.items() if any(k.startswith(p) for p in ("CH-", "MT-", "AC-"))
             },
-        },
-        "wk2_demand": {k: int(round(v)) for k, v in wk2_demand.items()
-                       if any(k.startswith(p) for p in ("CH-", "MT-", "AC-"))},
-        "assignments": {
-            "pr_cjam": pr_cjam,
-            "cex_ec": cex_ec,
-            "cexec_splits": splits,
-        },
-        "monthly_slots": monthly_slots,
-        "monthly_box_counts": monthly_counts,
-        "curations": ALL_CURATIONS,
-        "saved_cuts": saved_cuts,
-        "demand_source": STATE.get("demand_source") or settings_source or "none",
-        "demand_source_ts": STATE.get("demand_source_ts") or s.get("demand_source_ts", ""),
-        "ship_dates": ship_dates_json(),
-    })
+            "assignments": {
+                "pr_cjam": pr_cjam,
+                "cex_ec": cex_ec,
+                "cexec_splits": splits,
+            },
+            "monthly_slots": monthly_slots,
+            "monthly_box_counts": monthly_counts,
+            "curations": ALL_CURATIONS,
+            "saved_cuts": saved_cuts,
+            "demand_source": STATE.get("demand_source") or settings_source or "none",
+            "demand_source_ts": STATE.get("demand_source_ts") or s.get("demand_source_ts", ""),
+            "ship_dates": ship_dates_json(),
+        }
+    )
 
 
 @app.route("/api/cut_quantities", methods=["GET", "POST"])
@@ -3875,18 +4058,17 @@ def export_cut_order_csv():
     raw_cexec = STATE.get("rmfg_cexec_sat", {})
 
     if raw_direct or raw_prcjam or raw_cexec:
-        sat_demand, _ = resolve_demand(raw_direct, raw_prcjam, raw_cexec,
-                                        pr_cjam, cex_ec_d, splits)
+        sat_demand, _ = resolve_demand(raw_direct, raw_prcjam, raw_cexec, pr_cjam, cex_ec_d, splits)
     else:
         sat_demand = STATE.get("rmfg_sat_demand", {})
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["SKU", "Sliced", "Demand", "Gap", "Wheels to Cut",
-                      "Wheels Avail", "Pcs from Cut", "Net", "Status"])
+    writer.writerow(
+        ["SKU", "Sliced", "Demand", "Gap", "Wheels to Cut", "Wheels Avail", "Pcs from Cut", "Net", "Status"]
+    )
 
-    all_ch = sorted(set(k for k in inv if k.startswith("CH-")) |
-                    set(k for k in sat_demand if k.startswith("CH-")))
+    all_ch = sorted(set(k for k in inv if k.startswith("CH-")) | set(k for k in sat_demand if k.startswith("CH-")))
 
     for sku in all_ch:
         sliced = inv.get(sku, 0)
@@ -3930,12 +4112,15 @@ def projection_settings():
     """Get or set first-order projection settings."""
     s = _s()
     if request.method == "GET":
-        proj = s.get("first_order_projection", {
-            "enabled": True,
-            "active_curation": "MONG",
-            "multiplier": 3,
-            "recipe_only": True,
-        })
+        proj = s.get(
+            "first_order_projection",
+            {
+                "enabled": True,
+                "active_curation": "MONG",
+                "multiplier": 3,
+                "recipe_only": True,
+            },
+        )
         proj["shopify_weeks_back"] = s.get("shopify_weeks_back", 8)
         return jsonify(proj)
 
@@ -3972,8 +4157,7 @@ def reassignment_preview():
         return jsonify({"error": "No raw demand data loaded"}), 400
 
     # Current demand
-    current_demand, _ = resolve_demand(raw_direct, raw_prcjam, raw_cexec,
-                                        pr_cjam, cex_ec, splits)
+    current_demand, _ = resolve_demand(raw_direct, raw_prcjam, raw_cexec, pr_cjam, cex_ec, splits)
 
     # Apply proposed change
     if slot == "prcjam":
@@ -3985,16 +4169,14 @@ def reassignment_preview():
         else:
             entry = {"cheese": cheese, "jam": ""}
         pr_cjam_new[curation] = entry
-        new_demand, _ = resolve_demand(raw_direct, raw_prcjam, raw_cexec,
-                                        pr_cjam_new, cex_ec, splits)
+        new_demand, _ = resolve_demand(raw_direct, raw_prcjam, raw_cexec, pr_cjam_new, cex_ec, splits)
     elif slot == "cexec":
         cex_ec_new = dict(cex_ec)
         cex_ec_new[curation] = cheese
         # Clear any split for this curation
         splits_new = dict(splits)
         splits_new.pop(curation, None)
-        new_demand, _ = resolve_demand(raw_direct, raw_prcjam, raw_cexec,
-                                        pr_cjam, cex_ec_new, splits_new)
+        new_demand, _ = resolve_demand(raw_direct, raw_prcjam, raw_cexec, pr_cjam, cex_ec_new, splits_new)
     else:
         return jsonify({"error": f"Unknown slot: {slot}"}), 400
 
@@ -4013,16 +4195,21 @@ def reassignment_preview():
         curation,
         cheese if slot == "prcjam" else pr_cjam.get(curation, {}).get("cheese", ""),
         cheese if slot == "cexec" else cex_ec.get(curation, ""),
-        recipes, pr_cjam, cex_ec
+        recipes,
+        pr_cjam,
+        cex_ec,
     )
 
-    return jsonify({
-        "deltas": deltas,
-        "constraint": constraint,
-    })
+    return jsonify(
+        {
+            "deltas": deltas,
+            "constraint": constraint,
+        }
+    )
 
 
 # ── Substitution engine ───────────────────────────────────────────────
+
 
 @app.route("/api/substitutions")
 def get_substitutions():
@@ -4048,17 +4235,18 @@ def get_substitutions():
         potential = bw.get("potential_yield", 0)
         wheel_count = bw.get("count", 0)
         nets[sku] = {
-            "available": avail, "demand": demand,
+            "available": avail,
+            "demand": demand,
             "net": avail - demand,
-            "potential": potential, "wheel_count": wheel_count,
+            "potential": potential,
+            "wheel_count": wheel_count,
             "net_with_potential": avail + potential - demand,
         }
 
     # Find shortages (still short even with processed inventory)
     # and surplus candidates
     shortages = [(sku, d) for sku, d in nets.items() if d["net"] < 0]
-    surplus = [(sku, d) for sku, d in nets.items()
-               if d["net"] > 50 and d["demand"] > 0]
+    surplus = [(sku, d) for sku, d in nets.items() if d["net"] > 50 and d["demand"] > 0]
     surplus.sort(key=lambda x: -x[1]["net"])
 
     suggestions = []
@@ -4070,35 +4258,41 @@ def get_substitutions():
                 continue
             headroom = cdata["net"]
             can_cover = min(deficit, headroom)
-            subs.append({
-                "sku": cand_sku,
-                "headroom": headroom,
-                "can_cover": can_cover,
-                "covers_all": can_cover >= deficit,
-            })
+            subs.append(
+                {
+                    "sku": cand_sku,
+                    "headroom": headroom,
+                    "can_cover": can_cover,
+                    "covers_all": can_cover >= deficit,
+                }
+            )
         # Also suggest any SKU with high inventory and no demand
         for sk, d in nets.items():
             if sk == sku or d["demand"] > 0:
                 continue
             if d["available"] >= deficit:
-                subs.append({
-                    "sku": sk,
-                    "headroom": d["available"],
-                    "can_cover": deficit,
-                    "covers_all": True,
-                    "no_demand": True,
-                })
+                subs.append(
+                    {
+                        "sku": sk,
+                        "headroom": d["available"],
+                        "can_cover": deficit,
+                        "covers_all": True,
+                        "no_demand": True,
+                    }
+                )
         subs.sort(key=lambda x: (-x["covers_all"], -x["can_cover"]))
-        suggestions.append({
-            "sku": sku,
-            "deficit": deficit,
-            "available": sdata["available"],
-            "demand": sdata["demand"],
-            "potential": sdata.get("potential", 0),
-            "wheel_count": sdata.get("wheel_count", 0),
-            "net_with_potential": sdata.get("net_with_potential", sdata["net"]),
-            "substitutes": subs[:5],
-        })
+        suggestions.append(
+            {
+                "sku": sku,
+                "deficit": deficit,
+                "available": sdata["available"],
+                "demand": sdata["demand"],
+                "potential": sdata.get("potential", 0),
+                "wheel_count": sdata.get("wheel_count", 0),
+                "net_with_potential": sdata.get("net_with_potential", sdata["net"]),
+                "substitutes": subs[:5],
+            }
+        )
 
     return jsonify(suggestions)
 
@@ -4144,9 +4338,7 @@ def swap_preview():
     targets = find_swap_targets(store, token, ship_date, old_sku)
 
     # Dry run result
-    result = execute_bulk_swap(
-        store, token, targets, old_sku, new_gid, dry_run=True
-    )
+    result = execute_bulk_swap(store, token, targets, old_sku, new_gid, dry_run=True)
     result["ship_tag"] = ship_date
     result["new_variant_gid"] = new_gid
     result["old_sku"] = old_sku
@@ -4190,7 +4382,11 @@ def swap_execute():
                 _swap_progress["message"] = msg
 
             result = execute_bulk_swap(
-                store, token, targets, old_sku, new_variant_gid,
+                store,
+                token,
+                targets,
+                old_sku,
+                new_variant_gid,
                 staff_note=note,
                 dry_run=False,
                 progress_callback=_progress,
@@ -4204,6 +4400,7 @@ def swap_execute():
             _swap_progress["message"] = "Done"
 
     import threading
+
     threading.Thread(target=_worker, daemon=True).start()
     return jsonify({"started": True})
 
@@ -4222,6 +4419,7 @@ def swap_cancel():
 
 
 # ── Swap Manager (multi-swap, matrix upload, history) ────────────────
+
 
 def _load_sku_mappings():
     """Load sku_mappings.json (cached in STATE)."""
@@ -4260,8 +4458,7 @@ def swap_ship_tags():
     page = 0
     while url:
         page += 1
-        resp = req.get(url, headers=headers,
-                       params=params if page == 1 else None, timeout=30)
+        resp = req.get(url, headers=headers, params=params if page == 1 else None, timeout=30)
         resp.raise_for_status()
         for o in resp.json().get("orders", []):
             for t in (o.get("tags") or "").split(","):
@@ -4275,6 +4472,7 @@ def swap_ship_tags():
             if m:
                 url = m.group(1)
         import time
+
         time.sleep(0.1)
 
     return jsonify({"tags": sorted(tags, reverse=True)})
@@ -4312,11 +4510,14 @@ def swap_multi_preview():
 
         new_gid = lookup_variant_gid(store, token, new_sku)
         if not new_gid:
-            results.append({
-                "old_sku": old_sku, "new_sku": new_sku,
-                "error": f"Variant not found for {new_sku}",
-                "targets": [],
-            })
+            results.append(
+                {
+                    "old_sku": old_sku,
+                    "new_sku": new_sku,
+                    "error": f"Variant not found for {new_sku}",
+                    "targets": [],
+                }
+            )
             continue
 
         targets = find_swap_targets(store, token, ship_tag, old_sku)
@@ -4325,26 +4526,27 @@ def swap_multi_preview():
             "new_sku": new_sku,
             "new_variant_gid": new_gid,
             "count": len(targets),
-            "targets": [
-                {"order_name": t["order_name"], "qty": t["qty"]}
-                for t in targets
-            ],
+            "targets": [{"order_name": t["order_name"], "qty": t["qty"]} for t in targets],
         }
         results.append(pair_result)
         for t in targets:
-            all_targets.append({
-                "order_name": t["order_name"],
-                "old_sku": old_sku,
-                "new_sku": new_sku,
-                "qty": t["qty"],
-            })
+            all_targets.append(
+                {
+                    "order_name": t["order_name"],
+                    "old_sku": old_sku,
+                    "new_sku": new_sku,
+                    "qty": t["qty"],
+                }
+            )
 
-    return jsonify({
-        "ship_tag": ship_tag,
-        "pairs": results,
-        "all_targets": all_targets,
-        "total_orders": len(all_targets),
-    })
+    return jsonify(
+        {
+            "ship_tag": ship_tag,
+            "pairs": results,
+            "all_targets": all_targets,
+            "total_orders": len(all_targets),
+        }
+    )
 
 
 @app.route("/api/swap/multi-execute", methods=["POST"])
@@ -4401,17 +4603,26 @@ def swap_multi_execute():
                     _swap_progress["message"] = f"Pair {pair_num}/{total}: {msg}"
 
                 result = execute_bulk_swap(
-                    store, token, targets, old_sku, new_gid,
-                    staff_note=note, dry_run=False,
-                    progress_callback=_progress, cancel_flag=_swap_cancel,
+                    store,
+                    token,
+                    targets,
+                    old_sku,
+                    new_gid,
+                    staff_note=note,
+                    dry_run=False,
+                    progress_callback=_progress,
+                    cancel_flag=_swap_cancel,
                 )
                 total_success += result.get("success", 0)
                 total_failed += result.get("failed", 0)
-                combined_results.append({
-                    "old_sku": old_sku, "new_sku": new_sku,
-                    "orders": result.get("success", 0),
-                    "failed": result.get("failed", 0),
-                })
+                combined_results.append(
+                    {
+                        "old_sku": old_sku,
+                        "new_sku": new_sku,
+                        "orders": result.get("success", 0),
+                        "failed": result.get("failed", 0),
+                    }
+                )
                 combined_errors.extend(result.get("errors", []))
 
             # Save to swap history
@@ -4511,14 +4722,15 @@ def swap_matrix_upload():
     orders = []
     url = f"{base}/orders.json"
     params = {
-        "status": "open", "fulfillment_status": "unfulfilled",
-        "limit": 250, "fields": "id,name,line_items",
+        "status": "open",
+        "fulfillment_status": "unfulfilled",
+        "limit": 250,
+        "fields": "id,name,line_items",
     }
     page = 0
     while url:
         page += 1
-        resp = req.get(url, headers=headers,
-                       params=params if page == 1 else None, timeout=30)
+        resp = req.get(url, headers=headers, params=params if page == 1 else None, timeout=30)
         resp.raise_for_status()
         batch = resp.json().get("orders", [])
         # Filter to orders with this ship tag
@@ -4533,6 +4745,7 @@ def swap_matrix_upload():
             if m:
                 url = m.group(1)
         import time
+
         time.sleep(0.1)
 
     # Build Shopify SKU map per order
@@ -4581,21 +4794,25 @@ def swap_matrix_upload():
                     break
         if best_add:
             used_adds.add(best_add)
-            suggested_swaps.append({
-                "old_sku": rem_sku,
-                "new_sku": best_add,
-                "remove_count": rem_count,
-                "add_count": add_counts[best_add],
-            })
+            suggested_swaps.append(
+                {
+                    "old_sku": rem_sku,
+                    "new_sku": best_add,
+                    "remove_count": rem_count,
+                    "add_count": add_counts[best_add],
+                }
+            )
 
-    return jsonify({
-        "matrix_orders": len(matrix),
-        "shopify_orders": len(shopify),
-        "common_orders": len(common),
-        "removes": dict(remove_counts),
-        "adds": dict(add_counts),
-        "suggested_swaps": suggested_swaps,
-    })
+    return jsonify(
+        {
+            "matrix_orders": len(matrix),
+            "shopify_orders": len(shopify),
+            "common_orders": len(common),
+            "removes": dict(remove_counts),
+            "adds": dict(add_counts),
+            "suggested_swaps": suggested_swaps,
+        }
+    )
 
 
 @app.route("/api/swap/recharge-sync", methods=["POST"])
@@ -4632,6 +4849,7 @@ def swap_recharge_sync():
 
     # Build numeric variant ID map for Recharge (needs numeric, not GID)
     from shopify_swap import lookup_variant_gid
+
     store = s.get("shopify_store_url", "")
     shopify_token = s.get("shopify_access_token", "")
     variant_id_map = {}  # new_sku -> numeric variant ID
@@ -4662,10 +4880,10 @@ def swap_recharge_sync():
     while True:
         if cursor:
             params["cursor"] = cursor
-        resp = req.get(f"{rc_base}/charges", headers=rc_headers,
-                       params=params, timeout=30)
+        resp = req.get(f"{rc_base}/charges", headers=rc_headers, params=params, timeout=30)
         if resp.status_code == 429:
             import time
+
             time.sleep(float(resp.headers.get("Retry-After", "2")))
             continue
         resp.raise_for_status()
@@ -4729,6 +4947,7 @@ def swap_recharge_sync():
         if not cursor or not charges:
             break
         import time
+
         time.sleep(0.5)
 
     # Update history to mark recharge synced
@@ -4757,12 +4976,14 @@ def swap_export_csv():
     writer = csv.DictWriter(output, fieldnames=["order_name", "old_sku", "new_sku", "qty"])
     writer.writeheader()
     for row in rows:
-        writer.writerow({
-            "order_name": row.get("order_name", ""),
-            "old_sku": row.get("old_sku", ""),
-            "new_sku": row.get("new_sku", ""),
-            "qty": row.get("qty", 1),
-        })
+        writer.writerow(
+            {
+                "order_name": row.get("order_name", ""),
+                "old_sku": row.get("old_sku", ""),
+                "new_sku": row.get("new_sku", ""),
+                "qty": row.get("qty", 1),
+            }
+        )
 
     output.seek(0)
     return send_file(
@@ -4808,8 +5029,7 @@ def swap_tag_skus():
     order_count = 0
     while url:
         page += 1
-        resp = req.get(url, headers=headers,
-                       params=params if page == 1 else None, timeout=30)
+        resp = req.get(url, headers=headers, params=params if page == 1 else None, timeout=30)
         resp.raise_for_status()
         for o in resp.json().get("orders", []):
             tags = [t.strip() for t in (o.get("tags") or "").split(",")]
@@ -4829,6 +5049,7 @@ def swap_tag_skus():
             if m:
                 url = m.group(1)
         import time
+
         time.sleep(0.1)
 
     # Group by prefix
@@ -4840,11 +5061,13 @@ def swap_tag_skus():
             if sku.startswith(p):
                 prefix = p.rstrip("-")
                 break
-        prefixes[prefix].append({
-            "sku": sku,
-            "qty": info["qty"],
-            "order_count": len(info["orders"]),
-        })
+        prefixes[prefix].append(
+            {
+                "sku": sku,
+                "qty": info["qty"],
+                "order_count": len(info["orders"]),
+            }
+        )
 
     # Sort each group by qty descending
     for group in prefixes.values():
@@ -4852,12 +5075,14 @@ def swap_tag_skus():
 
     totals = {k: sum(item["qty"] for item in v) for k, v in prefixes.items()}
 
-    return jsonify({
-        "ship_tag": ship_tag,
-        "order_count": order_count,
-        "prefixes": dict(prefixes),
-        "totals": totals,
-    })
+    return jsonify(
+        {
+            "ship_tag": ship_tag,
+            "order_count": order_count,
+            "prefixes": dict(prefixes),
+            "totals": totals,
+        }
+    )
 
 
 # ── Shipping Invoice Sync ────────────────────────────────────────────
@@ -4920,9 +5145,11 @@ def shipping_sync_invoices():
                         subject += part
 
                 subj_upper = subject.upper()
-                is_shipping = ("FEDEX" in subj_upper and "INVOICE" in subj_upper) or \
-                              ("ONTRAC" in subj_upper and "INVOICE" in subj_upper) or \
-                              ("SHIPPING" in subj_upper and "BREAKDOWN" in subj_upper)
+                is_shipping = (
+                    ("FEDEX" in subj_upper and "INVOICE" in subj_upper)
+                    or ("ONTRAC" in subj_upper and "INVOICE" in subj_upper)
+                    or ("SHIPPING" in subj_upper and "BREAKDOWN" in subj_upper)
+                )
                 if not is_shipping:
                     continue
 
@@ -5030,17 +5257,20 @@ def shipping_invoice_files():
                 carrier = "FedEx"
             elif "ups" in fn.lower() or fn.startswith("Invoice_"):
                 carrier = "UPS"
-            files.append({
-                "name": fn,
-                "carrier": carrier,
-                "size_kb": round(stat.st_size / 1024, 1),
-                "modified": datetime.datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
-            })
+            files.append(
+                {
+                    "name": fn,
+                    "carrier": carrier,
+                    "size_kb": round(stat.st_size / 1024, 1),
+                    "modified": datetime.datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+                }
+            )
 
     return jsonify({"files": files, "dir": invoice_dir, "count": len(files)})
 
 
 # ── Morning Briefing ─────────────────────────────────────────────────
+
 
 @app.route("/api/briefing")
 def get_briefing():
@@ -5089,12 +5319,14 @@ def get_briefing():
     for po in open_pos:
         if po.get("status", "").lower() in ("open", "ordered"):
             eta = po.get("eta", "")
-            upcoming_pos.append({
-                "sku": po.get("sku", ""),
-                "qty": po.get("qty", 0),
-                "eta": eta,
-                "vendor": po.get("vendor", ""),
-            })
+            upcoming_pos.append(
+                {
+                    "sku": po.get("sku", ""),
+                    "qty": po.get("qty", 0),
+                    "eta": eta,
+                    "vendor": po.get("vendor", ""),
+                }
+            )
     upcoming_pos.sort(key=lambda x: x["eta"] or "9999")
 
     # Depletion history — last entry
@@ -5121,24 +5353,27 @@ def get_briefing():
     if not actions:
         actions.append("All clear — no immediate actions needed")
 
-    return jsonify({
-        "day": day_name,
-        "date": today.isoformat(),
-        "ship": ship_info,
-        "critical": critical_skus[:10],
-        "tight": tight_skus[:10],
-        "upcoming_pos": upcoming_pos[:5],
-        "last_depletion": {
-            "date": last_depletion.get("date", "") if last_depletion else None,
-            "total": last_depletion.get("total", 0) if last_depletion else 0,
-            "reship_pct": reship_pct,
-        },
-        "actions": actions,
-        "po_needed": po_needed,
-    })
+    return jsonify(
+        {
+            "day": day_name,
+            "date": today.isoformat(),
+            "ship": ship_info,
+            "critical": critical_skus[:10],
+            "tight": tight_skus[:10],
+            "upcoming_pos": upcoming_pos[:5],
+            "last_depletion": {
+                "date": last_depletion.get("date", "") if last_depletion else None,
+                "total": last_depletion.get("total", 0) if last_depletion else 0,
+                "reship_pct": reship_pct,
+            },
+            "actions": actions,
+            "po_needed": po_needed,
+        }
+    )
 
 
 # ── Smart Wednesday PO ───────────────────────────────────────────────
+
 
 @app.route("/api/smart_po")
 def smart_po():
@@ -5168,11 +5403,15 @@ def smart_po():
                 if potential > 0 and avail + potential >= demand:
                     continue
                 effective_net = net + potential
-                shortage_rows.append({
-                    "sku": sku, "net": effective_net,
-                    "avail": avail, "demand": demand,
-                    "potential": potential,
-                })
+                shortage_rows.append(
+                    {
+                        "sku": sku,
+                        "net": effective_net,
+                        "avail": avail,
+                        "demand": demand,
+                        "potential": potential,
+                    }
+                )
 
     # Build open PO index (sku -> total open qty)
     open_po_qty = defaultdict(int)
@@ -5202,18 +5441,20 @@ def smart_po():
         order_qty = max(cases * case_qty, moq)
         line_cost = round(order_qty * unit_cost, 2)
 
-        vendor_groups[vendor].append({
-            "sku": sku,
-            "deficit": deficit,
-            "existing_po": existing,
-            "remaining_deficit": remaining_deficit,
-            "order_qty": order_qty,
-            "cases": math.ceil(order_qty / case_qty),
-            "case_qty": case_qty,
-            "unit_cost": unit_cost,
-            "line_cost": line_cost,
-            "moq": moq,
-        })
+        vendor_groups[vendor].append(
+            {
+                "sku": sku,
+                "deficit": deficit,
+                "existing_po": existing,
+                "remaining_deficit": remaining_deficit,
+                "order_qty": order_qty,
+                "cases": math.ceil(order_qty / case_qty),
+                "case_qty": case_qty,
+                "unit_cost": unit_cost,
+                "line_cost": line_cost,
+                "moq": moq,
+            }
+        )
 
     # Sort lines within each vendor by deficit
     for lines in vendor_groups.values():
@@ -5223,22 +5464,27 @@ def smart_po():
     vendors = []
     for vendor in sorted(vendor_groups.keys()):
         lines = vendor_groups[vendor]
-        vendors.append({
-            "vendor": vendor,
-            "lines": lines,
-            "total_cost": round(sum(l["line_cost"] for l in lines), 2),
-            "total_units": sum(l["order_qty"] for l in lines),
-            "sku_count": len(lines),
-        })
+        vendors.append(
+            {
+                "vendor": vendor,
+                "lines": lines,
+                "total_cost": round(sum(l["line_cost"] for l in lines), 2),
+                "total_units": sum(l["order_qty"] for l in lines),
+                "sku_count": len(lines),
+            }
+        )
 
-    return jsonify({
-        "vendors": vendors,
-        "total_skus": sum(v["sku_count"] for v in vendors),
-        "grand_total": round(sum(v["total_cost"] for v in vendors), 2),
-    })
+    return jsonify(
+        {
+            "vendors": vendors,
+            "total_skus": sum(v["sku_count"] for v in vendors),
+            "grand_total": round(sum(v["total_cost"] for v in vendors), 2),
+        }
+    )
 
 
 # ── Run All endpoint ──────────────────────────────────────────────────
+
 
 @app.route("/api/run_all", methods=["POST"])
 def run_all():
@@ -5250,10 +5496,10 @@ def run_all():
     try:
         with app.test_request_context(json={}, content_type="application/json"):
             db_resp = dropbox_sync()
-            if hasattr(db_resp, 'get_json'):
+            if hasattr(db_resp, "get_json"):
                 db_result = db_resp.get_json()
-            elif hasattr(db_resp, '__iter__') and len(db_resp) == 2:
-                db_result = db_resp[0].get_json() if hasattr(db_resp[0], 'get_json') else None
+            elif hasattr(db_resp, "__iter__") and len(db_resp) == 2:
+                db_result = db_resp[0].get_json() if hasattr(db_resp[0], "get_json") else None
     except Exception as e:
         db_result = {"error": str(e)}
     results["dropbox"] = db_result
@@ -5265,10 +5511,10 @@ def run_all():
         try:
             with app.test_request_context(json={}, content_type="application/json"):
                 ef_resp = fetch_depletions_email()
-                if hasattr(ef_resp, 'get_json'):
+                if hasattr(ef_resp, "get_json"):
                     email_fetch_result = ef_resp.get_json()
                 elif isinstance(ef_resp, tuple):
-                    email_fetch_result = ef_resp[0].get_json() if hasattr(ef_resp[0], 'get_json') else None
+                    email_fetch_result = ef_resp[0].get_json() if hasattr(ef_resp[0], "get_json") else None
         except Exception as e:
             email_fetch_result = {"error": str(e)}
     results["email_depletion_fetch"] = email_fetch_result
@@ -5277,6 +5523,7 @@ def run_all():
     depletion_results = []
     try:
         import re as _re
+
         base_dir = _get_project_dir()
         shipments_dir = os.path.join(base_dir, "Shipments")
         # Get inventory snapshot date from Dropbox sync result or STATE
@@ -5295,8 +5542,8 @@ def run_all():
 
         if os.path.isdir(shipments_dir):
             import glob as globmod
-            dep_files = sorted(globmod.glob(
-                os.path.join(shipments_dir, "*.xlsx")), key=os.path.getmtime)
+
+            dep_files = sorted(globmod.glob(os.path.join(shipments_dir, "*.xlsx")), key=os.path.getmtime)
             s = _s()
             translations = s.get("sku_translations", {})
             inventory = s.get("inventory", {})
@@ -5305,7 +5552,7 @@ def run_all():
             for dep_path in dep_files:
                 fname = os.path.basename(dep_path)
                 # Extract date from filename (MM-DD-YY pattern)
-                date_match = _re.search(r'(\d{2})-(\d{2})-(\d{2})', fname)
+                date_match = _re.search(r"(\d{2})-(\d{2})-(\d{2})", fname)
                 if date_match and snapshot_date:
                     mm, dd, yy = date_match.groups()
                     file_date = datetime.date(2000 + int(yy), int(mm), int(dd))
@@ -5315,8 +5562,7 @@ def run_all():
                 product_totals, order_count, err = parse_depletion_xlsx(dep_path)
                 if err or not product_totals:
                     continue
-                sku_totals, mapped, unmatched = map_depletion_to_skus(
-                    product_totals, translations, inventory)
+                sku_totals, mapped, unmatched = map_depletion_to_skus(product_totals, translations, inventory)
                 if not sku_totals:
                     continue
 
@@ -5334,30 +5580,36 @@ def run_all():
                 # Log to depletion_history so Activity Log shows it
                 dep_s = _s()
                 dep_history = dep_s.setdefault("depletion_history", [])
-                dep_history.append({
-                    "date": datetime.datetime.now().isoformat(),
-                    "file": dep_label,
-                    "day": _detect_cycle_day(),
-                    "skus": {sku: int(q) for sku, q in sku_totals.items()},
-                    "total": sum(int(q) for q in sku_totals.values()),
-                    "total_orders": order_count,
-                })
+                dep_history.append(
+                    {
+                        "date": datetime.datetime.now().isoformat(),
+                        "file": dep_label,
+                        "day": _detect_cycle_day(),
+                        "skus": {sku: int(q) for sku, q in sku_totals.items()},
+                        "total": sum(int(q) for q in sku_totals.values()),
+                        "total_orders": order_count,
+                    }
+                )
                 dep_journal = dep_s.setdefault("inventory_journal", [])
-                dep_journal.append({
-                    "ts": datetime.datetime.now().isoformat(),
-                    "type": "depletion",
-                    "label": dep_label,
-                    "sku_deltas": {sku: -int(q) for sku, q in sku_totals.items()},
-                })
+                dep_journal.append(
+                    {
+                        "ts": datetime.datetime.now().isoformat(),
+                        "type": "depletion",
+                        "label": dep_label,
+                        "sku_deltas": {sku: -int(q) for sku, q in sku_totals.items()},
+                    }
+                )
                 save_settings(dep_s)
 
-                depletion_results.append({
-                    "file": dep_label,
-                    "order_count": order_count,
-                    "skus_affected": len(applied),
-                    "total_depleted": sum(int(q) for q in sku_totals.values()),
-                    "unmatched": unmatched,
-                })
+                depletion_results.append(
+                    {
+                        "file": dep_label,
+                        "order_count": order_count,
+                        "skus_affected": len(applied),
+                        "total_depleted": sum(int(q) for q in sku_totals.values()),
+                        "unmatched": unmatched,
+                    }
+                )
     except Exception as e:
         depletion_results.append({"error": str(e)})
     results["depletion"] = depletion_results
@@ -5369,6 +5621,7 @@ def run_all():
     if rc_token:
         try:
             import requests as req
+
             # Call core function directly — no Flask request context needed
             rc_result = _recharge_sync_foreground(rc_token, req, save_to_state=True)
             if not isinstance(rc_result, dict):
@@ -5386,14 +5639,14 @@ def run_all():
     if sh_token and sh_store:
         try:
             import requests as req
+
             # Call shopify_sync via test_request_context (it reads request.json)
-            with app.test_request_context(json={"force": True},
-                                          content_type="application/json"):
+            with app.test_request_context(json={"force": True}, content_type="application/json"):
                 sh_resp = shopify_sync()
-                if hasattr(sh_resp, 'get_json'):
+                if hasattr(sh_resp, "get_json"):
                     sh_result = sh_resp.get_json()
                 elif isinstance(sh_resp, tuple):
-                    sh_result = sh_resp[0].get_json() if hasattr(sh_resp[0], 'get_json') else {"error": "sync failed"}
+                    sh_result = sh_resp[0].get_json() if hasattr(sh_resp[0], "get_json") else {"error": "sync failed"}
         except Exception as e:
             sh_result = {"error": str(e)}
     results["shopify_sync"] = sh_result
@@ -5402,20 +5655,21 @@ def run_all():
     calc_data = {}
     with app.test_request_context(json={}):
         calc_resp = calculate_rmfg()
-        calc_data = calc_resp.get_json() if hasattr(calc_resp, 'get_json') else json.loads(calc_resp.data)
+        calc_data = calc_resp.get_json() if hasattr(calc_resp, "get_json") else json.loads(calc_resp.data)
     results["results"] = calc_data
 
     # 6. Substitutions
     subs = []
     with app.test_request_context():
         sub_resp = get_substitutions()
-        subs = sub_resp.get_json() if hasattr(sub_resp, 'get_json') else json.loads(sub_resp.data)
+        subs = sub_resp.get_json() if hasattr(sub_resp, "get_json") else json.loads(sub_resp.data)
     results["substitutions"] = subs
 
     return jsonify(results)
 
 
 # ── List available RMFG folders ───────────────────────────────────────
+
 
 @app.route("/api/rmfg_folders")
 def list_rmfg_folders():
@@ -5427,17 +5681,18 @@ def list_rmfg_folders():
         if os.path.isdir(path) and name.startswith("RMFG_"):
             files = detect_rmfg_files(path)
             found = sum(1 for v in files.values() if v)
-            folders.append({"name": name, "files_found": found,
-                            "total_files": 5})
+            folders.append({"name": name, "files_found": found, "total_files": 5})
     return jsonify(folders)
 
 
 # ── Dropbox integration ───────────────────────────────────────────────
 
+
 @app.route("/api/dropbox_sync", methods=["POST"])
 def dropbox_sync():
     """Fetch latest inventory snapshot from Dropbox shared link."""
     import tempfile
+
     try:
         import requests as req
     except ImportError:
@@ -5466,34 +5721,33 @@ def dropbox_sync():
                     "refresh_token": refresh_token,
                     "client_id": app_key,
                     "client_secret": app_secret,
-                }, timeout=15)
+                },
+                timeout=15,
+            )
             token_resp.raise_for_status()
             access_token = token_resp.json()["access_token"]
         else:
             access_token = direct_token
 
-        headers = {"Authorization": f"Bearer {access_token}",
-                   "Content-Type": "application/json"}
+        headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
 
         # Try multiple paths — direct account path first, then shared link
         attempts = []
         if shared_link:
             # Shared link with empty path = root of shared folder
-            attempts.append({"path": "", "recursive": False,
-                             "shared_link": {"url": shared_link.split("?")[0],
-                                             "password": None}})
-        attempts.append({"path": "/!AppyHour_SHARED/Product Inventory",
-                         "recursive": False})
+            attempts.append(
+                {"path": "", "recursive": False, "shared_link": {"url": shared_link.split("?")[0], "password": None}}
+            )
+        attempts.append({"path": "/!AppyHour_SHARED/Product Inventory", "recursive": False})
         # Try common folder name variations
-        attempts.append({"path": "/!AppyHour_SHARED/Product%20Inventory",
-                         "recursive": False})
+        attempts.append({"path": "/!AppyHour_SHARED/Product%20Inventory", "recursive": False})
 
         resp = None
         last_err = ""
         for list_body in attempts:
             resp = req.post(
-                "https://api.dropboxapi.com/2/files/list_folder",
-                headers=headers, json=list_body, timeout=15)
+                "https://api.dropboxapi.com/2/files/list_folder", headers=headers, json=list_body, timeout=15
+            )
             if resp.status_code == 200:
                 break
             last_err = resp.text[:300]
@@ -5503,10 +5757,7 @@ def dropbox_sync():
 
         entries = resp.json().get("entries", [])
         # Accept any csv/xlsx file (don't filter by name — the folder IS the inventory folder)
-        inv_files = [
-            e for e in entries
-            if e.get("name", "").lower().endswith((".csv", ".xlsx"))
-        ]
+        inv_files = [e for e in entries if e.get("name", "").lower().endswith((".csv", ".xlsx"))]
         if not inv_files:
             return jsonify({"error": "No inventory files found on Dropbox"}), 404
 
@@ -5523,39 +5774,44 @@ def dropbox_sync():
             headers={
                 "Authorization": f"Bearer {access_token}",
                 "Dropbox-API-Arg": json.dumps(dl_arg),
-            }, timeout=30)
+            },
+            timeout=30,
+        )
         dl_resp.raise_for_status()
     else:
         # Shared link only — try to scrape file links from the folder page
         # Fetch the folder page HTML to find file links
-        page_resp = req.get(shared_link, timeout=15,
-                            headers={"User-Agent": "Mozilla/5.0"})
+        page_resp = req.get(shared_link, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
         page_resp.raise_for_status()
         html_text = page_resp.text
 
         # Look for file entries in the page — Dropbox embeds JSON data
         import re
+
         # Find file URLs in the HTML for .csv or .xlsx files containing "product inventory"
         # Dropbox shared folder pages contain file metadata in embedded JSON
         file_links = re.findall(
-            r'(https://www\.dropbox\.com/scl/fi/[^"\'\\]+\.(?:csv|xlsx)[^"\'\\]*)',
-            html_text, re.IGNORECASE)
+            r'(https://www\.dropbox\.com/scl/fi/[^"\'\\]+\.(?:csv|xlsx)[^"\'\\]*)', html_text, re.IGNORECASE
+        )
 
         if not file_links:
             # Try alternate pattern
             file_links = re.findall(
-                r'(https://[^"\'\\]*dropbox[^"\'\\]*(?:csv|xlsx)[^"\'\\]*)',
-                html_text, re.IGNORECASE)
+                r'(https://[^"\'\\]*dropbox[^"\'\\]*(?:csv|xlsx)[^"\'\\]*)', html_text, re.IGNORECASE
+            )
 
         # Filter for inventory-related files
-        inv_links = [l for l in file_links
-                     if "product" in l.lower() or "inventory" in l.lower()]
+        inv_links = [l for l in file_links if "product" in l.lower() or "inventory" in l.lower()]
         if not inv_links:
             inv_links = file_links  # fallback to any csv/xlsx
 
         if not inv_links:
-            return jsonify({"error": "No inventory files found in shared folder. "
-                           "Configure Dropbox app credentials for reliable access."}), 404
+            return jsonify(
+                {
+                    "error": "No inventory files found in shared folder. "
+                    "Configure Dropbox app credentials for reliable access."
+                }
+            ), 404
 
         # Use the first (most recent) link — convert to direct download
         file_url = inv_links[0]
@@ -5566,8 +5822,7 @@ def dropbox_sync():
         if rlkey_match:
             dl_url += "&rlkey=" + rlkey_match.group(1)
 
-        dl_resp = req.get(dl_url, timeout=30,
-                         headers={"User-Agent": "Mozilla/5.0"})
+        dl_resp = req.get(dl_url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
         dl_resp.raise_for_status()
 
         # Infer filename
@@ -5584,6 +5839,7 @@ def dropbox_sync():
             import openpyxl
         except ImportError as exc:
             import traceback
+
             traceback.print_exc()
             return jsonify({"error": f"openpyxl import failed: {exc}"}), 500
         tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
@@ -5594,24 +5850,18 @@ def dropbox_sync():
             ws = wb.active
             rows = list(ws.iter_rows(values_only=True))
             headers = [str(c).strip() if c else "" for c in rows[0]]
-            sku_col = next((i for i, h in enumerate(headers)
-                          if h.lower() in ("product sku", "sku")), None)
-            rmfg_col = next((i for i, h in enumerate(headers)
-                           if h.upper() == "RMFG"), None)
-            total_col = next((i for i, h in enumerate(headers)
-                            if h.lower() == "total"), None)
+            sku_col = next((i for i, h in enumerate(headers) if h.lower() in ("product sku", "sku")), None)
+            rmfg_col = next((i for i, h in enumerate(headers) if h.upper() == "RMFG"), None)
+            total_col = next((i for i, h in enumerate(headers) if h.lower() == "total"), None)
             qty_col = total_col if total_col is not None else rmfg_col
 
             if sku_col is None or qty_col is None:
                 return jsonify({"error": f"Can't find SKU/qty columns in {name}"}), 400
 
             # Build dict rows for bulk weight extraction
-            ingredient_col = next((i for i, h in enumerate(headers)
-                                  if h.lower() == "ingredient"), None)
-            q1_col = next((i for i, h in enumerate(headers)
-                          if h.lower() == "quantity1"), None)
-            u1_col = next((i for i, h in enumerate(headers)
-                          if h.lower() == "unit1"), None)
+            ingredient_col = next((i for i, h in enumerate(headers) if h.lower() == "ingredient"), None)
+            q1_col = next((i for i, h in enumerate(headers) if h.lower() == "quantity1"), None)
+            u1_col = next((i for i, h in enumerate(headers) if h.lower() == "unit1"), None)
             xlsx_rows = []
             for row in rows[1:]:
                 sku = str(row[sku_col]).strip() if row[sku_col] else ""
@@ -5623,13 +5873,17 @@ def dropbox_sync():
                     inv[normalize_sku(sku)] = inv.get(normalize_sku(sku), 0) + qty
                 # Collect for bulk weight extraction (include Total for wheel counts)
                 total_val = row[qty_col] if qty_col is not None else 0
-                xlsx_rows.append({
-                    "Ingredient": str(row[ingredient_col]).strip() if ingredient_col is not None and row[ingredient_col] else "",
-                    "Product SKU": sku,
-                    "Quantity1": str(row[q1_col]).strip() if q1_col is not None and row[q1_col] else "",
-                    "Unit1": str(row[u1_col]).strip() if u1_col is not None and row[u1_col] else "",
-                    "Total": total_val,
-                })
+                xlsx_rows.append(
+                    {
+                        "Ingredient": str(row[ingredient_col]).strip()
+                        if ingredient_col is not None and row[ingredient_col]
+                        else "",
+                        "Product SKU": sku,
+                        "Quantity1": str(row[q1_col]).strip() if q1_col is not None and row[q1_col] else "",
+                        "Unit1": str(row[u1_col]).strip() if u1_col is not None and row[u1_col] else "",
+                        "Total": total_val,
+                    }
+                )
             STATE["bulk_weights"] = extract_bulk_weights(xlsx_rows)
         finally:
             os.unlink(tmp.name)
@@ -5664,12 +5918,14 @@ def dropbox_sync():
 
     # Append journal snapshot entry
     journal = s.setdefault("inventory_journal", [])
-    journal.append({
-        "ts": snap["timestamp"],
-        "type": "snapshot",
-        "snapshot_id": snap["id"],
-        "label": f"Dropbox: {name}",
-    })
+    journal.append(
+        {
+            "ts": snap["timestamp"],
+            "type": "snapshot",
+            "snapshot_id": snap["id"],
+            "label": f"Dropbox: {name}",
+        }
+    )
 
     # Detect production events if previous snapshot exists
     all_snaps = s.get("inventory_snapshots", [])
@@ -5692,20 +5948,24 @@ def dropbox_sync():
                             dep_between[dep_sku] = dep_between.get(dep_sku, 0) + d
         prod_events = detect_production_events(prev_snap, snap, dep_between)
         for evt in prod_events:
-            journal.append({
-                "ts": snap["timestamp"],
-                "type": "production",
-                "label": f"Cut {evt['wheels_cut']} wheels of {evt['sku']}",
-                "sku": evt["sku"],
-                "wheels_cut": evt["wheels_cut"],
-                "expected_sliced": evt["expected"],
-                "actual_sliced": evt["actual"],
-                "variance": evt["variance"],
-            })
+            journal.append(
+                {
+                    "ts": snap["timestamp"],
+                    "type": "production",
+                    "label": f"Cut {evt['wheels_cut']} wheels of {evt['sku']}",
+                    "sku": evt["sku"],
+                    "wheels_cut": evt["wheels_cut"],
+                    "expected_sliced": evt["expected"],
+                    "actual_sliced": evt["actual"],
+                    "variance": evt["variance"],
+                }
+            )
             if abs(evt["variance"]) > 5:
-                print(f"[WARN] Production variance for {evt['sku']}: "
-                      f"expected={evt['expected']}, actual={evt['actual']}, "
-                      f"variance={evt['variance']}")
+                print(
+                    f"[WARN] Production variance for {evt['sku']}: "
+                    f"expected={evt['expected']}, actual={evt['actual']}, "
+                    f"variance={evt['variance']}"
+                )
     # Cap journal at 200 entries
     if len(journal) > 200:
         s["inventory_journal"] = journal[-200:]
@@ -5717,38 +5977,43 @@ def dropbox_sync():
 
     # Parse snapshot date from filename (e.g., "Product Inventory_3-14-26_V2.xlsx")
     import re as _re
+
     snapshot_date_str = ""
-    date_match = _re.search(r'(\d{1,2})-(\d{1,2})-(\d{2})', name)
+    date_match = _re.search(r"(\d{1,2})-(\d{1,2})-(\d{2})", name)
     if date_match:
         mm, dd, yy = date_match.groups()
         snapshot_date = datetime.date(2000 + int(yy), int(mm), int(dd))
         snapshot_date_str = snapshot_date.isoformat()
         STATE["dropbox_snapshot_date"] = snapshot_date_str
 
-    return jsonify({
-        "ok": True,
-        "source": "dropbox",
-        "file": name,
-        "modified": newest.get("server_modified", ""),
-        "snapshot_date": snapshot_date_str,
-        "inventory_count": len(inv),
-        "cheese_count": ch_count,
-        "wheel_skus": wheel_skus,
-        "potential_yield": pot_total,
-    })
+    return jsonify(
+        {
+            "ok": True,
+            "source": "dropbox",
+            "file": name,
+            "modified": newest.get("server_modified", ""),
+            "snapshot_date": snapshot_date_str,
+            "inventory_count": len(inv),
+            "cheese_count": ch_count,
+            "wheel_skus": wheel_skus,
+            "potential_yield": pot_total,
+        }
+    )
 
 
 @app.route("/api/dropbox_status")
 def dropbox_status():
     """Check if Dropbox is configured."""
     s = _s()
-    return jsonify({
-        "configured": bool(
-            (s.get("dropbox_app_key") and (s.get("dropbox_refresh_token") or s.get("dropbox_access_token"))) or
-            s.get("dropbox_shared_link")
-        ),
-        "has_shared_link": bool(s.get("dropbox_shared_link")),
-    })
+    return jsonify(
+        {
+            "configured": bool(
+                (s.get("dropbox_app_key") and (s.get("dropbox_refresh_token") or s.get("dropbox_access_token")))
+                or s.get("dropbox_shared_link")
+            ),
+            "has_shared_link": bool(s.get("dropbox_shared_link")),
+        }
+    )
 
 
 @app.route("/api/dropbox_auth_url")
@@ -5758,11 +6023,13 @@ def dropbox_auth_url():
     app_key = s.get("dropbox_app_key", "")
     if not app_key:
         return jsonify({"error": "Set dropbox_app_key in settings first"}), 400
-    url = (f"https://www.dropbox.com/oauth2/authorize"
-           f"?client_id={app_key}"
-           f"&response_type=code"
-           f"&token_access_type=offline")
-    return jsonify({"url": url, "instructions": "Open this URL, authorize, then paste the code at /api/dropbox_token?code=YOUR_CODE"})
+    url = f"https://www.dropbox.com/oauth2/authorize?client_id={app_key}&response_type=code&token_access_type=offline"
+    return jsonify(
+        {
+            "url": url,
+            "instructions": "Open this URL, authorize, then paste the code at /api/dropbox_token?code=YOUR_CODE",
+        }
+    )
 
 
 @app.route("/api/dropbox_token")
@@ -5775,23 +6042,29 @@ def dropbox_token():
 
     code = request.args.get("code", "").strip()
     if not code:
-        return ("<h2>Dropbox Token Exchange</h2>"
-                "<form action='/api/dropbox_token' method='get'>"
-                "<label>Paste your authorization code:</label><br><br>"
-                "<input type='text' name='code' style='width:400px;padding:8px;font-size:14px' placeholder='Paste code here...'>"
-                "<br><br><button type='submit' style='padding:8px 20px;font-size:14px'>Submit</button>"
-                "</form>")
+        return (
+            "<h2>Dropbox Token Exchange</h2>"
+            "<form action='/api/dropbox_token' method='get'>"
+            "<label>Paste your authorization code:</label><br><br>"
+            "<input type='text' name='code' style='width:400px;padding:8px;font-size:14px' placeholder='Paste code here...'>"
+            "<br><br><button type='submit' style='padding:8px 20px;font-size:14px'>Submit</button>"
+            "</form>"
+        )
 
     s = _s()
     app_key = s.get("dropbox_app_key", "")
     app_secret = s.get("dropbox_app_secret", "")
 
-    resp = req.post("https://api.dropboxapi.com/oauth2/token", data={
-        "code": code,
-        "grant_type": "authorization_code",
-        "client_id": app_key,
-        "client_secret": app_secret,
-    }, timeout=15)
+    resp = req.post(
+        "https://api.dropboxapi.com/oauth2/token",
+        data={
+            "code": code,
+            "grant_type": "authorization_code",
+            "client_id": app_key,
+            "client_secret": app_secret,
+        },
+        timeout=15,
+    )
 
     if resp.status_code != 200:
         return f"<h2>Token exchange failed</h2><pre>{resp.text}</pre>", 400
@@ -5804,8 +6077,7 @@ def dropbox_token():
         s.pop("dropbox_access_token", None)
         save_settings(s)
         STATE["saved"] = load_settings()  # reload cached settings
-        return ("<h2>Dropbox authorized!</h2>"
-                "<p>Permanent refresh token saved. You can close this tab.</p>")
+        return "<h2>Dropbox authorized!</h2><p>Permanent refresh token saved. You can close this tab.</p>"
     else:
         return f"<h2>No refresh token</h2><pre>{data}</pre>", 400
 
@@ -5814,6 +6086,7 @@ def dropbox_token():
 
 _recharge_sync_lock = threading.Lock()
 _recharge_bg_thread = None
+
 
 @app.route("/api/recharge_sync", methods=["POST"])
 def recharge_sync():
@@ -5843,9 +6116,15 @@ def recharge_sync():
             last_sync = datetime.datetime.fromisoformat(s["recharge_last_sync_iso"])
             STATE["recharge_last_sync"] = last_sync
             # Restore raw components + demand from settings
-            for key in ("rmfg_direct_sat", "rmfg_prcjam_sat", "rmfg_cexec_sat",
-                        "rmfg_sat_demand", "rmfg_tue_demand",
-                        "rmfg_next_sat_demand", "rmfg_week4_demand"):
+            for key in (
+                "rmfg_direct_sat",
+                "rmfg_prcjam_sat",
+                "rmfg_cexec_sat",
+                "rmfg_sat_demand",
+                "rmfg_tue_demand",
+                "rmfg_next_sat_demand",
+                "rmfg_week4_demand",
+            ):
                 if s.get(key):
                     STATE.setdefault(key, s[key])
         except (ValueError, TypeError):
@@ -5866,8 +6145,7 @@ def recharge_sync():
         global _recharge_bg_thread
         if _recharge_bg_thread and _recharge_bg_thread.is_alive():
             return jsonify({"ok": True, "status": "already_syncing"})
-        _recharge_bg_thread = threading.Thread(
-            target=_recharge_sync_worker, args=(api_token,), daemon=True)
+        _recharge_bg_thread = threading.Thread(target=_recharge_sync_worker, args=(api_token,), daemon=True)
         _recharge_bg_thread.start()
         return jsonify({"ok": True, "status": "syncing_in_background"})
 
@@ -5879,6 +6157,7 @@ def _recharge_sync_worker(api_token):
     """Background thread worker for Recharge sync."""
     try:
         import requests as req
+
         with app.app_context():
             _recharge_sync_foreground(api_token, req, save_to_state=True)
     except Exception:
@@ -5891,11 +6170,13 @@ def _recharge_sync_foreground(api_token, req, save_to_state=False):
 
     # Fetch queued charges
     session = req.Session()
-    session.headers.update({
-        "X-Recharge-Access-Token": api_token,
-        "Accept": "application/json",
-        "X-Recharge-Version": "2021-11",
-    })
+    session.headers.update(
+        {
+            "X-Recharge-Access-Token": api_token,
+            "Accept": "application/json",
+            "X-Recharge-Version": "2021-11",
+        }
+    )
 
     all_charges = []
     url = "https://api.rechargeapps.com/charges"
@@ -5903,9 +6184,15 @@ def _recharge_sync_foreground(api_token, req, save_to_state=False):
     today = datetime.date.today()
     date_min = today.isoformat()
     date_max = (today + datetime.timedelta(days=28)).isoformat()
-    params = {"status": "queued", "limit": 250, "sort_by": "id-asc",
-              "scheduled_at_min": date_min, "scheduled_at_max": date_max}
+    params = {
+        "status": "queued",
+        "limit": 250,
+        "sort_by": "id-asc",
+        "scheduled_at_min": date_min,
+        "scheduled_at_max": date_max,
+    }
     import time as _time
+
     t0 = _time.time()
     page_count = 0
     while True:
@@ -5948,8 +6235,7 @@ def _recharge_sync_foreground(api_token, req, save_to_state=False):
     days_to_sat = (5 - today.weekday()) % 7
     if days_to_sat == 0:
         days_to_sat = 7
-    saturdays = [today + datetime.timedelta(days=days_to_sat + 7 * i)
-                 for i in range(4)]
+    saturdays = [today + datetime.timedelta(days=days_to_sat + 7 * i) for i in range(4)]
 
     # Bin charges by week: which Saturday window they fall into
     # Each charge's scheduled_at determines its window
@@ -6007,8 +6293,7 @@ def _recharge_sync_foreground(api_token, req, save_to_state=False):
         if curation and curation not in ("MONTHLY", None):
             week_prcjam[week_idx][curation] += 1
             info = pr_cjam.get(curation, {})
-            ch = info.get("cheese", "") if isinstance(info, dict) \
-                else str(info)
+            ch = info.get("cheese", "") if isinstance(info, dict) else str(info)
             if ch:
                 week_demands[week_idx][normalize_sku(ch)] += 1
 
@@ -6031,8 +6316,7 @@ def _recharge_sync_foreground(api_token, req, save_to_state=False):
                 week_cexec[week_idx][suffix] += qty
                 if suffix in splits:
                     for ssku, pct in splits[suffix].items():
-                        week_demands[week_idx][normalize_sku(ssku)] += \
-                            int(qty * pct)
+                        week_demands[week_idx][normalize_sku(ssku)] += int(qty * pct)
                 else:
                     ec = cex_ec.get(suffix, "")
                     if ec:
@@ -6046,8 +6330,7 @@ def _recharge_sync_foreground(api_token, req, save_to_state=False):
                     week_cexec[week_idx][suffix] += qty
                     if suffix in splits:
                         for ssku, pct in splits[suffix].items():
-                            week_demands[week_idx][normalize_sku(ssku)] += \
-                                int(qty * pct)
+                            week_demands[week_idx][normalize_sku(ssku)] += int(qty * pct)
                     else:
                         ec = cex_ec.get(suffix, "")
                         if isinstance(ec, str) and ec:
@@ -6067,10 +6350,10 @@ def _recharge_sync_foreground(api_token, req, save_to_state=False):
             week_demands[week_idx][normalize_sku(sku)] += qty
 
     # Store per-week demand (resolved)
-    STATE["rmfg_sat_demand"] = dict(week_demands[0])      # This Saturday
-    STATE["rmfg_tue_demand"] = dict(week_demands[1])       # Tuesday / week 2
+    STATE["rmfg_sat_demand"] = dict(week_demands[0])  # This Saturday
+    STATE["rmfg_tue_demand"] = dict(week_demands[1])  # Tuesday / week 2
     STATE["rmfg_next_sat_demand"] = dict(week_demands[2])  # Next Saturday
-    STATE["rmfg_week4_demand"] = dict(week_demands[3])     # Week 4
+    STATE["rmfg_week4_demand"] = dict(week_demands[3])  # Week 4
 
     # Store raw components for cut order deferred resolution
     STATE["rmfg_direct_sat"] = dict(week_direct[0])
@@ -6085,8 +6368,7 @@ def _recharge_sync_foreground(api_token, req, save_to_state=False):
     STATE["demand_source_ts"] = datetime.datetime.now().isoformat()
 
     # Save to settings for persistence
-    s["recharge_queued"] = {m: dict(skus)
-                            for m, skus in total_by_month.items()}
+    s["recharge_queued"] = {m: dict(skus) for m, skus in total_by_month.items()}
     # Persist raw components so they survive restarts
     s["rmfg_direct_sat"] = dict(week_direct[0])
     s["rmfg_prcjam_sat"] = dict(week_prcjam[0])
@@ -6103,14 +6385,15 @@ def _recharge_sync_foreground(api_token, req, save_to_state=False):
     save_settings(s)
     STATE["saved"] = s
 
-    ch_demand = sum(sum(v for k, v in wd.items() if k.startswith("CH-"))
-                    for wd in week_demands)
+    ch_demand = sum(sum(v for k, v in wd.items() if k.startswith("CH-")) for wd in week_demands)
     week_labels = ["This Sat", "Tuesday", "Next Sat", "Sat +3"]
     week_summary = [
-        {"label": week_labels[i],
-         "date": saturdays[i].isoformat(),
-         "skus": len(week_demands[i]),
-         "units": sum(week_demands[i].values())}
+        {
+            "label": week_labels[i],
+            "date": saturdays[i].isoformat(),
+            "skus": len(week_demands[i]),
+            "units": sum(week_demands[i].values()),
+        }
         for i in range(4)
     ]
     result = {
@@ -6170,7 +6453,8 @@ def shopify_sync():
             if not cached:
                 # Reconstruct minimal cache from settings
                 cached = {
-                    "ok": True, "from_cache": True,
+                    "ok": True,
+                    "from_cache": True,
                     "cache_age_seconds": int(age_seconds),
                     "weekly_avg_units": sum(s.get("shopify_api_demand", {}).values()),
                     "unfulfilled_units": sum(s.get("shopify_unfulfilled", {}).values()),
@@ -6190,10 +6474,12 @@ def shopify_sync():
 
     api_version = "2024-01"
     session = req.Session()
-    session.headers.update({
-        "X-Shopify-Access-Token": token,
-        "Content-Type": "application/json",
-    })
+    session.headers.update(
+        {
+            "X-Shopify-Access-Token": token,
+            "Content-Type": "application/json",
+        }
+    )
 
     # Pull fulfilled orders for weekly demand calculation
     try:
@@ -6202,10 +6488,10 @@ def shopify_sync():
         weeks_back = 8
     cutoff = (datetime.datetime.now() - datetime.timedelta(days=weeks_back * 7)).isoformat()
     url = f"{store}/admin/api/{api_version}/orders.json"
-    params = {"status": "any", "fulfillment_status": "shipped",
-              "limit": 250, "created_at_min": cutoff}
+    params = {"status": "any", "fulfillment_status": "shipped", "limit": 250, "created_at_min": cutoff}
 
     import time as _time
+
     t0 = _time.time()
     all_orders = []
     page_count = 0
@@ -6231,6 +6517,7 @@ def shopify_sync():
         link = resp.headers.get("Link", "")
         if 'rel="next"' in link:
             import re
+
             m = re.search(r'<([^>]+)>;\s*rel="next"', link)
             if m:
                 url = m.group(1)
@@ -6249,8 +6536,7 @@ def shopify_sync():
     unfulfilled_url = f"{store}/admin/api/{api_version}/orders.json"
     # No created_at_min — subscription orders are created months before ship date.
     # The unfulfilled set is naturally bounded (only open orders).
-    uf_params = {"status": "open", "fulfillment_status": "unfulfilled",
-                 "limit": 250}
+    uf_params = {"status": "open", "fulfillment_status": "unfulfilled", "limit": 250}
     unfulfilled_orders = []
     while unfulfilled_url:
         for attempt in range(3):
@@ -6273,6 +6559,7 @@ def shopify_sync():
             link = resp.headers.get("Link", "")
             if 'rel="next"' in link:
                 import re
+
                 m = re.search(r'<([^>]+)>;\s*rel="next"', link)
                 if m:
                     unfulfilled_url = m.group(1)
@@ -6337,13 +6624,13 @@ def shopify_sync():
 
     # Track first orders from last 3 days for MONG projection
     import pytz
+
     try:
         et = pytz.timezone("US/Eastern")
     except Exception:
         et = datetime.timezone(datetime.timedelta(hours=-4))
     now_et = datetime.datetime.now(et)
-    three_days_ago = (now_et - datetime.timedelta(days=3)).replace(
-        hour=0, minute=0, second=0, microsecond=0)
+    three_days_ago = (now_et - datetime.timedelta(days=3)).replace(hour=0, minute=0, second=0, microsecond=0)
     first_order_count_3d = 0
 
     for order in unfulfilled_orders:
@@ -6355,8 +6642,7 @@ def shopify_sync():
         if is_first:
             created = order.get("created_at", "")
             try:
-                created_dt = datetime.datetime.fromisoformat(
-                    created.replace("Z", "+00:00"))
+                created_dt = datetime.datetime.fromisoformat(created.replace("Z", "+00:00"))
                 if created_dt.astimezone(et) >= three_days_ago:
                     first_order_count_3d += 1
             except (ValueError, TypeError):
@@ -6424,7 +6710,8 @@ def shopify_sync():
         if days_to_monday == 0 and now_et.hour >= 23:
             days_to_monday = 7
         next_monday_midnight = (now_et + datetime.timedelta(days=days_to_monday)).replace(
-            hour=23, minute=59, second=0, microsecond=0)
+            hour=23, minute=59, second=0, microsecond=0
+        )
         hours_remaining = max(0, (next_monday_midnight - now_et).total_seconds() / 3600)
         projected_additional = int(daily_rate * (hours_remaining / 24))
         STATE["first_order_projection_count"] = projected_additional
@@ -6490,12 +6777,10 @@ def shopify_sync():
         fresh_s["rmfg_prcjam_sat"] = STATE["rmfg_prcjam_sat"]
         fresh_s["rmfg_cexec_sat"] = STATE["rmfg_cexec_sat"]
     fresh_s["shopify_first_order_demand"] = {
-        sku: round(qty / num_weeks_with_data)
-        for sku, qty in first_order_total.items() if qty > 0
+        sku: round(qty / num_weeks_with_data) for sku, qty in first_order_total.items() if qty > 0
     }
     fresh_s["shopify_recurring_demand"] = {
-        sku: round(qty / num_weeks_with_data)
-        for sku, qty in recurring_total.items() if qty > 0
+        sku: round(qty / num_weeks_with_data) for sku, qty in recurring_total.items() if qty > 0
     }
     now = datetime.datetime.now()
     fresh_s["shopify_last_sync_iso"] = now.isoformat()
@@ -6535,13 +6820,14 @@ def shopify_sync():
 def shopify_status():
     s = _s()
     weekly = s.get("shopify_api_demand", {})
-    return jsonify({
-        "configured": bool(s.get("shopify_store_url") and
-                          s.get("shopify_access_token")),
-        "has_data": bool(weekly),
-        "sku_count": len(weekly),
-        "weekly_units": sum(weekly.values()) if weekly else 0,
-    })
+    return jsonify(
+        {
+            "configured": bool(s.get("shopify_store_url") and s.get("shopify_access_token")),
+            "has_data": bool(weekly),
+            "sku_count": len(weekly),
+            "weekly_units": sum(weekly.values()) if weekly else 0,
+        }
+    )
 
 
 @app.route("/api/load_settings_inventory", methods=["POST"])
@@ -6577,13 +6863,14 @@ def load_settings_inventory():
 
     STATE["rmfg_inventory"] = inv
     ch_count = sum(1 for k in inv if k.startswith("CH-"))
-    return jsonify({
-        "ok": True,
-        "source": "settings",
-        "inventory_count": len(inv),
-        "cheese_count": ch_count,
-    })
-
+    return jsonify(
+        {
+            "ok": True,
+            "source": "settings",
+            "inventory_count": len(inv),
+            "cheese_count": ch_count,
+        }
+    )
 
 
 @app.route("/api/recharge_status")
@@ -6594,16 +6881,19 @@ def recharge_status():
     cache_age = None
     if last_sync:
         cache_age = int((datetime.datetime.now() - last_sync).total_seconds())
-    return jsonify({
-        "configured": bool(s.get("recharge_api_token")),
-        "last_sync": last_sync.isoformat() if last_sync else None,
-        "cache_age_seconds": cache_age,
-    })
+    return jsonify(
+        {
+            "configured": bool(s.get("recharge_api_token")),
+            "last_sync": last_sync.isoformat() if last_sync else None,
+            "cache_age_seconds": cache_age,
+        }
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════
 #  ACTION CALENDAR — multi-week task schedule (PO, MFG, Crossdock, Ship)
 # ══════════════════════════════════════════════════════════════════════════
+
 
 @app.route("/api/debug_demand_split")
 def debug_demand_split():
@@ -6616,15 +6906,15 @@ def debug_demand_split():
     rc_cexec = STATE.get("rmfg_cexec_sat", {})
     sh_cexec = STATE.get("shopify_cexec_counts", {})
     # RC prcjam = combined - shopify
-    rc_only_prcjam = {k: rc_prcjam.get(k, 0) - sh_prcjam.get(k, 0)
-                      for k in set(list(rc_prcjam) + list(sh_prcjam))}
-    rc_only_cexec = {k: rc_cexec.get(k, 0) - sh_cexec.get(k, 0)
-                     for k in set(list(rc_cexec) + list(sh_cexec))}
-    return jsonify({
-        "prcjam": {"combined": rc_prcjam, "shopify": sh_prcjam, "recharge": rc_only_prcjam},
-        "cexec": {"combined": rc_cexec, "shopify": sh_cexec, "recharge": rc_only_cexec},
-        "direct": {"recharge": rc_direct, "shopify": sh_direct},
-    })
+    rc_only_prcjam = {k: rc_prcjam.get(k, 0) - sh_prcjam.get(k, 0) for k in set(list(rc_prcjam) + list(sh_prcjam))}
+    rc_only_cexec = {k: rc_cexec.get(k, 0) - sh_cexec.get(k, 0) for k in set(list(rc_cexec) + list(sh_cexec))}
+    return jsonify(
+        {
+            "prcjam": {"combined": rc_prcjam, "shopify": sh_prcjam, "recharge": rc_only_prcjam},
+            "cexec": {"combined": rc_cexec, "shopify": sh_cexec, "recharge": rc_only_cexec},
+            "direct": {"recharge": rc_direct, "shopify": sh_direct},
+        }
+    )
 
 
 def _next_weekday(start, weekday):
@@ -6661,8 +6951,7 @@ def action_calendar():
 
     # Build running inventory projection
     running_inv = {}
-    for sku in set(list(inv.keys()) + list(sat_demand.keys()) +
-                   list(tue_demand.keys()) + list(next_sat_demand.keys())):
+    for sku in set(list(inv.keys()) + list(sat_demand.keys()) + list(tue_demand.keys()) + list(next_sat_demand.keys())):
         if sku.startswith("CH-") or sku.startswith("MT-") or sku.startswith("AC-"):
             running_inv[sku] = inv.get(sku, 0)
 
@@ -6700,12 +6989,10 @@ def action_calendar():
             week_tue_demand = tue_demand
         elif week_idx == 1:
             week_demand = next_sat_demand
-            week_tue_demand = {sku: int(qty * 0.3) for sku, qty in
-                               next_sat_demand.items()} if next_sat_demand else {}
+            week_tue_demand = {sku: int(qty * 0.3) for sku, qty in next_sat_demand.items()} if next_sat_demand else {}
         else:
             week_demand = avg_demand
-            week_tue_demand = {sku: int(qty * 0.3) for sku, qty in
-                               avg_demand.items()}
+            week_tue_demand = {sku: int(qty * 0.3) for sku, qty in avg_demand.items()}
 
         # Compute shortages for this week
         shortages = {}
@@ -6716,8 +7003,7 @@ def action_calendar():
             total = demand + tue_d
             net = avail - total
             if net < 0:
-                shortages[sku] = {"deficit": abs(net), "avail": avail,
-                                  "demand": total}
+                shortages[sku] = {"deficit": abs(net), "avail": avail, "demand": total}
 
         week_po_lines = []
         week_mfg_lines = []
@@ -6745,22 +7031,29 @@ def action_calendar():
             if mfg_possible >= deficit:
                 per_wheel = int(wheel_weight * _yield_factor(sku)) if wheel_weight > 0 else 1
                 wheels_needed = math.ceil(deficit / max(1, per_wheel))
-                week_mfg_lines.append({
-                    "sku": sku, "deficit": deficit,
-                    "slices_needed": deficit,
-                    "wheels_needed": wheels_needed,
-                    "action": "CUT",
-                })
+                week_mfg_lines.append(
+                    {
+                        "sku": sku,
+                        "deficit": deficit,
+                        "slices_needed": deficit,
+                        "wheels_needed": wheels_needed,
+                        "action": "CUT",
+                    }
+                )
             else:
                 vi = vendor_catalog.get(sku, {})
                 cq = int(vi.get("case_qty", 1)) or 1
                 cases = math.ceil(buf / cq)
-                week_po_lines.append({
-                    "sku": sku, "deficit": deficit,
-                    "order_qty": cases * cq, "cases": cases,
-                    "case_qty": cq,
-                    "vendor": vi.get("vendor", "TBD"),
-                })
+                week_po_lines.append(
+                    {
+                        "sku": sku,
+                        "deficit": deficit,
+                        "order_qty": cases * cq,
+                        "cases": cases,
+                        "case_qty": cq,
+                        "vendor": vi.get("vendor", "TBD"),
+                    }
+                )
 
         # Build daily tasks for this week
         for day_offset in range(7):
@@ -6770,76 +7063,89 @@ def action_calendar():
 
             # Monday: inventory check
             if dow == 0:
-                tasks.append({
-                    "type": "INVENTORY",
-                    "title": "Check inventory report",
-                    "detail": "Review fulfillment center inventory CSV",
-                    "priority": "medium",
-                })
+                tasks.append(
+                    {
+                        "type": "INVENTORY",
+                        "title": "Check inventory report",
+                        "detail": "Review fulfillment center inventory CSV",
+                        "priority": "medium",
+                    }
+                )
 
             # Tuesday: fulfillment ship
             if dow == 1:
                 tue_total = sum(week_tue_demand.values()) if week_tue_demand else 0
-                tue_skus = len([k for k, v in week_tue_demand.items()
-                                if v > 0]) if week_tue_demand else 0
-                tasks.append({
-                    "type": "FULFILL",
-                    "title": f"Tuesday ship: {tue_total} units",
-                    "detail": (f"{tue_skus} SKUs, first orders + requested"
-                               if tue_skus else "First orders + requested"),
-                    "priority": "high",
-                    "units": tue_total,
-                    "skus": tue_skus,
-                })
+                tue_skus = len([k for k, v in week_tue_demand.items() if v > 0]) if week_tue_demand else 0
+                tasks.append(
+                    {
+                        "type": "FULFILL",
+                        "title": f"Tuesday ship: {tue_total} units",
+                        "detail": (
+                            f"{tue_skus} SKUs, first orders + requested" if tue_skus else "First orders + requested"
+                        ),
+                        "priority": "high",
+                        "units": tue_total,
+                        "skus": tue_skus,
+                    }
+                )
 
             # Wednesday: POs + MFG
             if dow == 2:
                 if week_po_lines:
                     total_po_units = sum(p["order_qty"] for p in week_po_lines)
                     vendors = list(set(p["vendor"] for p in week_po_lines))
-                    tasks.append({
-                        "type": "PO",
-                        "title": f"Place POs: {len(week_po_lines)} lines, {total_po_units} units",
-                        "detail": f"Vendors: {', '.join(vendors[:5])}",
-                        "priority": "high",
-                        "lines": week_po_lines,
-                    })
+                    tasks.append(
+                        {
+                            "type": "PO",
+                            "title": f"Place POs: {len(week_po_lines)} lines, {total_po_units} units",
+                            "detail": f"Vendors: {', '.join(vendors[:5])}",
+                            "priority": "high",
+                            "lines": week_po_lines,
+                        }
+                    )
                 if week_mfg_lines:
                     total_slices = sum(m["slices_needed"] for m in week_mfg_lines)
-                    tasks.append({
-                        "type": "MFG",
-                        "title": f"Production order: {total_slices} slices",
-                        "detail": f"{len(week_mfg_lines)} SKUs to cut/wrap/label",
-                        "priority": "high",
-                        "lines": week_mfg_lines,
-                    })
+                    tasks.append(
+                        {
+                            "type": "MFG",
+                            "title": f"Production order: {total_slices} slices",
+                            "detail": f"{len(week_mfg_lines)} SKUs to cut/wrap/label",
+                            "priority": "high",
+                            "lines": week_mfg_lines,
+                        }
+                    )
 
             # Friday: inventory check
             if dow == 4:
-                tasks.append({
-                    "type": "INVENTORY",
-                    "title": "Check inventory report",
-                    "detail": "Review fulfillment center inventory CSV",
-                    "priority": "medium",
-                })
+                tasks.append(
+                    {
+                        "type": "INVENTORY",
+                        "title": "Check inventory report",
+                        "detail": "Review fulfillment center inventory CSV",
+                        "priority": "medium",
+                    }
+                )
 
             # Saturday: main fulfillment
             if dow == 5:
                 sat_total = sum(week_demand.values()) if week_demand else 0
-                sat_skus = len([k for k, v in week_demand.items()
-                                if v > 0]) if week_demand else 0
+                sat_skus = len([k for k, v in week_demand.items() if v > 0]) if week_demand else 0
                 shortage_count = len(shortages)
-                tasks.append({
-                    "type": "FULFILL",
-                    "title": f"Saturday ship: {sat_total} units",
-                    "detail": (f"{sat_skus} SKUs, {shortage_count} shortages"
-                               if shortage_count
-                               else f"{sat_skus} SKUs, all covered"),
-                    "priority": "critical" if shortage_count else "high",
-                    "units": sat_total,
-                    "skus": sat_skus,
-                    "shortages": shortage_count,
-                })
+                tasks.append(
+                    {
+                        "type": "FULFILL",
+                        "title": f"Saturday ship: {sat_total} units",
+                        "detail": (
+                            f"{sat_skus} SKUs, {shortage_count} shortages"
+                            if shortage_count
+                            else f"{sat_skus} SKUs, all covered"
+                        ),
+                        "priority": "critical" if shortage_count else "high",
+                        "units": sat_total,
+                        "skus": sat_skus,
+                        "shortages": shortage_count,
+                    }
+                )
 
             # Crossdock: check open POs with ETA this day
             for po in open_pos:
@@ -6851,23 +7157,27 @@ def action_calendar():
                 except (ValueError, TypeError):
                     continue
                 if eta == d:
-                    tasks.append({
-                        "type": "CROSSDOCK",
-                        "title": f"Receive PO: {po.get('sku', '?')}",
-                        "detail": f"{po.get('qty', '?')} units from {po.get('vendor', '?')}",
-                        "priority": "high",
-                        "sku": po.get("sku", ""),
-                        "qty": po.get("qty", 0),
-                    })
+                    tasks.append(
+                        {
+                            "type": "CROSSDOCK",
+                            "title": f"Receive PO: {po.get('sku', '?')}",
+                            "detail": f"{po.get('qty', '?')} units from {po.get('vendor', '?')}",
+                            "priority": "high",
+                            "sku": po.get("sku", ""),
+                            "qty": po.get("qty", 0),
+                        }
+                    )
 
-            days.append({
-                "date": d.isoformat(),
-                "dow": d.strftime("%a"),
-                "day": d.day,
-                "tasks": tasks,
-                "is_today": d == today,
-                "is_past": d < today,
-            })
+            days.append(
+                {
+                    "date": d.isoformat(),
+                    "dow": d.strftime("%a"),
+                    "day": d.day,
+                    "tasks": tasks,
+                    "is_today": d == today,
+                    "is_past": d < today,
+                }
+            )
 
         # Deplete running inventory for next week
         for sku in running_inv:
@@ -6875,17 +7185,19 @@ def action_calendar():
             tue_d = int(round(week_tue_demand.get(sku, 0)))
             running_inv[sku] = max(0, running_inv[sku] - sat_d - tue_d)
 
-        weeks.append({
-            "week": week_idx + 1,
-            "start": ws.isoformat(),
-            "end": we.isoformat(),
-            "label": f"Week {week_idx + 1}: {ws.strftime('%b %d')} - {we.strftime('%b %d')}",
-            "days": days,
-            "po_lines": week_po_lines,
-            "mfg_lines": week_mfg_lines,
-            "shortages": len(shortages),
-            "total_demand": sum(week_demand.values()) if week_demand else 0,
-        })
+        weeks.append(
+            {
+                "week": week_idx + 1,
+                "start": ws.isoformat(),
+                "end": we.isoformat(),
+                "label": f"Week {week_idx + 1}: {ws.strftime('%b %d')} - {we.strftime('%b %d')}",
+                "days": days,
+                "po_lines": week_po_lines,
+                "mfg_lines": week_mfg_lines,
+                "shortages": len(shortages),
+                "total_demand": sum(week_demand.values()) if week_demand else 0,
+            }
+        )
 
     return jsonify({"weeks": weeks, "generated": today.isoformat()})
 
@@ -6902,8 +7214,8 @@ def _get_bulk_weights() -> dict:
     base = _get_project_dir()
     for pat in ("Product Inventory*.csv", "RMFG_*/Product Inventory*.csv"):
         import glob as globmod
-        files = sorted(globmod.glob(os.path.join(base, pat)),
-                       key=os.path.getmtime, reverse=True)
+
+        files = sorted(globmod.glob(os.path.join(base, pat)), key=os.path.getmtime, reverse=True)
         if files:
             try:
                 with open(files[0], encoding="utf-8-sig") as f:
@@ -6917,11 +7229,17 @@ def _get_bulk_weights() -> dict:
 
 
 from invoice_processor import (
-    parse_production_invoice, extract_invoice_id,
-    match_product_to_sku, get_match_candidates, SEED_TRANSLATIONS,
-    gmail_connect, search_rmfg_invoices,
-    reconcile_invoice_with_pos, apply_reconciliation,
-    compute_yield_ratios, annotate_invoice_yields,
+    parse_production_invoice,
+    extract_invoice_id,
+    match_product_to_sku,
+    get_match_candidates,
+    SEED_TRANSLATIONS,
+    gmail_connect,
+    search_rmfg_invoices,
+    reconcile_invoice_with_pos,
+    apply_reconciliation,
+    compute_yield_ratios,
+    annotate_invoice_yields,
     extract_bulk_weights,
 )
 
@@ -6935,13 +7253,15 @@ def invoice_status():
     invoices = s.get("production_invoices", [])
     pending = len([i for i in invoices if i.get("status") in ("pending", "partial")])
     total_charge = sum(i.get("total_production_charge", 0) for i in invoices)
-    return jsonify({
-        "configured": bool(smtp_user and smtp_pass),
-        "total_invoices": len(invoices),
-        "pending_match": pending,
-        "total_production_charge": round(total_charge, 2),
-        "last_sync": s.get("_last_invoice_sync", ""),
-    })
+    return jsonify(
+        {
+            "configured": bool(smtp_user and smtp_pass),
+            "total_invoices": len(invoices),
+            "pending_match": pending,
+            "total_production_charge": round(total_charge, 2),
+            "last_sync": s.get("_last_invoice_sync", ""),
+        }
+    )
 
 
 _invoice_sync_state = {"running": False, "progress": "", "result": None}
@@ -6996,7 +7316,8 @@ def _invoice_sync_worker(force: bool):
                 for section_key in ("full_mfg", "meals", "label_only"):
                     for item in parsed.get(section_key, []):
                         sku, confidence, method = match_product_to_sku(
-                            item["product_name"], sku_translations, inventory)
+                            item["product_name"], sku_translations, inventory
+                        )
                         li = {
                             "section": section_key,
                             "product_name": item["product_name"],
@@ -7017,8 +7338,11 @@ def _invoice_sync_worker(force: bool):
                     "filename": att["filename"],
                     "received_date": em["date"],
                     "mfg_date": parsed.get("mfg_date"),
-                    "status": "matched" if not unmatched else
-                              "partial" if len(unmatched) < len(line_items) else "pending",
+                    "status": "matched"
+                    if not unmatched
+                    else "partial"
+                    if len(unmatched) < len(line_items)
+                    else "pending",
                     "total_production_charge": parsed.get("total_production_charge", 0),
                     "full_mfg_charge": parsed.get("full_mfg_totals", {}).get("charge", 0),
                     "label_only_charge": parsed.get("label_only_totals", {}).get("charge", 0),
@@ -7080,11 +7404,13 @@ def invoice_sync():
 @app.route("/api/invoice_sync_progress")
 def invoice_sync_progress():
     """Poll sync progress."""
-    return jsonify({
-        "running": _invoice_sync_state["running"],
-        "progress": _invoice_sync_state["progress"],
-        "result": _invoice_sync_state["result"],
-    })
+    return jsonify(
+        {
+            "running": _invoice_sync_state["running"],
+            "progress": _invoice_sync_state["progress"],
+            "result": _invoice_sync_state["result"],
+        }
+    )
 
 
 @app.route("/api/invoices")
@@ -7097,17 +7423,19 @@ def list_invoices():
         products = len(inv.get("line_items", []))
         cases = sum(li.get("case_packouts", 0) for li in inv.get("line_items", []))
         yld = sum(li.get("total_yield", 0) for li in inv.get("line_items", []))
-        summaries.append({
-            "id": inv.get("id"),
-            "mfg_date": inv.get("mfg_date"),
-            "received_date": inv.get("received_date"),
-            "products": products,
-            "cases": cases,
-            "total_yield": yld,
-            "total_charge": inv.get("total_production_charge", 0),
-            "status": inv.get("status", "unknown"),
-            "unmatched_count": len(inv.get("unmatched_products", [])),
-        })
+        summaries.append(
+            {
+                "id": inv.get("id"),
+                "mfg_date": inv.get("mfg_date"),
+                "received_date": inv.get("received_date"),
+                "products": products,
+                "cases": cases,
+                "total_yield": yld,
+                "total_charge": inv.get("total_production_charge", 0),
+                "status": inv.get("status", "unknown"),
+                "unmatched_count": len(inv.get("unmatched_products", [])),
+            }
+        )
     return jsonify({"invoices": summaries})
 
 
@@ -7147,8 +7475,7 @@ def invoice_map_sku():
                 li["match_method"] = "manual"
                 updated += 1
         # Recalculate unmatched list and status
-        unmatched = [li["product_name"] for li in inv.get("line_items", [])
-                     if not li.get("sku")]
+        unmatched = [li["product_name"] for li in inv.get("line_items", []) if not li.get("sku")]
         inv["unmatched_products"] = unmatched
         if not unmatched:
             inv["status"] = "matched"
@@ -7167,8 +7494,7 @@ def invoice_match_candidates():
     product_name = data.get("product_name", "")
     if not product_name:
         return jsonify({"error": "product_name required"})
-    candidates = get_match_candidates(
-        product_name, s.get("sku_translations", {}), s.get("inventory", {}))
+    candidates = get_match_candidates(product_name, s.get("sku_translations", {}), s.get("inventory", {}))
     return jsonify({"product_name": product_name, "candidates": candidates})
 
 
@@ -7194,13 +7520,18 @@ def invoice_auto_map():
         if recommended:
             best = recommended[0]
             translations[product_name] = best["sku"]
-            mapped.append({"product_name": product_name, "sku": best["sku"],
-                           "score": best["score"], "name": best["name"]})
+            mapped.append(
+                {"product_name": product_name, "sku": best["sku"], "score": best["score"], "name": best["name"]}
+            )
         else:
             top = candidates[0] if candidates else None
-            skipped.append({"product_name": product_name,
-                            "best_sku": top["sku"] if top else "",
-                            "best_score": top["score"] if top else 0})
+            skipped.append(
+                {
+                    "product_name": product_name,
+                    "best_sku": top["sku"] if top else "",
+                    "best_score": top["score"] if top else 0,
+                }
+            )
 
     # Apply mappings to all invoices
     total_updated = 0
@@ -7211,8 +7542,7 @@ def invoice_auto_map():
                 li["match_confidence"] = 1.0
                 li["match_method"] = "auto_recommend"
                 total_updated += 1
-        unmatched = [li["product_name"] for li in inv.get("line_items", [])
-                     if not li.get("sku")]
+        unmatched = [li["product_name"] for li in inv.get("line_items", []) if not li.get("sku")]
         inv["unmatched_products"] = unmatched
         if not unmatched:
             inv["status"] = "matched"
@@ -7220,12 +7550,14 @@ def invoice_auto_map():
             inv["status"] = "partial"
 
     save_settings(s)
-    return jsonify({
-        "ok": True,
-        "mapped": mapped,
-        "skipped": skipped,
-        "total_updated": total_updated,
-    })
+    return jsonify(
+        {
+            "ok": True,
+            "mapped": mapped,
+            "skipped": skipped,
+            "total_updated": total_updated,
+        }
+    )
 
 
 @app.route("/api/invoice_reconcile/<invoice_id>", methods=["POST"])
@@ -7287,16 +7619,17 @@ def invoice_cost_history():
     # Calculate averages
     analytics = []
     for sku, data in sorted(by_sku.items()):
-        avg_cost = (data["total_cost"] / data["total_yield"]
-                    if data["total_yield"] > 0 else 0)
-        analytics.append({
-            "sku": sku,
-            "total_yield": data["total_yield"],
-            "total_cost": round(data["total_cost"], 2),
-            "avg_cost_per_unit": round(avg_cost, 2),
-            "entries": len(data["entries"]),
-            "history": data["entries"],
-        })
+        avg_cost = data["total_cost"] / data["total_yield"] if data["total_yield"] > 0 else 0
+        analytics.append(
+            {
+                "sku": sku,
+                "total_yield": data["total_yield"],
+                "total_cost": round(data["total_cost"], 2),
+                "avg_cost_per_unit": round(avg_cost, 2),
+                "entries": len(data["entries"]),
+                "history": data["entries"],
+            }
+        )
 
     return jsonify({"analytics": analytics})
 
@@ -7308,6 +7641,7 @@ def invoice_cost_history():
 def depletion_scan():
     """Scan Gmail Sent + Downloads for new depletion XLSX files."""
     from depletion_finder import find_all_depletion_files
+
     s = _s()
     user = s.get("smtp_user", "")
     password = s.get("smtp_password", "")
@@ -7323,6 +7657,7 @@ def depletion_scan_and_parse():
     Expects JSON: {path: "/path/to/file.xlsx", filename: "..."}
     """
     import tempfile
+
     data = request.get_json(force=True)
     file_path = data.get("path", "")
     filename = data.get("filename", "")
@@ -7346,22 +7681,23 @@ def depletion_scan_and_parse():
     s = _s()
     translations = s.get("sku_translations", {})
     inventory = s.get("inventory", {})
-    sku_totals, mapped, unmatched = map_depletion_to_skus(
-        product_totals, translations, inventory)
+    sku_totals, mapped, unmatched = map_depletion_to_skus(product_totals, translations, inventory)
 
-    return jsonify({
-        "ok": True,
-        "filename": filename,
-        "path": file_path,
-        "order_count": order_count,
-        "product_count": len(product_totals),
-        "total_units": sum(product_totals.values()),
-        "sku_totals": sku_totals,
-        "mapped": mapped,
-        "unmatched": unmatched,
-        "mapped_count": len(mapped),
-        "unmatched_count": len(unmatched),
-    })
+    return jsonify(
+        {
+            "ok": True,
+            "filename": filename,
+            "path": file_path,
+            "order_count": order_count,
+            "product_count": len(product_totals),
+            "total_units": sum(product_totals.values()),
+            "sku_totals": sku_totals,
+            "mapped": mapped,
+            "unmatched": unmatched,
+            "mapped_count": len(mapped),
+            "unmatched_count": len(unmatched),
+        }
+    )
 
 
 @app.route("/api/depletion_parse", methods=["POST"])
@@ -7376,6 +7712,7 @@ def depletion_parse():
 
     # Save to temp, parse
     import tempfile
+
     with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
         f.save(tmp.name)
         tmp_path = tmp.name
@@ -7392,21 +7729,22 @@ def depletion_parse():
     s = _s()
     translations = s.get("sku_translations", {})
     inventory = s.get("inventory", {})
-    sku_totals, mapped, unmatched = map_depletion_to_skus(
-        product_totals, translations, inventory)
+    sku_totals, mapped, unmatched = map_depletion_to_skus(product_totals, translations, inventory)
 
-    return jsonify({
-        "ok": True,
-        "filename": f.filename,
-        "order_count": order_count,
-        "product_count": len(product_totals),
-        "total_units": sum(product_totals.values()),
-        "sku_totals": sku_totals,
-        "mapped": mapped,
-        "unmatched": unmatched,
-        "mapped_count": len(mapped),
-        "unmatched_count": len(unmatched),
-    })
+    return jsonify(
+        {
+            "ok": True,
+            "filename": f.filename,
+            "order_count": order_count,
+            "product_count": len(product_totals),
+            "total_units": sum(product_totals.values()),
+            "sku_totals": sku_totals,
+            "mapped": mapped,
+            "unmatched": unmatched,
+            "mapped_count": len(mapped),
+            "unmatched_count": len(unmatched),
+        }
+    )
 
 
 @app.route("/api/depletion_apply", methods=["POST"])
@@ -7438,35 +7776,41 @@ def depletion_apply():
     # Log depletion in settings history
     s = _s()
     history = s.setdefault("depletion_history", [])
-    history.append({
-        "date": datetime.datetime.now().isoformat(),
-        "file": label,
-        "day": _detect_cycle_day(),
-        "skus": len(applied),
-        "total": sum(int(q) for q in sku_totals.values()),
-        "total_orders": data.get("order_count", 0),
-    })
+    history.append(
+        {
+            "date": datetime.datetime.now().isoformat(),
+            "file": label,
+            "day": _detect_cycle_day(),
+            "skus": len(applied),
+            "total": sum(int(q) for q in sku_totals.values()),
+            "total_orders": data.get("order_count", 0),
+        }
+    )
 
     # Append journal entry for running inventory
     journal = s.setdefault("inventory_journal", [])
-    journal.append({
-        "ts": datetime.datetime.now().isoformat(),
-        "type": "depletion",
-        "label": label,
-        "sku_deltas": {sku: -int(qty) for sku, qty in sku_totals.items()},
-    })
+    journal.append(
+        {
+            "ts": datetime.datetime.now().isoformat(),
+            "type": "depletion",
+            "label": label,
+            "sku_deltas": {sku: -int(qty) for sku, qty in sku_totals.items()},
+        }
+    )
 
     save_settings(s)
 
     # Snapshot after applying
     _take_snapshot(f"Post-depletion: {label}", source="depletion")
 
-    return jsonify({
-        "ok": True,
-        "applied": applied,
-        "total_depleted": sum(int(q) for q in sku_totals.values()),
-        "skus_affected": len(applied),
-    })
+    return jsonify(
+        {
+            "ok": True,
+            "applied": applied,
+            "total_depleted": sum(int(q) for q in sku_totals.values()),
+            "skus_affected": len(applied),
+        }
+    )
 
 
 @app.route("/api/auto_deplete", methods=["POST"])
@@ -7504,8 +7848,7 @@ def auto_deplete():
                     dep_paths.append(os.path.join(search_dir, f))
 
     if not dep_paths:
-        return jsonify({"ok": False, "skipped": True,
-                        "reason": "No WeeklyProductionQuery XLSX found"})
+        return jsonify({"ok": False, "skipped": True, "reason": "No WeeklyProductionQuery XLSX found"})
 
     # Only use latest 2 files (sorted by name, which includes date)
     dep_paths = sorted(dep_paths, key=lambda p: os.path.basename(p))[-2:]
@@ -7517,13 +7860,11 @@ def auto_deplete():
 
     if not new_paths:
         already = [os.path.basename(p) for p in dep_paths]
-        return jsonify({"ok": False, "skipped": True,
-                        "reason": f"Already applied: {', '.join(already)}"})
+        return jsonify({"ok": False, "skipped": True, "reason": f"Already applied: {', '.join(already)}"})
 
     inv = STATE.get("rmfg_inventory", {})
     if not inv:
-        return jsonify({"ok": False, "skipped": True,
-                        "reason": "No inventory loaded yet"})
+        return jsonify({"ok": False, "skipped": True, "reason": "No inventory loaded yet"})
 
     translations = s.get("sku_translations", {})
     inventory_settings = s.get("inventory", {})
@@ -7538,8 +7879,7 @@ def auto_deplete():
         if err or not product_totals:
             continue
 
-        sku_totals, mapped, unmatched = map_depletion_to_skus(
-            product_totals, translations, inventory_settings)
+        sku_totals, mapped, unmatched = map_depletion_to_skus(product_totals, translations, inventory_settings)
         if not sku_totals:
             continue
 
@@ -7554,8 +7894,7 @@ def auto_deplete():
                 total_applied[sku]["after"] = after
                 total_applied[sku]["depleted"] += int(qty)
             else:
-                total_applied[sku] = {"before": before, "after": after,
-                                      "depleted": int(qty)}
+                total_applied[sku] = {"before": before, "after": after, "depleted": int(qty)}
 
         STATE["rmfg_inventory"] = inv
         _take_snapshot(f"Post-depletion: {dep_label}", source="depletion")
@@ -7564,8 +7903,7 @@ def auto_deplete():
         files_applied.append(dep_label)
 
     if not files_applied:
-        return jsonify({"ok": False, "skipped": True,
-                        "reason": "Depletion files found but no data could be mapped"})
+        return jsonify({"ok": False, "skipped": True, "reason": "Depletion files found but no data could be mapped"})
 
     # Mark files as applied so they're never reapplied
     applied_list = s.setdefault("depletion_applied_files", [])
@@ -7575,15 +7913,17 @@ def auto_deplete():
     save_settings(s)
     STATE["saved"] = s
 
-    return jsonify({
-        "ok": True,
-        "files": files_applied,
-        "file": ", ".join(files_applied),
-        "order_count": total_order_count,
-        "skus_affected": len(total_applied),
-        "total_depleted": sum(a["depleted"] for a in total_applied.values()),
-        "unmatched": all_unmatched,
-    })
+    return jsonify(
+        {
+            "ok": True,
+            "files": files_applied,
+            "file": ", ".join(files_applied),
+            "order_count": total_order_count,
+            "skus_affected": len(total_applied),
+            "total_depleted": sum(a["depleted"] for a in total_applied.values()),
+            "unmatched": all_unmatched,
+        }
+    )
 
 
 @app.route("/api/fetch_depletions_email", methods=["POST"])
@@ -7625,7 +7965,7 @@ def fetch_depletions_email():
             all_ids.update(msg_ids_kurt[0].split())
         if msg_ids_sent[0]:
             all_ids.update(msg_ids_sent[0].split())
-        msg_ids = [b' '.join(sorted(all_ids))] if all_ids else [b'']
+        msg_ids = [b" ".join(sorted(all_ids))] if all_ids else [b""]
 
         if not msg_ids[0]:
             conn.logout()
@@ -7688,12 +8028,14 @@ def fetch_depletions_email():
                     downloaded.append(clean_name)
 
         conn.logout()
-        return jsonify({
-            "ok": True,
-            "files": downloaded,
-            "skipped": skipped,
-            "message": f"Downloaded {len(downloaded)} file(s), skipped {len(skipped)} existing"
-        })
+        return jsonify(
+            {
+                "ok": True,
+                "files": downloaded,
+                "skipped": skipped,
+                "message": f"Downloaded {len(downloaded)} file(s), skipped {len(skipped)} existing",
+            }
+        )
 
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -7759,8 +8101,7 @@ def _take_snapshot(label, source="manual", cycle_day=None):
     if not inv:
         # Fallback to settings inventory
         raw = s.get("inventory", {})
-        inv = {k: (v.get("qty", 0) if isinstance(v, dict) else int(v or 0))
-               for k, v in raw.items()}
+        inv = {k: (v.get("qty", 0) if isinstance(v, dict) else int(v or 0)) for k, v in raw.items()}
 
     # Include potential yield from wheels/blocks
     bulk_weights = STATE.get("bulk_weights", {})
@@ -7769,8 +8110,7 @@ def _take_snapshot(label, source="manual", cycle_day=None):
         py = bw.get("potential_yield", 0)
         wc = bw.get("count", 0)
         if py > 0:
-            potential[sku] = {"yield": py, "wheels": wc,
-                              "weight_lbs": bw.get("weight_lbs", 0)}
+            potential[sku] = {"yield": py, "wheels": wc, "weight_lbs": bw.get("weight_lbs", 0)}
 
     snap = {
         "id": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
@@ -7793,8 +8133,7 @@ def _take_snapshot(label, source="manual", cycle_day=None):
 def _detect_cycle_day():
     """Detect current cycle day: friday/saturday/monday/tuesday/wednesday."""
     wd = datetime.date.today().weekday()  # 0=Mon
-    return {0: "monday", 1: "tuesday", 2: "wednesday",
-            4: "friday", 5: "saturday"}.get(wd, f"day_{wd}")
+    return {0: "monday", 1: "tuesday", 2: "wednesday", 4: "friday", 5: "saturday"}.get(wd, f"day_{wd}")
 
 
 @app.route("/api/snapshots")
@@ -7807,18 +8146,20 @@ def list_snapshots():
         inv = snap.get("inventory", {})
         pot = snap.get("potential_yield", {})
         pot_total = sum(p.get("yield", 0) for p in pot.values())
-        summaries.append({
-            "id": snap["id"],
-            "timestamp": snap["timestamp"],
-            "label": snap["label"],
-            "source": snap.get("source", ""),
-            "cycle_day": snap.get("cycle_day", ""),
-            "sku_count": len(inv),
-            "total_units": sum(inv.values()),
-            "cheese_units": sum(v for k, v in inv.items() if k.startswith("CH-")),
-            "potential_yield": pot_total,
-            "wheel_skus": len(pot),
-        })
+        summaries.append(
+            {
+                "id": snap["id"],
+                "timestamp": snap["timestamp"],
+                "label": snap["label"],
+                "source": snap.get("source", ""),
+                "cycle_day": snap.get("cycle_day", ""),
+                "sku_count": len(inv),
+                "total_units": sum(inv.values()),
+                "cheese_units": sum(v for k, v in inv.items() if k.startswith("CH-")),
+                "potential_yield": pot_total,
+                "wheel_skus": len(pot),
+            }
+        )
     return jsonify({"snapshots": summaries})
 
 
@@ -7838,11 +8179,17 @@ def save_snapshot():
     data = request.json or {}
     label = data.get("label", "Manual snapshot")
     snap = _take_snapshot(label, source="manual")
-    return jsonify({"ok": True, "snapshot": {
-        "id": snap["id"], "label": snap["label"],
-        "sku_count": len(snap["inventory"]),
-        "total_units": sum(snap["inventory"].values()),
-    }})
+    return jsonify(
+        {
+            "ok": True,
+            "snapshot": {
+                "id": snap["id"],
+                "label": snap["label"],
+                "sku_count": len(snap["inventory"]),
+                "total_units": sum(snap["inventory"].values()),
+            },
+        }
+    )
 
 
 @app.route("/api/snapshot/<snap_id>", methods=["DELETE"])
@@ -7883,32 +8230,44 @@ def compare_snapshots():
             continue
         pa = pot_a.get(sku, {}).get("yield", 0)
         pb = pot_b.get(sku, {}).get("yield", 0)
-        rows.append({
-            "sku": sku,
-            "qty_a": qa,
-            "qty_b": qb,
-            "delta": delta,
-            "pct_change": round(delta / qa * 100, 1) if qa else None,
-            "potential_a": pa,
-            "potential_b": pb,
-        })
+        rows.append(
+            {
+                "sku": sku,
+                "qty_a": qa,
+                "qty_b": qb,
+                "delta": delta,
+                "pct_change": round(delta / qa * 100, 1) if qa else None,
+                "potential_a": pa,
+                "potential_b": pb,
+            }
+        )
 
-    return jsonify({
-        "a": {"id": snap_a["id"], "label": snap_a["label"],
-              "timestamp": snap_a["timestamp"], "cycle_day": snap_a.get("cycle_day", "")},
-        "b": {"id": snap_b["id"], "label": snap_b["label"],
-              "timestamp": snap_b["timestamp"], "cycle_day": snap_b.get("cycle_day", "")},
-        "rows": rows,
-        "summary": {
-            "total_a": sum(inv_a.values()),
-            "total_b": sum(inv_b.values()),
-            "net_change": sum(inv_b.values()) - sum(inv_a.values()),
-            "skus_gained": sum(1 for r in rows if r["qty_a"] == 0 and r["qty_b"] > 0),
-            "skus_lost": sum(1 for r in rows if r["qty_a"] > 0 and r["qty_b"] == 0),
-            "skus_increased": sum(1 for r in rows if r["delta"] > 0),
-            "skus_decreased": sum(1 for r in rows if r["delta"] < 0),
-        },
-    })
+    return jsonify(
+        {
+            "a": {
+                "id": snap_a["id"],
+                "label": snap_a["label"],
+                "timestamp": snap_a["timestamp"],
+                "cycle_day": snap_a.get("cycle_day", ""),
+            },
+            "b": {
+                "id": snap_b["id"],
+                "label": snap_b["label"],
+                "timestamp": snap_b["timestamp"],
+                "cycle_day": snap_b.get("cycle_day", ""),
+            },
+            "rows": rows,
+            "summary": {
+                "total_a": sum(inv_a.values()),
+                "total_b": sum(inv_b.values()),
+                "net_change": sum(inv_b.values()) - sum(inv_a.values()),
+                "skus_gained": sum(1 for r in rows if r["qty_a"] == 0 and r["qty_b"] > 0),
+                "skus_lost": sum(1 for r in rows if r["qty_a"] > 0 and r["qty_b"] == 0),
+                "skus_increased": sum(1 for r in rows if r["delta"] > 0),
+                "skus_decreased": sum(1 for r in rows if r["delta"] < 0),
+            },
+        }
+    )
 
 
 @app.route("/api/snapshot_current")
@@ -7918,15 +8277,16 @@ def snapshot_current():
     if not inv:
         s = _s()
         raw = s.get("inventory", {})
-        inv = {k: (v.get("qty", 0) if isinstance(v, dict) else int(v or 0))
-               for k, v in raw.items()}
-    return jsonify({
-        "inventory": inv,
-        "sat_demand": STATE.get("rmfg_sat_demand", {}),
-        "tue_demand": STATE.get("rmfg_tue_demand", {}),
-        "sku_count": len(inv),
-        "total_units": sum(inv.values()),
-    })
+        inv = {k: (v.get("qty", 0) if isinstance(v, dict) else int(v or 0)) for k, v in raw.items()}
+    return jsonify(
+        {
+            "inventory": inv,
+            "sat_demand": STATE.get("rmfg_sat_demand", {}),
+            "tue_demand": STATE.get("rmfg_tue_demand", {}),
+            "sku_count": len(inv),
+            "total_units": sum(inv.values()),
+        }
+    )
 
 
 # ── Inventory Reconciliation ───────────────────────────────────────────
@@ -7977,8 +8337,7 @@ def reconcile_inventory():
             src = sn.get("source", "")
             label = sn.get("label", "").lower()
             # Prefer: Friday, pre-depletion, or Dropbox sync before Monday
-            if (day in ("friday", "saturday") or src == "depletion"
-                    or "dropbox" in label or "friday" in label):
+            if day in ("friday", "saturday") or src == "depletion" or "dropbox" in label or "friday" in label:
                 friday_snap = sn
                 break
         # Fallback: second most recent
@@ -8070,57 +8429,60 @@ def reconcile_inventory():
                 expected_cutting = round(wheels_cut * weight_lbs * _yield_factor(sku))
                 actual_gain = qty_mon - qty_fri + depletion_total
                 cutting_disc = round(actual_gain - expected_cutting)
-        pct = round((diff / expected * 100), 1) if expected > 0 else (
-            100.0 if qty_mon > 0 else 0.0)
+        pct = round((diff / expected * 100), 1) if expected > 0 else (100.0 if qty_mon > 0 else 0.0)
         flagged = abs_diff >= threshold_min and abs(pct) >= threshold_pct
 
         if flagged:
             flagged_count += 1
             total_discrepancy += abs_diff
 
-        rows.append({
-            "sku": sku,
-            "friday": qty_fri,
-            "monday": qty_mon,
-            "invoice_yield": inv_yield,
-            "sat_depletion": depletion_total,
-            "expected": expected,
-            "diff": diff,
-            "pct": pct,
-            "flagged": flagged,
-            "status": "over" if diff > 0 else "under" if diff < 0 else "match",
-            "wheel_fri": wheel_fri,
-            "wheel_mon": wheel_mon,
-            "expected_from_cutting": expected_cutting,
-            "cutting_discrepancy": cutting_disc,
-        })
+        rows.append(
+            {
+                "sku": sku,
+                "friday": qty_fri,
+                "monday": qty_mon,
+                "invoice_yield": inv_yield,
+                "sat_depletion": depletion_total,
+                "expected": expected,
+                "diff": diff,
+                "pct": pct,
+                "flagged": flagged,
+                "status": "over" if diff > 0 else "under" if diff < 0 else "match",
+                "wheel_fri": wheel_fri,
+                "wheel_mon": wheel_mon,
+                "expected_from_cutting": expected_cutting,
+                "cutting_discrepancy": cutting_disc,
+            }
+        )
 
     # Sort: flagged first (by abs diff desc), then others
     rows.sort(key=lambda r: (-int(r["flagged"]), -abs(r["diff"])))
 
-    return jsonify({
-        "ok": True,
-        "monday": {
-            "id": monday_snap["id"],
-            "label": monday_snap.get("label", ""),
-            "timestamp": monday_snap.get("timestamp", ""),
-            "cycle_day": monday_snap.get("cycle_day", ""),
-        },
-        "friday": {
-            "id": friday_snap["id"],
-            "label": friday_snap.get("label", ""),
-            "timestamp": friday_snap.get("timestamp", ""),
-            "cycle_day": friday_snap.get("cycle_day", ""),
-        },
-        "rows": rows,
-        "summary": {
-            "total_skus": len(rows),
-            "flagged": flagged_count,
-            "total_discrepancy": total_discrepancy,
-            "invoices_in_window": len(invoice_entries),
-            "depletions_in_window": len(depletion_entries),
-        },
-    })
+    return jsonify(
+        {
+            "ok": True,
+            "monday": {
+                "id": monday_snap["id"],
+                "label": monday_snap.get("label", ""),
+                "timestamp": monday_snap.get("timestamp", ""),
+                "cycle_day": monday_snap.get("cycle_day", ""),
+            },
+            "friday": {
+                "id": friday_snap["id"],
+                "label": friday_snap.get("label", ""),
+                "timestamp": friday_snap.get("timestamp", ""),
+                "cycle_day": friday_snap.get("cycle_day", ""),
+            },
+            "rows": rows,
+            "summary": {
+                "total_skus": len(rows),
+                "flagged": flagged_count,
+                "total_discrepancy": total_discrepancy,
+                "invoices_in_window": len(invoice_entries),
+                "depletions_in_window": len(depletion_entries),
+            },
+        }
+    )
 
 
 @app.route("/api/reconcile_snapshots")
@@ -8131,14 +8493,16 @@ def reconcile_snapshots():
     result = []
     for sn in reversed(snapshots):
         ts = sn.get("timestamp", "")
-        result.append({
-            "id": sn["id"],
-            "label": sn.get("label", ""),
-            "timestamp": ts,
-            "cycle_day": sn.get("cycle_day", ""),
-            "source": sn.get("source", ""),
-            "sku_count": len(sn.get("inventory", {})),
-        })
+        result.append(
+            {
+                "id": sn["id"],
+                "label": sn.get("label", ""),
+                "timestamp": ts,
+                "cycle_day": sn.get("cycle_day", ""),
+                "source": sn.get("source", ""),
+                "sku_count": len(sn.get("inventory", {})),
+            }
+        )
     return jsonify({"snapshots": result})
 
 
@@ -8172,14 +8536,16 @@ def detect_production_events(old_snap, new_snap, depletion_between):
             new_sliced = new_inv.get(sku, 0)
             actual_sliced_gain = new_sliced - old_sliced + depletion_between.get(sku, 0)
             variance = round(actual_sliced_gain - expected_sliced_gain)
-            events.append({
-                "sku": sku,
-                "wheels_cut": wheels_cut,
-                "weight_lbs": weight_lbs,
-                "expected": expected_sliced_gain,
-                "actual": round(actual_sliced_gain),
-                "variance": variance,
-            })
+            events.append(
+                {
+                    "sku": sku,
+                    "wheels_cut": wheels_cut,
+                    "weight_lbs": weight_lbs,
+                    "expected": expected_sliced_gain,
+                    "actual": round(actual_sliced_gain),
+                    "variance": variance,
+                }
+            )
 
     return events
 
@@ -8218,7 +8584,7 @@ def compute_running_inventory():
         sliced, wheels = _load_snap(journal[last_snap_idx].get("snapshot_id", ""))
 
     # Replay journal entries after the last snapshot
-    for entry in journal[last_snap_idx + 1:]:
+    for entry in journal[last_snap_idx + 1 :]:
         etype = entry.get("type", "")
         if etype == "snapshot":
             sliced, wheels = _load_snap(entry.get("snapshot_id", ""))
@@ -8295,28 +8661,227 @@ def add_journal_entry():
     return jsonify({"ok": True, "entry": entry})
 
 
+# ── Calculated Inventory & Projections ────────────────────────────────
+
+
+@app.route("/api/calculated_inventory")
+def calculated_inventory():
+    """Return calculated available inventory (journal-replayed).
+
+    This is the source of truth — accounts for snapshots, depletions,
+    adjustments, and production. Use for Matrix Commander inventory CSV
+    and React tool inventory input.
+    """
+    result = compute_running_inventory()
+    sliced = result.get("sliced", {})
+    wheels = result.get("wheels", {})
+
+    # Add wheel potential to sliced (same formula as elsewhere: weight * 2.67)
+    s = _s()
+    wheel_inv = s.get("wheel_inventory", {})
+    potential = {}
+    for sku, wdata in wheel_inv.items():
+        target = wdata.get("target_sku", sku)
+        weight = wdata.get("weight_lbs", 0)
+        count = wheels.get(sku, wdata.get("count", 0))
+        if count > 0 and weight > 0:
+            potential[target] = potential.get(target, 0) + int(count * weight * 2.67)
+
+    # Add open PO quantities
+    open_pos = s.get("open_pos", [])
+    incoming = {}
+    for po in open_pos:
+        if po.get("status") in ("ordered", "confirmed", "in_transit"):
+            sku = po.get("sku", "")
+            qty = po.get("qty", 0)
+            if sku and qty > 0:
+                incoming[sku] = incoming.get(sku, 0) + qty
+
+    # Build combined available
+    all_skus = set(sliced.keys()) | set(potential.keys()) | set(incoming.keys())
+    available = {}
+    for sku in sorted(all_skus):
+        available[sku] = {
+            "on_hand": sliced.get(sku, 0),
+            "wheel_potential": potential.get(sku, 0),
+            "incoming": incoming.get(sku, 0),
+            "total_available": sliced.get(sku, 0) + potential.get(sku, 0),
+        }
+
+    return jsonify({"ok": True, "inventory": available})
+
+
+@app.route("/api/export_inventory_csv")
+def export_inventory_csv():
+    """Export calculated inventory as CSV for Matrix Commander / React tool.
+
+    Format: sku,available_qty
+    Uses on_hand sliced inventory (no wheel potential — that requires cutting).
+    """
+    result = compute_running_inventory()
+    sliced = result.get("sliced", {})
+
+    import io
+
+    output = io.StringIO()
+    output.write("sku,available_qty\n")
+    for sku in sorted(sliced.keys()):
+        qty = max(0, int(sliced.get(sku, 0)))
+        output.write(f"{sku},{qty}\n")
+
+    from flask import Response
+
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=inventory_calculated.csv"},
+    )
+
+
+@app.route("/api/tuesday_projection")
+def tuesday_projection():
+    """Project Tuesday inventory: current running inventory - Tuesday demand.
+
+    Call after Saturday depletion to see what's left for Tuesday fulfillment.
+    Flags SKUs that will be short on Tuesday.
+    """
+    result = compute_running_inventory()
+    sliced = result.get("sliced", {})
+
+    tue_demand = STATE.get("rmfg_tue_demand", {})
+    if not tue_demand:
+        return jsonify({"error": "No Tuesday demand data. Run calculate first."}), 400
+
+    projection = []
+    all_skus = set(sliced.keys()) | set(tue_demand.keys())
+    short_count = 0
+
+    for sku in sorted(all_skus):
+        on_hand = int(sliced.get(sku, 0))
+        demand = int(tue_demand.get(sku, 0))
+        if demand == 0:
+            continue
+        remaining = on_hand - demand
+        status = "SHORT" if remaining < 0 else ("LOW" if remaining < 20 else "OK")
+        if remaining < 0:
+            short_count += 1
+        projection.append(
+            {
+                "sku": sku,
+                "on_hand": on_hand,
+                "tue_demand": demand,
+                "remaining": remaining,
+                "status": status,
+            }
+        )
+
+    return jsonify(
+        {
+            "ok": True,
+            "sku_count": len(projection),
+            "short_count": short_count,
+            "projection": projection,
+        }
+    )
+
+
+@app.route("/api/import_depletion_from_matrix", methods=["POST"])
+def import_depletion_from_matrix():
+    """Import depletion data from Matrix Commander's generate output.
+
+    Body: {ship_day: "SAT"|"TUE", depletions: {sku: qty, ...}, source: "matrix_commander"}
+
+    Creates a journal entry subtracting the depleted quantities from
+    running inventory. Equivalent to uploading a depletion XLSX but
+    automated from Matrix Commander's demand totals.
+    """
+    data = request.json or {}
+    ship_day = data.get("ship_day", "SAT")
+    depletions = data.get("depletions", {})
+    source = data.get("source", "matrix_commander")
+
+    if not depletions:
+        return jsonify({"error": "No depletion data provided"}), 400
+
+    # Create pre-depletion snapshot
+    _take_snapshot(
+        f"pre-depletion-{ship_day.lower()}",
+        source="auto",
+        cycle_day=ship_day.lower(),
+    )
+
+    # Apply depletions as negative deltas
+    s = _s()
+    journal = s.setdefault("inventory_journal", [])
+    sku_deltas = {sku: -abs(int(qty)) for sku, qty in depletions.items() if int(qty) > 0}
+
+    entry = {
+        "ts": datetime.datetime.now().isoformat(),
+        "type": "depletion",
+        "label": f"{ship_day} depletion from {source}",
+        "sku_deltas": sku_deltas,
+        "ship_day": ship_day,
+        "source": source,
+    }
+    journal.append(entry)
+
+    # Also update depletion_history for tracking
+    dep_history = s.setdefault("depletion_history", [])
+    dep_history.append(
+        {
+            "date": datetime.datetime.now().strftime("%Y-%m-%d"),
+            "file": f"auto_{source}",
+            "day": ship_day,
+            "skus": sku_deltas,
+            "total": sum(abs(v) for v in sku_deltas.values()),
+            "total_orders": 0,
+        }
+    )
+
+    save_settings(s)
+
+    # Create post-depletion snapshot
+    _take_snapshot(
+        f"post-depletion-{ship_day.lower()}",
+        source="auto",
+        cycle_day=ship_day.lower(),
+    )
+
+    return jsonify(
+        {
+            "ok": True,
+            "ship_day": ship_day,
+            "skus_depleted": len(sku_deltas),
+            "total_units": sum(abs(v) for v in sku_deltas.values()),
+        }
+    )
+
+
 # ── Settings Configuration UI ────────────────────────────────────────
+
 
 @app.route("/api/settings_config")
 def get_settings_config():
     """Return editable settings for the Settings UI."""
     s = _s()
-    return jsonify({
-        "vendor_catalog": s.get("vendor_catalog", {}),
-        "bulk_conversions": s.get("bulk_conversions", {}),
-        "reorder_points": s.get("reorder_points", {}),
-        "smtp_host": s.get("smtp_host", "smtp.gmail.com"),
-        "smtp_port": s.get("smtp_port", "587"),
-        "smtp_user": s.get("smtp_user", ""),
-        "smtp_password": s.get("smtp_password", ""),
-        "depletion_email_to": s.get("depletion_email_to", ""),
-        "depletion_email_from": s.get("depletion_email_from", ""),
-        "auto_refresh_interval": s.get("auto_refresh_interval", 60),
-        "yield_reconciliation_threshold_pct": s.get("yield_reconciliation_threshold_pct", 5),
-        "yield_reconciliation_threshold_min": s.get("yield_reconciliation_threshold_min", 2),
-        "expiration_warning_days": s.get("expiration_warning_days", "14"),
-        "fulfillment_buffer": s.get("fulfillment_buffer", "10"),
-    })
+    return jsonify(
+        {
+            "vendor_catalog": s.get("vendor_catalog", {}),
+            "bulk_conversions": s.get("bulk_conversions", {}),
+            "reorder_points": s.get("reorder_points", {}),
+            "smtp_host": s.get("smtp_host", "smtp.gmail.com"),
+            "smtp_port": s.get("smtp_port", "587"),
+            "smtp_user": s.get("smtp_user", ""),
+            "smtp_password": s.get("smtp_password", ""),
+            "depletion_email_to": s.get("depletion_email_to", ""),
+            "depletion_email_from": s.get("depletion_email_from", ""),
+            "auto_refresh_interval": s.get("auto_refresh_interval", 60),
+            "yield_reconciliation_threshold_pct": s.get("yield_reconciliation_threshold_pct", 5),
+            "yield_reconciliation_threshold_min": s.get("yield_reconciliation_threshold_min", 2),
+            "expiration_warning_days": s.get("expiration_warning_days", "14"),
+            "fulfillment_buffer": s.get("fulfillment_buffer", "10"),
+        }
+    )
 
 
 @app.route("/api/settings_config", methods=["POST"])
@@ -8328,11 +8893,19 @@ def update_settings_config():
 
     s = _s()
     allowed = {
-        "vendor_catalog", "bulk_conversions", "reorder_points",
-        "smtp_host", "smtp_port", "smtp_user", "smtp_password",
-        "depletion_email_to", "depletion_email_from",
-        "auto_refresh_interval", "yield_reconciliation_threshold_pct",
-        "yield_reconciliation_threshold_min", "expiration_warning_days",
+        "vendor_catalog",
+        "bulk_conversions",
+        "reorder_points",
+        "smtp_host",
+        "smtp_port",
+        "smtp_user",
+        "smtp_password",
+        "depletion_email_to",
+        "depletion_email_from",
+        "auto_refresh_interval",
+        "yield_reconciliation_threshold_pct",
+        "yield_reconciliation_threshold_min",
+        "expiration_warning_days",
         "fulfillment_buffer",
     }
     updated = []
@@ -8381,6 +8954,7 @@ def delete_vendor_catalog(sku):
 
 # ── Undo Depletion / Audit Trail ─────────────────────────────────────
 
+
 @app.route("/api/undo_depletion", methods=["POST"])
 def undo_depletion():
     """Undo the last depletion by restoring the pre-depletion snapshot."""
@@ -8413,24 +8987,28 @@ def undo_depletion():
 
     # Log the undo in audit trail
     audit = s.setdefault("audit_log", [])
-    audit.append({
-        "timestamp": datetime.datetime.now().isoformat(),
-        "action": "undo_depletion",
-        "detail": f"Restored inventory from: {pre_snap['label']}",
-        "depletion_file": last_dep.get("file", ""),
-        "units_restored": last_dep.get("total", 0),
-    })
+    audit.append(
+        {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "action": "undo_depletion",
+            "detail": f"Restored inventory from: {pre_snap['label']}",
+            "depletion_file": last_dep.get("file", ""),
+            "units_restored": last_dep.get("total", 0),
+        }
+    )
     save_settings(s)
 
     # Take a new snapshot
     _take_snapshot("Post-undo: restored from " + pre_snap["label"], source="undo")
 
-    return jsonify({
-        "ok": True,
-        "restored_from": pre_snap["label"],
-        "units_restored": last_dep.get("total", 0),
-        "skus_restored": len(restored_inv),
-    })
+    return jsonify(
+        {
+            "ok": True,
+            "restored_from": pre_snap["label"],
+            "units_restored": last_dep.get("total", 0),
+            "skus_restored": len(restored_inv),
+        }
+    )
 
 
 @app.route("/api/audit_log")
@@ -8442,19 +9020,23 @@ def get_audit_log():
 
     # Include depletion history
     for dep in s.get("depletion_history", []):
-        log_entries.append({
-            "timestamp": dep.get("date", ""),
-            "action": "depletion_applied",
-            "detail": f"{dep.get('file', 'Unknown')}: {dep.get('total', 0)} units, {dep.get('skus', 0)} SKUs",
-        })
+        log_entries.append(
+            {
+                "timestamp": dep.get("date", ""),
+                "action": "depletion_applied",
+                "detail": f"{dep.get('file', 'Unknown')}: {dep.get('total', 0)} units, {dep.get('skus', 0)} SKUs",
+            }
+        )
 
     # Include snapshots
     for sn in s.get("inventory_snapshots", []):
-        log_entries.append({
-            "timestamp": sn.get("timestamp", ""),
-            "action": "snapshot_" + sn.get("source", "manual"),
-            "detail": sn.get("label", ""),
-        })
+        log_entries.append(
+            {
+                "timestamp": sn.get("timestamp", ""),
+                "action": "snapshot_" + sn.get("source", "manual"),
+                "detail": sn.get("label", ""),
+            }
+        )
 
     # Sort by timestamp descending
     log_entries.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
@@ -8462,6 +9044,7 @@ def get_audit_log():
 
 
 # ── Waste / Spoilage Ledger ──────────────────────────────────────────
+
 
 @app.route("/api/waste", methods=["POST"])
 def record_waste():
@@ -8493,11 +9076,13 @@ def record_waste():
 
     # Audit log
     audit = s.setdefault("audit_log", [])
-    audit.append({
-        "timestamp": entry["timestamp"],
-        "action": "waste_recorded",
-        "detail": f"{sku}: {qty} units ({reason})",
-    })
+    audit.append(
+        {
+            "timestamp": entry["timestamp"],
+            "action": "waste_recorded",
+            "detail": f"{sku}: {qty} units ({reason})",
+        }
+    )
     save_settings(s)
 
     return jsonify({"ok": True, "entry": entry})
@@ -8520,12 +9105,14 @@ def get_waste_ledger():
     for entry in ledger:
         by_reason[entry.get("reason", "spoilage")] += entry["qty"]
 
-    return jsonify({
-        "entries": ledger,
-        "by_sku": dict(by_sku),
-        "by_reason": dict(by_reason),
-        "total_wasted": sum(e["qty"] for e in ledger),
-    })
+    return jsonify(
+        {
+            "entries": ledger,
+            "by_sku": dict(by_sku),
+            "by_reason": dict(by_reason),
+            "total_wasted": sum(e["qty"] for e in ledger),
+        }
+    )
 
 
 @app.route("/api/waste/<waste_id>", methods=["DELETE"])
@@ -8539,6 +9126,7 @@ def delete_waste(waste_id):
 
 
 # ── Reorder Points / Wed PO Templates ────────────────────────────────
+
 
 @app.route("/api/reorder_points")
 def get_reorder_points():
@@ -8599,29 +9187,34 @@ def wed_po_draft():
             else:
                 cases = order_qty
 
-            lines.append({
-                "sku": sku,
-                "current": current,
-                "min_stock": min_stock,
-                "deficit": deficit,
-                "order_qty": order_qty,
-                "cases": cases,
-                "case_qty": case_qty,
-                "vendor": vc.get("vendor", ""),
-                "unit_cost": vc.get("unit_cost", 0),
-                "line_cost": round(vc.get("unit_cost", 0) * order_qty, 2),
-                "lead_days": lead_days,
-            })
+            lines.append(
+                {
+                    "sku": sku,
+                    "current": current,
+                    "min_stock": min_stock,
+                    "deficit": deficit,
+                    "order_qty": order_qty,
+                    "cases": cases,
+                    "case_qty": case_qty,
+                    "vendor": vc.get("vendor", ""),
+                    "unit_cost": vc.get("unit_cost", 0),
+                    "line_cost": round(vc.get("unit_cost", 0) * order_qty, 2),
+                    "lead_days": lead_days,
+                }
+            )
 
     total_cost = sum(l["line_cost"] for l in lines)
-    return jsonify({
-        "lines": lines,
-        "total_lines": len(lines),
-        "total_cost": round(total_cost, 2),
-    })
+    return jsonify(
+        {
+            "lines": lines,
+            "total_lines": len(lines),
+            "total_cost": round(total_cost, 2),
+        }
+    )
 
 
 # ── Email Wednesday PO ───────────────────────────────────────────────
+
 
 @app.route("/api/email_po", methods=["POST"])
 def email_po():
@@ -8691,11 +9284,13 @@ def email_po():
 
         # Audit log
         audit = s.setdefault("audit_log", [])
-        audit.append({
-            "timestamp": datetime.datetime.now().isoformat(),
-            "action": "po_emailed",
-            "detail": f"Sent to {to_addr}: {len(lines)} lines, ${total_cost:.2f}",
-        })
+        audit.append(
+            {
+                "timestamp": datetime.datetime.now().isoformat(),
+                "action": "po_emailed",
+                "detail": f"Sent to {to_addr}: {len(lines)} lines, ${total_cost:.2f}",
+            }
+        )
         save_settings(s)
 
         return jsonify({"ok": True, "sent_to": to_addr, "lines": len(lines)})
@@ -8704,6 +9299,7 @@ def email_po():
 
 
 # ── Cut Order PDF + Email ─────────────────────────────────────────────
+
 
 def generate_cut_order_pdf(cut_lines, summary):
     """Generate a simple PDF for the cut order. Returns BytesIO with PDF bytes."""
@@ -8724,7 +9320,13 @@ def generate_cut_order_pdf(cut_lines, summary):
     total_wheels = summary.get("total_wheels_to_cut", 0)
     total_pcs = summary.get("total_pcs_from_cut", 0)
     shortage_count = summary.get("shortage_count", 0)
-    pdf.cell(0, 6, f"Total Demand: {total_demand}  |  Wheels to Cut: {total_wheels}  |  Pcs from Cut: {total_pcs}  |  Shortages: {shortage_count}", ln=True, align="C")
+    pdf.cell(
+        0,
+        6,
+        f"Total Demand: {total_demand}  |  Wheels to Cut: {total_wheels}  |  Pcs from Cut: {total_pcs}  |  Shortages: {shortage_count}",
+        ln=True,
+        align="C",
+    )
     pdf.ln(6)
 
     # Table header
@@ -8773,7 +9375,13 @@ def generate_cut_order_pdf(cut_lines, summary):
     # Footer
     pdf.ln(6)
     pdf.set_font("Helvetica", "B", 9)
-    pdf.cell(0, 6, f"Total: {total_demand} demand  |  {total_wheels} wheels to cut  |  {total_pcs} pcs from cut", ln=True, align="C")
+    pdf.cell(
+        0,
+        6,
+        f"Total: {total_demand} demand  |  {total_wheels} wheels to cut  |  {total_pcs} pcs from cut",
+        ln=True,
+        align="C",
+    )
 
     buf = io.BytesIO()
     pdf.output(buf)
@@ -8843,11 +9451,13 @@ def email_cut_order():
 
         # Audit log
         audit = s.setdefault("audit_log", [])
-        audit.append({
-            "timestamp": datetime.datetime.now().isoformat(),
-            "action": "cut_order_emailed",
-            "detail": f"Sent to {to_addr}: {len(lines)} lines",
-        })
+        audit.append(
+            {
+                "timestamp": datetime.datetime.now().isoformat(),
+                "action": "cut_order_emailed",
+                "detail": f"Sent to {to_addr}: {len(lines)} lines",
+            }
+        )
         save_settings(s)
 
         return jsonify({"ok": True, "sent_to": to_addr, "lines": len(lines)})
@@ -8870,6 +9480,7 @@ def schedule_cut_order_email():
 
 
 # ── SKU History for Sparklines ────────────────────────────────────────
+
 
 @app.route("/api/sku_history")
 def sku_history():
@@ -8897,14 +9508,17 @@ def sku_history():
             if len(history[sku]) < len(timestamps):
                 history[sku].append(0)
 
-    return jsonify({
-        "timestamps": timestamps,
-        "history": dict(history),
-        "count": len(timestamps),
-    })
+    return jsonify(
+        {
+            "timestamps": timestamps,
+            "history": dict(history),
+            "count": len(timestamps),
+        }
+    )
 
 
 # ── Supplier Lead Time Tracking ──────────────────────────────────────
+
 
 @app.route("/api/po_received", methods=["POST"])
 def mark_po_received():
@@ -8942,34 +9556,40 @@ def mark_po_received():
 
     # Record in lead time history
     lt_history = s.setdefault("lead_time_history", [])
-    lt_history.append({
-        "sku": po.get("sku", ""),
-        "vendor": po.get("vendor", ""),
-        "placed_date": placed,
-        "eta": eta,
-        "received_date": received_date,
-        "expected_lead_days": None,
-        "actual_lead_days": actual_lead,
-        "qty": po.get("qty", 0),
-        "actual_qty": actual_qty or po.get("qty", 0),
-    })
+    lt_history.append(
+        {
+            "sku": po.get("sku", ""),
+            "vendor": po.get("vendor", ""),
+            "placed_date": placed,
+            "eta": eta,
+            "received_date": received_date,
+            "expected_lead_days": None,
+            "actual_lead_days": actual_lead,
+            "qty": po.get("qty", 0),
+            "actual_qty": actual_qty or po.get("qty", 0),
+        }
+    )
 
     # Audit
     audit = s.setdefault("audit_log", [])
-    audit.append({
-        "timestamp": datetime.datetime.now().isoformat(),
-        "action": "po_received",
-        "detail": f"{po.get('sku', '?')}: {po.get('qty', 0)} units from {po.get('vendor', '?')}"
-                  + (f", {actual_lead}d lead time" if actual_lead else ""),
-    })
+    audit.append(
+        {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "action": "po_received",
+            "detail": f"{po.get('sku', '?')}: {po.get('qty', 0)} units from {po.get('vendor', '?')}"
+            + (f", {actual_lead}d lead time" if actual_lead else ""),
+        }
+    )
 
     save_settings(s)
 
-    return jsonify({
-        "ok": True,
-        "sku": po.get("sku", ""),
-        "actual_lead_days": actual_lead,
-    })
+    return jsonify(
+        {
+            "ok": True,
+            "sku": po.get("sku", ""),
+            "actual_lead_days": actual_lead,
+        }
+    )
 
 
 @app.route("/api/lead_times")
@@ -9009,15 +9629,18 @@ def get_lead_times():
             "count": len(days),
         }
 
-    return jsonify({
-        "has_data": True,
-        "entries": history[-20:],
-        "by_vendor": vendor_stats,
-        "by_sku": sku_stats,
-    })
+    return jsonify(
+        {
+            "has_data": True,
+            "entries": history[-20:],
+            "by_vendor": vendor_stats,
+            "by_sku": sku_stats,
+        }
+    )
 
 
 # ── Morning Briefing ─────────────────────────────────────────────────
+
 
 @app.route("/api/briefing")
 def morning_briefing():
@@ -9061,8 +9684,16 @@ def morning_briefing():
         if d_sat == 0 and d_tue == 0:
             continue
         if net < 0:
-            shortages.append({"sku": sku, "available": avail, "demand": d_sat, "deficit": abs(net),
-                              "potential": potential, "coverable": potential >= abs(net)})
+            shortages.append(
+                {
+                    "sku": sku,
+                    "available": avail,
+                    "demand": d_sat,
+                    "deficit": abs(net),
+                    "potential": potential,
+                    "coverable": potential >= abs(net),
+                }
+            )
         elif net < d_sat * 0.2:
             tight.append({"sku": sku, "available": avail, "demand": d_sat, "net": net})
         elif net > avail * 0.5 and avail > 200:
@@ -9107,36 +9738,43 @@ def morning_briefing():
     accuracy = s.get("forecast_accuracy", [])
     recent_accuracy = accuracy[-4:] if accuracy else []
 
-    return jsonify({
-        "cycle_day": cycle_day,
-        "date": today.isoformat(),
-        "weekday": today.strftime("%A"),
-        "action_hint": day_actions.get(cycle_day, ""),
-        "shortages": shortages,
-        "shortage_count": len(shortages),
-        "tight": tight,
-        "tight_count": len(tight),
-        "surplus_count": len(surplus),
-        "tue_gaps": tue_gaps,
-        "expiring": expiring,
-        "expiring_count": len(expiring),
-        "last_snapshot": {
-            "label": last_snapshot.get("label", ""),
-            "timestamp": last_snapshot.get("timestamp", ""),
-            "cycle_day": last_snapshot.get("cycle_day", ""),
-        } if last_snapshot else None,
-        "last_depletion": {
-            "date": last_depletion.get("date", ""),
-            "file": last_depletion.get("file", ""),
-            "total": last_depletion.get("total", 0),
-        } if last_depletion else None,
-        "recent_accuracy": recent_accuracy,
-        "total_cheese_skus": len([k for k in inv if k.startswith("CH-")]),
-        "total_cheese_units": sum(v for k, v in inv.items() if k.startswith("CH-")),
-    })
+    return jsonify(
+        {
+            "cycle_day": cycle_day,
+            "date": today.isoformat(),
+            "weekday": today.strftime("%A"),
+            "action_hint": day_actions.get(cycle_day, ""),
+            "shortages": shortages,
+            "shortage_count": len(shortages),
+            "tight": tight,
+            "tight_count": len(tight),
+            "surplus_count": len(surplus),
+            "tue_gaps": tue_gaps,
+            "expiring": expiring,
+            "expiring_count": len(expiring),
+            "last_snapshot": {
+                "label": last_snapshot.get("label", ""),
+                "timestamp": last_snapshot.get("timestamp", ""),
+                "cycle_day": last_snapshot.get("cycle_day", ""),
+            }
+            if last_snapshot
+            else None,
+            "last_depletion": {
+                "date": last_depletion.get("date", ""),
+                "file": last_depletion.get("file", ""),
+                "total": last_depletion.get("total", 0),
+            }
+            if last_depletion
+            else None,
+            "recent_accuracy": recent_accuracy,
+            "total_cheese_skus": len([k for k in inv if k.startswith("CH-")]),
+            "total_cheese_units": sum(v for k, v in inv.items() if k.startswith("CH-")),
+        }
+    )
 
 
 # ── Forecast Accuracy ────────────────────────────────────────────────
+
 
 @app.route("/api/forecast_accuracy", methods=["POST"])
 def record_forecast_accuracy():
@@ -9174,10 +9812,15 @@ def record_forecast_accuracy():
             continue
         error = actual - pred
         pct_error = round((error / pred) * 100, 1) if pred > 0 else None
-        sku_accuracy.append({
-            "sku": sku, "predicted": pred, "actual": actual,
-            "error": error, "pct_error": pct_error,
-        })
+        sku_accuracy.append(
+            {
+                "sku": sku,
+                "predicted": pred,
+                "actual": actual,
+                "error": error,
+                "pct_error": pct_error,
+            }
+        )
         total_predicted += pred
         total_actual += actual
 
@@ -9241,46 +9884,55 @@ def forecast_accuracy_summary():
         if len(errors) >= 3:
             avg = sum(errors) / len(errors)
             if abs(avg) > 15:  # consistently >15% off
-                biased_skus.append({
-                    "sku": sku,
-                    "avg_error_pct": round(avg, 1),
-                    "direction": "over" if avg > 0 else "under",
-                    "samples": len(errors),
-                })
+                biased_skus.append(
+                    {
+                        "sku": sku,
+                        "avg_error_pct": round(avg, 1),
+                        "direction": "over" if avg > 0 else "under",
+                        "samples": len(errors),
+                    }
+                )
     biased_skus.sort(key=lambda x: abs(x["avg_error_pct"]), reverse=True)
 
-    return jsonify({
-        "has_data": True,
-        "total_records": len(history),
-        "recent_mape": round(sum(mapes) / len(mapes), 1) if mapes else None,
-        "recent_overall_error": round(sum(overall_errors) / len(overall_errors), 1) if overall_errors else None,
-        "trend": [{"date": r["date"], "window": r["window"], "mape": r.get("mape"),
-                   "overall_pct_error": r.get("overall_pct_error"),
-                   "total_predicted": r["total_predicted"], "total_actual": r["total_actual"]}
-                  for r in recent],
-        "biased_skus": biased_skus[:10],
-    })
+    return jsonify(
+        {
+            "has_data": True,
+            "total_records": len(history),
+            "recent_mape": round(sum(mapes) / len(mapes), 1) if mapes else None,
+            "recent_overall_error": round(sum(overall_errors) / len(overall_errors), 1) if overall_errors else None,
+            "trend": [
+                {
+                    "date": r["date"],
+                    "window": r["window"],
+                    "mape": r.get("mape"),
+                    "overall_pct_error": r.get("overall_pct_error"),
+                    "total_predicted": r["total_predicted"],
+                    "total_actual": r["total_actual"],
+                }
+                for r in recent
+            ],
+            "biased_skus": biased_skus[:10],
+        }
+    )
 
 
 # ── Launch ──────────────────────────────────────────────────────────────
 
+
 def run_webview():
     """Launch in a native window via pywebview."""
     import webview
+
     STATE["saved"] = load_settings()
 
-    server = threading.Thread(
-        target=lambda: app.run(port=5187, debug=False, use_reloader=False),
-        daemon=True)
+    server = threading.Thread(target=lambda: app.run(port=5187, debug=False, use_reloader=False), daemon=True)
     server.start()
 
     import time
+
     time.sleep(0.5)
 
-    webview.create_window(
-        "Fulfillment Planner",
-        "http://127.0.0.1:5187",
-        width=1400, height=900, min_size=(1000, 700))
+    webview.create_window("Fulfillment Planner", "http://127.0.0.1:5187", width=1400, height=900, min_size=(1000, 700))
     webview.start()
 
 
@@ -9288,15 +9940,16 @@ def run_browser():
     """Launch in default browser."""
     STATE["saved"] = load_settings()
     import webbrowser
+
     webbrowser.open("http://127.0.0.1:5187")
     app.run(port=5187, debug=False)
 
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("--browser", action="store_true",
-                        help="Open in browser instead of native window")
+    parser.add_argument("--browser", action="store_true", help="Open in browser instead of native window")
     args = parser.parse_args()
 
     STATE["saved"] = load_settings()

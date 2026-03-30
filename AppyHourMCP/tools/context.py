@@ -7,12 +7,14 @@ as readable MCP resources and tools.
 import json
 from pathlib import Path
 
+
 def _find_memory_dir():
     """Derive Claude Code memory directory from home path."""
     home = Path.home()
     # Claude Code encodes the project path: colons become double-dash, separators become dash
     home_encoded = str(home).replace("\\", "-").replace("/", "-").replace(":", "-")
     return home / ".claude" / "projects" / home_encoded / "memory"
+
 
 MEMORY_DIR = _find_memory_dir()
 SETTINGS_PATH = Path(__file__).parent.parent.parent / "InventoryReorder" / "dist" / "inventory_reorder_settings.json"
@@ -29,8 +31,10 @@ def _load_settings() -> dict:
 
 def _make_reader(path: Path):
     """Create a no-arg closure that reads a specific file."""
+
     def reader() -> str:
         return path.read_text(encoding="utf-8")
+
     reader.__name__ = f"memory_{path.stem.replace('-', '_')}"
     reader.__doc__ = f"Memory file: {path.name}"
     return reader
@@ -79,13 +83,104 @@ def register(mcp):
             qty = data.get("qty", 0)
             if low_stock_only and qty > 50:
                 continue
-            results.append({
-                "sku": sku,
-                "qty": qty,
-                "name": data.get("name", ""),
-                "category": data.get("category", ""),
-                "warehouse_qty": data.get("warehouse_qty", {}),
-            })
+            results.append(
+                {
+                    "sku": sku,
+                    "qty": qty,
+                    "name": data.get("name", ""),
+                    "category": data.get("category", ""),
+                    "warehouse_qty": data.get("warehouse_qty", {}),
+                }
+            )
+        return json.dumps(results, indent=2)
+
+    # ── Calculated inventory (journal-replayed) ───────────────────────
+
+    @mcp.tool()
+    def get_calculated_inventory(
+        category: str = "",
+        include_potential: bool = False,
+    ) -> str:
+        """Get calculated available inventory by replaying the inventory journal.
+
+        This is the source of truth — accounts for Dropbox snapshots,
+        depletions (Sat/Tue), adjustments, and production. More accurate
+        than get_inventory_snapshot which reads static settings values.
+
+        Use this for Matrix Commander inventory CSV input and pre-fulfillment
+        inventory checks.
+
+        Args:
+            category: Filter by SKU prefix (e.g. 'CH-', 'MT-', 'AC-'). Empty = all.
+            include_potential: If true, include wheel potential and open PO qty.
+
+        Returns JSON with {sku: {on_hand, wheel_potential?, incoming?, total?}}.
+        """
+        settings = _load_settings()
+        journal = settings.get("inventory_journal", [])
+        snapshots = settings.get("inventory_snapshots", [])
+
+        # Replay journal on last snapshot
+        snap_by_id = {sn["id"]: sn for sn in snapshots}
+
+        def _load_snap(snap_id):
+            sn = snap_by_id.get(snap_id)
+            if not sn:
+                return {}, {}
+            sl = dict(sn.get("inventory", {}))
+            wh = {s: p.get("wheels", 0) for s, p in sn.get("potential_yield", {}).items()}
+            return sl, wh
+
+        last_snap_idx = -1
+        for i, entry in enumerate(journal):
+            if entry.get("type") == "snapshot":
+                last_snap_idx = i
+
+        sliced, wheels = {}, {}
+        if last_snap_idx >= 0:
+            sliced, wheels = _load_snap(journal[last_snap_idx].get("snapshot_id", ""))
+
+        for entry in journal[last_snap_idx + 1 :]:
+            etype = entry.get("type", "")
+            if etype == "snapshot":
+                sliced, wheels = _load_snap(entry.get("snapshot_id", ""))
+            elif etype in ("depletion", "adjustment"):
+                for sku, delta in entry.get("sku_deltas", {}).items():
+                    sliced[sku] = sliced.get(sku, 0) + int(delta)
+            elif etype == "production":
+                sku = entry.get("sku", "")
+                if sku:
+                    wheels[sku] = wheels.get(sku, 0) - entry.get("wheels_cut", 0)
+                    sliced[sku] = sliced.get(sku, 0) + entry.get("actual_sliced", 0)
+
+        # Build results
+        results = {}
+        for sku in sorted(sliced.keys()):
+            if category and not sku.startswith(category):
+                continue
+            qty = max(0, int(sliced.get(sku, 0)))
+            entry = {"on_hand": qty}
+
+            if include_potential:
+                wheel_inv = settings.get("wheel_inventory", {})
+                pot = 0
+                for wsku, wdata in wheel_inv.items():
+                    if wdata.get("target_sku") == sku:
+                        w = wdata.get("weight_lbs", 0)
+                        c = wheels.get(wsku, wdata.get("count", 0))
+                        if c > 0 and w > 0:
+                            pot += int(c * w * 2.67)
+                entry["wheel_potential"] = pot
+
+                incoming = 0
+                for po in settings.get("open_pos", []):
+                    if po.get("sku") == sku and po.get("status") in ("ordered", "confirmed", "in_transit"):
+                        incoming += po.get("qty", 0)
+                entry["incoming"] = incoming
+                entry["total"] = qty + pot + incoming
+
+            results[sku] = entry
+
         return json.dumps(results, indent=2)
 
     # ── Curation & cut order config ──────────────────────────────────
@@ -99,14 +194,17 @@ def register(mcp):
         wheel_inventory, monthly_box_counts.
         """
         settings = _load_settings()
-        return json.dumps({
-            "curation_recipes": settings.get("curation_recipes", {}),
-            "pr_cjam": settings.get("pr_cjam", {}),
-            "cex_ec": settings.get("cex_ec", {}),
-            "cexec_splits": settings.get("cexec_splits", {}),
-            "wheel_inventory": settings.get("wheel_inventory", {}),
-            "monthly_box_counts": settings.get("monthly_box_counts", {}),
-        }, indent=2)
+        return json.dumps(
+            {
+                "curation_recipes": settings.get("curation_recipes", {}),
+                "pr_cjam": settings.get("pr_cjam", {}),
+                "cex_ec": settings.get("cex_ec", {}),
+                "cexec_splits": settings.get("cexec_splits", {}),
+                "wheel_inventory": settings.get("wheel_inventory", {}),
+                "monthly_box_counts": settings.get("monthly_box_counts", {}),
+            },
+            indent=2,
+        )
 
     # ── Recent error scan results ────────────────────────────────────
 
@@ -134,11 +232,14 @@ def register(mcp):
                     break
                 rows.append(dict(row))
 
-        return json.dumps({
-            "file": newest.name,
-            "total_rows": len(rows),
-            "rows": rows,
-        }, indent=2)
+        return json.dumps(
+            {
+                "file": newest.name,
+                "total_rows": len(rows),
+                "rows": rows,
+            },
+            indent=2,
+        )
 
     # ── Depletion history ────────────────────────────────────────────
 
