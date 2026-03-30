@@ -153,26 +153,107 @@ These are currently handled by the cold chain app's QC checker but should also b
 
 ## Part 4: Shopify Sync — Replace Matrixify (P1 — Should Have)
 
-**Problem:** Matrixify upload is slow for 2,500+ orders and requires a separate manual step. After upload, I often need to fix orders via Shopify API anyway.
+**Problem:** Matrixify upload is slow for 2,500+ orders and requires a separate manual step.
 
-**Change:** Build direct Shopify sync into the React tool using the GraphQL order edit API.
+**Change:** Direct Shopify GraphQL sync. Working Python implementation: `matrix_commander.py` lines 900-1280.
 
-**Logic per order:**
-1. Fetch current line items from Shopify
-2. Compare against matrix assignments
-3. For each child SKU to add:
-   - If SKU already on order with qty > 0 → **skip** (duplicate protection)
-   - Otherwise → add as $0 variant via `orderEditBegin` → `orderEditAddVariant` → `orderEditCommit`
-4. Only touch orders that need changes (skip unchanged = faster)
-5. Skip gift redemption orders (Shopify blocks edits on them)
+### Step 1: Look up $0 variant GIDs (once, before sync loop)
 
-**Duplicate protection** is the key feature from Matrixify we must preserve. Two modes:
-- **Conservative:** If ANY SKU would duplicate, skip entire order (matches Matrixify behavior)
-- **Smart:** Skip only the duplicate SKU, add the rest
+```
+// Collect all unique child SKUs from the allocation output
+skus_needed = Set of all child SKUs (CH-LEON, MT-TUSC, AC-PRPE, etc.)
 
-**Rate limiting:** 5-10 concurrent requests with backoff on 429s.
+// Query Shopify for variant GIDs — batch 10 SKUs per query
+for each batch of 10 SKUs:
+    query = `productVariants(first: 50, query: "sku:CH-LEON OR sku:MT-TUSC OR ...")`
+    // Returns: [{ id: "gid://shopify/ProductVariant/12345", sku: "CH-LEON", price: "0.00" }]
+    // Pick the CHEAPEST variant per SKU (the $0 one)
+    for each result:
+        if result.price < stored_price[result.sku]:
+            variant_gids[result.sku] = result.id
 
-**Output:** Sync report showing: X updated, Y skipped (already correct), Z rejected (duplicates).
+// Result: variant_gids = { "CH-LEON": "gid://shopify/ProductVariant/12345", ... }
+```
+
+### Step 2: Sync each order (parallel, 5-10 workers)
+
+```
+for each order in allocation_output (parallel):
+    // Skip gift redemption
+    if "Gift Redemption" in order.tags:
+        log("SKIP", order, "gift redemption")
+        continue
+
+    // Fetch current line items
+    current_skus = {}
+    for li in order.line_items:
+        if li.fulfillable_quantity > 0 and li.sku:
+            current_skus[li.sku] = li.fulfillable_quantity
+
+    // Determine what to add
+    to_add = []
+    for sku in order.assigned_child_skus:
+        if sku in current_skus:
+            log("SKIP_SKU", order, sku, "already on order")  // duplicate protection
+        else if sku in variant_gids:
+            to_add.append(sku)
+
+    if to_add is empty:
+        log("SKIP", order, "already correct")
+        continue
+
+    // GraphQL order edit: begin → add variants → commit
+    mutation orderEditBegin($id: ID!) {
+        orderEditBegin(id: $id) {
+            calculatedOrder { id }
+            userErrors { field message }
+        }
+    }
+    // variables: { id: "gid://shopify/Order/{order.id}" }
+    calc_id = result.calculatedOrder.id
+
+    for each sku in to_add:
+        mutation orderEditAddVariant($id: ID!, $variantId: ID!, $quantity: Int!) {
+            orderEditAddVariant(id: $id, variantId: $variantId, quantity: 1,
+                                allowDuplicates: false) {
+                calculatedOrder { id }
+                userErrors { field message }
+            }
+        }
+        // variables: { id: calc_id, variantId: variant_gids[sku] }
+        // NOTE: allowDuplicates: false — Shopify itself rejects if variant already exists
+
+    mutation orderEditCommit($id: ID!) {
+        orderEditCommit(id: $id) {
+            order { id }
+            userErrors { field message }
+        }
+    }
+    // ALWAYS notifyCustomer: false (don't email customer about backend edit)
+
+    log("UPDATED", order, to_add)
+```
+
+### Step 3: Rate limiting
+
+```
+// Shopify GraphQL: 1000 cost points, restores 50/sec
+// Each mutation ≈ 10 points
+// At 5 workers × 3 mutations/order = 150 points/sec burst → OK with backoff
+// At 10 workers → may hit limit, add 100ms delay between orders
+
+if response.extensions.cost.throttleStatus.currentlyAvailable < 100:
+    sleep(2)  // back off when running low
+
+if response.status == 429:
+    sleep(retry_after_header or 2)
+    retry once
+```
+
+### Performance estimate
+- 2,500 orders × 3 API calls × 200ms = ~25 min sequential
+- With 5 parallel workers: **~5 minutes**
+- Skipping unchanged orders makes repeat runs even faster
 
 ---
 
@@ -221,9 +302,90 @@ This takes 20-30 minutes of tedious manual work every fulfillment day.
 - Columns auto-sized for readability
 
 **MFG Translations mapping** (SKU → column header):
-The canonical list is exported from https://translator.robbinsmfginc.com/ as a CSV. The tool should either:
-- Accept this CSV as input (updated weekly when new products onboarded), or
-- Pull it from the portal API if available
+The canonical list is exported from https://translator.robbinsmfginc.com/ as a CSV (227 entries). Format: `SKU,"AHB (S_REG): Product Name"` — no header row. The tool should accept this CSV as input (updated weekly when new products onboarded).
+
+### Pseudocode: Generate RMFG Matrix
+
+Working Python implementation: `matrix_commander.py` function `generate_matrix_xlsx()`.
+
+```
+// Input: rmfg_tag, ship_day, ship_date, mfg_translations_csv
+
+// Step 1: Load MFG translations
+mfg_translations = {}  // sku -> "AHB (S_REG): Product Name"
+for row in read_csv(mfg_translations_csv):
+    mfg_translations[row[0]] = row[1]
+// Example: { "CH-LEON": "AHB (S_REG): Leonora", "MT-TUSC": "AHB (S_REG): Toscano Salame" }
+
+// Step 2: Fetch orders from Shopify by RMFG tag
+orders = fetch_all_orders(tag: rmfg_tag, fields: "id,name,email,phone,tags,note,shipping_address,line_items")
+// Need full address data — fetch with shipping_address field
+
+// Step 3: Determine product columns
+// Collect all food/packaging SKUs across all orders
+all_skus = Set()
+for order in orders:
+    for li in order.line_items where li.fulfillable_quantity > 0:
+        if li.sku starts with "CH-", "MT-", "AC-", "PK-", "TR-":
+            all_skus.add(li.sku)
+
+// Build column headers from MFG translations
+product_columns = []  // [(sku, header_string)]
+for sku in sorted(all_skus):
+    header = mfg_translations[sku]  // e.g., "AHB (S_REG): Leonora"
+    if header not found:
+        WARN("SKU not onboarded at RMFG: " + sku)
+    product_columns.append((sku, header))
+
+// Step 4: Build XLSX
+// Sheet name: "Access_LIVE"
+// Row 1: headers
+headers = ["OrderID", "Name", "Distribution Type", "Total", "Phone Number",
+           "Email", "Address", "Address 2", "City", "State", "Zip",
+           "Tags", "Notes", "ProductionDay"] + [col[1] for col in product_columns]
+
+// Data rows (one per order)
+rows = []
+for order in orders:
+    addr = order.shipping_address
+
+    // Count food items
+    food_count = sum(li.fulfillable_quantity for li in order.line_items
+                     where li.sku starts with "CH-", "MT-", "AC-")
+
+    // Build product assignment cells (1 or empty per column)
+    order_skus = {li.sku: li.fulfillable_quantity for li in order.line_items
+                  where li.fulfillable_quantity > 0}
+
+    row = [
+        int(order.name.replace("#", "")),  // OrderID as number
+        addr.first_name + " " + addr.last_name,
+        "SHIPPING",
+        food_count,                         // Total
+        addr.phone or order.phone,
+        order.email,
+        addr.address1,
+        addr.address2 or "",
+        addr.city,
+        addr.province_code,                 // State as 2-letter code
+        zero_pad(addr.zip, 5),              // Leading zeroes preserved
+        order.tags,                         // Full comma-separated tag string
+        order.note or "",
+        ship_day,                           // "SAT" or "TUE"
+    ]
+    // Append product columns
+    for (sku, _) in product_columns:
+        row.append(order_skus.get(sku, None))  // 1 or empty
+
+    rows.append(row)
+
+// Sort by OrderID ascending
+rows.sort(by: row[0])
+
+// Auto-size columns
+// File name: AHB_WeeklyProductionQuery_{ship_date}_vF.xlsx
+// ship_date format: MM-DD-YY (this is the SHIP date — Monday for SAT, Tuesday for TUE)
+```
 
 **This is the highest-impact change** — it eliminates the RMFG portal dependency entirely and removes all manual reformatting.
 
