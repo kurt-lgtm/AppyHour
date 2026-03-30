@@ -104,7 +104,8 @@ Total: 2-3 hours, 4+ tools, many manual steps
 │     a) Allocate ALL child SKUs in ONE pass                         │
 │        (PR-CJAM + CEX-EC + AHB-MED/LGE + extras — unified)       │
 │     b) Show demand summary + shortage report                       │
-│     c) Suggest swaps for shortages → operator approves             │
+│     c) Suggest swaps for existing 
+          item shortages → operator approves (this can be moved)     │
 │                                                                    │
 │  4. Click "Sync & Build"                                           │
 │     a) Sync $0 variants to Shopify via GraphQL (~5 min)            │
@@ -153,7 +154,7 @@ Total: 15-20 minutes, 1 tool, operator just clicks buttons
 
 **Change:** The React tool should accept an inventory CSV as input instead of reading Shopify inventory levels.
 
-**Input format:**
+**Input format:**   TBD, I will create a format and send so you can test
 ```csv
 sku,available_qty
 CH-LEON,342
@@ -514,7 +515,7 @@ rows.sort(by: row[0])
 
 ---
 
-## Part 5: Shortage Resolution with Swap Suggestions (P2 — Nice to Have)
+## Part 5: Shortage Resolution with Swap Suggestions (P2 — Nice to Have) LOW PRIORITY
 
 When inventory check finds shortages, suggest swaps from these families:
 

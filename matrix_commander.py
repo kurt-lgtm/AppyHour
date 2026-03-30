@@ -1845,17 +1845,59 @@ def finalize_xlsx(
             break
 
     # Step 3: Read all data rows, fix values, sort
+    # Find first product column index (for merge logic below)
+    first_prod_col = None
+    for i, h in enumerate(headers):
+        if h.startswith("AHB (S_REG):"):
+            first_prod_col = i
+            break
+
     data_rows: list[tuple[int, list]] = []
+    suffixed_rows: list[tuple[str, int, list]] = []  # (raw_oid, base_oid, row_vals)
     for r in range(2, ws.max_row + 1):
         row_vals = [ws.cell(r, c).value for c in range(1, max_col + 1)]
         oid_raw = row_vals[0]
         if oid_raw is None:
             continue
+        oid_str = str(oid_raw).strip().lstrip("#")
+        # Detect letter-suffixed OrderIDs (e.g., 123548A) — gift redemption duplicates
+        import re as _re
+        suffix_match = _re.match(r"^(\d+)([A-Za-z]+)$", oid_str)
+        if suffix_match:
+            base_oid = int(suffix_match.group(1))
+            suffixed_rows.append((oid_str, base_oid, row_vals))
+            continue
         try:
-            numeric_oid = int(float(str(oid_raw)))
+            numeric_oid = int(float(oid_str))
         except (ValueError, TypeError):
             numeric_oid = 0
         data_rows.append((numeric_oid, row_vals))
+
+    # Merge suffixed orders (e.g., 123548A) into base orders or strip suffix
+    if suffixed_rows:
+        oid_to_idx = {oid: i for i, (oid, _) in enumerate(data_rows)}
+        merged_count = 0
+        stripped_count = 0
+        for raw_oid, base_oid, suffix_vals in suffixed_rows:
+            if base_oid in oid_to_idx and first_prod_col is not None:
+                # Base order exists — merge product columns into it
+                idx = oid_to_idx[base_oid]
+                base_vals = data_rows[idx][1]
+                for c in range(first_prod_col, len(base_vals)):
+                    suffix_v = suffix_vals[c] if c < len(suffix_vals) else None
+                    if suffix_v and isinstance(suffix_v, (int, float)) and suffix_v > 0:
+                        existing = base_vals[c] if isinstance(base_vals[c], (int, float)) else 0
+                        base_vals[c] = existing + int(suffix_v)
+                merged_count += 1
+            else:
+                # Base order not in file — strip suffix, keep as standalone
+                suffix_vals[0] = base_oid
+                data_rows.append((base_oid, suffix_vals))
+                stripped_count += 1
+        if merged_count:
+            fixes_applied.append(f"Merged {merged_count} gift redemption order(s) into base orders")
+        if stripped_count:
+            fixes_applied.append(f"Stripped letter suffix from {stripped_count} gift order(s)")
 
     # Sort by OrderID ascending
     was_sorted = (

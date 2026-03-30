@@ -2916,9 +2916,13 @@ def get_runway():
     avg_churn_weekly = round(1 - (1 - avg_monthly) ** (1 / 4.33), 4)
 
     # --- Inventory source ---
-    # Prefer RMFG loaded inventory, fall back to settings inventory
-    inv = STATE.get("rmfg_inventory", {})
+    # Journal-replayed calculated inventory is the source of truth.
+    # Falls back to RMFG loaded inventory, then settings inventory.
+    _running = compute_running_inventory()
+    inv = _running.get("sliced", {})
     bulk_weights = STATE.get("bulk_weights", {})
+    if not inv:
+        inv = STATE.get("rmfg_inventory", {})
     if not inv:
         inv = {}
         for sku, data in inventory_settings.items():
@@ -3258,8 +3262,13 @@ def get_runway_monthly():
     weekly_retention = (1 - avg_monthly) ** (1 / 4.33)
 
     # --- Inventory source ---
-    inv = STATE.get("rmfg_inventory", {})
+    # Journal-replayed calculated inventory is the source of truth.
+    # Falls back to RMFG loaded inventory, then settings inventory.
+    _running = compute_running_inventory()
+    inv = _running.get("sliced", {})
     bulk_weights = STATE.get("bulk_weights", {})
+    if not inv:
+        inv = STATE.get("rmfg_inventory", {})
     if not inv:
         inv = {}
         for sku, data in inventory_settings.items():
