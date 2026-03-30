@@ -39,6 +39,7 @@ NAME_TO_SKU = {
     "Sun-Dried Turkish Figs": "AC-SDF",
     "Sweet & Smoky Almonds": "AC-SMAL",
     # Cheese (CH-) — verified against Shopify product catalog
+    "Alpha Tolman": "CH-ALPHA",
     "Alp Blossom Floral Cheese": "CH-ALP",
     "Baked Lemon Ricotta": "CH-BLR",
     "Barista": "CH-BARI",
@@ -53,6 +54,7 @@ NAME_TO_SKU = {
     "Fontal": "CH-FONTAL",
     "From the Cave": "TR-FTC",
     "Gruyere AOP": "CH-GAOP",
+    "Gubbeen": "CH-GUBB",
     "Honey Clover Gouda Packaged Slice": "CH-HCGU",
     "Imported Parmigiano Reggiano": "CH-IPRW",
     "KM39": "CH-KM39",

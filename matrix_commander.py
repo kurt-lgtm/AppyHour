@@ -1282,6 +1282,295 @@ def cmd_sync(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Phase 5: Generate matrix XLSX directly from Shopify (replaces RMFG portal)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def generate_matrix_xlsx(
+    rmfg_tag: str,
+    ship_day: str = "SAT",
+    ship_date: str = "",
+    gift_path: Optional[str] = None,
+    output_dir: Optional[str] = None,
+) -> str:
+    """Generate the RMFG production matrix XLSX directly from Shopify orders.
+
+    Replaces both Matrixify and the RMFG Translator portal. Fetches orders
+    by tag, builds the full matrix with MFG column headers, formats it,
+    and saves as AHB_WeeklyProductionQuery_MM-DD-YY_vF.xlsx.
+    """
+    import re as _re
+    from openpyxl.utils import get_column_letter
+    import time as _time
+
+    print(f"  Connecting to Shopify...")
+    base, headers = _get_shopify_auth()
+
+    print(f"  Fetching orders with tag '{rmfg_tag}'...")
+    shopify_orders = _fetch_orders_by_tag(base, headers, rmfg_tag)
+    print(f"  {len(shopify_orders)} orders fetched")
+
+    if not shopify_orders:
+        print(f"  {_RED}No orders found for tag {rmfg_tag}{_RESET}")
+        return ""
+
+    # Load MFG translations: SKU -> "AHB (S_REG): Product Name"
+    mfg_translations = load_mfg_translations()
+    if not mfg_translations:
+        print(f"  {_RED}No MFG translations file — cannot generate matrix{_RESET}")
+        return ""
+
+    # Build reverse: we need all unique product column headers
+    # Collect all food/packaging SKUs across all orders
+    all_skus: set[str] = set()
+    order_data: list[dict] = []
+
+    for o in shopify_orders:
+        name = o["name"].replace("#", "")
+        tags = o.get("tags", "")
+        # Extract address from shipping_address or billing_address
+        # Orders from REST have line_items but may not have full address in "fields" fetch
+        # We fetched with fields="id,name,tags,line_items" — need to re-fetch with address
+        order_data.append({
+            "id": o["id"],
+            "name": name,
+            "tags": tags,
+            "line_items": o.get("line_items", []),
+        })
+
+        for li in o.get("line_items", []):
+            sku = (li.get("sku") or "").strip()
+            fq = li.get("fulfillable_quantity", li.get("quantity", 0))
+            if sku and fq > 0:
+                all_skus.add(sku)
+
+    # We need full order details (address, phone, email) — re-fetch
+    print(f"  Fetching full order details...")
+    import requests as _req
+
+    full_orders: dict[int, dict] = {}
+    order_ids = [o["id"] for o in order_data]
+
+    # Fetch in batches of 50 by ID
+    for i in range(0, len(order_ids), 50):
+        batch = order_ids[i:i + 50]
+        ids_str = ",".join(str(oid) for oid in batch)
+        resp = _req.get(
+            f"{base}/orders.json",
+            headers=headers,
+            params={
+                "ids": ids_str,
+                "status": "any",
+                "fields": "id,name,email,phone,tags,note,shipping_address,line_items",
+                "limit": 250,
+            },
+            timeout=30,
+        )
+        if resp.ok:
+            for o in resp.json().get("orders", []):
+                full_orders[o["id"]] = o
+        _time.sleep(0.2)
+
+    print(f"  Full details for {len(full_orders)} orders")
+
+    # Determine product columns from MFG translations
+    # Only include SKUs that actually appear in orders
+    food_pkg_prefixes = ("CH-", "MT-", "AC-", "PK-", "TR-")
+    relevant_skus = {s for s in all_skus if any(s.startswith(p) for p in food_pkg_prefixes)}
+
+    # Build column headers: use MFG translation name, sorted alphabetically
+    product_columns: list[tuple[str, str]] = []  # (sku, mfg_header)
+    unmapped_skus: list[str] = []
+    for sku in sorted(relevant_skus):
+        mfg_name = mfg_translations.get(sku)
+        if mfg_name:
+            product_columns.append((sku, mfg_name))
+        else:
+            # Fallback: use NAME_TO_SKU reverse
+            name = SKU_TO_NAME.get(sku, sku)
+            product_columns.append((sku, f"AHB (S_REG): {name}"))
+            unmapped_skus.append(sku)
+
+    if unmapped_skus:
+        print(f"  {_YELLOW}Warning: {len(unmapped_skus)} SKUs not in MFG translations: {unmapped_skus[:10]}{_RESET}")
+
+    # Build the workbook
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Access_LIVE"
+
+    # Headers: metadata + ProductionDay + product columns
+    meta_headers = [
+        "OrderID", "Name", "Distribution Type", "Total",
+        "Phone Number", "Email", "Address", "Address 2",
+        "City", "State", "Zip", "Tags", "Notes", "ProductionDay",
+    ]
+    all_headers = meta_headers + [col_header for _, col_header in product_columns]
+    for c, h in enumerate(all_headers, 1):
+        ws.cell(1, c).value = h
+
+    # Build SKU -> column index map (1-indexed, after metadata)
+    sku_col_offset = len(meta_headers)
+    sku_to_col: dict[str, int] = {}
+    for idx, (sku, _) in enumerate(product_columns):
+        sku_to_col[sku] = sku_col_offset + idx + 1
+
+    # Write order rows
+    row_num = 1
+    for od in order_data:
+        full = full_orders.get(od["id"], {})
+        addr = full.get("shipping_address") or {}
+
+        # Count food items
+        food_count = 0
+        order_skus: dict[str, int] = {}
+        for li in od["line_items"]:
+            sku = (li.get("sku") or "").strip()
+            fq = li.get("fulfillable_quantity", li.get("quantity", 0))
+            if sku and fq > 0:
+                order_skus[sku] = order_skus.get(sku, 0) + fq
+                if any(sku.startswith(p) for p in ("CH-", "MT-", "AC-")):
+                    food_count += fq
+
+        row_num += 1
+        oid = od["name"]
+        try:
+            numeric_oid = int(float(oid))
+        except (ValueError, TypeError):
+            numeric_oid = oid
+
+        # Zip: ensure text with leading zeroes
+        raw_zip = str(addr.get("zip") or "").strip()
+        if raw_zip.isdigit() and len(raw_zip) < 5:
+            raw_zip = raw_zip.zfill(5)
+
+        ws.cell(row_num, 1).value = numeric_oid
+        ws.cell(row_num, 2).value = f"{addr.get('first_name', '')} {addr.get('last_name', '')}".strip() or full.get("name", "")
+        ws.cell(row_num, 3).value = "SHIPPING"
+        ws.cell(row_num, 4).value = food_count
+        ws.cell(row_num, 5).value = addr.get("phone") or full.get("phone") or ""
+        ws.cell(row_num, 6).value = full.get("email", "")
+        ws.cell(row_num, 7).value = addr.get("address1", "")
+        ws.cell(row_num, 8).value = addr.get("address2", "")
+        ws.cell(row_num, 9).value = addr.get("city", "")
+        ws.cell(row_num, 10).value = addr.get("province_code", "")
+        ws.cell(row_num, 11).value = raw_zip
+        ws.cell(row_num, 12).value = od["tags"]
+        ws.cell(row_num, 13).value = full.get("note", "") or ""
+        ws.cell(row_num, 14).value = ship_day.upper()
+
+        # Product assignments
+        for sku, qty in order_skus.items():
+            col = sku_to_col.get(sku)
+            if col:
+                ws.cell(row_num, col).value = qty
+
+    # Sort rows by OrderID
+    # Read all data, sort, rewrite
+    data_rows = []
+    for r in range(2, row_num + 1):
+        vals = [ws.cell(r, c).value for c in range(1, len(all_headers) + 1)]
+        try:
+            sort_key = int(float(str(vals[0] or 0)))
+        except (ValueError, TypeError):
+            sort_key = 0
+        data_rows.append((sort_key, vals))
+
+    data_rows.sort(key=lambda x: x[0])
+
+    for idx, (_, vals) in enumerate(data_rows):
+        r = idx + 2
+        for c, v in enumerate(vals):
+            ws.cell(r, c + 1).value = v
+
+    # Auto-size columns
+    for col_idx in range(1, len(all_headers) + 1):
+        max_len = len(str(ws.cell(1, col_idx).value or ""))
+        for r in range(2, min(22, row_num + 1)):
+            val = ws.cell(r, col_idx).value
+            if val is not None:
+                max_len = max(max_len, len(str(val)))
+        ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 2, 40)
+
+    # Generate filename
+    if ship_date:
+        try:
+            from datetime import datetime as dt
+            if len(ship_date) == 10 and ship_date[4] == "-":
+                d = dt.strptime(ship_date, "%Y-%m-%d")
+            else:
+                d = dt.strptime(ship_date, "%m-%d-%y")
+            date_str = d.strftime("%m-%d-%y")
+        except ValueError:
+            date_str = ship_date
+    else:
+        # Extract from RMFG tag: RMFG_20260328 -> 03-28-26
+        m = _re.search(r"RMFG_(\d{4})(\d{2})(\d{2})", rmfg_tag)
+        if m:
+            date_str = f"{m.group(2)}-{m.group(3)}-{m.group(1)[2:]}"
+        else:
+            from datetime import datetime as dt
+            date_str = dt.now().strftime("%m-%d-%y")
+
+    out_dir = Path(output_dir) if output_dir else Path.cwd()
+    out_name = f"AHB_WeeklyProductionQuery_{date_str}_vF.xlsx"
+    out_path = out_dir / out_name
+    wb.save(str(out_path))
+    wb.close()
+
+    print(f"\n{_BOLD}  Matrix Generated{_RESET}")
+    print(f"  Orders: {len(data_rows)}")
+    print(f"  Product columns: {len(product_columns)}")
+    print(f"  Ship day: {ship_day}")
+    if unmapped_skus:
+        print(f"  {_YELLOW}Unmapped SKUs: {unmapped_skus}{_RESET}")
+    print(f"\n  Saved: {_GREEN}{out_name}{_RESET}")
+
+    return str(out_path)
+
+
+def cmd_generate(
+    rmfg_tag: str,
+    ship_day: str = "SAT",
+    ship_date: str = "",
+    gift_path: Optional[str] = None,
+) -> bool:
+    """Generate RMFG matrix XLSX directly from Shopify orders."""
+    print(f"\n{_BOLD}{'#' * 60}{_RESET}")
+    print(f"{_BOLD}  MATRIX COMMANDER — Generate Matrix{_RESET}")
+    print(f"{_BOLD}{'#' * 60}{_RESET}\n")
+
+    out_path = generate_matrix_xlsx(
+        rmfg_tag, ship_day=ship_day, ship_date=ship_date, gift_path=gift_path,
+    )
+
+    if not out_path:
+        return False
+
+    # Merge gift sheet if provided
+    if gift_path:
+        print(f"\n  Merging gift sheet: {Path(gift_path).name}")
+        out_path = merge_gift_xlsx(out_path, gift_path)
+
+    # MFG validation
+    mfg_translations = load_mfg_translations()
+    if mfg_translations:
+        orders, _, _ = parse_matrix(out_path)
+        result = check_mfg_onboarding(orders, mfg_translations)
+        icon = _check_icon(result.passed)
+        print(f"\n  [{icon}] {result.name}: {result.message}")
+        if not result.passed:
+            for d in result.details:
+                print(f"       {d}")
+
+    print(f"\n{_BOLD}{'#' * 60}{_RESET}")
+    print(f"  {_GREEN}Ready to email to RMFG: {Path(out_path).name}{_RESET}")
+    print(f"{_BOLD}{'#' * 60}{_RESET}\n")
+
+    return True
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Phase 4: Gift redemption merge + finalize
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -1799,6 +2088,13 @@ def main() -> None:
     )
     p_sync.add_argument("--workers", type=int, default=5, help="Concurrent workers (default: 5)")
 
+    # generate
+    p_gen = sub.add_parser("generate", help="Generate RMFG matrix directly from Shopify (replaces RMFG portal)")
+    p_gen.add_argument("tag", help="RMFG tag (e.g. RMFG_20260328)")
+    p_gen.add_argument("--day", "-d", choices=["SAT", "TUE"], default="SAT", help="Ship day (default: SAT)")
+    p_gen.add_argument("--date", help="Ship date for filename (Mon or Tue date, e.g. 2026-03-30)")
+    p_gen.add_argument("--gift", "-g", help="Gift redemption XLSX to merge")
+
     # finalize
     p_fin = sub.add_parser("finalize", help="Merge gift orders + format fixes + MFG validation")
     p_fin.add_argument("xlsx", help="Path to RMFG download or production XLSX file")
@@ -1821,6 +2117,10 @@ def main() -> None:
         ok = cmd_swap(args.xlsx, getattr(args, "inventory", None))
     elif args.command == "sync-shopify":
         ok = cmd_sync(args.xlsx, args.tag, mode=args.mode, dry_run=not args.execute, workers=args.workers)
+    elif args.command == "generate":
+        ok = cmd_generate(args.tag, ship_day=args.day,
+                          ship_date=getattr(args, "date", "") or "",
+                          gift_path=getattr(args, "gift", None))
     elif args.command == "finalize":
         ok = cmd_finalize(
             args.xlsx,
