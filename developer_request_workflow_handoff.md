@@ -24,6 +24,129 @@ I built a Python prototype (`matrix_commander.py`) that implements the validatio
 
 ---
 
+## Flow Summary: Current vs Target
+
+### Current Flow (4 tools, 2-3 hours)
+
+```
+┌─ BEFORE FULFILLMENT ──────────────────────────────────────────────┐
+│  1. Manually upload inventory to Shopify (paid + $0 variants)     │
+│     Tool: Shopify Admin (manual)          Time: 30-60 min         │
+│                                                                    │
+│  2. Cold chain app applies routing + gel pack tags                 │
+│     Tool: GelPackCalculator               Time: 10 min            │
+└────────────────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌─ ALLOCATION ──────────────────────────────────────────────────────┐
+│  3. React tool generates PR-CJAM Matrixify CSV                    │
+│     Tool: React fulfillment tool          Time: 5 min             │
+│                                                                    │
+│  4. Upload PR-CJAM CSV to Matrixify, WAIT for processing          │
+│     Tool: Matrixify                       Time: 30-60 min (wait)  │
+│                                                                    │
+│  5. React tool generates 2nd pass Matrixify CSV (all other parents)│
+│     Tool: React fulfillment tool          Time: 5 min             │
+│                                                                    │
+│  6. Upload 2nd CSV to Matrixify, WAIT again                       │
+│     Tool: Matrixify                       Time: 30-60 min (wait)  │
+└────────────────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌─ SHORTAGE RESOLUTION ─────────────────────────────────────────────┐
+│  7. Download SKU demand, cross-check against inventory             │
+│     Tool: Manual / spreadsheet            Time: 20 min            │
+│                                                                    │
+│  8. If shortages → fix via Shopify API swaps                       │
+│     Tool: Shopify Admin / API scripts     Time: 20-60 min         │
+└────────────────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌─ MATRIX GENERATION ───────────────────────────────────────────────┐
+│  9. Go to RMFG Translator portal, filter by tag, download XLSX     │
+│     Tool: translator.robbinsmfginc.com    Time: 5 min             │
+│                                                                    │
+│ 10. Reformat XLSX: rename tab, add ProductionDay, fix zips, sort   │
+│     Tool: Excel (manual)                  Time: 20-30 min         │
+│                                                                    │
+│ 11. Process gift redemption orders in separate React tool           │
+│     Tool: Gift redemption React app       Time: 10 min            │
+│                                                                    │
+│ 12. Merge gift sheet, check MFG names, rename file                 │
+│     Tool: Excel (manual)                  Time: 10 min            │
+│                                                                    │
+│ 13. Email final XLSX to RMFG                                       │
+│     Tool: Email                           Time: 1 min             │
+└────────────────────────────────────────────────────────────────────┘
+
+Total: 2-3 hours, 4+ tools, many manual steps
+```
+
+### Target Flow (1 tool, 15-20 minutes)
+
+```
+┌─ BEFORE FULFILLMENT ──────────────────────────────────────────────┐
+│  1. Cold chain app applies routing + gel pack tags                 │
+│     Tool: GelPackCalculator               Time: 10 min            │
+│     (could eventually be built into React tool too)                │
+└────────────────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌─ ONE TOOL DOES EVERYTHING ────────────────────────────────────────┐
+│  2. Open React fulfillment tool                                    │
+│     - Auto-loads inventory CSV from planning app API               │
+│       (http://localhost:5187/api/export_inventory_csv)             │
+│     - Select RMFG ship tag (e.g., RMFG_20260328)                  │
+│     - Select ship day (SAT or TUE)                                 │
+│     - Enter ship date (Monday or Tuesday date)                     │
+│                                                                    │
+│  3. Click "Generate"                                               │
+│     a) Allocate ALL child SKUs in ONE pass                         │
+│        (PR-CJAM + CEX-EC + AHB-MED/LGE + extras — unified)       │
+│     b) Show demand summary + shortage report                       │
+│     c) Suggest swaps for shortages → operator approves             │
+│                                                                    │
+│  4. Click "Sync & Build"                                           │
+│     a) Sync $0 variants to Shopify via GraphQL (~5 min)            │
+│        - Skips gift orders (Shopify blocks edits)                  │
+│        - Skips duplicates (reads current line items first)         │
+│     b) Generate RMFG matrix XLSX directly from Shopify data        │
+│        - Access_LIVE tab, ProductionDay, sorted, zips fixed        │
+│        - Gift orders included in matrix                            │
+│        - MFG name validation (all SKUs onboarded?)                 │
+│        - File: AHB_WeeklyProductionQuery_MM-DD-YY_vF.xlsx         │
+│                                                                    │
+│  5. Review validation dashboard                                    │
+│     - All checks green? → proceed                                  │
+│     - Red flags? → fix before sending                              │
+│                                                                    │
+│  6. Click "Send to RMFG"                                           │
+│     - Emails final XLSX                                            │
+│                                                                    │
+│  7. (Auto) Depletion fed back to planning app                      │
+│     - POST to http://localhost:5187/api/import_depletion_from_matrix│
+│     - Planning app auto-projects Tuesday inventory                  │
+└────────────────────────────────────────────────────────────────────┘
+
+Total: 15-20 minutes, 1 tool, operator just clicks buttons
+```
+
+### What Gets Eliminated
+
+| Manual Step | How It's Eliminated |
+|---|---|
+| Upload inventory to Shopify | Planning app provides CSV directly |
+| Two-pass Matrixify upload + wait | Unified single-pass allocation + direct GraphQL sync |
+| Manual shortage investigation | Auto shortage report + swap suggestions |
+| RMFG portal download | Tool generates matrix directly from Shopify |
+| Excel reformatting (tab, column, zips, sort) | Tool outputs correct format from the start |
+| Separate gift redemption tool | Gift orders processed in same run |
+| Manual sheet merge | Auto-merged into final XLSX |
+| MFG name checking | Auto-validated before output |
+| File renaming | Auto-named with ship date |
+
+---
+
 ## Part 1: Inventory CSV Input (P0 — Must Have)
 
 **Problem:** I currently upload inventory to Shopify manually before each run — splitting between paid and $0 variants for every SKU. This takes 30-60 minutes and is error-prone. The React tool reads these Shopify inventory levels, so bad input = bad allocation decisions = hours of fixing.
