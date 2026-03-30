@@ -246,21 +246,29 @@ This eliminates the separate tool and the manual sheet merge.
 
 ---
 
-## What the React Tool Does NOT Need to Build
+## What Already Exists as Python Prototypes (Replicate in React)
 
-The following capabilities already exist in our planning tools and should NOT be duplicated:
+I've built working prototypes for everything below. The React tool should absorb ALL of this so a substitute operator uses ONE tool, not four.
 
-| Capability | Already handled by | How React tool uses it |
-|---|---|---|
-| Inventory calculation | Fulfillment app (journal-replayed ledger) | Accept inventory CSV as input |
-| Tuesday projection | Fulfillment app (`/api/tuesday_projection`) | Not needed — planning app shows this |
-| Depletion tracking | Fulfillment app (`/api/import_depletion_from_matrix`) | Not needed — Matrix Commander feeds depletions back |
-| Shopify $0 variant sync | Matrix Commander (`sync-shopify`) | Just output the allocation CSV |
-| RMFG matrix generation | Matrix Commander (`generate`) | Not needed — MC builds the XLSX from Shopify |
-| MFG name validation | Matrix Commander (uses `mfg_translations.csv`) | Not needed — MC validates before sending |
-| Gift sheet merging | Matrix Commander (`finalize --gift`) | Not needed — MC handles merge |
+| Capability | Python prototype | What it does | Replicate in React? |
+|---|---|---|---|
+| Inventory CSV input | Fulfillment app `export_inventory_csv` | Journal-replayed calculated inventory | **YES — accept this CSV** |
+| Allocation + rotation | React tool (existing) | Child SKU → parent assignment | Already built |
+| Shopify $0 variant sync | `matrix_commander.py sync-shopify` | Direct GraphQL orderEdit, replaces Matrixify | **YES — build this in** |
+| RMFG matrix generation | `matrix_commander.py generate` | Fetch from Shopify, build Access_LIVE XLSX | **YES — build this in** |
+| Pre-output validation | `matrix_commander.py validate` | 9 QC checks (zips, MFG names, fill, etc.) | **YES — build this in** |
+| Shortage detection + swap suggestions | `matrix_commander.py check` | Demand vs inventory, substitution families | **YES — build this in** |
+| Gift redemption merge | `matrix_commander.py finalize --gift` | Merge gift XLSX, sort, format | **YES — build this in** |
+| MFG name validation | `mfg_translations.csv` check | Verify all SKUs onboarded at RMFG | **YES — build this in** |
+| Depletion feedback | Fulfillment app `import_depletion_from_matrix` | Auto-feed depletions back to planning | **NICE TO HAVE — call API** |
+| Tuesday projection | Fulfillment app `tuesday_projection` | Post-Saturday shortage forecast | **NICE TO HAVE — call API** |
 
-**The React tool's scope is focused:** Accept inventory CSV → run allocation logic (rotation, no repeats, adjacency) → output assignment CSV + demand summary. Everything else is handled.
+**The Python prototypes are your spec.** The code is in:
+- `AppyHour/matrix_commander.py` — CLI tool (~2100 lines) with all validation, sync, generate, swap, finalize logic
+- `AppyHour/matrix_commander_web/` — Flask web UI (dark theme) showing how the UX should flow
+- `AppyHour/mfg_translations.csv` — 227 MFG name translations from RMFG portal
+
+**Goal for the substitute operator:** One React app. Open it. Pick the ship tag. Click Generate. Review. Click Send. Done in 15 minutes. No Matrix Commander, no fulfillment app, no cold chain app, no RMFG portal.
 
 ---
 
@@ -270,28 +278,32 @@ After all changes, this is what a Saturday morning looks like:
 
 ```
 Step 1: Run cold chain app → routing + gel pack tags applied to Shopify orders
-        (~10 min, unchanged)
+        (~10 min — could also be built into React tool eventually)
 
-Step 2: Download inventory CSV from fulfillment planning app
-        (http://localhost:5187/api/export_inventory_csv — one click)
-
-Step 3: Open the React fulfillment tool
-        - Upload inventory CSV from Step 2
+Step 2: Open the React fulfillment tool
+        - Tool auto-loads inventory CSV from planning app API
+          (http://localhost:5187/api/export_inventory_csv)
         - Select ship tag (e.g., RMFG_20260328)
         - Select production day (SAT)
+        - Enter ship date (Monday date for SAT, Tuesday date for TUE)
         - Click "Generate"
 
-Step 4: Review allocation output
-        - Demand summary: spot-check totals look reasonable
-        - Download the assignment CSV
+Step 3: Tool runs the full pipeline:
+        - Allocates child SKUs to parents (existing logic)
+        - Syncs $0 variants to Shopify via GraphQL (replaces Matrixify)
+        - Generates RMFG matrix XLSX directly (replaces RMFG portal)
+        - Runs all validation checks
+        - Merges gift redemption orders
+        - Formats: Access_LIVE tab, ProductionDay, sorted, zips, auto-sized
+        - Names file: AHB_WeeklyProductionQuery_MM-DD-YY_vF.xlsx
 
-Step 5: Open Matrix Commander (http://localhost:5188)
-        - Click "Generate from Shopify" with RMFG tag
-        - Tool syncs $0 variants to Shopify directly (replaces Matrixify)
-        - Tool generates RMFG matrix XLSX directly (replaces RMFG portal)
-        - Validates: MFG names, CEX-EC, parent fill, zips, sort
-        - Gift orders included in matrix, excluded from Shopify sync
-        - File named: AHB_WeeklyProductionQuery_MM-DD-YY_vF.xlsx
+Step 4: Review the dashboard
+        - Validation checks: all green? → proceed
+        - Shortages: review swap suggestions, accept or adjust
+        - Demand summary: spot-check totals
+
+Step 5: Click "Send to RMFG"
+        - Emails the final XLSX
 
 Step 6: Email Production Matrix XLSX to RMFG
         (Attach file, send — 1 minute. Or auto-email if built in.)
