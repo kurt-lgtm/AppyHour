@@ -517,6 +517,111 @@ def check_cexec_cheese_counts(
     )
 
 
+# Parent SKU fill requirements: {prefix: (min_CH, min_MT, min_AC, description)}
+# AC count includes jam/mustard (which are AC- prefixed)
+PARENT_FILL_RULES: dict[str, tuple[int, int, int, str]] = {
+    "AHB-MED": (2, 2, 3, "Medium monthly (2CH+2MT+3AC incl jam)"),
+    "AHB-LGE": (3, 3, 3, "Large monthly (3CH+3MT+3AC incl jam)"),
+    "AHB-CMED": (2, 0, 3, "Cheese-only medium (2CH+0MT+3AC incl jam)"),
+    "AHB-MCUST": (2, 2, 3, "Medium curated (2CH+2MT+3AC incl jam)"),
+    "AHB-LCUST": (3, 3, 3, "Large curated (3CH+3MT+3AC incl jam)"),
+    "PR-CJAM": (1, 0, 1, "Cheese & Jam pairing (1CH+1AC jam/mustard)"),
+    "CEX-EC": (1, 0, 0, "Extra cheese (1CH)"),
+    "EX-EC": (1, 0, 0, "Paid extra cheese (1CH)"),
+    "EX-EA": (0, 0, 1, "Paid extra accessory (1AC)"),
+    "CEX-EM": (0, 1, 0, "Extra meat (1MT)"),
+    "CEX-EA": (0, 0, 1, "Extra accessory (1AC)"),
+    "EX-EM": (0, 1, 0, "Paid extra meat (1MT)"),
+    "EX-PS": (2, 2, 2, "Party size (2CH+2MT+2AC)"),
+}
+
+
+def _match_parent_prefix(sku: str) -> str | None:
+    """Match a SKU to its parent fill rule prefix."""
+    # Check exact matches first, then prefix matches
+    for prefix in PARENT_FILL_RULES:
+        if sku == prefix or sku.startswith(prefix + "-"):
+            return prefix
+    return None
+
+
+def check_parent_fill(orders: list[OrderRow]) -> CheckResult:
+    """Verify all parent SKUs have their expected children filled.
+
+    For each order, identifies parent SKUs (AHB-MED, PR-CJAM-*, CEX-EC-*, etc.)
+    and checks that enough CH-/MT-/AC- children are assigned. Children are a
+    shared pool summed across all parents. BL- bundle children count toward fill
+    but BL- itself is not a parent with fill requirements (it defines its own items).
+
+    NOTE: Parent SKUs only appear in Shopify line items, not in RMFG matrix
+    columns. This check only fires when the data includes parent SKUs.
+    """
+    issues: list[str] = []
+    checked = 0
+
+    for o in orders:
+        # Identify parents and children in this order
+        parents: list[tuple[str, str]] = []  # (sku, matched_prefix)
+        ch_count = 0
+        mt_count = 0
+        ac_count = 0
+
+        for sku, qty in o.assignments.items():
+            prefix = _match_parent_prefix(sku)
+            if prefix:
+                parents.append((sku, prefix))
+            elif sku.startswith("CH-"):
+                ch_count += qty
+            elif sku.startswith("MT-"):
+                mt_count += qty
+            elif sku.startswith("AC-"):
+                ac_count += qty
+
+        if not parents:
+            continue
+
+        checked += 1
+
+        # Sum requirements across ALL parents — children are a shared pool
+        # e.g., AHB-MED(2CH) + PR-CJAM(1CH) + CEX-EC(1CH) = 4 CH needed total
+        need_ch = 0
+        need_mt = 0
+        need_ac = 0
+        parent_labels: list[str] = []
+
+        for sku, prefix in parents:
+            rule = PARENT_FILL_RULES[prefix]
+            need_ch += rule[0]
+            need_mt += rule[1]
+            need_ac += rule[2]
+            parent_labels.append(sku)
+
+        # Compare
+        short_parts: list[str] = []
+        if ch_count < need_ch:
+            short_parts.append(f"CH: {ch_count}/{need_ch}")
+        if mt_count < need_mt:
+            short_parts.append(f"MT: {mt_count}/{need_mt}")
+        if ac_count < need_ac:
+            short_parts.append(f"AC: {ac_count}/{need_ac}")
+
+        if short_parts and len(issues) < 50:
+            issues.append(f"  #{o.order_id} ({o.name}): {', '.join(short_parts)} [parents: {', '.join(parent_labels)}]")
+
+    if issues:
+        return CheckResult(
+            "Parent SKU Fill",
+            False,
+            f"{len(issues)} order(s) with unfilled parents (checked {checked})",
+            issues[:20],
+        )
+    return CheckResult(
+        "Parent SKU Fill",
+        True,
+        f"All {checked} orders have parents properly filled",
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Inventory cross-check & shortage report
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1331,12 +1436,14 @@ def generate_matrix_xlsx(
         # Extract address from shipping_address or billing_address
         # Orders from REST have line_items but may not have full address in "fields" fetch
         # We fetched with fields="id,name,tags,line_items" — need to re-fetch with address
-        order_data.append({
-            "id": o["id"],
-            "name": name,
-            "tags": tags,
-            "line_items": o.get("line_items", []),
-        })
+        order_data.append(
+            {
+                "id": o["id"],
+                "name": name,
+                "tags": tags,
+                "line_items": o.get("line_items", []),
+            }
+        )
 
         for li in o.get("line_items", []):
             sku = (li.get("sku") or "").strip()
@@ -1353,7 +1460,7 @@ def generate_matrix_xlsx(
 
     # Fetch in batches of 50 by ID
     for i in range(0, len(order_ids), 50):
-        batch = order_ids[i:i + 50]
+        batch = order_ids[i : i + 50]
         ids_str = ",".join(str(oid) for oid in batch)
         resp = _req.get(
             f"{base}/orders.json",
@@ -1401,9 +1508,20 @@ def generate_matrix_xlsx(
 
     # Headers: metadata + ProductionDay + product columns
     meta_headers = [
-        "OrderID", "Name", "Distribution Type", "Total",
-        "Phone Number", "Email", "Address", "Address 2",
-        "City", "State", "Zip", "Tags", "Notes", "ProductionDay",
+        "OrderID",
+        "Name",
+        "Distribution Type",
+        "Total",
+        "Phone Number",
+        "Email",
+        "Address",
+        "Address 2",
+        "City",
+        "State",
+        "Zip",
+        "Tags",
+        "Notes",
+        "ProductionDay",
     ]
     all_headers = meta_headers + [col_header for _, col_header in product_columns]
     for c, h in enumerate(all_headers, 1):
@@ -1445,7 +1563,9 @@ def generate_matrix_xlsx(
             raw_zip = raw_zip.zfill(5)
 
         ws.cell(row_num, 1).value = numeric_oid
-        ws.cell(row_num, 2).value = f"{addr.get('first_name', '')} {addr.get('last_name', '')}".strip() or full.get("name", "")
+        ws.cell(row_num, 2).value = f"{addr.get('first_name', '')} {addr.get('last_name', '')}".strip() or full.get(
+            "name", ""
+        )
         ws.cell(row_num, 3).value = "SHIPPING"
         ws.cell(row_num, 4).value = food_count
         ws.cell(row_num, 5).value = addr.get("phone") or full.get("phone") or ""
@@ -1496,6 +1616,7 @@ def generate_matrix_xlsx(
     if ship_date:
         try:
             from datetime import datetime as dt
+
             if len(ship_date) == 10 and ship_date[4] == "-":
                 d = dt.strptime(ship_date, "%Y-%m-%d")
             else:
@@ -1510,6 +1631,7 @@ def generate_matrix_xlsx(
             date_str = f"{m.group(2)}-{m.group(3)}-{m.group(1)[2:]}"
         else:
             from datetime import datetime as dt
+
             date_str = dt.now().strftime("%m-%d-%y")
 
     out_dir = Path(output_dir) if output_dir else Path.cwd()
@@ -1541,7 +1663,10 @@ def cmd_generate(
     print(f"{_BOLD}{'#' * 60}{_RESET}\n")
 
     out_path = generate_matrix_xlsx(
-        rmfg_tag, ship_day=ship_day, ship_date=ship_date, gift_path=gift_path,
+        rmfg_tag,
+        ship_day=ship_day,
+        ship_date=ship_date,
+        gift_path=gift_path,
     )
 
     if not out_path:
@@ -1891,6 +2016,7 @@ def cmd_validate(xlsx_path: str) -> bool:
         check_sku_mappings(unmapped),
         check_mfg_onboarding(orders, mfg_translations),
         check_cexec_cheese_counts(orders, cex_ec, cexec_splits),
+        check_parent_fill(orders),
     ]
 
     all_passed = print_validation_report(results, len(orders))
@@ -2118,9 +2244,12 @@ def main() -> None:
     elif args.command == "sync-shopify":
         ok = cmd_sync(args.xlsx, args.tag, mode=args.mode, dry_run=not args.execute, workers=args.workers)
     elif args.command == "generate":
-        ok = cmd_generate(args.tag, ship_day=args.day,
-                          ship_date=getattr(args, "date", "") or "",
-                          gift_path=getattr(args, "gift", None))
+        ok = cmd_generate(
+            args.tag,
+            ship_day=args.day,
+            ship_date=getattr(args, "date", "") or "",
+            gift_path=getattr(args, "gift", None),
+        )
     elif args.command == "finalize":
         ok = cmd_finalize(
             args.xlsx,
