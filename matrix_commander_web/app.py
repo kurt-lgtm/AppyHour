@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["flask", "pywebview"]
+# ///
+
 """
 Matrix Commander Web — pywebview desktop app for fulfillment matrix management.
 
@@ -19,6 +24,10 @@ from flask import Flask, jsonify, request, send_from_directory
 
 # Add parent dir for matrix_commander imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from pipeline.checkpoint_store import CheckpointStore
+from pipeline.pipeline_state import PipelineState, PipelineStage
+from pipeline.dry_run_guard import DryRunGuard, DryRunViolationError
 from matrix_commander import (
     CheckResult,
     parse_matrix,
@@ -44,13 +53,18 @@ from matrix_commander import (
     SwapDecision,
     SKU_TO_NAME,
     SUBSTITUTION_FAMILIES,
+    sync_order_to_shopify,
+    SyncResult,
+    _get_shopify_auth,
+    _fetch_orders_by_tag,
+    _lookup_zero_variant_gids,
 )
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50MB
 
-# Global state for current session
-STATE = {
+# Session-scoped state (XLSX path, parsed orders, inventory — not pipeline stage)
+SESSION_STATE = {
     "xlsx_path": None,
     "gift_path": None,
     "orders": [],
@@ -64,9 +78,11 @@ STATE = {
     "ship_date": "",
 }
 
+# Pipeline-stage state persisted to .pipeline/checkpoint.json
+_checkpoint = CheckpointStore()
+
 UPLOAD_DIR = Path(__file__).parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
-
 
 # ── Routes ────────────────────────────────────────────────────────────
 
@@ -95,28 +111,28 @@ def upload_file():
     file.save(str(save_path))
 
     if file_type == "gift":
-        STATE["gift_path"] = str(save_path)
+        SESSION_STATE["gift_path"] = str(save_path)
         return jsonify({"ok": True, "filename": filename, "type": "gift"})
 
-    STATE["xlsx_path"] = str(save_path)
+    SESSION_STATE["xlsx_path"] = str(save_path)
     return jsonify({"ok": True, "filename": filename, "type": "main"})
 
 
 @app.route("/api/validate", methods=["POST"])
 def validate():
     """Run all validation checks on the uploaded XLSX."""
-    if not STATE["xlsx_path"]:
+    if not SESSION_STATE["xlsx_path"]:
         return jsonify({"error": "No XLSX uploaded"}), 400
 
     body = request.get_json(silent=True) or {}
-    STATE["ship_day"] = body.get("ship_day", STATE["ship_day"])
-    STATE["ship_date"] = body.get("ship_date", STATE["ship_date"])
+    SESSION_STATE["ship_day"] = body.get("ship_day", SESSION_STATE["ship_day"])
+    SESSION_STATE["ship_date"] = body.get("ship_date", SESSION_STATE["ship_date"])
 
     try:
-        orders, product_columns, unmapped = parse_matrix(STATE["xlsx_path"])
-        STATE["orders"] = orders
-        STATE["product_columns"] = product_columns
-        STATE["unmapped"] = unmapped
+        orders, product_columns, unmapped = parse_matrix(SESSION_STATE["xlsx_path"])
+        SESSION_STATE["orders"] = orders
+        SESSION_STATE["product_columns"] = product_columns
+        SESSION_STATE["unmapped"] = unmapped
 
         settings = load_settings_config()
         cex_ec = settings.get("cex_ec", {})
@@ -132,7 +148,7 @@ def validate():
             check_mfg_onboarding(orders, mfg_translations),
             check_cexec_cheese_counts(orders, cex_ec, cexec_splits),
         ]
-        STATE["validation_results"] = results
+        SESSION_STATE["validation_results"] = results
 
         regular, gift = identify_gift_orders(orders)
 
@@ -156,7 +172,7 @@ def validate():
 @app.route("/api/inventory", methods=["POST"])
 def inventory_check():
     """Run inventory cross-check. Optionally upload inventory CSV."""
-    if not STATE["orders"]:
+    if not SESSION_STATE["orders"]:
         return jsonify({"error": "Run validate first"}), 400
 
     # Check for uploaded inventory CSV
@@ -171,11 +187,11 @@ def inventory_check():
     if not inventory:
         return jsonify({"error": "No inventory data available"}), 400
 
-    STATE["inventory"] = inventory
-    demand = compute_demand(STATE["orders"])
-    STATE["demand"] = demand
+    SESSION_STATE["inventory"] = inventory
+    demand = compute_demand(SESSION_STATE["orders"])
+    SESSION_STATE["demand"] = demand
     shortages = find_shortages(demand, inventory)
-    STATE["shortages"] = shortages
+    SESSION_STATE["shortages"] = shortages
 
     # Build inventory table
     food_demand = {sku: qty for sku, qty in demand.items() if any(sku.startswith(p) for p in ("CH-", "MT-", "AC-"))}
@@ -228,7 +244,7 @@ def inventory_check():
 @app.route("/api/swap", methods=["POST"])
 def apply_swap():
     """Apply a single swap decision to the XLSX."""
-    if not STATE["xlsx_path"] or not STATE["orders"]:
+    if not SESSION_STATE["xlsx_path"] or not SESSION_STATE["orders"]:
         return jsonify({"error": "No data loaded"}), 400
 
     body = request.get_json()
@@ -242,24 +258,24 @@ def apply_swap():
     decision = SwapDecision(short_sku=short_sku, replacement_sku=replacement_sku, qty=qty)
 
     try:
-        fixed_path = apply_swaps_to_xlsx(STATE["xlsx_path"], [decision], STATE["orders"])
-        STATE["xlsx_path"] = fixed_path
+        fixed_path = apply_swaps_to_xlsx(SESSION_STATE["xlsx_path"], [decision], SESSION_STATE["orders"])
+        SESSION_STATE["xlsx_path"] = fixed_path
 
         # Re-parse and re-check
         orders, _, _ = parse_matrix(fixed_path)
-        STATE["orders"] = orders
+        SESSION_STATE["orders"] = orders
         demand = compute_demand(orders)
-        STATE["demand"] = demand
+        SESSION_STATE["demand"] = demand
 
-        if STATE["inventory"]:
-            shortages = find_shortages(demand, STATE["inventory"])
-            STATE["shortages"] = shortages
+        if SESSION_STATE["inventory"]:
+            shortages = find_shortages(demand, SESSION_STATE["inventory"])
+            SESSION_STATE["shortages"] = shortages
 
         return jsonify(
             {
                 "ok": True,
                 "fixed_path": fixed_path,
-                "remaining_shortages": len(STATE["shortages"]),
+                "remaining_shortages": len(SESSION_STATE["shortages"]),
             }
         )
     except Exception as e:
@@ -269,19 +285,19 @@ def apply_swap():
 @app.route("/api/finalize", methods=["POST"])
 def finalize():
     """Merge gift sheet (if any) and finalize the XLSX."""
-    if not STATE["xlsx_path"]:
+    if not SESSION_STATE["xlsx_path"]:
         return jsonify({"error": "No XLSX loaded"}), 400
 
     body = request.get_json(silent=True) or {}
-    ship_day = body.get("ship_day", STATE["ship_day"])
-    ship_date = body.get("ship_date", STATE["ship_date"])
+    ship_day = body.get("ship_day", SESSION_STATE["ship_day"])
+    ship_date = body.get("ship_date", SESSION_STATE["ship_date"])
 
-    working_path = STATE["xlsx_path"]
+    working_path = SESSION_STATE["xlsx_path"]
 
     try:
         # Merge gift sheet if provided
-        if STATE["gift_path"]:
-            working_path = merge_gift_xlsx(working_path, STATE["gift_path"])
+        if SESSION_STATE["gift_path"]:
+            working_path = merge_gift_xlsx(working_path, SESSION_STATE["gift_path"])
 
         # MFG validation
         mfg_translations = load_mfg_translations()
@@ -315,34 +331,34 @@ def generate():
     """Generate RMFG matrix directly from Shopify orders (replaces RMFG portal)."""
     body = request.get_json(silent=True) or {}
     rmfg_tag = body.get("tag", "")
-    ship_day = body.get("ship_day", STATE["ship_day"])
-    ship_date = body.get("ship_date", STATE["ship_date"])
+    ship_day = body.get("ship_day", SESSION_STATE["ship_day"])
+    ship_date = body.get("ship_date", SESSION_STATE["ship_date"])
 
     if not rmfg_tag:
         return jsonify({"error": "RMFG tag required (e.g. RMFG_20260328)"}), 400
 
-    STATE["ship_day"] = ship_day
-    STATE["ship_date"] = ship_date
+    SESSION_STATE["ship_day"] = ship_day
+    SESSION_STATE["ship_date"] = ship_date
 
     try:
         out_path = generate_matrix_xlsx(
             rmfg_tag,
             ship_day=ship_day,
             ship_date=ship_date,
-            gift_path=STATE["gift_path"],
+            gift_path=SESSION_STATE["gift_path"],
             output_dir=str(UPLOAD_DIR),
         )
 
         if not out_path:
             return jsonify({"error": "Generation failed — check console"}), 500
 
-        STATE["xlsx_path"] = out_path
+        SESSION_STATE["xlsx_path"] = out_path
 
         # Auto-validate the generated file
         orders, product_columns, unmapped = parse_matrix(out_path)
-        STATE["orders"] = orders
-        STATE["product_columns"] = product_columns
-        STATE["unmapped"] = unmapped
+        SESSION_STATE["orders"] = orders
+        SESSION_STATE["product_columns"] = product_columns
+        SESSION_STATE["unmapped"] = unmapped
 
         settings = load_settings_config()
         cex_ec = settings.get("cex_ec", {})
@@ -359,7 +375,7 @@ def generate():
             check_cexec_cheese_counts(orders, cex_ec, cexec_splits),
             check_parent_fill(orders),
         ]
-        STATE["validation_results"] = results
+        SESSION_STATE["validation_results"] = results
         regular, gift = identify_gift_orders(orders)
 
         return jsonify(
@@ -380,19 +396,214 @@ def generate():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/sync", methods=["POST"])
+def sync_to_shopify():
+    """Sync matrix assignments to Shopify orders via $0 variant order edits."""
+    if not SESSION_STATE["orders"]:
+        return jsonify({"error": "No orders loaded — run validate or generate first"}), 400
+
+    body = request.get_json(silent=True) or {}
+    rmfg_tag = body.get("rmfg_tag", "").strip()
+    mode = body.get("mode", "smart")
+    dry_run = body.get("dry_run", True)
+    pass_number = body.get("pass_number", 1)
+
+    if not rmfg_tag:
+        return jsonify({"error": "rmfg_tag required (e.g. RMFG_20260328)"}), 400
+
+    if mode not in ("smart", "conservative"):
+        return jsonify({"error": "mode must be 'smart' or 'conservative'"}), 400
+
+    # Validate pass_number (T-02-04)
+    if pass_number not in (1, 2):
+        return jsonify({"error": "pass_number must be 1 or 2"}), 400
+
+    # Pass gate: Pass 2 blocked until PASS1_COMPLETE (D-07, SYNC-04)
+    if pass_number == 2:
+        checkpoint_state: PipelineState | None = CheckpointStore().load()
+        if checkpoint_state is None or checkpoint_state.stage != PipelineStage.PASS1_COMPLETE:
+            return jsonify(
+                {
+                    "error": "pass1_not_complete",
+                    "message": "Run Pass 1 first and verify live orders before starting Pass 2.",
+                }
+            ), 409
+
+    try:
+        # Build matrix lookup: order_name -> {sku: qty}
+        matrix_by_order: dict[str, dict[str, int]] = {}
+        all_matrix_skus: set[str] = set()
+        for row in SESSION_STATE["orders"]:
+            order_name = str(row.get("order_id", row.get("Order", ""))).strip().replace("#", "")
+            if not order_name:
+                continue
+            skus: dict[str, int] = {}
+            for col, val in row.items():
+                if isinstance(val, (int, float)) and val > 0 and isinstance(col, str):
+                    if any(col.startswith(p) for p in ("CH-", "MT-", "AC-", "PK-", "TR-")):
+                        skus[col] = int(val)
+                        all_matrix_skus.add(col)
+            matrix_by_order[order_name] = skus
+
+        # Auth and Shopify data
+        base, auth_headers = _get_shopify_auth()
+        shopify_orders = _fetch_orders_by_tag(base, auth_headers, rmfg_tag)
+
+        if not shopify_orders:
+            return jsonify({"error": f"No unfulfilled Shopify orders found with tag '{rmfg_tag}'"}), 404
+
+        # Look up $0 variant GIDs
+        variant_gids = _lookup_zero_variant_gids(base, auth_headers, all_matrix_skus)
+
+        # Match Shopify orders to matrix rows
+        matched = []
+        unmatched_shopify = []
+        for so in shopify_orders:
+            so_name = so["name"].replace("#", "")
+            if so_name in matrix_by_order:
+                matched.append((so, matrix_by_order[so_name]))
+            else:
+                unmatched_shopify.append(so_name)
+
+        if dry_run:
+            # Simulate without making changes
+            counts = {"updated": 0, "skipped": 0, "gift": 0, "duplicate": 0, "error": 0}
+            preview_details: list[dict] = []
+            for so, m_skus in matched:
+                result = _simulate_sync(so, m_skus, variant_gids, mode)
+                counts[result.status] = counts.get(result.status, 0) + 1
+                preview_details.append(
+                    {
+                        "order": result.order_name,
+                        "status": result.status,
+                        "added_skus": result.added_skus,
+                        "error": result.error,
+                    }
+                )
+
+            return jsonify(
+                {
+                    "ok": True,
+                    "dry_run": True,
+                    "matched": len(matched),
+                    "unmatched": len(unmatched_shopify),
+                    "counts": counts,
+                    "details": preview_details[:100],
+                    "variant_gids_found": len(variant_gids),
+                    "variant_gids_missing": len(all_matrix_skus - set(variant_gids.keys())),
+                }
+            )
+
+        # Enforce dry-run guard before any Shopify mutation (D-12, T-03-01)
+        DryRunGuard(dry_run=dry_run).assert_can_mutate()
+
+        # Live sync with ThreadPoolExecutor
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        results: list[SyncResult] = []
+        errors_detail: list[dict] = []
+
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            futures = {
+                pool.submit(sync_order_to_shopify, base, auth_headers, so, m_skus, variant_gids, mode): so["name"]
+                for so, m_skus in matched
+            }
+            for future in as_completed(futures):
+                order_label = futures[future]
+                try:
+                    r = future.result()
+                    results.append(r)
+                    if r.status == "error":
+                        errors_detail.append({"order": r.order_name, "error": r.error})
+                except Exception as exc:
+                    results.append(SyncResult(order_label, "error", error=str(exc)))
+                    errors_detail.append({"order": order_label, "error": str(exc)})
+
+        counts = {"updated": 0, "skipped": 0, "gift": 0, "duplicate": 0, "error": 0}
+        for r in results:
+            counts[r.status] = counts.get(r.status, 0) + 1
+
+        return jsonify(
+            {
+                "ok": True,
+                "dry_run": False,
+                "matched": len(matched),
+                "unmatched": len(unmatched_shopify),
+                "counts": counts,
+                "errors": errors_detail,
+                "total_synced": len(results),
+            }
+        )
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+def _simulate_sync(order: dict, matrix_skus: dict[str, int], variant_gids: dict[str, str], mode: str) -> SyncResult:
+    """Dry-run simulation of sync logic (no Shopify API calls)."""
+    order_name = order["name"].replace("#", "")
+    tags_lower = order.get("tags", "").lower()
+
+    if "gift redemption" in tags_lower:
+        return SyncResult(order_name, "gift")
+
+    current_skus: dict[str, int] = {}
+    for li in order.get("line_items", []):
+        sku = (li.get("sku") or "").strip()
+        fq = li.get("fulfillable_quantity", li.get("quantity", 0))
+        if sku and fq > 0:
+            current_skus[sku] = current_skus.get(sku, 0) + fq
+
+    to_add: list[str] = []
+    duplicates: list[str] = []
+    for sku in matrix_skus:
+        if not any(sku.startswith(p) for p in ("CH-", "MT-", "AC-", "PK-", "TR-")):
+            continue
+        if sku in current_skus:
+            duplicates.append(sku)
+        elif sku in variant_gids:
+            to_add.append(sku)
+
+    if not to_add and not duplicates:
+        return SyncResult(order_name, "skipped")
+
+    if duplicates and mode == "conservative":
+        return SyncResult(order_name, "duplicate", error=f"Dupes: {', '.join(duplicates)}")
+
+    if not to_add:
+        return SyncResult(order_name, "skipped")
+
+    return SyncResult(order_name, "updated", added_skus=to_add)
+
+
 @app.route("/api/state", methods=["GET"])
 def get_state():
-    """Return current session state summary."""
+    """Return merged session + pipeline-stage state.
+
+    Session fields (in-memory): xlsx, orders, shortages, ship info.
+    Pipeline fields (from checkpoint.json): stage, dry_run, pass1, pass2.
+    """
+    pipeline_state = _checkpoint.load()
     return jsonify(
         {
-            "xlsx_loaded": STATE["xlsx_path"] is not None,
-            "xlsx_name": Path(STATE["xlsx_path"]).name if STATE["xlsx_path"] else None,
-            "gift_loaded": STATE["gift_path"] is not None,
-            "gift_name": Path(STATE["gift_path"]).name if STATE["gift_path"] else None,
-            "order_count": len(STATE["orders"]),
-            "shortage_count": len(STATE["shortages"]),
-            "ship_day": STATE["ship_day"],
-            "ship_date": STATE["ship_date"],
+            # Session-scoped fields
+            "xlsx_loaded": SESSION_STATE["xlsx_path"] is not None,
+            "xlsx_name": Path(SESSION_STATE["xlsx_path"]).name if SESSION_STATE["xlsx_path"] else None,
+            "gift_loaded": SESSION_STATE["gift_path"] is not None,
+            "gift_name": Path(SESSION_STATE["gift_path"]).name if SESSION_STATE["gift_path"] else None,
+            "order_count": len(SESSION_STATE["orders"]),
+            "shortage_count": len(SESSION_STATE["shortages"]),
+            "ship_day": SESSION_STATE["ship_day"],
+            "ship_date": SESSION_STATE["ship_date"],
+            # Pipeline-stage fields from checkpoint.json (None → IDLE defaults)
+            "pipeline_stage": pipeline_state.stage.name if pipeline_state else "IDLE",
+            "dry_run": pipeline_state.dry_run if pipeline_state else True,
+            "pass1": pipeline_state.pass1.to_dict()
+            if pipeline_state
+            else {"succeeded": [], "failed": [], "skipped": []},
+            "pass2": pipeline_state.pass2.to_dict()
+            if pipeline_state
+            else {"succeeded": [], "failed": [], "skipped": []},
         }
     )
 

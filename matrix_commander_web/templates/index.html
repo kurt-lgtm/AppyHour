@@ -102,6 +102,28 @@
     <div id="finalResult"></div>
   </section>
 
+  <!-- Sync to Shopify -->
+  <section id="sync-panel" class="panel hidden">
+    <h2>SYNC TO SHOPIFY</h2>
+    <div class="sync-controls">
+      <div class="config-group">
+        <label>RMFG Tag</label>
+        <input type="text" id="syncTag" placeholder="RMFG_20260328">
+      </div>
+      <div class="config-group">
+        <label>Mode</label>
+        <select id="syncMode">
+          <option value="smart" selected>Smart (skip dupes per-SKU)</option>
+          <option value="conservative">Conservative (skip entire order)</option>
+        </select>
+      </div>
+      <button id="btnPreviewSync" class="btn">Preview Sync</button>
+      <button id="btnExecuteSync" class="btn danger" disabled>Execute Sync</button>
+    </div>
+    <div id="syncResults" class="sync-results"></div>
+    <div id="syncErrors" class="sync-errors"></div>
+  </section>
+
   <!-- Status Bar -->
   <footer id="statusBar">
     <span id="statusText">Ready</span>

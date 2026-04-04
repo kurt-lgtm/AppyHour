@@ -127,8 +127,9 @@ async function loadInventory(file) {
       renderSwaps(data.shortages);
     }
 
-    // Show actions
+    // Show actions and sync panels
     $('actions-panel').classList.remove('hidden');
+    $('sync-panel').classList.remove('hidden');
 
     status(`Inventory loaded: ${data.sku_count} SKUs, ${data.shortage_count} shortages`);
   } catch (e) {
@@ -266,6 +267,9 @@ async function runGenerate() {
     // Show inventory panel
     $('inventory-panel').classList.remove('hidden');
 
+    // Auto-fill sync tag from generate tag
+    $('syncTag').value = tag;
+
     status(`Generated: ${data.filename} (${data.order_count} orders)`);
   } catch (e) {
     status(`Generate failed: ${e.message}`);
@@ -294,6 +298,97 @@ function showValidation(data) {
   }).join('');
 }
 
+// ── Sync to Shopify ───────────────────────────────────────────────
+
+async function runSync(dryRun) {
+  const tag = $('syncTag').value.trim();
+  if (!tag) {
+    status('Enter an RMFG tag for sync');
+    return;
+  }
+
+  if (!dryRun && !confirm('Execute live sync to Shopify? This will modify orders. Continue?')) {
+    return;
+  }
+
+  const btnPreview = $('btnPreviewSync');
+  const btnExecute = $('btnExecuteSync');
+  btnPreview.disabled = true;
+  btnExecute.disabled = true;
+
+  const label = dryRun ? 'Previewing' : 'Syncing';
+  status(`<span class="spinner"></span>${label} orders to Shopify...`);
+
+  const body = {
+    rmfg_tag: tag,
+    mode: $('syncMode').value,
+    dry_run: dryRun,
+  };
+
+  try {
+    const resp = await fetch('/api/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+
+    if (data.error) {
+      status(`Sync error: ${data.error}`);
+      btnPreview.disabled = false;
+      btnExecute.disabled = false;
+      return;
+    }
+
+    showSyncResults(data);
+
+    if (dryRun) {
+      btnExecute.disabled = false;
+      status(`Preview complete: ${data.counts.updated} would update, ${data.counts.skipped} skipped`);
+    } else {
+      status(`Sync complete: ${data.counts.updated} updated, ${data.counts.error} errors`);
+    }
+  } catch (e) {
+    status(`Sync failed: ${e.message}`);
+  }
+  btnPreview.disabled = false;
+}
+
+function showSyncResults(data) {
+  const c = data.counts;
+  const dryLabel = data.dry_run ? ' (PREVIEW)' : '';
+
+  let html = `<div class="sync-stats-row">
+    <div class="sync-stat"><span class="sync-stat-num matched">${data.matched}</span><span class="sync-stat-label">Matched</span></div>
+    <div class="sync-stat"><span class="sync-stat-num updated">${c.updated}</span><span class="sync-stat-label">Updated${dryLabel}</span></div>
+    <div class="sync-stat"><span class="sync-stat-num skipped">${c.skipped}</span><span class="sync-stat-label">Skipped</span></div>
+    <div class="sync-stat"><span class="sync-stat-num gift">${c.gift}</span><span class="sync-stat-label">Gift</span></div>
+    <div class="sync-stat"><span class="sync-stat-num duplicate">${c.duplicate}</span><span class="sync-stat-label">Duplicate</span></div>
+    <div class="sync-stat"><span class="sync-stat-num error">${c.error}</span><span class="sync-stat-label">Error</span></div>
+  </div>`;
+
+  if (data.unmatched > 0) {
+    html += `<div style="font-size:11px;color:var(--yellow);margin-bottom:8px;">${data.unmatched} Shopify orders not found in matrix</div>`;
+  }
+
+  if (data.dry_run && data.variant_gids_missing > 0) {
+    html += `<div style="font-size:11px;color:var(--orange);margin-bottom:8px;">${data.variant_gids_missing} SKUs missing $0 variant GIDs</div>`;
+  }
+
+  $('syncResults').innerHTML = html;
+
+  // Errors detail
+  const errorList = data.errors || (data.details || []).filter(d => d.status === 'error');
+  if (errorList.length > 0) {
+    const items = errorList.map(e =>
+      `<div class="error-item"><span class="error-order">#${escHtml(e.order)}</span>${escHtml(e.error)}</div>`
+    ).join('');
+    $('syncErrors').innerHTML = `<details><summary>ERRORS (${errorList.length})</summary>${items}</details>`;
+  } else {
+    $('syncErrors').innerHTML = '';
+  }
+}
+
 // ── Helpers ────────────────────────────────────────────────────────
 
 function escHtml(s) {
@@ -315,6 +410,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.target.files.length) loadInventory(e.target.files[0]);
   });
   $('btnFinalize').addEventListener('click', runFinalize);
+  $('btnPreviewSync').addEventListener('click', () => runSync(true));
+  $('btnExecuteSync').addEventListener('click', () => runSync(false));
 
   // Set default ship date to next Monday
   const today = new Date();

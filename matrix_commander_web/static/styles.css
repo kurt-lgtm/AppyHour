@@ -390,6 +390,87 @@ td.status-badge {
   z-index: 100;
 }
 
+/* Sync Controls */
+.sync-controls {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.sync-controls .config-group { flex: 0 1 auto; }
+.sync-controls input[type="text"],
+.sync-controls select {
+  background: var(--bg3);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  font-family: var(--font-chrome);
+  font-size: 12px;
+  border-radius: 3px;
+}
+
+/* Sync Results */
+.sync-results { margin-bottom: 8px; }
+.sync-stats-row {
+  display: flex;
+  gap: 20px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.sync-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.sync-stat-num {
+  font-family: var(--font-num);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1;
+}
+.sync-stat-label {
+  font-family: var(--font-chrome);
+  font-size: 9px;
+  color: var(--fg2);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.sync-stat-num.updated { color: var(--green); }
+.sync-stat-num.skipped { color: var(--fg2); }
+.sync-stat-num.gift { color: var(--cyan); }
+.sync-stat-num.duplicate { color: var(--yellow); }
+.sync-stat-num.error { color: var(--red); }
+.sync-stat-num.matched { color: var(--fg); }
+
+/* Sync Errors */
+.sync-errors details {
+  margin-top: 8px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 12px;
+}
+.sync-errors summary {
+  font-family: var(--font-chrome);
+  font-size: 11px;
+  color: var(--red);
+  cursor: pointer;
+  letter-spacing: 1px;
+}
+.sync-errors .error-item {
+  font-size: 11px;
+  color: var(--fg2);
+  padding: 4px 0;
+  border-bottom: 1px solid #21262d;
+}
+.sync-errors .error-item:last-child { border-bottom: none; }
+.sync-errors .error-order {
+  font-family: var(--font-chrome);
+  color: var(--fg);
+  margin-right: 8px;
+}
+
 /* Loading spinner */
 .spinner {
   display: inline-block;
