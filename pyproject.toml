@@ -8,6 +8,7 @@ dependencies = [
     "openpyxl>=3.1.5",
     "pyyaml>=6.0.3",
     "pydantic>=2.12.4",
+    "tenacity>=9.0",
 ]
 
 [project.optional-dependencies]
@@ -15,6 +16,7 @@ fulfillment = [
     "flask>=3.1.2",
     "pywebview>=6.1",
     "fpdf2>=2.8.7",
+    "tenacity>=9.0",
 ]
 shipping = [
     "aiohttp>=3.13.2",

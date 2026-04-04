@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["openpyxl", "requests"]
+# ///
+
 """
 Matrix Commander — Phase 1: Validate + Inventory Check + Shortage Report.
 
@@ -22,6 +27,11 @@ from typing import Optional
 
 import openpyxl
 
+from pipeline.rate_limiter import LeakyBucketLimiter
+
+# Module-level rate limiter instance — configurable per D-08
+_limiter = LeakyBucketLimiter(pts_per_sec=5.0)
+
 # Force UTF-8 output on Windows to avoid cp1252 encoding errors
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
@@ -42,8 +52,255 @@ SKU_TO_NAME: dict[str, str] = {v: k for k, v in NAME_TO_SKU.items()}
 # Substitution families — cheeses that can swap for each other
 # ---------------------------------------------------------------------------
 SUBSTITUTION_FAMILIES: dict[str, list[str]] = {
-    "Brie": ["CH-TTBRIE", "CH-TIP", "CH-EBRIE", "CH-PBRIE", "CH-GPBRIE"],
-    "Alpine / Semi-hard": ["CH-BARI"],
+    # ── Cheese families ──────────────────────────────────────────────
+    # Soft / Bloomy rind
+    "Brie": [
+        "CH-TTBRIE",
+        "CH-TIP",
+        "CH-EBRIE",
+        "CH-PBRIE",
+        "CH-GPBRIE",
+        "CH-FDCB",
+        "CH-FSRB",
+        "CH-BRIE",
+    ],
+    "Camembert / Soft-ripened": ["CH-CAM", "CH-HARBM", "CH-PBOO"],
+    # Washed rind / Semi-soft
+    "Washed Rind": ["CH-GUUB", "CH-SPORT", "CH-RACL", "CH-LOU"],
+    # Goat
+    "Goat": [
+        "CH-LEON",
+        "CH-GEVE",
+        "CH-MONET",
+        "CH-BLUELEM",
+        "CH-CABR",
+        "CH-SMG",
+        "CH-HBGG",
+    ],
+    # Cheddar (aged, sharp)
+    "Cheddar": [
+        "CH-ACAC",
+        "CH-V5CH",
+        "CH-CSGOD",
+        "CH-CTGOD",
+        "CH-CCB",
+        "CH-CCC",
+        "CH-FOWC",
+        "CH-IPAC",
+        "CH-VAT",
+        "CH-MCPC",
+        "CH-COWBOY",
+        "CH-BBCOF",
+    ],
+    # Gouda (semi-hard, creamy)
+    "Gouda": [
+        "CH-AGOU",
+        "CH-FAG",
+        "CH-FENG",
+        "CH-MSMG",
+        "CH-PBGO",
+        "CH-SFG",
+        "CH-HCGU",
+        "CH-PRAD",
+    ],
+    # Alpine / Swiss (nutty, firm)
+    "Alpine / Swiss": [
+        "CH-BARI",
+        "CH-ALP",
+        "CH-ALPHA",
+        "CH-CHALLER",
+        "CH-6COM",
+        "CH-GAOP",
+        "CH-HORN",
+        "CH-EMSW",
+        "CH-FEMM",
+        "CH-FONTAL",
+        "CH-MSWISS",
+        "CH-KM39",
+        "CH-TOPR",
+    ],
+    # Blue
+    "Blue": ["CH-BBLUE", "CH-STIL", "CH-VBLUE"],
+    # Manchego / Iberian (aged sheep/goat)
+    "Manchego / Iberian": [
+        "CH-MAU3",
+        "CH-MANC",
+        "CH-CAMPO",
+        "CH-MAHO",
+        "CH-LOSC",
+        "CH-ROMQ",
+        "CH-QCAV",
+        "CH-RQCAV",
+    ],
+    # Italian hard / aged
+    "Italian Aged": [
+        "CH-PARM",
+        "CH-IPRW",
+        "CH-PVEC",
+        "CH-ASIAGO",
+        "CH-BAP",
+        "CH-SJGO",
+    ],
+    # Italian wine-washed / truffle
+    "Italian Wine / Truffle": [
+        "CH-UBRI",
+        "CH-UCONE",
+        "CH-UROSE",
+        "CH-SOT",
+        "CH-CTUF",
+        "CH-TRUSEK",
+    ],
+    # Fresh / Ricotta / Curds
+    "Fresh / Ricotta": [
+        "CH-BLR",
+        "CH-BCR",
+        "CH-OGFM",
+        "CH-MSF",
+        "CH-EBCC",
+        "CH-GHCC",
+        "CH-PIMO",
+    ],
+    # Flavored / Specialty
+    "Flavored Cheese": [
+        "CH-WMANG",
+        "CH-SHADOW",
+        "CH-LRB",
+        "CH-RASHI",
+        "CH-WWBC",
+        "CH-WWDI",
+        "CH-NMACF",
+        "CH-NMMAP",
+        "CH-NMPSC",
+    ],
+    # Farmstead misc (BRZ/MAFT interchangeable per MONG heuristics)
+    "Farmstead Misc": [
+        "CH-MAFT",
+        "CH-BRZ",
+        "CH-PRBZ",
+        "CH-AJACK",
+        "CH-MARGOT",
+        "CH-MOSES",
+        "CH-MPOLO",
+        "CH-TOMT",
+        "CH-KUNIK",
+    ],
+    # ── Meat families ────────────────────────────────────────────────
+    # Salami (cured, sliced)
+    "Salami": [
+        "MT-SOP",
+        "MT-SFEN",
+        "MT-TUSC",
+        "MT-GEN",
+        "MT-BPSS",
+        "MT-STSB",
+        "MT-SLRWG",
+        "MT-SPAP",
+        "MT-STCZ",
+        "MT-SMASH",
+    ],
+    # Salami chubs (whole, unsliced)
+    "Salami Chub": ["MT-BCSC", "MT-JUNI", "MT-REDW", "MT-SFNL", "MT-RAMP"],
+    # Prosciutto / dry-cured ham
+    "Prosciutto": [
+        "MT-PRO",
+        "MT-JAHH",
+        "MT-4JAHH",
+        "MT-JABPC",
+        "MT-4JABPC",
+        "MT-PSS",
+        "MT-4PSS",
+        "MT-JAMS",
+        "MT-IBHP",
+    ],
+    # Coppa / Speck / whole-muscle
+    "Coppa / Whole Muscle": [
+        "MT-CAPO",
+        "MT-BKCO",
+        "MT-CBCO",
+        "MT-STCOP",
+        "MT-ASPK",
+        "MT-LONZ",
+    ],
+    # Bresaola / Piccante (lean beef / spicy)
+    "Bresaola / Piccante": ["MT-sBRES", "MT-BRAS", "MT-PP", "MT-4PP"],
+    # ── Accompaniment families ───────────────────────────────────────
+    # Jam / Preserves (sweet spreads)
+    "Jam / Preserves": [
+        "AC-APMB",
+        "AC-APOH",
+        "AC-BLBALS",
+        "AC-BRJA",
+        "AC-BLUTH",
+        "AC-CFPH",
+        "AC-FLH",
+        "AC-FOJ",
+        "AC-GBEF",
+        "AC-PBLINI",
+        "AC-RHB",
+        "AC-RPJ",
+        "AC-RSPM",
+        "AC-SBPBJ",
+        "AC-SCP",
+        "AC-SLL",
+        "AC-SRHUB",
+        "AC-TCP",
+        "AC-VMOJ",
+    ],
+    # Mustard / Savory spread
+    "Mustard / Savory Spread": [
+        "AC-FALD",
+        "AC-FALM",
+        "AC-MUSTCH",
+        "AC-BACO",
+        "AC-MEMB",
+    ],
+    # Crackers / Flatbreads
+    "Crackers / Flatbreads": [
+        "AC-CBIS",
+        "AC-EFLAT",
+        "AC-PFLAT",
+        "AC-FHOO",
+        "AC-RBOL",
+        "AC-RBBS",
+        "AC-CROS",
+    ],
+    # Artisan crisps (sweet crackers)
+    "Artisan Crisps": ["AC-ACRISP", "AC-TCRISP", "AC-PCRISP"],
+    # Nuts
+    "Nuts": [
+        "AC-COCO",
+        "AC-GAL",
+        "AC-WAL",
+        "AC-RHAZ",
+        "AC-MARC",
+        "AC-SMAL",
+        "AC-PRPE",
+        "AC-SCNM",
+    ],
+    # Dried fruit
+    "Dried Fruit": [
+        "AC-APR",
+        "AC-DPAP",
+        "AC-DPEC",
+        "AC-DTCH",
+        "AC-MANG",
+        "AC-PMULB",
+        "AC-SDF",
+    ],
+    # Chocolate-covered
+    "Chocolate": ["AC-DALM", "AC-DCRAN", "AC-STRAW", "AC-MCP"],
+    # Olives / Pickles
+    "Olives / Pickles": [
+        "AC-CAOL",
+        "AC-FRESC",
+        "AC-MEDO",
+        "AC-LFOLIVE",
+        "AC-DPIC",
+    ],
+    # Specialty sweets / honey
+    "Specialty Sweets": ["AC-FIGA", "AC-HON", "AC-PPCM"],
+    # Pretzels
+    "Pretzels": ["AC-MPTZ8"],
 }
 
 # Build reverse: SKU → family name
@@ -60,7 +317,6 @@ SETTINGS_PATH = Path(__file__).parent / "InventoryReorder" / "dist" / "inventory
 
 # MFG translations CSV (exported from RMFG Translator portal)
 MFG_TRANSLATIONS_PATH = Path(__file__).parent / "mfg_translations.csv"
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Data structures
@@ -1064,7 +1320,7 @@ def _lookup_zero_variant_gids(base: str, headers: dict, skus: set[str]) -> dict[
                 prev_price = variant_map.get(sku, (None, float("inf")))[1]
                 if price < prev_price:
                     variant_map[sku] = (node["id"], price)
-        time.sleep(0.1)
+        _limiter.wait(cost=1)
 
     return {sku: gid for sku, (gid, _) in variant_map.items()}
 
@@ -1097,7 +1353,7 @@ def _fetch_orders_by_tag(base: str, headers: dict, tag: str) -> list[dict]:
             m = re.search(r'<([^>]+)>;\s*rel="next"', link)
             if m:
                 url = m.group(1)
-        time.sleep(0.1)
+        _limiter.wait(cost=1)
     return all_orders
 
 
@@ -1406,7 +1662,6 @@ def generate_matrix_xlsx(
     """
     import re as _re
     from openpyxl.utils import get_column_letter
-    import time as _time
 
     print(f"  Connecting to Shopify...")
     base, headers = _get_shopify_auth()
@@ -1476,7 +1731,7 @@ def generate_matrix_xlsx(
         if resp.ok:
             for o in resp.json().get("orders", []):
                 full_orders[o["id"]] = o
-        _time.sleep(0.2)
+        _limiter.wait(cost=1)
 
     print(f"  Full details for {len(full_orders)} orders")
 
@@ -1862,6 +2117,7 @@ def finalize_xlsx(
         oid_str = str(oid_raw).strip().lstrip("#")
         # Detect letter-suffixed OrderIDs (e.g., 123548A) — gift redemption duplicates
         import re as _re
+
         suffix_match = _re.match(r"^(\d+)([A-Za-z]+)$", oid_str)
         if suffix_match:
             base_oid = int(suffix_match.group(1))
