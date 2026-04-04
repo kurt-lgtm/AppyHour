@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pipeline.pipeline_state import InvalidTransitionError, PassProgress, PipelineStage, PipelineState
-
+from pipeline.pipeline_state import InvalidTransitionError, PassProgress, PipelineStage, PipelineState, _active_prefixes
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -187,3 +186,24 @@ def test_pass_progress_existing_fields_unaffected() -> None:
 
 
 # ── _active_prefixes() helper ─────────────────────────────────────────────────
+
+
+def test_active_prefixes_pass1_returns_pr_cjam_only() -> None:
+    result = _active_prefixes(1)
+    assert result == ("PR-CJAM",)
+
+
+def test_active_prefixes_pass2_returns_five_prefixes() -> None:
+    result = _active_prefixes(2)
+    assert result == ("CH-", "MT-", "AC-", "PK-", "TR-")
+
+
+def test_active_prefixes_pass1_excludes_pass2_prefixes() -> None:
+    result = _active_prefixes(1)
+    for prefix in ("CH-", "MT-", "AC-", "PK-", "TR-"):
+        assert prefix not in result
+
+
+def test_active_prefixes_pass2_excludes_pr_cjam() -> None:
+    result = _active_prefixes(2)
+    assert "PR-CJAM" not in result

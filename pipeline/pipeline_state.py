@@ -55,6 +55,19 @@ class PassProgress:
         )
 
 
+def _active_prefixes(pass_number: int) -> tuple[str, ...]:
+    """Return the SKU prefixes active for a given pass number.
+
+    Pass 1: PR-CJAM only (cheese jam pairings go on orders first).
+    Pass 2: Standard food/packaging prefixes — PR-CJAM already present.
+
+    Used by cmd_sync to filter which SKUs are processed per pass (D-06, D-08).
+    """
+    if pass_number == 1:
+        return ("PR-CJAM",)
+    return ("CH-", "MT-", "AC-", "PK-", "TR-")
+
+
 @dataclass
 class PipelineState:
     """Immutable pipeline state snapshot. Advance with advance() — never mutate directly."""
