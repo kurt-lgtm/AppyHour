@@ -33,10 +33,12 @@
 - [ ] **INV-02**: Shortage detection verified live — cross-check demand vs inventory, flag shortages
 - [ ] **INV-03**: Swap resolution verified live — interactive shortage swaps with substitution families
 - [ ] **INV-04**: Dietary restriction swap exclusion — NNRS/CORS/NCRS orders excluded from auto-swaps
+- [ ] **INV-05**: Recharge bundle selection pre-fetch — download bundle selections before swaps to know what's customer-chosen vs curation-assigned
+- [ ] **INV-06**: Apply swaps to Shopify — execute decided swaps via order edit API (remove old SKU, add replacement $0 variant)
 
 ### End-to-End (E2E)
 
-- [ ] **E2E-01**: Full Saturday flow works end-to-end: inventory → sync (pass 1) → verify → sync (pass 2) → generate → finalize → email-ready
+- [ ] **E2E-01**: Full Saturday flow works end-to-end: React sheets → sync (two passes) → React gift sheet → inventory check → Recharge pre-fetch → discrepancy check → swaps → apply swaps to Shopify → generate final RMFG sheet → email-ready
 - [ ] **E2E-02**: Web UI supports the full flow (not just CLI)
 - [ ] **E2E-03**: All commands produce correct output against live data (not just unit tests)
 
@@ -91,6 +93,8 @@
 | INV-02 | TBD | Pending |
 | INV-03 | TBD | Pending |
 | INV-04 | TBD | Pending |
+| INV-05 | TBD | Pending |
+| INV-06 | TBD | Pending |
 | E2E-01 | TBD | Pending |
 | E2E-02 | TBD | Pending |
 | E2E-03 | TBD | Pending |
@@ -98,9 +102,9 @@
 | INTG-02 | TBD | Pending |
 
 **Coverage:**
-- v1 requirements: 22 total
+- v1 requirements: 24 total
 - Mapped to phases: 0
-- Unmapped: 22 ⚠️
+- Unmapped: 24 ⚠️
 
 ---
 *Requirements defined: 2026-04-04*
