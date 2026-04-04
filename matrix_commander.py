@@ -35,6 +35,24 @@ from pipeline.rate_limiter import LeakyBucketLimiter
 # Module-level rate limiter instance — configurable per D-08
 _limiter = LeakyBucketLimiter(pts_per_sec=5.0)
 
+# Verification query for error-but-applied detection (SYNC-05, D-12)
+VERIFY_LINE_ITEMS_QUERY = """
+query VerifyOrderLineItems($id: ID!) {
+    order(id: $id) {
+        id
+        lineItems(first: 250) {
+            edges {
+                node {
+                    sku
+                    fulfillableQuantity
+                    quantity
+                }
+            }
+        }
+    }
+}
+"""
+
 # Force UTF-8 output on Windows to avoid cp1252 encoding errors.
 # Guard: only redirect when running as CLI (not under pytest).
 # pytest replaces sys.stdout with a capture object whose .buffer is a tmpfile
@@ -1374,6 +1392,40 @@ class SyncResult:
     status: str  # "updated", "skipped", "duplicate", "gift", "error"
     added_skus: list[str] = field(default_factory=list)
     error: str = ""
+
+
+def _verify_edit_applied(base: str, headers: dict, order_gid: str, expected_skus: list[str]) -> bool:
+    """Return True if all expected_skus appear on the order with fulfillableQuantity > 0.
+
+    Used after orderEditCommit returns an error to detect the error-but-applied case (D-12).
+    Reads current line items via GraphQL and checks whether the edit went through server-side.
+    """
+    data = _shopify_graphql(base, headers, VERIFY_LINE_ITEMS_QUERY, {"id": order_gid})
+    order_data = data.get("order") or {}
+    edges = (order_data.get("lineItems") or {}).get("edges") or []
+    current_skus = {edge["node"]["sku"] for edge in edges if (edge.get("node") or {}).get("fulfillableQuantity", 0) > 0}
+    return all(sku in current_skus for sku in expected_skus)
+
+
+def _update_pass_progress(state: PipelineState, pass_number: int, progress: PassProgress) -> PipelineState:
+    """Return a new PipelineState with the given pass's progress updated."""
+    if pass_number == 1:
+        return PipelineState(
+            stage=state.stage,
+            pipeline_id=state.pipeline_id,
+            pass1=progress,
+            pass2=state.pass2,
+            created_at=state.created_at,
+            updated_at=state.updated_at,
+        )
+    return PipelineState(
+        stage=state.stage,
+        pipeline_id=state.pipeline_id,
+        pass1=state.pass1,
+        pass2=progress,
+        created_at=state.created_at,
+        updated_at=state.updated_at,
+    )
 
 
 def sync_order_to_shopify(
