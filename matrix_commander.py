@@ -27,14 +27,23 @@ from typing import Optional
 
 import openpyxl
 
+from pipeline.checkpoint_store import CheckpointStore
+from pipeline.dry_run_guard import DryRunGuard, DryRunViolationError
+from pipeline.pipeline_state import PassProgress, PipelineStage, PipelineState, _active_prefixes
 from pipeline.rate_limiter import LeakyBucketLimiter
 
 # Module-level rate limiter instance — configurable per D-08
 _limiter = LeakyBucketLimiter(pts_per_sec=5.0)
 
-# Force UTF-8 output on Windows to avoid cp1252 encoding errors
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+# Force UTF-8 output on Windows to avoid cp1252 encoding errors.
+# Guard: only redirect when running as CLI (not under pytest).
+# pytest replaces sys.stdout with a capture object whose .buffer is a tmpfile
+# that gets closed during teardown, causing "I/O operation on closed file" errors.
+if __name__ == "__main__":
+    if hasattr(sys.stdout, "buffer"):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "buffer"):
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 # ---------------------------------------------------------------------------
 # Import NAME_TO_SKU from the MCP constants (single source of truth)
@@ -1374,11 +1383,17 @@ def sync_order_to_shopify(
     matrix_skus: dict[str, int],
     variant_gids: dict[str, str],
     mode: str = "smart",
+    limiter: LeakyBucketLimiter | None = None,
+    guard: DryRunGuard | None = None,
+    active_prefixes: tuple[str, ...] = ("CH-", "MT-", "AC-", "PK-", "TR-"),
 ) -> SyncResult:
     """Sync one order: add $0 variants for matrix SKUs not yet on Shopify.
 
     mode: "smart" = skip only duplicate SKUs, add rest.
           "conservative" = skip entire order if any duplicate.
+    limiter: LeakyBucketLimiter called before each GraphQL mutation.
+    guard: DryRunGuard checked before orderEditBegin.
+    active_prefixes: SKU prefixes to process (pass-dependent, from _active_prefixes()).
     """
     order_name = order["name"].replace("#", "")
     tags_lower = order.get("tags", "").lower()
@@ -1395,12 +1410,12 @@ def sync_order_to_shopify(
         if sku and fq > 0:
             current_skus[sku] = current_skus.get(sku, 0) + fq
 
-    # Determine what to add
+    # Determine what to add (filtered by active_prefixes for this pass)
     to_add: list[str] = []
     duplicates: list[str] = []
     for sku, qty in matrix_skus.items():
-        if not any(sku.startswith(p) for p in ("CH-", "MT-", "AC-", "PK-", "TR-")):
-            continue  # Skip non-food/packaging SKUs
+        if not any(sku.startswith(p) for p in active_prefixes):
+            continue  # Skip SKUs not active in this pass
         if sku in current_skus:
             duplicates.append(sku)
         elif sku in variant_gids:
@@ -1419,7 +1434,13 @@ def sync_order_to_shopify(
     try:
         order_gid = f"gid://shopify/Order/{order['id']}"
 
+        # Guard: block mutations in dry-run mode
+        if guard is not None:
+            guard.assert_can_mutate()
+
         # Begin edit
+        if limiter is not None:
+            limiter.wait(cost=10)
         data = _shopify_graphql(
             base,
             headers,
@@ -1444,6 +1465,8 @@ def sync_order_to_shopify(
         added: list[str] = []
         for sku in to_add:
             gid = variant_gids[sku]
+            if limiter is not None:
+                limiter.wait(cost=10)
             add_data = _shopify_graphql(
                 base,
                 headers,
@@ -1462,6 +1485,8 @@ def sync_order_to_shopify(
                 added.append(sku)
 
         # Commit
+        if limiter is not None:
+            limiter.wait(cost=10)
         commit_data = _shopify_graphql(
             base,
             headers,
@@ -1481,8 +1506,17 @@ def sync_order_to_shopify(
 
         return SyncResult(order_name, "updated", added)
 
+    except DryRunViolationError:
+        raise
     except Exception as e:
         return SyncResult(order_name, "error", error=str(e))
+
+
+def _pipeline_id() -> str:
+    """Generate a pipeline ID from today's date."""
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
 def cmd_sync(
@@ -1490,10 +1524,33 @@ def cmd_sync(
     rmfg_tag: str,
     mode: str = "smart",
     dry_run: bool = True,
-    workers: int = 5,
+    pass_number: int = 1,
+    retry_failed: bool = False,
 ) -> bool:
-    """Sync matrix XLSX assignments to Shopify as $0 variants."""
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    """Sync matrix XLSX assignments to Shopify as $0 variants.
+
+    Sequential per-order loop with LeakyBucketLimiter, DryRunGuard,
+    CheckpointStore, and PipelineState stage transitions.
+
+    pass_number: 1 = PR-CJAM only, 2 = CH-/MT-/AC-/PK-/TR- only.
+    retry_failed: if True, only re-run orders in progress.failed.
+    """
+    from dataclasses import replace as dc_replace
+
+    # Infrastructure
+    guard = DryRunGuard(dry_run=dry_run)
+    limiter = LeakyBucketLimiter(pts_per_sec=5.0)
+    store = CheckpointStore()
+    state = store.load() or PipelineState(pipeline_id=_pipeline_id(), dry_run=dry_run)
+
+    # Pass gate: Pass 2 blocked until PASS1_COMPLETE (D-07, SYNC-04)
+    if pass_number == 2 and state.stage != PipelineStage.PASS1_COMPLETE:
+        print("ERROR: Pass 1 must complete and be verified before running Pass 2.")
+        print(f"Current stage: {state.stage.name}. Run --pass 1 first.")
+        return False
+
+    progress = state.pass1 if pass_number == 1 else state.pass2
+    prefixes = _active_prefixes(pass_number)
 
     print(f"  Loading {Path(xlsx_path).name}...")
     orders_parsed, _, _ = parse_matrix(xlsx_path)
@@ -1519,18 +1576,18 @@ def cmd_sync(
         name = o["name"].replace("#", "")
         shopify_by_name[name] = o
 
-    matched = set(matrix.keys()) & set(shopify_by_name.keys())
+    matched = sorted(set(matrix.keys()) & set(shopify_by_name.keys()))
     print(f"  {len(matched)} orders matched between matrix and Shopify")
 
     if not matched:
         print(f"  {_RED}No matching orders found!{_RESET}")
         return False
 
-    # Collect all SKUs that need variant GIDs
+    # Collect all SKUs that need variant GIDs (filtered by active prefixes)
     all_skus: set[str] = set()
     for oid in matched:
         for sku in matrix[oid]:
-            if any(sku.startswith(p) for p in ("CH-", "MT-", "AC-", "PK-", "TR-")):
+            if any(sku.startswith(p) for p in prefixes):
                 all_skus.add(sku)
 
     print(f"  Looking up $0 variant GIDs for {len(all_skus)} SKUs...")
@@ -1542,17 +1599,14 @@ def cmd_sync(
     print(f"  Found $0 variants for {len(variant_gids)}/{len(all_skus)} SKUs")
 
     if dry_run:
-        # Preview mode
+        # Preview mode — no mutations, no checkpoint
         print(f"\n{_BOLD}  DRY RUN — No changes will be made{_RESET}\n")
         updated = 0
         skipped = 0
         gift = 0
         dupes = 0
-        for oid in sorted(matched):
+        for oid in matched:
             order = shopify_by_name[oid]
-            result = sync_order_to_shopify(base, headers, order, matrix[oid], variant_gids, mode)
-            # Just count — don't actually call API in preview since sync_order_to_shopify
-            # does the real work. For true dry run, we simulate:
             tags_lower = order.get("tags", "").lower()
             if "gift redemption" in tags_lower:
                 gift += 1
@@ -1566,13 +1620,9 @@ def cmd_sync(
             to_add = [
                 s
                 for s in matrix[oid]
-                if any(s.startswith(p) for p in ("CH-", "MT-", "AC-", "PK-", "TR-"))
-                and s not in current
-                and s in variant_gids
+                if any(s.startswith(p) for p in prefixes) and s not in current and s in variant_gids
             ]
-            has_dupes = any(
-                s in current for s in matrix[oid] if any(s.startswith(p) for p in ("CH-", "MT-", "AC-", "PK-", "TR-"))
-            )
+            has_dupes = any(s in current for s in matrix[oid] if any(s.startswith(p) for p in prefixes))
             if to_add:
                 updated += 1
             elif has_dupes and mode == "conservative":
@@ -1588,26 +1638,89 @@ def cmd_sync(
         print(f"\n  Run with --execute to apply changes.")
         return True
 
-    # Live mode — execute with thread pool
-    print(f"\n{_BOLD}  LIVE SYNC — Applying changes to Shopify ({workers} workers){_RESET}\n")
+    # Live mode — sequential loop with infrastructure
+    print(f"\n{_BOLD}  LIVE SYNC — Pass {pass_number} ({len(matched)} orders){_RESET}\n")
     results: list[SyncResult] = []
-    order_items = [(shopify_by_name[oid], matrix[oid]) for oid in sorted(matched)]
-    completed = 0
-    total = len(order_items)
+    total = len(matched)
 
-    def _do_sync(order_and_matrix: tuple[dict, dict[str, int]]) -> SyncResult:
-        order, m_skus = order_and_matrix
-        return sync_order_to_shopify(base, headers, order, m_skus, variant_gids, mode)
+    for idx, oid in enumerate(matched, 1):
+        # Idempotency: skip already-succeeded orders (D-09)
+        if oid in progress.succeeded:
+            print(f"  [{idx}/{total}] #{oid} — skipped (already succeeded)")
+            results.append(SyncResult(oid, "skipped"))
+            continue
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_do_sync, item): item[0]["name"] for item in order_items}
-        for future in as_completed(futures):
-            result = future.result()
-            results.append(result)
-            completed += 1
-            if completed % 50 == 0 or completed == total:
-                pct = int(100 * completed / total)
-                print(f"  Progress: {completed}/{total} ({pct}%)")
+        # Retry filter: if --retry-failed, only process orders in failed list
+        if retry_failed and oid not in progress.failed:
+            results.append(SyncResult(oid, "skipped"))
+            continue
+
+        order = shopify_by_name[oid]
+        result = sync_order_to_shopify(
+            base,
+            headers,
+            order,
+            matrix[oid],
+            variant_gids,
+            mode,
+            limiter=limiter,
+            guard=guard,
+            active_prefixes=prefixes,
+        )
+        results.append(result)
+
+        if idx % 50 == 0 or idx == total:
+            pct = int(100 * idx / total)
+            print(f"  Progress: {idx}/{total} ({pct}%)")
+
+        # Update progress (immutable — construct new PassProgress, D-coding-style)
+        if result.status == "updated":
+            new_succeeded = [*progress.succeeded, oid]
+            new_failed = [f for f in progress.failed if f != oid]
+            new_errors = {k: v for k, v in progress.errors.items() if k != oid}
+            progress = PassProgress(
+                succeeded=new_succeeded,
+                failed=new_failed,
+                skipped=progress.skipped,
+                commit_pending=progress.commit_pending,
+                errors=new_errors,
+            )
+        elif result.status in ("error",):
+            new_failed = [*progress.failed, oid] if oid not in progress.failed else progress.failed
+            new_errors = {**progress.errors, oid: result.error}
+            progress = PassProgress(
+                succeeded=progress.succeeded,
+                failed=new_failed,
+                skipped=progress.skipped,
+                commit_pending=progress.commit_pending,
+                errors=new_errors,
+            )
+        elif result.status in ("skipped", "gift", "duplicate"):
+            new_skipped = [*progress.skipped, oid] if oid not in progress.skipped else progress.skipped
+            progress = PassProgress(
+                succeeded=progress.succeeded,
+                failed=progress.failed,
+                skipped=new_skipped,
+                commit_pending=progress.commit_pending,
+                errors=progress.errors,
+            )
+
+        # Rebuild state with updated progress and save checkpoint after every order
+        if pass_number == 1:
+            state = dc_replace(state, pass1=progress)
+        else:
+            state = dc_replace(state, pass2=progress)
+        store.save(state)
+
+    # Advance stage after pass completes
+    try:
+        if pass_number == 1:
+            state = state.advance(PipelineStage.PASS1_COMPLETE)
+        else:
+            state = state.advance(PipelineStage.PASS2_COMPLETE)
+        store.save(state)
+    except Exception:
+        pass  # Stage may already be advanced on re-run; non-fatal
 
     # Summarize
     counts: dict[str, int] = defaultdict(int)
@@ -1615,7 +1728,7 @@ def cmd_sync(
         counts[r.status] += 1
 
     print(f"\n{_BOLD}{'=' * 60}{_RESET}")
-    print(f"{_BOLD}  SYNC COMPLETE{_RESET}")
+    print(f"{_BOLD}  SYNC COMPLETE — Pass {pass_number}{_RESET}")
     print(f"{_BOLD}{'=' * 60}{_RESET}")
     print(f"  Updated:    {_GREEN}{counts.get('updated', 0)}{_RESET}")
     print(f"  Skipped:    {counts.get('skipped', 0)}")
@@ -1638,6 +1751,9 @@ def cmd_sync(
             print(f"    #{r.order_name}: {r.error}")
 
     print(f"{_BOLD}{'=' * 60}{_RESET}\n")
+
+    if pass_number == 1:
+        print("Pass 1 complete. Verify live orders in Shopify admin, then run --pass 2 to continue.")
 
     return counts.get("error", 0) == 0
 
@@ -2510,7 +2626,20 @@ def main() -> None:
         default="smart",
         help="Duplicate handling: smart (skip SKU) or conservative (skip order)",
     )
-    p_sync.add_argument("--workers", type=int, default=5, help="Concurrent workers (default: 5)")
+    p_sync.add_argument(
+        "--pass",
+        type=int,
+        choices=[1, 2],
+        default=1,
+        dest="pass_number",
+        help="Pass number: 1=PR-CJAM only, 2=CH-/MT-/AC-/PK-/TR- (default: 1)",
+    )
+    p_sync.add_argument(
+        "--retry-failed",
+        action="store_true",
+        dest="retry_failed",
+        help="Only re-run orders that failed in the last checkpoint",
+    )
 
     # generate
     p_gen = sub.add_parser("generate", help="Generate RMFG matrix directly from Shopify (replaces RMFG portal)")
@@ -2540,7 +2669,14 @@ def main() -> None:
     elif args.command == "swap":
         ok = cmd_swap(args.xlsx, getattr(args, "inventory", None))
     elif args.command == "sync-shopify":
-        ok = cmd_sync(args.xlsx, args.tag, mode=args.mode, dry_run=not args.execute, workers=args.workers)
+        ok = cmd_sync(
+            args.xlsx,
+            args.tag,
+            mode=args.mode,
+            dry_run=not args.execute,
+            pass_number=args.pass_number,
+            retry_failed=args.retry_failed,
+        )
     elif args.command == "generate":
         ok = cmd_generate(
             args.tag,
