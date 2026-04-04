@@ -31,7 +31,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. The rate limiter holds Shopify GraphQL throughput at or below target pts/sec and backs off cleanly on 429s
   3. Pipeline state machine transitions forward-only through named stages; illegal transitions are rejected with a clear error
   4. Dry-run mode prints what sync-shopify would do without issuing any Shopify mutations
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [ ] 01-01-PLAN.md — CheckpointStore + PipelineState (PIPE-01, PIPE-03): crash-safe JSON checkpoint and forward-only state machine
+- [ ] 01-02-PLAN.md — Rate Limiter (PIPE-02): leaky-bucket throttle + tenacity 429 retry, replaces bare sleep calls
+- [ ] 01-03-PLAN.md — Dry-Run Enforcement + Web Integration (PIPE-04): DryRunGuard at mutation layer, STATE dict replaced by CheckpointStore
 
 ### Phase 2: Shopify Sync Battle-Test
 **Goal**: Two-pass Shopify order edit loop works correctly against live orders — idempotent, rate-safe, and partial-failure tolerant
@@ -105,7 +110,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Pipeline Foundation | 0/? | Not started | - |
+| 1. Pipeline Foundation | 0/3 | Not started | - |
 | 2. Shopify Sync Battle-Test | 0/? | Not started | - |
 | 3. Inventory + Shortage Detection | 0/? | Not started | - |
 | 4. Recharge Pre-Fetch + Swap Engine | 0/? | Not started | - |
