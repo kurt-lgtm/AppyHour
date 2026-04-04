@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Shopify order SKU swap via GraphQL order edit API.
 
 Swaps a shortage SKU for a substitute across unfulfilled orders
@@ -13,6 +18,19 @@ from typing import Callable
 
 import requests
 
+# Dietary restriction box SKU fragments — orders with these are excluded from
+# automatic swaps because their contents are curated for the restriction.
+# If a restricted item appears on such an order, the customer chose it themselves.
+DIETARY_RESTRICTION_FRAGMENTS = ("NNRS", "CORS", "NCRS")
+
+def _has_dietary_restriction(line_items: list[dict]) -> bool:
+    """Check if any line item SKU contains a dietary restriction fragment."""
+    for li in line_items:
+        sku = (li.get("sku") or "").strip().upper()
+        for frag in DIETARY_RESTRICTION_FRAGMENTS:
+            if frag in sku:
+                return True
+    return False
 
 def _gql(store_url: str, token: str, query: str, variables: dict | None = None) -> dict:
     """Execute a Shopify Admin GraphQL query."""
@@ -28,7 +46,6 @@ def _gql(store_url: str, token: str, query: str, variables: dict | None = None) 
         raise Exception(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
     return data["data"]
 
-
 def _rest_get(store_url: str, token: str, path: str, params: dict | None = None) -> requests.Response:
     """Execute a Shopify Admin REST GET request."""
     url = f"https://{store_url}.myshopify.com/admin/api/2024-01/{path}"
@@ -36,7 +53,6 @@ def _rest_get(store_url: str, token: str, path: str, params: dict | None = None)
     resp = requests.get(url, headers=headers, params=params, timeout=30)
     resp.raise_for_status()
     return resp
-
 
 def lookup_variant_gid(store_url: str, token: str, sku: str) -> str | None:
     """Find the $0 variant GID for a SKU. Returns None if not found."""
@@ -54,7 +70,6 @@ def lookup_variant_gid(store_url: str, token: str, sku: str) -> str | None:
     # Prefer $0 variant (used for curation swaps)
     variants.sort(key=lambda v: float(v["price"]))
     return variants[0]["id"]
-
 
 def find_swap_targets(
     store_url: str,
@@ -94,7 +109,10 @@ def find_swap_targets(
             tags = [t.strip() for t in (o.get("tags") or "").split(",")]
             if ship_tag not in tags:
                 continue
-            for li in o.get("line_items", []):
+            order_line_items = o.get("line_items", [])
+            if _has_dietary_restriction(order_line_items):
+                continue
+            for li in order_line_items:
                 sku = (li.get("sku") or "").strip()
                 if sku != old_sku:
                     continue
@@ -122,7 +140,6 @@ def find_swap_targets(
         time.sleep(0.1)
 
     return targets
-
 
 def execute_swap(
     store_url: str,
@@ -212,7 +229,6 @@ def execute_swap(
         return {"success": False, "error": f"commit: {errors}"}
 
     return {"success": True, "error": None}
-
 
 def execute_bulk_swap(
     store_url: str,

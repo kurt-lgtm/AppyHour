@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["openpyxl", "requests"]
+# ///
+
 """
 Inventory Reorder System
 Standalone tkinter app for forecasting demand, tracking inventory,
@@ -187,7 +192,6 @@ DEFAULT_CEX_EC = {
     "SPN": "CH-MSMG", "HHIGH": "CH-HGCU", "BYO": "CH-HGCU",
 }
 
-
 # ═════════════════════════════════════════════════════════════════════
 #  SETTINGS PERSISTENCE
 # ═════════════════════════════════════════════════════════════════════
@@ -201,7 +205,6 @@ def _get_app_dir():
         return os.path.join(script_dir, "dist")
     return script_dir
 
-
 def load_settings():
     path = os.path.join(_get_app_dir(), SETTINGS_FILE)
     if os.path.exists(path):
@@ -212,7 +215,6 @@ def load_settings():
             pass
     return {}
 
-
 def save_settings(settings):
     path = os.path.join(_get_app_dir(), SETTINGS_FILE)
     try:
@@ -221,13 +223,11 @@ def save_settings(settings):
     except Exception:
         pass
 
-
 # ═════════════════════════════════════════════════════════════════════
 #  EXPIRATION DATE PARSING
 # ═════════════════════════════════════════════════════════════════════
 
 _EXP_DATE_FORMATS = ["%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d"]
-
 
 def _parse_expiration_dates(raw_string):
     """Parse comma-separated expiration dates into sorted ISO date strings.
@@ -251,7 +251,6 @@ def _parse_expiration_dates(raw_string):
                 continue
     results.sort()
     return results
-
 
 # ═════════════════════════════════════════════════════════════════════
 #  RECHARGE API CLIENT
@@ -536,7 +535,6 @@ class RechargeClient:
 
         return cohort_data, overall, segmented
 
-
 # ═════════════════════════════════════════════════════════════════════
 #  SHOPIFY API CLIENT
 # ═════════════════════════════════════════════════════════════════════
@@ -661,7 +659,6 @@ class ShopifyOAuth:
             callback(self._access_token)
 
         return self._access_token
-
 
 class ShopifyClient:
     """Shopify Admin API client for pulling Subscription First Orders."""
@@ -961,7 +958,6 @@ class ShopifyClient:
                 {k: dict(v) for k, v in retention_by_cohort.items()},
                 reship_rate)
 
-
 # ═════════════════════════════════════════════════════════════════════
 #  DATA MODELS / CALCULATIONS
 # ═════════════════════════════════════════════════════════════════════
@@ -970,10 +966,8 @@ def calculate_reorder_point(daily_usage, lead_time_days, safety_stock):
     """Reorder Point = (Daily Usage x Total Lead Time) + Safety Stock"""
     return (daily_usage * lead_time_days) + safety_stock
 
-
 def calculate_total_lead_time(purchase_lt, production_lt, shipping_lt):
     return purchase_lt + production_lt + shipping_lt
-
 
 def decompose_bundles(bundle_sku, quantity, bundle_map):
     """Break a bundle SKU into component SKUs using bundle_map.
@@ -989,18 +983,15 @@ def decompose_bundles(bundle_sku, quantity, bundle_map):
         ]
     return [(bundle_sku, quantity)]
 
-
 def apply_churn_rate(quantity, churn_pct):
     """Reduce quantity by churn percentage (e.g., 5% churn -> 95% remains)."""
     return quantity * (1.0 - churn_pct / 100.0)
-
 
 # ── Queued-charge curation resolution ────────────────────────────────
 
 KNOWN_CURATIONS = set(CURATION_ORDER) | {"NMS", "BYO", "SS", "MS"}
 
 _MONTHLY_PATTERNS = {"AHB-MED", "AHB-LGE", "AHB-CMED", "AHB-CUR-MS", "AHB-BVAL"}
-
 
 def resolve_curation_from_box_sku(sku):
     """Determine curation from an AHB box SKU.
@@ -1026,7 +1017,6 @@ def resolve_curation_from_box_sku(sku):
                 return seg
         return None
     return None
-
 
 def resolve_queued_charges(charges):
     """Resolve generic PR-CJAM/CEX-EC SKUs using per-charge box context.
@@ -1123,7 +1113,6 @@ def resolve_queued_charges(charges):
                 "cex_ec": dict(v["cex_ec"]),
                 "unresolved": v["unresolved"]}
             for m, v in result.items()}
-
 
 # ── Cohort-based forecast engine ─────────────────────────────────────
 
@@ -1231,7 +1220,6 @@ def forecast_cohort_demand(cohorts, retention_matrix, curation_recipes,
 
     return results
 
-
 def compute_wheel_supply(wheel_inventory, adjusted_factors=None):
     """Convert cheese wheel inventory to potential slices.
 
@@ -1254,7 +1242,6 @@ def compute_wheel_supply(wheel_inventory, adjusted_factors=None):
         if slices > 0:
             supply[target] += round(slices, 1)
     return dict(supply)
-
 
 def compute_bulk_supply(inventory, bulk_conversions):
     """Convert bulk raw material inventory to potential finished packets.
@@ -1303,7 +1290,6 @@ def compute_bulk_supply(inventory, bulk_conversions):
                     supply[target_sku] += round(packets, 1)
                 break
     return dict(supply)
-
 
 def compute_monthly_box_demand(monthly_box_recipes, monthly_box_counts,
                                 forecast_months=3):
@@ -1359,7 +1345,6 @@ def compute_monthly_box_demand(monthly_box_recipes, monthly_box_counts,
             }
 
     return results
-
 
 def compute_reorder_alerts(forecast, inventory, open_pos, wheel_supply,
                            bulk_supply=None):
@@ -1436,7 +1421,6 @@ def compute_reorder_alerts(forecast, inventory, open_pos, wheel_supply,
     urgency_order = {"CRITICAL": 0, "WARNING": 1, "PLAN": 2}
     alerts.sort(key=lambda a: urgency_order.get(a["urgency"], 3))
     return alerts
-
 
 # ═════════════════════════════════════════════════════════════════════
 #  CSV COLUMN MAPPING DIALOG
@@ -1541,7 +1525,6 @@ class ColumnMappingDialog(tk.Toplevel):
                 return
         self.result = mapping
         self.destroy()
-
 
 # ═════════════════════════════════════════════════════════════════════
 #  BUNDLE MAPPING EDITOR DIALOG
@@ -1710,7 +1693,6 @@ class BundleMappingEditor(tk.Toplevel):
         self.result = self.bundle_map
         self.destroy()
 
-
 class _ComponentEntryDialog(tk.Toplevel):
     """Small dialog for entering a component SKU + quantity."""
 
@@ -1760,7 +1742,6 @@ class _ComponentEntryDialog(tk.Toplevel):
             return
         self.result = (sku, qty)
         self.destroy()
-
 
 # ═════════════════════════════════════════════════════════════════════
 #  SKU SETTINGS EDITOR DIALOG
@@ -1835,7 +1816,6 @@ class SkuSettingsDialog(tk.Toplevel):
                     return
         self.result = result
         self.destroy()
-
 
 # ═════════════════════════════════════════════════════════════════════
 #  MANUAL DEMAND EDITOR DIALOG
@@ -1959,7 +1939,6 @@ class ManualDemandDialog(tk.Toplevel):
         self.result = self.data
         self.destroy()
 
-
 # ═════════════════════════════════════════════════════════════════════
 #  SHOPIFY FORECAST EDITOR DIALOG
 # ═════════════════════════════════════════════════════════════════════
@@ -2081,7 +2060,6 @@ class ShopifyForecastDialog(tk.Toplevel):
     def _on_save(self):
         self.result = self.data
         self.destroy()
-
 
 # ═════════════════════════════════════════════════════════════════════
 #  CURATION RECIPE EDITOR DIALOG
@@ -2355,7 +2333,6 @@ class CurationRecipeDialog(tk.Toplevel):
             "cex_ec": self.cex_ec,
         }
         self.destroy()
-
 
 # ═════════════════════════════════════════════════════════════════════
 #  MONTHLY BOX RECIPE DIALOG (MED / CMED / LGE)
@@ -2734,7 +2711,6 @@ class MonthlyBoxRecipeDialog(tk.Toplevel):
         }
         self.destroy()
 
-
 # ═════════════════════════════════════════════════════════════════════
 #  COHORT MANAGER DIALOG
 # ═════════════════════════════════════════════════════════════════════
@@ -2921,7 +2897,6 @@ class CohortManagerDialog(tk.Toplevel):
         self.result = self.cohorts
         self.destroy()
 
-
 class _CohortEntryDialog(tk.Toplevel):
     """Small dialog for entering a cohort."""
 
@@ -2984,7 +2959,6 @@ class _CohortEntryDialog(tk.Toplevel):
             "track": self.track_var.get(),
         }
         self.destroy()
-
 
 # ═════════════════════════════════════════════════════════════════════
 #  RETENTION MATRIX EDITOR DIALOG
@@ -3137,7 +3111,6 @@ class RetentionMatrixDialog(tk.Toplevel):
             "repeat_rate": repeat,
         }
         self.destroy()
-
 
 # ═════════════════════════════════════════════════════════════════════
 #  OPEN PO MANAGER DIALOG
@@ -3298,7 +3271,6 @@ class OpenPODialog(tk.Toplevel):
         self.result = self.data
         self.destroy()
 
-
 class _POEntryDialog(tk.Toplevel):
     """Small dialog for entering/editing a PO line."""
 
@@ -3367,7 +3339,6 @@ class _POEntryDialog(tk.Toplevel):
             "status": "Open",
         }
         self.destroy()
-
 
 # ═════════════════════════════════════════════════════════════════════
 #  MAIN APPLICATION
@@ -13417,11 +13388,9 @@ class InventoryReorderApp:
             f"Settings saved  |  "
             f"{datetime.datetime.now().strftime('%H:%M:%S')}")
 
-
 # ═════════════════════════════════════════════════════════════════════
 #  INVENTORY EDIT DIALOG
 # ═════════════════════════════════════════════════════════════════════
-
 
 class _RetentionComparisonDialog(tk.Toplevel):
     """Compare actual retention curves vs. the current modeled matrix."""
@@ -13635,7 +13604,6 @@ class _RetentionComparisonDialog(tk.Toplevel):
         self.result = new_matrix
         self.destroy()
 
-
 class _ProductionDayDialog(tk.Toplevel):
     """Let user choose which production day to deplete."""
 
@@ -13670,7 +13638,6 @@ class _ProductionDayDialog(tk.Toplevel):
     def _ok(self):
         self.result = self._var.get()
         self.destroy()
-
 
 class _DepletionPreviewDialog(tk.Toplevel):
     """Preview depletion quantities before applying to inventory."""
@@ -13813,7 +13780,6 @@ class _DepletionPreviewDialog(tk.Toplevel):
     def _apply(self):
         self.result = self.depletion
         self.destroy()
-
 
 # ═════════════════════════════════════════════════════════════════════
 
@@ -13965,11 +13931,9 @@ class _InventoryEditDialog(tk.Toplevel):
         self.result = result
         self.destroy()
 
-
 # ═════════════════════════════════════════════════════════════════════
 #  VENDOR CATALOG DIALOG
 # ═════════════════════════════════════════════════════════════════════
-
 
 class _VendorCatalogDialog(tk.Toplevel):
     """Editable vendor catalog database."""
@@ -14135,11 +14099,9 @@ class _VendorCatalogDialog(tk.Toplevel):
         self.result = self.catalog
         self.destroy()
 
-
 # ═════════════════════════════════════════════════════════════════════
 #  AUTO-PO PREVIEW DIALOG
 # ═════════════════════════════════════════════════════════════════════
-
 
 class _AutoPOPreviewDialog(tk.Toplevel):
     """Preview auto-generated POs grouped by vendor."""
@@ -14246,11 +14208,9 @@ class _AutoPOPreviewDialog(tk.Toplevel):
         ttk.Button(btn_frame, text="Close",
                    command=self.destroy).pack(side="right")
 
-
 # ═════════════════════════════════════════════════════════════════════
 #  DEPLETION EMAIL COMPOSE DIALOG
 # ═════════════════════════════════════════════════════════════════════
-
 
 class _DepletionEmailDialog(tk.Toplevel):
     """Compose dialog for depletion report email."""
@@ -14365,7 +14325,6 @@ class _DepletionEmailDialog(tk.Toplevel):
         }
         self.destroy()
 
-
 # ═════════════════════════════════════════════════════════════════════
 #  ENTRY POINT
 # ═════════════════════════════════════════════════════════════════════
@@ -14386,7 +14345,6 @@ def main():
 
     root.protocol("WM_DELETE_WINDOW", on_close)
     root.mainloop()
-
 
 if __name__ == "__main__":
     main()

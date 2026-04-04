@@ -1,4 +1,10 @@
 #!/usr/bin/env python
+
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["openpyxl", "requests"]
+# ///
+
 """
 Inventory & Demand Report -- Weeks of 3/21 and 3/28
 ===================================================
@@ -24,26 +30,38 @@ from datetime import date
 # -- Paths --
 BASE = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PATH = os.path.join(BASE, "dist", "inventory_reorder_settings.json")
-INV_CSV = os.path.join(BASE, "Orders RMFG_20260324 - Template Check.csv")
+INV_CSV = r"C:\Users\Work\Claude Projects\Product Inventory_3-31-26_(3-31-26).csv"
 SHIPMENTS = os.path.join(BASE, "Shipments")
-SAT_DEPLETION = ""  # No depletion file this week — template check already has net available
+SAT_DEPLETION = ""  # Inventory CSV is from 3/31 — post-Saturday depletion
 TUE_DEPLETION = ""
 
-# Ship week boundaries
-WK1_START = date(2026, 3, 25)
-WK1_END = date(2026, 3, 28)
-WK2_START = date(2026, 3, 29)
-WK2_END = date(2026, 4, 4)
+# Ship week boundaries — Recharge uses Sun-Sat (charge dates)
+# WK1: Sun 4/5 – Sat 4/11 (ships week of _SHIP_2026-04-13)
+# WK2: Sun 4/12 – Sat 4/18 (ships week of _SHIP_2026-04-20)
+WK1_START = date(2026, 4, 5)
+WK1_END = date(2026, 4, 11)
+WK2_START = date(2026, 4, 12)
+WK2_END = date(2026, 4, 18)
 
 PICKABLE_PREFIXES = ("CH-", "MT-", "AC-")
 
 # Curation resolution
 KNOWN_CURATIONS = {
-    "MONG", "MDT", "OWC", "SPN", "ALPN", "ALPT",
-    "ISUN", "HHIGH", "NMS", "BYO", "SS", "GEN", "MS",
+    "MONG",
+    "MDT",
+    "OWC",
+    "SPN",
+    "ALPN",
+    "ALPT",
+    "ISUN",
+    "HHIGH",
+    "NMS",
+    "BYO",
+    "SS",
+    "GEN",
+    "MS",
 }
-_MONTHLY_PATTERNS = {"AHB-MED", "AHB-LGE", "AHB-CMED", "AHB-CUR-MS",
-                      "AHB-BVAL", "AHB-MCUST-MS", "AHB-MCUST-NMS"}
+_MONTHLY_PATTERNS = {"AHB-MED", "AHB-LGE", "AHB-CMED", "AHB-CUR-MS", "AHB-BVAL", "AHB-MCUST-MS", "AHB-MCUST-NMS"}
 
 
 def resolve_curation(sku):
@@ -75,6 +93,7 @@ def load_settings():
 
 # -- Step 1: Load inventory --
 
+
 def load_inventory_csv(path):
     inv = {}
     with open(path, encoding="utf-8-sig") as f:
@@ -83,15 +102,18 @@ def load_inventory_csv(path):
             sku = (row.get("Product SKU") or "").strip()
             if not sku:
                 continue
-            total = row.get("Total", "0") or "0"
+            # Prefer RMFG column (fulfillment warehouse) over Total (which includes CA)
+            raw = row.get("RMFG") or row.get("Total", "0") or "0"
+            raw = raw.strip() if isinstance(raw, str) else str(raw)
             try:
-                inv[sku] = int(float(total))
+                inv[sku] = int(float(raw)) if raw else 0
             except (ValueError, TypeError):
                 inv[sku] = 0
     return inv
 
 
 # -- Step 2: Parse depletion XLSX --
+
 
 def parse_depletion_xlsx(path, sku_translations):
     import openpyxl
@@ -160,16 +182,19 @@ def parse_depletion_xlsx(path, sku_translations):
 
 # -- Step 3: Fetch Recharge via API (v2021-11) --
 
+
 def fetch_recharge_api(api_token):
     """Fetch queued charges. Returns pickable SKU demand + curation counts per week."""
     import requests
 
     session = requests.Session()
-    session.headers.update({
-        "X-Recharge-Access-Token": api_token,
-        "Accept": "application/json",
-        "X-Recharge-Version": "2021-11",
-    })
+    session.headers.update(
+        {
+            "X-Recharge-Access-Token": api_token,
+            "Accept": "application/json",
+            "X-Recharge-Version": "2021-11",
+        }
+    )
 
     all_charges = []
     params = {
@@ -185,8 +210,7 @@ def fetch_recharge_api(api_token):
         page += 1
         for attempt in range(3):
             try:
-                resp = session.get("https://api.rechargeapps.com/charges",
-                                   params=params, timeout=60)
+                resp = session.get("https://api.rechargeapps.com/charges", params=params, timeout=60)
                 resp.raise_for_status()
                 break
             except Exception:
@@ -216,14 +240,17 @@ def fetch_recharge_api(api_token):
     wk2_skus = defaultdict(int)
     wk1_curations = defaultdict(int)  # {curation: charge_count}
     wk2_curations = defaultdict(int)
-    wk1_large = defaultdict(int)      # {curation: large_box_count}
+    wk1_large = defaultdict(int)  # {curation: large_box_count}
     wk2_large = defaultdict(int)
-    wk1_med_total = 0                 # total AHB-MED/MCUST boxes (excludes CMED)
+    wk1_med_total = 0  # total AHB-MED/MCUST boxes (excludes CMED)
     wk2_med_total = 0
-    wk1_cmed_total = 0                # total AHB-CMED boxes
+    wk1_cmed_total = 0  # total AHB-CMED boxes
     wk2_cmed_total = 0
-    wk1_lge_total = 0                 # total AHB-LGE/LCUST boxes
+    wk1_lge_total = 0  # total AHB-LGE/LCUST boxes
     wk2_lge_total = 0
+    # Monthly box counts split by (week, charge_month) — recipes differ per month
+    # Key: (week, charge_month) e.g. ("WK1", "2026-04"), ("WK2", "2026-05")
+    monthly_by_week_month = defaultdict(lambda: {"MED": 0, "CMED": 0, "LGE": 0})
     charges_per_date = defaultdict(int)
 
     for charge in all_charges:
@@ -258,21 +285,26 @@ def fetch_recharge_api(api_token):
             # Custom curations (AHB-MCUST-MDT, AHB-LCUST-OWC) are already in per-curation tables
             if cur == "MONTHLY":
                 is_cmed = "CMED" in upper_box
+                charge_month = sched[:7]  # "2026-04" or "2026-05"
+                week_label = "WK1" if is_wk1 else "WK2"
                 if is_lg:
                     if is_wk1:
                         wk1_lge_total += 1
                     else:
                         wk2_lge_total += 1
+                    monthly_by_week_month[(week_label, charge_month)]["LGE"] += 1
                 elif is_cmed:
                     if is_wk1:
                         wk1_cmed_total += 1
                     else:
                         wk2_cmed_total += 1
+                    monthly_by_week_month[(week_label, charge_month)]["CMED"] += 1
                 else:
                     if is_wk1:
                         wk1_med_total += 1
                     else:
                         wk2_med_total += 1
+                    monthly_by_week_month[(week_label, charge_month)]["MED"] += 1
 
             # Curation counts (non-MONTHLY only)
             if cur and cur != "MONTHLY":
@@ -285,38 +317,41 @@ def fetch_recharge_api(api_token):
                     if is_lg:
                         wk2_large[cur] += 1
 
-        # Sum pickable SKU quantities
-        # For MONTHLY boxes, skip pickable items — they flow through slot
-        # assignment SUMIF tables in the cut order xlsx instead.
-        cur = resolve_curation(box_sku) if box_sku else None
-        is_monthly = (cur == "MONTHLY")
-
+        # Sum pickable SKU quantities (all charges, including MONTHLY boxes)
         for item in charge.get("line_items", []):
             sku = (item.get("sku") or "").strip()
             if not sku or not any(sku.startswith(p) for p in PICKABLE_PREFIXES):
                 continue
-            if is_monthly:
-                continue  # items flow through slot tables instead
             qty = int(float(item.get("quantity", 1)))
             if is_wk1:
                 wk1_skus[sku] += qty
             else:
                 wk2_skus[sku] += qty
 
-    return (dict(wk1_skus), dict(wk2_skus),
-            dict(wk1_curations), dict(wk2_curations),
-            dict(wk1_large), dict(wk2_large),
-            len(all_charges), dict(charges_per_date),
-            wk1_med_total, wk2_med_total,
-            wk1_cmed_total, wk2_cmed_total,
-            wk1_lge_total, wk2_lge_total)
+    return (
+        dict(wk1_skus),
+        dict(wk2_skus),
+        dict(wk1_curations),
+        dict(wk2_curations),
+        dict(wk1_large),
+        dict(wk2_large),
+        len(all_charges),
+        dict(charges_per_date),
+        wk1_med_total,
+        wk2_med_total,
+        wk1_cmed_total,
+        wk2_cmed_total,
+        wk1_lge_total,
+        wk2_lge_total,
+        dict(monthly_by_week_month),
+    )
 
 
 # -- Step 4: Fetch Shopify orders for upcoming ship weeks --
 
 # Ship week tag dates (Monday of each week)
-WK1_SHIP_TAG = "_SHIP_2026-03-30"
-WK2_SHIP_TAG = "_SHIP_2026-04-06"
+WK1_SHIP_TAG = "_SHIP_2026-04-13"
+WK2_SHIP_TAG = "_SHIP_2026-04-20"
 
 
 def fetch_shopify_orders(settings):
@@ -342,16 +377,18 @@ def fetch_shopify_orders(settings):
         store = f"https://{store}.myshopify.com"
 
     session = requests.Session()
-    session.headers.update({
-        "X-Shopify-Access-Token": token,
-        "Content-Type": "application/json",
-    })
+    session.headers.update(
+        {
+            "X-Shopify-Access-Token": token,
+            "Content-Type": "application/json",
+        }
+    )
 
     # Fetch all open/unfulfilled orders (no date cutoff — ship tag is the filter)
     import re
+
     url = f"{store}/admin/api/2024-01/orders.json"
-    params = {"status": "open", "fulfillment_status": "unfulfilled",
-              "limit": 250}
+    params = {"status": "open", "fulfillment_status": "unfulfilled", "limit": 250}
 
     all_orders = []
     while url:
@@ -472,19 +509,31 @@ def fetch_shopify_orders(settings):
                 if any(upper.startswith(p) for p in PICKABLE_PREFIXES):
                     target[sku] += qty
 
-    print(f"  Shopify WK1: {wk1_count} orders ({sum(wk1_curations.values())} subs, "
-          f"{wk1_count - sum(wk1_curations.values())} addon-only)")
-    print(f"  Shopify WK2: {wk2_count} orders ({sum(wk2_curations.values())} subs, "
-          f"{wk2_count - sum(wk2_curations.values())} addon-only)")
+    print(
+        f"  Shopify WK1: {wk1_count} orders ({sum(wk1_curations.values())} subs, "
+        f"{wk1_count - sum(wk1_curations.values())} addon-only)"
+    )
+    print(
+        f"  Shopify WK2: {wk2_count} orders ({sum(wk2_curations.values())} subs, "
+        f"{wk2_count - sum(wk2_curations.values())} addon-only)"
+    )
 
-    return (dict(wk1_addon), dict(wk2_addon),
-            dict(wk1_curations), dict(wk2_curations),
-            dict(wk1_large), dict(wk2_large),
-            dict(wk1_med), dict(wk2_med),
-            dict(wk1_lge), dict(wk2_lge))
+    return (
+        dict(wk1_addon),
+        dict(wk2_addon),
+        dict(wk1_curations),
+        dict(wk2_curations),
+        dict(wk1_large),
+        dict(wk2_large),
+        dict(wk1_med),
+        dict(wk2_med),
+        dict(wk1_lge),
+        dict(wk2_lge),
+    )
 
 
 # -- Main --
+
 
 def main():
     settings = load_settings()
@@ -531,13 +580,22 @@ def main():
         return
 
     print("\nFetching Recharge demand from API (v2021-11)...")
-    (rc_wk1, rc_wk2,
-     wk1_curations, wk2_curations,
-     wk1_large, wk2_large,
-     total_charges, charges_per_date,
-     wk1_med_monthly, wk2_med_monthly,
-     _wk1_cmed, _wk2_cmed,
-     wk1_lge_monthly, wk2_lge_monthly) = fetch_recharge_api(recharge_token)
+    (
+        rc_wk1,
+        rc_wk2,
+        wk1_curations,
+        wk2_curations,
+        wk1_large,
+        wk2_large,
+        total_charges,
+        charges_per_date,
+        wk1_med_monthly,
+        wk2_med_monthly,
+        _wk1_cmed,
+        _wk2_cmed,
+        wk1_lge_monthly,
+        wk2_lge_monthly,
+    ) = fetch_recharge_api(recharge_token)
 
     print(f"\n  Charges per date:")
     wk1_ct = wk2_ct = 0
@@ -555,8 +613,8 @@ def main():
     print(f"  WK1 charges: {wk1_ct:,}  |  WK2 charges: {wk2_ct:,}")
 
     # 5. First order projections
-    wk1_first = dict(sat_first_skus)   # project Sat 3/16 first order profile
-    wk2_first = dict(tue_first_skus)   # project Tue 3/17 first order profile
+    wk1_first = dict(sat_first_skus)  # project Sat 3/16 first order profile
+    wk2_first = dict(tue_first_skus)  # project Tue 3/17 first order profile
 
     # 6. Combine demands
     wk1_total = defaultdict(int)
@@ -578,10 +636,7 @@ def main():
     report_skus = set()
     for d in (available, wk1_total, wk2_total):
         report_skus.update(d.keys())
-    report_skus = sorted(
-        sku for sku in report_skus
-        if any(sku.startswith(p) for p in PICKABLE_PREFIXES)
-    )
+    report_skus = sorted(sku for sku in report_skus if any(sku.startswith(p) for p in PICKABLE_PREFIXES))
 
     inv_settings = settings.get("inventory", {})
 
@@ -607,10 +662,7 @@ def main():
         skus = categories[prefix]
         if not skus:
             continue
-        active = [s for s in skus
-                  if available.get(s, 0) != 0
-                  or wk1_total.get(s, 0) > 0
-                  or wk2_total.get(s, 0) > 0]
+        active = [s for s in skus if available.get(s, 0) != 0 or wk1_total.get(s, 0) > 0 or wk2_total.get(s, 0) > 0]
         if not active:
             continue
 
@@ -693,10 +745,8 @@ def main():
     print("\n" + "=" * 100)
     print(f"Inventory: 3/14 RMFG snapshot")
     print(f"Depletions: Sat 3/16 ({sat_orders:,} orders) + Tue 3/17 ({tue_orders:,} orders)")
-    print(f"Wk1: RC={sum(rc_wk1.values()):,} + FO={sum(wk1_first.values()):,}"
-          f" = {sum(wk1_total.values()):,} items")
-    print(f"Wk2: RC={sum(rc_wk2.values()):,} + FO={sum(wk2_first.values()):,}"
-          f" = {sum(wk2_total.values()):,} items")
+    print(f"Wk1: RC={sum(rc_wk1.values()):,} + FO={sum(wk1_first.values()):,} = {sum(wk1_total.values()):,} items")
+    print(f"Wk2: RC={sum(rc_wk2.values()):,} + FO={sum(wk2_first.values()):,} = {sum(wk2_total.values()):,} items")
 
     shortages = []
     for sku in report_skus:
@@ -727,8 +777,7 @@ def main():
         for cur in sorted(set(list(wk1_curations.keys()) + list(wk2_curations.keys()))):
             cheese = pr_cjam.get(cur, {}).get("cheese", "")
             if cheese:
-                writer.writerow(["", cur, cheese, wk1_curations.get(cur, 0),
-                                 wk2_curations.get(cur, 0)])
+                writer.writerow(["", cur, cheese, wk1_curations.get(cur, 0), wk2_curations.get(cur, 0)])
         writer.writerow(["PR-CJAM TOTALS"])
         for cheese in sorted(set(list(cjam_wk1_totals.keys()) + list(cjam_wk2_totals.keys()))):
             writer.writerow(["", "", cheese, cjam_wk1_totals[cheese], cjam_wk2_totals[cheese]])
@@ -739,8 +788,7 @@ def main():
         for cur in sorted(set(list(wk1_large.keys()) + list(wk2_large.keys()))):
             cheese = cex_ec.get(cur, "")
             if cheese:
-                writer.writerow(["", cur, cheese, wk1_large.get(cur, 0),
-                                 wk2_large.get(cur, 0)])
+                writer.writerow(["", cur, cheese, wk1_large.get(cur, 0), wk2_large.get(cur, 0)])
         writer.writerow(["CEX-EC TOTALS"])
         for cheese in sorted(set(list(cexec_wk1_totals.keys()) + list(cexec_wk2_totals.keys()))):
             writer.writerow(["", "", cheese, cexec_wk1_totals[cheese], cexec_wk2_totals[cheese]])

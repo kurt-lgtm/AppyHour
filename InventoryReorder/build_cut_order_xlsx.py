@@ -1,4 +1,10 @@
 #!/usr/bin/env python
+
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["google-api-python-client", "google-auth", "openpyxl", "requests"]
+# ///
+
 """
 Cut Order Excel — single sheet, clean layout.
 
@@ -21,10 +27,19 @@ from collections import defaultdict
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 from inventory_demand_report import (
-    load_settings, load_inventory_csv, parse_depletion_xlsx,
-    fetch_recharge_api, fetch_shopify_orders, PICKABLE_PREFIXES,
-    WK1_START, WK1_END, WK2_START, WK2_END,
-    INV_CSV, SAT_DEPLETION, TUE_DEPLETION,
+    load_settings,
+    load_inventory_csv,
+    parse_depletion_xlsx,
+    fetch_recharge_api,
+    fetch_shopify_orders,
+    PICKABLE_PREFIXES,
+    WK1_START,
+    WK1_END,
+    WK2_START,
+    WK2_END,
+    INV_CSV,
+    SAT_DEPLETION,
+    TUE_DEPLETION,
 )
 
 
@@ -54,6 +69,7 @@ def main():
     # Template check fallback: "a" column = SKU, "Available M/DD" column = qty
     if not inventory:
         import csv as _csv
+
         with open(INV_CSV, encoding="utf-8-sig") as _f:
             reader = _csv.reader(_f)
             hdr = next(reader)
@@ -82,11 +98,23 @@ def main():
         available[sku] = inventory.get(sku, 0) - sat_dep.get(sku, 0) - tue_dep.get(sku, 0)
 
     print("Fetching Recharge charges...")
-    (rc_wk1, rc_wk2, rc_wk1_curations, rc_wk2_curations,
-     rc_wk1_large, rc_wk2_large, _, _,
-     rc_wk1_med_monthly, rc_wk2_med_monthly,
-     rc_wk1_cmed_monthly, rc_wk2_cmed_monthly,
-     rc_wk1_lge_monthly, rc_wk2_lge_monthly) = fetch_recharge_api(recharge_token)
+    (
+        rc_wk1,
+        rc_wk2,
+        rc_wk1_curations,
+        rc_wk2_curations,
+        rc_wk1_large,
+        rc_wk2_large,
+        _,
+        _,
+        rc_wk1_med_monthly,
+        rc_wk2_med_monthly,
+        rc_wk1_cmed_monthly,
+        rc_wk2_cmed_monthly,
+        rc_wk1_lge_monthly,
+        rc_wk2_lge_monthly,
+        monthly_by_week_month,
+    ) = fetch_recharge_api(recharge_token)
 
     # Diagnostic: WK1 vs WK2 Recharge charge counts
     rc_wk1_total = sum(rc_wk1.values())
@@ -97,11 +125,18 @@ def main():
     print(f"  Recharge WK2: {rc_wk2_total} pickable SKUs, {rc_wk2_curs} curation charges")
 
     print("Fetching Shopify orders...")
-    (sh_wk1_addon, sh_wk2_addon,
-     sh_wk1_curations, sh_wk2_curations,
-     sh_wk1_large, sh_wk2_large,
-     sh_wk1_med, sh_wk2_med,
-     sh_wk1_lge, sh_wk2_lge) = fetch_shopify_orders(settings)
+    (
+        sh_wk1_addon,
+        sh_wk2_addon,
+        sh_wk1_curations,
+        sh_wk2_curations,
+        sh_wk1_large,
+        sh_wk2_large,
+        sh_wk1_med,
+        sh_wk2_med,
+        sh_wk1_lge,
+        sh_wk2_lge,
+    ) = fetch_shopify_orders(settings)
 
     # -- First-order projection (MONG) --
     # Count "Subscription First Order" tagged orders from last 3 days, project forward
@@ -115,15 +150,19 @@ def main():
             store_url = f"https://{store_url}.myshopify.com"
         _cutoff = (datetime.now() - timedelta(days=3)).isoformat()
         _fo_url = f"{store_url}/admin/api/2024-01/orders.json"
-        _fo_params = {"status": "any", "limit": 250, "created_at_min": _cutoff,
-                      "fields": "id,tags,line_items"}
+        _fo_params = {"status": "any", "limit": 250, "created_at_min": _cutoff, "fields": "id,tags,line_items"}
         _fo_orders = []
         _fo_page_url = _fo_url
         while _fo_page_url:
-            _fo_resp = _req.get(_fo_page_url, headers={
-                "X-Shopify-Access-Token": shop_token,
-                "Content-Type": "application/json",
-            }, params=_fo_params if _fo_page_url == _fo_url else None, timeout=30)
+            _fo_resp = _req.get(
+                _fo_page_url,
+                headers={
+                    "X-Shopify-Access-Token": shop_token,
+                    "Content-Type": "application/json",
+                },
+                params=_fo_params if _fo_page_url == _fo_url else None,
+                timeout=30,
+            )
             _fo_data = _fo_resp.json()
             for _o in _fo_data.get("orders", []):
                 if "Subscription First Order" in (_o.get("tags") or ""):
@@ -132,6 +171,7 @@ def main():
             _link = _fo_resp.headers.get("Link", "")
             if 'rel="next"' in _link:
                 import re as _re
+
                 _m = _re.search(r'<([^>]+)>;\s*rel="next"', _link)
                 if _m:
                     _fo_page_url = _m.group(1)
@@ -143,8 +183,7 @@ def main():
         _projected = int(_daily_rate * _days_to_friday)
 
         # Build per-SKU profile from MONG first orders
-        _mong_fo = [o for o in _fo_orders if any(
-            "MONG" in (li.get("sku") or "") for li in o.get("line_items", []))]
+        _mong_fo = [o for o in _fo_orders if any("MONG" in (li.get("sku") or "") for li in o.get("line_items", []))]
         _fo_skus = defaultdict(float)
         if _mong_fo:
             for _o in _mong_fo:
@@ -156,9 +195,11 @@ def main():
         # Add projected demand to WK1 Shopify addon counts
         _mong_pct = len(_mong_fo) / len(_fo_orders) if _fo_orders else 0
         _mong_projected = int(_projected * _mong_pct)
-        print(f"  First-order projection: {len(_fo_orders)} in 3d, "
-              f"{_daily_rate:.0f}/day, {_projected} projected, "
-              f"{_mong_projected} MONG ({_mong_pct:.0%})")
+        print(
+            f"  First-order projection: {len(_fo_orders)} in 3d, "
+            f"{_daily_rate:.0f}/day, {_projected} projected, "
+            f"{_mong_projected} MONG ({_mong_pct:.0%})"
+        )
         for _sku, _rate in _fo_skus.items():
             _add = int(_rate * _mong_projected)
             if _add > 0:
@@ -228,18 +269,29 @@ def main():
         report_skus.update(d.keys())
 
     active_skus = sorted(
-        sku for sku in report_skus
+        sku
+        for sku in report_skus
         if any(sku.startswith(p) for p in PICKABLE_PREFIXES)
-        and (available.get(sku, 0) != 0
-             or rc_wk1.get(sku, 0) > 0 or rc_wk2.get(sku, 0) > 0
-             or sh_wk1_addon.get(sku, 0) > 0 or sh_wk2_addon.get(sku, 0) > 0)
+        and (
+            available.get(sku, 0) != 0
+            or rc_wk1.get(sku, 0) > 0
+            or rc_wk2.get(sku, 0) > 0
+            or sh_wk1_addon.get(sku, 0) > 0
+            or sh_wk2_addon.get(sku, 0) > 0
+        )
     )
 
     all_curations = sorted(
-        set(list(wk1_curations.keys()) + list(wk2_curations.keys())
-            + list(wk1_large.keys()) + list(wk2_large.keys())
-            + list(wk1_med.keys()) + list(wk2_med.keys())
-            + list(wk1_lge.keys()) + list(wk2_lge.keys()))
+        set(
+            list(wk1_curations.keys())
+            + list(wk2_curations.keys())
+            + list(wk1_large.keys())
+            + list(wk2_large.keys())
+            + list(wk1_med.keys())
+            + list(wk2_med.keys())
+            + list(wk1_lge.keys())
+            + list(wk2_lge.keys())
+        )
     )
 
     # -- Build Excel --
@@ -309,38 +361,49 @@ def main():
 
     # Slot definitions — must match MONTHLY_BOX_SLOTS in fulfillment_web/app.py
     AHB_MED_SLOTS = [
-        ("Cheese 1", "CH-"), ("Cheese 2", "CH-"),
-        ("Meat 1", "MT-"), ("Meat 2", "MT-"),
+        ("Cheese 1", "CH-"),
+        ("Cheese 2", "CH-"),
+        ("Meat 1", "MT-"),
+        ("Meat 2", "MT-"),
         ("Crackers", "AC-"),
-        ("Accompaniment 1", "AC-"), ("Accompaniment 2", "AC-"),
-        ("PR-CJAM-GEN Cheese", "CH-"), ("PR-CJAM-GEN Jam", "AC-"),
+        ("Accompaniment 1", "AC-"),
+        ("Accompaniment 2", "AC-"),
+        ("PR-CJAM-GEN Cheese", "CH-"),
+        ("PR-CJAM-GEN Jam", "AC-"),
     ]
     AHB_CMED_SLOTS = [
-        ("Cheese 1", "CH-"), ("Cheese 2", "CH-"),
-        ("Cheese 3", "CH-"), ("Cheese 4", "CH-"),
+        ("Cheese 1", "CH-"),
+        ("Cheese 2", "CH-"),
+        ("Cheese 3", "CH-"),
+        ("Cheese 4", "CH-"),
         ("Crackers", "AC-"),
-        ("Accompaniment 1", "AC-"), ("Accompaniment 2", "AC-"),
-        ("PR-CJAM-GEN Cheese", "CH-"), ("PR-CJAM-GEN Jam", "AC-"),
+        ("Accompaniment 1", "AC-"),
+        ("Accompaniment 2", "AC-"),
+        ("PR-CJAM-GEN Cheese", "CH-"),
+        ("PR-CJAM-GEN Jam", "AC-"),
     ]
     AHB_LGE_SLOTS = [
-        ("Cheese 1", "CH-"), ("Cheese 2", "CH-"), ("Cheese 3", "CH-"),
-        ("Meat 1", "MT-"), ("Meat 2", "MT-"), ("Meat 3", "MT-"),
+        ("Cheese 1", "CH-"),
+        ("Cheese 2", "CH-"),
+        ("Cheese 3", "CH-"),
+        ("Meat 1", "MT-"),
+        ("Meat 2", "MT-"),
+        ("Meat 3", "MT-"),
         ("Crackers", "AC-"),
-        ("Accompaniment 1", "AC-"), ("Accompaniment 2", "AC-"),
-        ("PR-CJAM-GEN Cheese", "CH-"), ("PR-CJAM-GEN Jam", "AC-"),
+        ("Accompaniment 1", "AC-"),
+        ("Accompaniment 2", "AC-"),
+        ("PR-CJAM-GEN Cheese", "CH-"),
+        ("PR-CJAM-GEN Jam", "AC-"),
     ]
-
-    monthly_med_w1 = wk1_med.get("MONTHLY", 0)
-    monthly_med_w2 = wk2_med.get("MONTHLY", 0)
-    monthly_lge_w1 = wk1_lge.get("MONTHLY", 0)
-    monthly_lge_w2 = wk2_lge.get("MONTHLY", 0)
 
     box_start_row = len(all_curations) + 4  # 2 rows gap
 
     # Helper to write a slot table section
+    # w1_count goes in Wk1 Ct column (P), w2_count goes in Wk2 Ct column (Q)
     def _write_slot_table(ws, start_row, label, slots, w1_count, w2_count):
-        ws.cell(row=start_row, column=prcjam_col_start,
-                value=f"{label} ({w1_count} Wk1 / {w2_count} Wk2)").font = section_font
+        ws.cell(
+            row=start_row, column=prcjam_col_start, value=f"{label} ({w1_count} Wk1 / {w2_count} Wk2)"
+        ).font = section_font
         r = start_row
         for slot_name, _prefix in slots:
             r += 1
@@ -351,21 +414,46 @@ def main():
             ws.cell(row=r, column=prcjam_col_start + 3, value=w2_count).font = num_font
         return r
 
-    # -- AHB-MED slot table --
-    slot_row = _write_slot_table(ws, box_start_row, "AHB-MED",
-                                  AHB_MED_SLOTS, monthly_med_w1, monthly_med_w2)
+    slot_row = box_start_row
 
-    # -- AHB-CMED slot table --
-    # CMED boxes resolve to MONTHLY via _MONTHLY_PATTERNS, count alongside MED
-    # but have a different recipe (4 cheese, no meat). Need separate counts.
-    monthly_cmed_w1 = wk1_med.get("CMED", 0)
-    monthly_cmed_w2 = wk2_med.get("CMED", 0)
-    slot_row = _write_slot_table(ws, slot_row + 2, "AHB-CMED",
-                                  AHB_CMED_SLOTS, monthly_cmed_w1, monthly_cmed_w2)
+    # Build per-(month) counts aggregated from (week, month) keys
+    # Each month gets a slot table with separate WK1 and WK2 columns
+    month_counts = {}  # {month: {box_type: {wk1: N, wk2: N}}}
+    for (week, month), counts in monthly_by_week_month.items():
+        if month not in month_counts:
+            month_counts[month] = {
+                "MED": {"wk1": 0, "wk2": 0},
+                "CMED": {"wk1": 0, "wk2": 0},
+                "LGE": {"wk1": 0, "wk2": 0},
+            }
+        wk_key = "wk1" if week == "WK1" else "wk2"
+        for box_type in ("MED", "CMED", "LGE"):
+            month_counts[month][box_type][wk_key] += counts.get(box_type, 0)
 
-    # -- AHB-LGE slot table --
-    slot_row = _write_slot_table(ws, slot_row + 2, "AHB-LGE",
-                                  AHB_LGE_SLOTS, monthly_lge_w1, monthly_lge_w2)
+    # Write separate slot tables per month for each box type
+    for month in sorted(month_counts.keys()):
+        mc = month_counts[month]
+
+        # AHB-MED for this month
+        if mc["MED"]["wk1"] + mc["MED"]["wk2"] > 0:
+            slot_row = _write_slot_table(
+                ws, slot_row, f"AHB-MED ({month})", AHB_MED_SLOTS, mc["MED"]["wk1"], mc["MED"]["wk2"]
+            )
+            slot_row += 2
+
+        # AHB-CMED for this month
+        if mc["CMED"]["wk1"] + mc["CMED"]["wk2"] > 0:
+            slot_row = _write_slot_table(
+                ws, slot_row, f"AHB-CMED ({month})", AHB_CMED_SLOTS, mc["CMED"]["wk1"], mc["CMED"]["wk2"]
+            )
+            slot_row += 2
+
+        # AHB-LGE for this month
+        if mc["LGE"]["wk1"] + mc["LGE"]["wk2"] > 0:
+            slot_row = _write_slot_table(
+                ws, slot_row, f"AHB-LGE ({month})", AHB_LGE_SLOTS, mc["LGE"]["wk1"], mc["LGE"]["wk2"]
+            )
+            slot_row += 2
 
     last_slot_row = slot_row
 
@@ -452,14 +540,12 @@ def main():
 
         # D: Demand Wk1 = RC_direct + SH_addon + SUMIF(PRCJAM) + SUMIF(CEXEC)
         ws[f"D{row}"] = (
-            f'={rc1}+{sh1}'
-            f'+SUMIF({prcjam_cheese},A{row},{prcjam_w1})'
-            f'+SUMIF({cexec_cheese},A{row},{cexec_w1})'
+            f"={rc1}+{sh1}+SUMIF({prcjam_cheese},A{row},{prcjam_w1})+SUMIF({cexec_cheese},A{row},{cexec_w1})"
         )
         ws.cell(row=row, column=4).font = bold_num
 
         # E: After Wk1 = Avail - Demand
-        ws[f"E{row}"] = f'=C{row}-D{row}'
+        ws[f"E{row}"] = f"=C{row}-D{row}"
         ws.cell(row=row, column=5).font = bold_num
 
         # F: Cut Wk1 (user input)
@@ -475,14 +561,12 @@ def main():
 
         # I: Demand Wk2 = RC_direct + SH_addon + SUMIF(PRCJAM) + SUMIF(CEXEC)
         ws[f"I{row}"] = (
-            f'={rc2}+{sh2}'
-            f'+SUMIF({prcjam_cheese},A{row},{prcjam_w2})'
-            f'+SUMIF({cexec_cheese},A{row},{cexec_w2})'
+            f"={rc2}+{sh2}+SUMIF({prcjam_cheese},A{row},{prcjam_w2})+SUMIF({cexec_cheese},A{row},{cexec_w2})"
         )
         ws.cell(row=row, column=9).font = bold_num
 
         # J: After Wk2 = (After Wk1 + Cut Wk1) - Demand Wk2
-        ws[f"J{row}"] = f'=(E{row}+F{row})-I{row}'
+        ws[f"J{row}"] = f"=(E{row}+F{row})-I{row}"
         ws.cell(row=row, column=10).font = bold_num
 
         # K: Cut Wk2 (user input)
@@ -497,33 +581,22 @@ def main():
     last_row = row
 
     # Conditional formatting on After columns and Good columns
+    ws.conditional_formatting.add(f"E2:E{last_row}", CellIsRule(operator="lessThan", formula=["0"], fill=short_fill))
     ws.conditional_formatting.add(
-        f"E2:E{last_row}",
-        CellIsRule(operator="lessThan", formula=["0"], fill=short_fill))
+        f"E2:E{last_row}", CellIsRule(operator="greaterThanOrEqual", formula=["0"], fill=ok_fill)
+    )
+    ws.conditional_formatting.add(f"J2:J{last_row}", CellIsRule(operator="lessThan", formula=["0"], fill=short_fill))
     ws.conditional_formatting.add(
-        f"E2:E{last_row}",
-        CellIsRule(operator="greaterThanOrEqual", formula=["0"], fill=ok_fill))
-    ws.conditional_formatting.add(
-        f"J2:J{last_row}",
-        CellIsRule(operator="lessThan", formula=["0"], fill=short_fill))
-    ws.conditional_formatting.add(
-        f"J2:J{last_row}",
-        CellIsRule(operator="greaterThanOrEqual", formula=["0"], fill=ok_fill))
+        f"J2:J{last_row}", CellIsRule(operator="greaterThanOrEqual", formula=["0"], fill=ok_fill)
+    )
 
     # Good? columns: green for OK, red for NEED
     from openpyxl.formatting.rule import FormulaRule
-    ws.conditional_formatting.add(
-        f"G2:G{last_row}",
-        FormulaRule(formula=[f'G2="OK"'], fill=ok_fill))
-    ws.conditional_formatting.add(
-        f"G2:G{last_row}",
-        FormulaRule(formula=[f'LEFT(G2,4)="NEED"'], fill=short_fill))
-    ws.conditional_formatting.add(
-        f"L2:L{last_row}",
-        FormulaRule(formula=[f'L2="OK"'], fill=ok_fill))
-    ws.conditional_formatting.add(
-        f"L2:L{last_row}",
-        FormulaRule(formula=[f'LEFT(L2,4)="NEED"'], fill=short_fill))
+
+    ws.conditional_formatting.add(f"G2:G{last_row}", FormulaRule(formula=[f'G2="OK"'], fill=ok_fill))
+    ws.conditional_formatting.add(f"G2:G{last_row}", FormulaRule(formula=[f'LEFT(G2,4)="NEED"'], fill=short_fill))
+    ws.conditional_formatting.add(f"L2:L{last_row}", FormulaRule(formula=[f'L2="OK"'], fill=ok_fill))
+    ws.conditional_formatting.add(f"L2:L{last_row}", FormulaRule(formula=[f'LEFT(L2,4)="NEED"'], fill=short_fill))
 
     # -- Save --
     ship_date = WK1_END.isoformat()
@@ -577,12 +650,16 @@ def upload_to_drive(file_path):
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             resumable=True,
         )
-        f = drive.files().create(
-            body={"name": file_name, "parents": [DRIVE_FOLDER_ID]},
-            media_body=media,
-            fields="id, webViewLink",
-            supportsAllDrives=True,
-        ).execute()
+        f = (
+            drive.files()
+            .create(
+                body={"name": file_name, "parents": [DRIVE_FOLDER_ID]},
+                media_body=media,
+                fields="id, webViewLink",
+                supportsAllDrives=True,
+            )
+            .execute()
+        )
 
     link = f.get("webViewLink", f"https://drive.google.com/file/d/{f['id']}")
     print(f"  Uploaded: {link}")

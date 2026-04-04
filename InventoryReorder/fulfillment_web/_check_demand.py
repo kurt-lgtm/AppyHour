@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Quick check: what's in the cut order interactive response."""
 import requests, json
 

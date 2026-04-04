@@ -1,0 +1,16 @@
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on http://127.0.0.1:5187
+Press CTRL+C to quit
+127.0.0.1 - - [18/Mar/2026 14:38:52] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [18/Mar/2026 14:38:53] "GET /static/app.js?v=42 HTTP/1.1" 304 -
+127.0.0.1 - - [18/Mar/2026 14:38:53] "GET /static/styles.css?v=42 HTTP/1.1" 304 -
+127.0.0.1 - - [18/Mar/2026 14:38:53] "GET /api/assignments HTTP/1.1" 200 -
+127.0.0.1 - - [18/Mar/2026 14:38:53] "GET /api/data HTTP/1.1" 200 -
+127.0.0.1 - - [18/Mar/2026 14:38:53] "GET /api/monthly_boxes HTTP/1.1" 200 -
+127.0.0.1 - - [18/Mar/2026 14:38:53] "GET /api/dropbox_status HTTP/1.1" 200 -
+127.0.0.1 - - [18/Mar/2026 14:38:54] "POST /api/cut_order_interactive HTTP/1.1" 200 -
+127.0.0.1 - - [18/Mar/2026 14:38:59] "POST /api/dropbox_sync HTTP/1.1" 200 -
+127.0.0.1 - - [18/Mar/2026 14:38:59] "GET /api/recharge_status HTTP/1.1" 200 -
+127.0.0.1 - - [18/Mar/2026 14:39:11] "POST /api/recharge_sync HTTP/1.1" 200 -
+127.0.0.1 - - [18/Mar/2026 14:39:11] "GET /api/shopify_status HTTP/1.1" 200 -
+127.0.0.1 - - [18/Mar/2026 14:40:29] "POST /api/shopify_sync HTTP/1.1" 200 -

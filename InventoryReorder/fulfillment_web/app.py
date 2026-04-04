@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["flask", "fpdf2", "openpyxl", "pytz", "pywebview", "requests"]
+# ///
+
 """
 Fulfillment Planner -- Flask + pywebview
 Gamified weekly cheese fulfillment planning.
@@ -30,13 +35,11 @@ EXTRA_CURATIONS = ["NMS", "BYO", "SS"]
 ALL_CURATIONS = CURATION_ORDER + EXTRA_CURATIONS
 WHEEL_TO_SLICE_FACTOR = 2.67  # Default fallback
 
-
 def _yield_factor(sku: str) -> float:
     """Per-SKU wheel-to-slice factor from adjusted_conversion_factors, fallback to default."""
     s = STATE.get("saved", {})
     factors = s.get("adjusted_conversion_factors", {})
     return float(factors.get(sku, WHEEL_TO_SLICE_FACTOR))
-
 
 # SKUs excluded from PR-CJAM and CEX-EC assignment candidates
 ASSIGNMENT_EXCLUDE = {"CH-MAFT"}
@@ -91,14 +94,11 @@ MONTHLY_BOX_SLOTS = {
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
-
 def _inv_qty(data):
     """Extract qty from an inventory entry (dict or raw int)."""
     return data.get("qty", 0) if isinstance(data, dict) else int(data or 0)
 
-
 # ── Settings persistence (shared with main app) ────────────────────────
-
 
 def _get_app_dir():
     if getattr(sys, "frozen", False):
@@ -110,13 +110,11 @@ def _get_app_dir():
         return os.path.join(base, "dist")
     return base
 
-
 def _get_project_dir():
     """Return the project root dir (for RMFG folders, Shipments, etc.)."""
     if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
 
 def load_settings():
     path = os.path.join(_get_app_dir(), SETTINGS_FILE)
@@ -127,7 +125,6 @@ def load_settings():
         except Exception:
             pass
     return {}
-
 
 def save_settings(data):
     path = os.path.join(_get_app_dir(), SETTINGS_FILE)
@@ -153,9 +150,7 @@ def save_settings(data):
     except Exception:
         pass
 
-
 # ── Constraint checking ────────────────────────────────────────────────
-
 
 def check_constraint(curation, prcjam_cheese, cexec_cheese, recipes, pr_cjam, cex_ec):
     if curation not in CURATION_ORDER:
@@ -183,7 +178,6 @@ def check_constraint(curation, prcjam_cheese, cexec_cheese, recipes, pr_cjam, ce
         violations.append("EC")
     return "CONFLICT: " + "+".join(violations) if violations else "OK"
 
-
 # ── Flask app ───────────────────────────────────────────────────────────
 
 # PyInstaller frozen support: templates/static live next to the exe in _MEIPASS
@@ -198,16 +192,13 @@ else:
     app = Flask(__name__)
 STATE = {"saved": {}, "csv_demand": {}}
 
-
 def _s():
     """Get current settings."""
     return STATE["saved"]
 
-
 @app.route("/")
 def index():
     return render_template("index.html")
-
 
 @app.route("/api/data")
 def get_data():
@@ -232,7 +223,6 @@ def get_data():
             "curation_order": CURATION_ORDER,
         }
     )
-
 
 @app.route("/api/calculate", methods=["POST"])
 def calculate():
@@ -461,7 +451,6 @@ def calculate():
         }
     )
 
-
 @app.route("/api/assignments")
 def get_assignments():
     s = _s()
@@ -496,7 +485,6 @@ def get_assignments():
             }
         )
     return jsonify(rows)
-
 
 @app.route("/api/assign", methods=["POST"])
 def set_assignment():
@@ -533,7 +521,6 @@ def set_assignment():
     save_settings(s)
     return jsonify({"ok": True, "constraint": constraint})
 
-
 @app.route("/api/candidates/<curation>/<slot>")
 def get_candidates(curation, slot):
     s = _s()
@@ -562,7 +549,6 @@ def get_candidates(curation, slot):
 
     candidates.sort(key=lambda x: (0 if x["constraint"] == "OK" else 1, -x["qty"]))
     return jsonify(candidates)
-
 
 @app.route("/api/monthly_boxes")
 def get_monthly_boxes():
@@ -596,7 +582,6 @@ def get_monthly_boxes():
         }
     return jsonify(result)
 
-
 @app.route("/api/monthly_box_assign", methods=["POST"])
 def set_monthly_box_assign():
     data = request.json
@@ -617,7 +602,6 @@ def set_monthly_box_assign():
     save_settings(s)
     return jsonify({"ok": True})
 
-
 @app.route("/api/monthly_box_candidates/<box_type>/<int:slot_index>")
 def get_monthly_box_candidates(box_type, slot_index):
     s = _s()
@@ -636,7 +620,6 @@ def get_monthly_box_candidates(box_type, slot_index):
     candidates.sort(key=lambda c: c["qty"], reverse=True)
     return jsonify(candidates)
 
-
 @app.route("/api/monthly_box_count", methods=["POST"])
 def set_monthly_box_count():
     data = request.json
@@ -647,7 +630,6 @@ def set_monthly_box_count():
     counts[box_type] = count
     save_settings(s)
     return jsonify({"ok": True})
-
 
 @app.route("/api/auto_assign", methods=["POST"])
 def auto_assign():
@@ -722,9 +704,7 @@ def auto_assign():
 
     return jsonify({"changes": changes, "count": len(changes)})
 
-
 # ── Global Extras ─────────────────────────────────────────────────────
-
 
 @app.route("/api/global_extras")
 def get_global_extras():
@@ -740,7 +720,6 @@ def get_global_extras():
             qty = _inv_qty(inventory.get(sku, {}))
         result[slot] = {"sku": sku, "qty": qty, "category": meta["category"], "prefix": meta["prefix"]}
     return jsonify(result)
-
 
 @app.route("/api/set_global_extra", methods=["POST"])
 def set_global_extra():
@@ -761,7 +740,6 @@ def set_global_extra():
     save_settings(s)
     return jsonify({"ok": True})
 
-
 @app.route("/api/global_extra_candidates/<slot>")
 def get_global_extra_candidates(slot):
     """Return candidate SKUs for a global extra slot, filtered by type."""
@@ -781,7 +759,6 @@ def get_global_extra_candidates(slot):
         candidates.append({"sku": sku, "name": name, "qty": qty})
     candidates.sort(key=lambda x: -x["qty"])
     return jsonify(candidates)
-
 
 @app.route("/api/auto_assign_extras", methods=["POST"])
 def auto_assign_extras():
@@ -827,7 +804,6 @@ def auto_assign_extras():
     save_settings(s)
     return jsonify({"changes": changes, "count": len(changes)})
 
-
 @app.route("/api/suggest_fixes")
 def suggest_fixes():
     # Trigger a calculate first
@@ -860,7 +836,6 @@ def suggest_fixes():
         suggestions.append({"sku": r["sku"], "deficit": deficit, "fixes": fixes})
 
     return jsonify(suggestions)
-
 
 @app.route("/api/variety_check")
 def variety_check():
@@ -907,7 +882,6 @@ def variety_check():
             issues.append(f"PR-CJAM duplicate: {ch} in {', '.join(curs)}")
 
     return jsonify(issues)
-
 
 @app.route("/api/wed_po")
 def wed_po():
@@ -968,7 +942,6 @@ def wed_po():
         )
     lines.sort(key=lambda x: -x["deficit"])
     return jsonify(lines)
-
 
 @app.route("/api/order_list")
 def order_list():
@@ -1066,7 +1039,6 @@ def order_list():
     lines.sort(key=lambda x: (cat_order.get(x["category"], 9), -x["deficit"]))
     return jsonify(lines)
 
-
 @app.route("/api/order_list_csv")
 def order_list_csv():
     """Export consolidated order list as CSV."""
@@ -1111,9 +1083,7 @@ def order_list_csv():
     today = datetime.date.today().strftime("%Y%m%d")
     return send_file(buf, mimetype="text/csv", as_attachment=True, download_name=f"order_list_{today}.csv")
 
-
 ## email_po moved to "Email Wednesday PO" section below
-
 
 @app.route("/api/import_csv", methods=["POST"])
 def import_csv():
@@ -1197,7 +1167,6 @@ def import_csv():
         }
     )
 
-
 @app.route("/api/export_csv")
 def export_csv():
     """Export NET report as CSV. Uses RMFG data if loaded."""
@@ -1262,7 +1231,6 @@ def export_csv():
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     return send_file(mem, mimetype="text/csv", as_attachment=True, download_name=f"fulfillment_net_{ts}.csv")
 
-
 @app.route("/api/split", methods=["POST"])
 def set_split():
     data = request.json
@@ -1277,7 +1245,6 @@ def set_split():
         s["cexec_splits"].pop(cur, None)
     save_settings(s)
     return jsonify({"ok": True})
-
 
 # ══════════════════════════════════════════════════════════════════════════
 #  AUTOMATION: Full RMFG folder loading + multi-window demand + substitutions
@@ -1304,10 +1271,8 @@ KNOWN_CURATIONS = {
 }
 _MONTHLY_PATTERNS = {"AHB-MED", "AHB-LGE", "AHB-CMED", "AHB-CUR-MS", "AHB-BVAL", "AHB-MCUST-MS", "AHB-MCUST-NMS"}
 
-
 def normalize_sku(sku):
     return EQUIV.get(sku, sku)
-
 
 def resolve_curation_from_box_sku(sku):
     if not sku:
@@ -1324,7 +1289,6 @@ def resolve_curation_from_box_sku(sku):
             return cur
     return None
 
-
 def is_pickable(sku):
     upper = sku.upper()
     if any(upper.startswith(p) for p in SKIP_PREFIXES):
@@ -1335,12 +1299,10 @@ def is_pickable(sku):
         return False
     return bool(sku.strip())
 
-
 def resolve_pr_cjam(suffix):
     s = _s()
     pr_cjam = s.get("pr_cjam", {})
     return resolve_pr_cjam_with(suffix, pr_cjam)
-
 
 def resolve_cex_ec(suffix):
     s = _s()
@@ -1348,13 +1310,11 @@ def resolve_cex_ec(suffix):
     splits = s.get("cexec_splits", {})
     return resolve_cex_ec_with(suffix, cex_ec, splits)
 
-
 def resolve_pr_cjam_with(suffix, pr_cjam_dict):
     """Pure version — takes explicit assignment dict, not settings."""
     info = pr_cjam_dict.get(suffix, {})
     ch = info.get("cheese", "") if isinstance(info, dict) else str(info)
     return {ch: 1} if ch else {}
-
 
 def resolve_cex_ec_with(suffix, cex_ec_dict, splits_dict):
     """Pure version — takes explicit assignment dict, not settings."""
@@ -1363,7 +1323,6 @@ def resolve_cex_ec_with(suffix, cex_ec_dict, splits_dict):
         return dict(sp)
     ch = cex_ec_dict.get(suffix, "")
     return {ch: 1} if ch else {}
-
 
 def resolve_demand(direct_demand, prcjam_counts, cexec_counts, pr_cjam, cex_ec, splits):
     """Resolve raw demand components using provided assignments.
@@ -1413,9 +1372,7 @@ def resolve_demand(direct_demand, prcjam_counts, cexec_counts, pr_cjam, cex_ec, 
         }
     return resolved_demand, attr_out
 
-
 # ── Ship Tag Helpers ──────────────────────────────────────────────────
-
 
 def parse_ship_tag(tags_str: str):
     """Extract _SHIP_YYYY-MM-DD Monday date from order tags. Returns date or None."""
@@ -1427,13 +1384,11 @@ def parse_ship_tag(tags_str: str):
             return None
     return None
 
-
 def ship_tag_windows(ship_monday):
     """Given a _SHIP_ Monday date, return (saturday, tuesday) fulfillment dates."""
     saturday = ship_monday - datetime.timedelta(days=2)
     tuesday = ship_monday + datetime.timedelta(days=1)
     return saturday, tuesday
-
 
 def current_ship_monday(ref_date=None):
     """Get the _SHIP_ Monday for the current fulfillment cycle.
@@ -1447,7 +1402,6 @@ def current_ship_monday(ref_date=None):
     else:
         # Thu-Sun: we're preparing for next Monday's cycle
         return ref_date + datetime.timedelta(days=(7 - weekday))
-
 
 def classify_order_window(ship_monday, ref_date=None):
     """Classify whether an order with this ship tag is Saturday or Tuesday demand.
@@ -1467,9 +1421,7 @@ def classify_order_window(ship_monday, ref_date=None):
         return "future"
     return "saturday"  # past tag, treat as Saturday
 
-
 # ── Depletion File Parser ─────────────────────────────────────────────
-
 
 def _load_shipment_sku_map():
     """Load SKU mapping from meal-type-export CSV in Shipments folder.
@@ -1495,7 +1447,6 @@ def _load_shipment_sku_map():
                         short = col_name.split(": ", 1)[1]
                         mapping[short] = sku
     return mapping
-
 
 def parse_depletion_xlsx(path):
     """Parse AHB_WeeklyProductionQuery XLSX depletion file.
@@ -1539,7 +1490,6 @@ def parse_depletion_xlsx(path):
 
     wb.close()
     return dict(totals), order_count, None
-
 
 def map_depletion_to_skus(product_totals, sku_translations, inventory):
     """Map depletion product names to SKUs.
@@ -1610,9 +1560,7 @@ def map_depletion_to_skus(product_totals, sku_translations, inventory):
 
     return dict(sku_totals), mapped, unmatched
 
-
 # ── File detection ────────────────────────────────────────────────────
-
 
 def detect_rmfg_files(folder):
     """Auto-detect RMFG data files in a folder."""
@@ -1652,9 +1600,7 @@ def detect_rmfg_files(folder):
                     break
     return result
 
-
 # ── Inventory loading ─────────────────────────────────────────────────
-
 
 def load_inventory_from_files(template_path, product_inv_path, po_additions=None, incoming=None, corrections=None):
     """Load inventory from Template Check + Product Inventory fallback."""
@@ -1722,9 +1668,7 @@ def load_inventory_from_files(template_path, product_inv_path, po_additions=None
 
     return inv
 
-
 # ── Demand parsers ────────────────────────────────────────────────────
-
 
 def parse_order_dashboard(path):
     """Parse Shopify order-dashboard. Returns demand dicts + counts.
@@ -1858,7 +1802,6 @@ def parse_order_dashboard(path):
         "monthly_box_counts": dict(monthly_box_order_counts),
     }
 
-
 def parse_charges_queued(path, target_date=None):
     """Parse Recharge charges_queued CSV.
     Returns ({sku: qty}, bare_skipped, raw_components).
@@ -1953,7 +1896,6 @@ def parse_charges_queued(path, target_date=None):
     }
     return {sku: int(round(q)) for sku, q in demand.items()}, bare_skipped, raw
 
-
 def parse_march_charges(path, start_day, end_day, year=2026, month=3):
     """Parse MARCH CHARGES for a date range. Returns {sku: qty}, charge_count."""
     demand = defaultdict(float)
@@ -2038,9 +1980,7 @@ def parse_march_charges(path, start_day, end_day, year=2026, month=3):
 
     return {sku: int(round(q)) for sku, q in demand.items()}, len(charges_by_id)
 
-
 # ── Load RMFG folder endpoint ─────────────────────────────────────────
-
 
 @app.route("/api/load_rmfg", methods=["POST"])
 def load_rmfg():
@@ -2265,9 +2205,7 @@ def load_rmfg():
         }
     )
 
-
 # ── Demand Mode (Discrete vs Churned) ─────────────────────────────────
-
 
 def apply_churn_to_demand(demand, recurring_demand, churn_rates, weeks_out=0):
     """Apply churn reduction to subscription portion of demand.
@@ -2308,7 +2246,6 @@ def apply_churn_to_demand(demand, recurring_demand, churn_rates, weeks_out=0):
         adjusted[sku] = non_sub_qty + churned_sub
 
     return adjusted
-
 
 def apply_unified_forecast(
     demand,
@@ -2357,9 +2294,7 @@ def apply_unified_forecast(
 
     return result
 
-
 # ── Full calculate using RMFG data ────────────────────────────────────
-
 
 @app.route("/api/calculate_rmfg", methods=["POST"])
 def calculate_rmfg():
@@ -2716,9 +2651,7 @@ def calculate_rmfg():
         }
     )
 
-
 # ── Inventory Runway ──────────────────────────────────────────────────
-
 
 def _runway_saturdays(num_weeks=4):
     """Return next N Saturday dates from today."""
@@ -2728,14 +2661,12 @@ def _runway_saturdays(num_weeks=4):
         days_to_sat = 7
     return [today + datetime.timedelta(days=days_to_sat + 7 * i) for i in range(num_weeks)]
 
-
 def _fmtd(d):
     """Format date as M/DD."""
     try:
         return d.strftime("%#m/%d")  # Windows
     except (ValueError, TypeError):
         return d.strftime("%-m/%d")  # Unix
-
 
 def _split_monthly_to_weekly(monthly_data, saturdays):
     """Split {month: {sku: qty}} into per-Saturday demand dicts.
@@ -2764,7 +2695,6 @@ def _split_monthly_to_weekly(monthly_data, saturdays):
             week_demands[i][sku] += qty / divisor
 
     return week_demands
-
 
 def _extract_curation_counts(monthly_data, saturdays):
     """Extract per-curation box counts from monthly queued data, split weekly.
@@ -2796,7 +2726,6 @@ def _extract_curation_counts(monthly_data, saturdays):
             week_counts[i][cur] += qty / divisor
 
     return week_counts
-
 
 def _build_queued_runway_demand(recharge_queued, pr_cjam, cex_ec, splits, saturdays):
     """Build per-week demand dicts from recharge_queued monthly data.
@@ -2885,7 +2814,6 @@ def _build_queued_runway_demand(recharge_queued, pr_cjam, cex_ec, splits, saturd
                 all_attribution[sku]["cexec"][c] = all_attribution[sku]["cexec"].get(c, 0) + v
 
     return week_demands, week_direct, week_prcjam, week_cexec, curation_box_counts, all_attribution
-
 
 @app.route("/api/runway", methods=["POST"])
 def get_runway():
@@ -3234,9 +3162,7 @@ def get_runway():
         }
     )
 
-
 # ── Monthly Runway (4-month horizon) ─────────────────────────────────
-
 
 @app.route("/api/runway_monthly", methods=["POST"])
 def get_runway_monthly():
@@ -3511,9 +3437,7 @@ def get_runway_monthly():
         }
     )
 
-
 # ── Activity Log ──────────────────────────────────────────────────────
-
 
 @app.route("/api/activity_log")
 def activity_log():
@@ -3672,9 +3596,7 @@ def activity_log():
         }
     )
 
-
 # ── First-Order Overrides ─────────────────────────────────────────────
-
 
 @app.route("/api/first_order_override", methods=["POST"])
 def set_first_order_override():
@@ -3703,7 +3625,6 @@ def set_first_order_override():
     STATE["saved"] = s
     return jsonify({"ok": True, "overrides": overrides})
 
-
 @app.route("/api/first_order_overrides", methods=["GET"])
 def get_first_order_overrides():
     """Return current first-order overrides and rolling averages."""
@@ -3712,9 +3633,7 @@ def get_first_order_overrides():
     rolling = s.get("shopify_first_order_demand", {})
     return jsonify({"overrides": overrides, "rolling_averages": rolling})
 
-
 # ── Cut Order ─────────────────────────────────────────────────────────
-
 
 @app.route("/api/cut_order", methods=["POST"])
 def get_cut_order():
@@ -3855,14 +3774,12 @@ def get_cut_order():
         }
     )
 
-
 @app.route("/api/demand_breakdown/<sku>")
 def demand_breakdown(sku):
     """Get detailed demand attribution for a single SKU."""
     attribution = STATE.get("rmfg_attribution", {})
     attr = attribution.get(sku, {"direct": 0, "prcjam": {}, "cexec": {}})
     return jsonify(attr)
-
 
 @app.route("/api/cut_order_interactive", methods=["POST"])
 def get_cut_order_interactive():
@@ -4035,7 +3952,6 @@ def get_cut_order_interactive():
         }
     )
 
-
 @app.route("/api/cut_quantities", methods=["GET", "POST"])
 def cut_quantities():
     """Get or save cut quantity inputs for the interactive calculator."""
@@ -4050,7 +3966,6 @@ def cut_quantities():
     save_settings(s)
     STATE["saved"] = s
     return jsonify({"ok": True})
-
 
 @app.route("/api/cut_order_csv")
 def export_cut_order_csv():
@@ -4115,7 +4030,6 @@ def export_cut_order_csv():
         download_name=f"cut_order_{today}.csv",
     )
 
-
 @app.route("/api/projection_settings", methods=["GET", "POST"])
 def projection_settings():
     """Get or set first-order projection settings."""
@@ -4143,7 +4057,6 @@ def projection_settings():
     STATE["saved"] = s
     save_settings(s)
     return jsonify({"ok": True, "projection": s["first_order_projection"]})
-
 
 @app.route("/api/reassignment_preview", methods=["POST"])
 def reassignment_preview():
@@ -4216,9 +4129,7 @@ def reassignment_preview():
         }
     )
 
-
 # ── Substitution engine ───────────────────────────────────────────────
-
 
 @app.route("/api/substitutions")
 def get_substitutions():
@@ -4305,13 +4216,11 @@ def get_substitutions():
 
     return jsonify(suggestions)
 
-
 # ── Swap Integration ──────────────────────────────────────────────────
 
 _swap_progress = {"running": False, "message": "", "result": None}
 _swap_cancel = [False]
 _swap_lock = threading.Lock()
-
 
 @app.route("/api/swap_preview", methods=["POST"])
 def swap_preview():
@@ -4353,7 +4262,6 @@ def swap_preview():
     result["old_sku"] = old_sku
     result["new_sku"] = new_sku
     return jsonify(result)
-
 
 @app.route("/api/swap_execute", methods=["POST"])
 def swap_execute():
@@ -4413,12 +4321,10 @@ def swap_execute():
     threading.Thread(target=_worker, daemon=True).start()
     return jsonify({"started": True})
 
-
 @app.route("/api/swap_progress")
 def swap_progress():
     """Poll for swap execution progress."""
     return jsonify(_swap_progress)
-
 
 @app.route("/api/swap_cancel", methods=["POST"])
 def swap_cancel():
@@ -4426,9 +4332,7 @@ def swap_cancel():
     _swap_cancel[0] = True
     return jsonify({"ok": True})
 
-
 # ── Swap Manager (multi-swap, matrix upload, history) ────────────────
-
 
 def _load_sku_mappings():
     """Load sku_mappings.json (cached in STATE)."""
@@ -4440,7 +4344,6 @@ def _load_sku_mappings():
         else:
             STATE["sku_mappings"] = {"name_to_sku": {}, "zero_dollar_variants": {}}
     return STATE["sku_mappings"]
-
 
 @app.route("/api/swap/ship-tags")
 def swap_ship_tags():
@@ -4485,7 +4388,6 @@ def swap_ship_tags():
         time.sleep(0.1)
 
     return jsonify({"tags": sorted(tags, reverse=True)})
-
 
 @app.route("/api/swap/multi-preview", methods=["POST"])
 def swap_multi_preview():
@@ -4556,7 +4458,6 @@ def swap_multi_preview():
             "total_orders": len(all_targets),
         }
     )
-
 
 @app.route("/api/swap/multi-execute", methods=["POST"])
 def swap_multi_execute():
@@ -4665,7 +4566,6 @@ def swap_multi_execute():
 
     threading.Thread(target=_worker, daemon=True).start()
     return jsonify({"started": True})
-
 
 @app.route("/api/swap/matrix-upload", methods=["POST"])
 def swap_matrix_upload():
@@ -4823,7 +4723,6 @@ def swap_matrix_upload():
         }
     )
 
-
 @app.route("/api/swap/recharge-sync", methods=["POST"])
 def swap_recharge_sync():
     """Sync swap to Recharge bundle_selections for unconverted charges.
@@ -4967,13 +4866,11 @@ def swap_recharge_sync():
 
     return jsonify({"updated": updated, "errors": errors[:20]})
 
-
 @app.route("/api/swap/history")
 def swap_history():
     """Return swap history."""
     s = _s()
     return jsonify({"history": s.get("swap_history", [])})
-
 
 @app.route("/api/swap/export-csv", methods=["POST"])
 def swap_export_csv():
@@ -5001,7 +4898,6 @@ def swap_export_csv():
         as_attachment=True,
         download_name=f"swap_export_{datetime.datetime.now().strftime('%Y-%m-%d')}.csv",
     )
-
 
 @app.route("/api/swap/tag-skus")
 def swap_tag_skus():
@@ -5093,11 +4989,9 @@ def swap_tag_skus():
         }
     )
 
-
 # ── Shipping Invoice Sync ────────────────────────────────────────────
 
 _ship_invoice_state = {"running": False, "progress": "", "result": None}
-
 
 @app.route("/api/shipping/sync-invoices", methods=["POST"])
 def shipping_sync_invoices():
@@ -5238,12 +5132,10 @@ def shipping_sync_invoices():
     threading.Thread(target=_worker, daemon=True).start()
     return jsonify({"started": True})
 
-
 @app.route("/api/shipping/sync-progress")
 def shipping_sync_progress():
     """Poll shipping invoice sync progress."""
     return jsonify(_ship_invoice_state)
-
 
 @app.route("/api/shipping/invoice-files")
 def shipping_invoice_files():
@@ -5277,9 +5169,7 @@ def shipping_invoice_files():
 
     return jsonify({"files": files, "dir": invoice_dir, "count": len(files)})
 
-
 # ── Morning Briefing ─────────────────────────────────────────────────
-
 
 @app.route("/api/briefing")
 def get_briefing():
@@ -5380,9 +5270,7 @@ def get_briefing():
         }
     )
 
-
 # ── Smart Wednesday PO ───────────────────────────────────────────────
-
 
 @app.route("/api/smart_po")
 def smart_po():
@@ -5491,9 +5379,7 @@ def smart_po():
         }
     )
 
-
 # ── Run All endpoint ──────────────────────────────────────────────────
-
 
 @app.route("/api/run_all", methods=["POST"])
 def run_all():
@@ -5676,9 +5562,7 @@ def run_all():
 
     return jsonify(results)
 
-
 # ── List available RMFG folders ───────────────────────────────────────
-
 
 @app.route("/api/rmfg_folders")
 def list_rmfg_folders():
@@ -5693,9 +5577,7 @@ def list_rmfg_folders():
             folders.append({"name": name, "files_found": found, "total_files": 5})
     return jsonify(folders)
 
-
 # ── Dropbox integration ───────────────────────────────────────────────
-
 
 @app.route("/api/dropbox_sync", methods=["POST"])
 def dropbox_sync():
@@ -6009,7 +5891,6 @@ def dropbox_sync():
         }
     )
 
-
 @app.route("/api/dropbox_status")
 def dropbox_status():
     """Check if Dropbox is configured."""
@@ -6023,7 +5904,6 @@ def dropbox_status():
             "has_shared_link": bool(s.get("dropbox_shared_link")),
         }
     )
-
 
 @app.route("/api/dropbox_auth_url")
 def dropbox_auth_url():
@@ -6039,7 +5919,6 @@ def dropbox_auth_url():
             "instructions": "Open this URL, authorize, then paste the code at /api/dropbox_token?code=YOUR_CODE",
         }
     )
-
 
 @app.route("/api/dropbox_token")
 def dropbox_token():
@@ -6090,12 +5969,10 @@ def dropbox_token():
     else:
         return f"<h2>No refresh token</h2><pre>{data}</pre>", 400
 
-
 # ── Recharge API integration ──────────────────────────────────────────
 
 _recharge_sync_lock = threading.Lock()
 _recharge_bg_thread = None
-
 
 @app.route("/api/recharge_sync", methods=["POST"])
 def recharge_sync():
@@ -6161,7 +6038,6 @@ def recharge_sync():
     # Foreground sync
     return _recharge_sync_foreground(api_token, req)
 
-
 def _recharge_sync_worker(api_token):
     """Background thread worker for Recharge sync."""
     try:
@@ -6171,7 +6047,6 @@ def _recharge_sync_worker(api_token):
             _recharge_sync_foreground(api_token, req, save_to_state=True)
     except Exception:
         pass
-
 
 def _recharge_sync_foreground(api_token, req, save_to_state=False):
     """Core Recharge sync logic. Returns Flask response or saves to STATE."""
@@ -6428,7 +6303,6 @@ def _recharge_sync_foreground(api_token, req, save_to_state=False):
     if save_to_state:
         return result  # background worker — no Flask response needed
     return jsonify(result)
-
 
 @app.route("/api/shopify_sync", methods=["POST"])
 def shopify_sync():
@@ -6824,7 +6698,6 @@ def shopify_sync():
 
     return jsonify(result)
 
-
 @app.route("/api/shopify_status")
 def shopify_status():
     s = _s()
@@ -6837,7 +6710,6 @@ def shopify_status():
             "weekly_units": sum(weekly.values()) if weekly else 0,
         }
     )
-
 
 @app.route("/api/load_settings_inventory", methods=["POST"])
 def load_settings_inventory():
@@ -6881,7 +6753,6 @@ def load_settings_inventory():
         }
     )
 
-
 @app.route("/api/recharge_status")
 def recharge_status():
     """Check if Recharge API is configured and cache freshness."""
@@ -6898,11 +6769,9 @@ def recharge_status():
         }
     )
 
-
 # ══════════════════════════════════════════════════════════════════════════
 #  ACTION CALENDAR — multi-week task schedule (PO, MFG, Crossdock, Ship)
 # ══════════════════════════════════════════════════════════════════════════
-
 
 @app.route("/api/debug_demand_split")
 def debug_demand_split():
@@ -6925,14 +6794,12 @@ def debug_demand_split():
         }
     )
 
-
 def _next_weekday(start, weekday):
     """Return the next date on or after `start` that falls on `weekday` (0=Mon)."""
     days_ahead = weekday - start.weekday()
     if days_ahead < 0:
         days_ahead += 7
     return start + datetime.timedelta(days=days_ahead)
-
 
 @app.route("/api/action_calendar", methods=["POST"])
 def action_calendar():
@@ -7210,9 +7077,7 @@ def action_calendar():
 
     return jsonify({"weeks": weeks, "generated": today.isoformat()})
 
-
 # ── Invoice API ────────────────────────────────────────────────────────
-
 
 def _get_bulk_weights() -> dict:
     """Get bulk weights from STATE (populated by Dropbox sync) or load from local CSV."""
@@ -7236,7 +7101,6 @@ def _get_bulk_weights() -> dict:
                 pass
     return {}
 
-
 from invoice_processor import (
     parse_production_invoice,
     extract_invoice_id,
@@ -7251,7 +7115,6 @@ from invoice_processor import (
     annotate_invoice_yields,
     extract_bulk_weights,
 )
-
 
 @app.route("/api/invoice_status")
 def invoice_status():
@@ -7272,9 +7135,7 @@ def invoice_status():
         }
     )
 
-
 _invoice_sync_state = {"running": False, "progress": "", "result": None}
-
 
 def _invoice_sync_worker(force: bool):
     """Background worker for invoice sync."""
@@ -7385,7 +7246,6 @@ def _invoice_sync_worker(force: bool):
     finally:
         _invoice_sync_state["running"] = False
 
-
 @app.route("/api/invoice_sync", methods=["POST"])
 def invoice_sync():
     """Start invoice sync (runs in background thread).
@@ -7409,7 +7269,6 @@ def invoice_sync():
 
     return jsonify({"ok": True, "started": True, "progress": "Starting..."})
 
-
 @app.route("/api/invoice_sync_progress")
 def invoice_sync_progress():
     """Poll sync progress."""
@@ -7420,7 +7279,6 @@ def invoice_sync_progress():
             "result": _invoice_sync_state["result"],
         }
     )
-
 
 @app.route("/api/invoices")
 def list_invoices():
@@ -7447,7 +7305,6 @@ def list_invoices():
         )
     return jsonify({"invoices": summaries})
 
-
 @app.route("/api/invoice/<invoice_id>")
 def get_invoice(invoice_id):
     """Full invoice detail."""
@@ -7457,7 +7314,6 @@ def get_invoice(invoice_id):
         if inv.get("id") == invoice_id:
             return jsonify(inv)
     return jsonify({"error": f"Invoice {invoice_id} not found"})
-
 
 @app.route("/api/invoice_map_sku", methods=["POST"])
 def invoice_map_sku():
@@ -7494,7 +7350,6 @@ def invoice_map_sku():
     save_settings(s)
     return jsonify({"ok": True, "updated": updated, "product_name": product_name, "sku": sku})
 
-
 @app.route("/api/invoice_match_candidates", methods=["POST"])
 def invoice_match_candidates():
     """Get ranked SKU candidates for an unmatched product name."""
@@ -7505,7 +7360,6 @@ def invoice_match_candidates():
         return jsonify({"error": "product_name required"})
     candidates = get_match_candidates(product_name, s.get("sku_translations", {}), s.get("inventory", {}))
     return jsonify({"product_name": product_name, "candidates": candidates})
-
 
 @app.route("/api/invoice_auto_map", methods=["POST"])
 def invoice_auto_map():
@@ -7568,7 +7422,6 @@ def invoice_auto_map():
         }
     )
 
-
 @app.route("/api/invoice_reconcile/<invoice_id>", methods=["POST"])
 def invoice_reconcile(invoice_id):
     """Run reconciliation against open POs."""
@@ -7579,7 +7432,6 @@ def invoice_reconcile(invoice_id):
     save_settings(s)
     return jsonify({"ok": True, **result})
 
-
 @app.route("/api/invoice_yield_ratios")
 def invoice_yield_ratios():
     """Per-SKU yield-per-case ratios computed from invoice history."""
@@ -7588,7 +7440,6 @@ def invoice_yield_ratios():
     bw = _get_bulk_weights()
     ratios = compute_yield_ratios(invoices, bulk_weights=bw)
     return jsonify({"ratios": ratios})
-
 
 @app.route("/api/invoice_yield/<invoice_id>")
 def invoice_yield_detail(invoice_id):
@@ -7607,7 +7458,6 @@ def invoice_yield_detail(invoice_id):
     ratios = compute_yield_ratios(invoices, bulk_weights=bw)
     annotations = annotate_invoice_yields(invoice, ratios)
     return jsonify({"invoice_id": invoice_id, "annotations": annotations, "ratios": ratios})
-
 
 @app.route("/api/invoice_cost_history")
 def invoice_cost_history():
@@ -7642,9 +7492,7 @@ def invoice_cost_history():
 
     return jsonify({"analytics": analytics})
 
-
 # ── Depletion File Endpoints ──────────────────────────────────────────
-
 
 @app.route("/api/depletion_scan", methods=["POST"])
 def depletion_scan():
@@ -7657,7 +7505,6 @@ def depletion_scan():
     applied = s.get("depletion_applied_files", [])
     files = find_all_depletion_files(user, password, applied)
     return jsonify({"files": files, "count": len(files)})
-
 
 @app.route("/api/depletion_scan_and_parse", methods=["POST"])
 def depletion_scan_and_parse():
@@ -7708,7 +7555,6 @@ def depletion_scan_and_parse():
         }
     )
 
-
 @app.route("/api/depletion_parse", methods=["POST"])
 def depletion_parse():
     """Parse an uploaded depletion XLSX file. Returns product totals + SKU mapping."""
@@ -7754,7 +7600,6 @@ def depletion_parse():
             "unmatched_count": len(unmatched),
         }
     )
-
 
 @app.route("/api/depletion_apply", methods=["POST"])
 def depletion_apply():
@@ -7820,7 +7665,6 @@ def depletion_apply():
             "skus_affected": len(applied),
         }
     )
-
 
 @app.route("/api/auto_deplete", methods=["POST"])
 def auto_deplete():
@@ -7933,7 +7777,6 @@ def auto_deplete():
             "unmatched": all_unmatched,
         }
     )
-
 
 @app.route("/api/fetch_depletions_email", methods=["POST"])
 def fetch_depletions_email():
@@ -8049,7 +7892,6 @@ def fetch_depletions_email():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
-
 @app.route("/api/depletion_map_sku", methods=["POST"])
 def depletion_map_sku():
     """Save a product name → SKU translation for future depletion files."""
@@ -8066,7 +7908,6 @@ def depletion_map_sku():
     save_settings(s)
 
     return jsonify({"ok": True, "product": product, "sku": sku})
-
 
 @app.route("/api/import_sku_translations", methods=["POST"])
 def import_sku_translations():
@@ -8099,9 +7940,7 @@ def import_sku_translations():
     except Exception as e:
         return jsonify({"error": f"Parse error: {e}"}), 400
 
-
 # ── Inventory Snapshots ────────────────────────────────────────────────
-
 
 def _take_snapshot(label, source="manual", cycle_day=None):
     """Save a point-in-time inventory snapshot. Returns the snapshot dict."""
@@ -8138,12 +7977,10 @@ def _take_snapshot(label, source="manual", cycle_day=None):
     save_settings(s)
     return snap
 
-
 def _detect_cycle_day():
     """Detect current cycle day: friday/saturday/monday/tuesday/wednesday."""
     wd = datetime.date.today().weekday()  # 0=Mon
     return {0: "monday", 1: "tuesday", 2: "wednesday", 4: "friday", 5: "saturday"}.get(wd, f"day_{wd}")
-
 
 @app.route("/api/snapshots")
 def list_snapshots():
@@ -8171,7 +8008,6 @@ def list_snapshots():
         )
     return jsonify({"snapshots": summaries})
 
-
 @app.route("/api/snapshot/<snap_id>")
 def get_snapshot(snap_id):
     """Get full snapshot detail."""
@@ -8180,7 +8016,6 @@ def get_snapshot(snap_id):
         if snap["id"] == snap_id:
             return jsonify(snap)
     return jsonify({"error": "Snapshot not found"}), 404
-
 
 @app.route("/api/snapshot", methods=["POST"])
 def save_snapshot():
@@ -8200,7 +8035,6 @@ def save_snapshot():
         }
     )
 
-
 @app.route("/api/snapshot/<snap_id>", methods=["DELETE"])
 def delete_snapshot(snap_id):
     """Delete a snapshot."""
@@ -8209,7 +8043,6 @@ def delete_snapshot(snap_id):
     s["inventory_snapshots"] = [sn for sn in snapshots if sn["id"] != snap_id]
     save_settings(s)
     return jsonify({"ok": True})
-
 
 @app.route("/api/snapshot_compare")
 def compare_snapshots():
@@ -8278,7 +8111,6 @@ def compare_snapshots():
         }
     )
 
-
 @app.route("/api/snapshot_current")
 def snapshot_current():
     """Get current inventory state (not saved, just for preview/comparison)."""
@@ -8297,9 +8129,7 @@ def snapshot_current():
         }
     )
 
-
 # ── Inventory Reconciliation ───────────────────────────────────────────
-
 
 @app.route("/api/reconcile_inventory", methods=["POST"])
 def reconcile_inventory():
@@ -8493,7 +8323,6 @@ def reconcile_inventory():
         }
     )
 
-
 @app.route("/api/reconcile_snapshots")
 def reconcile_snapshots():
     """Return snapshots grouped by cycle day for the reconciliation picker."""
@@ -8514,9 +8343,7 @@ def reconcile_snapshots():
         )
     return jsonify({"snapshots": result})
 
-
 # ── Production Event Detection ─────────────────────────────────────────
-
 
 def detect_production_events(old_snap, new_snap, depletion_between):
     """Detect wheel→slice production events between two snapshots.
@@ -8558,9 +8385,7 @@ def detect_production_events(old_snap, new_snap, depletion_between):
 
     return events
 
-
 # ── Running Inventory (Journal-based) ──────────────────────────────────
-
 
 def compute_running_inventory():
     """Compute current running inventory by replaying journal on last snapshot.
@@ -8610,13 +8435,11 @@ def compute_running_inventory():
 
     return {"sliced": sliced, "wheels": wheels}
 
-
 @app.route("/api/running_inventory")
 def running_inventory():
     """Return computed running inventory from journal replay."""
     result = compute_running_inventory()
     return jsonify({"ok": True, **result})
-
 
 @app.route("/api/journal")
 def get_journal():
@@ -8638,7 +8461,6 @@ def get_journal():
                 pass
 
     return jsonify({"ok": True, "entries": journal[start_idx:]})
-
 
 @app.route("/api/journal_entry", methods=["POST"])
 def add_journal_entry():
@@ -8669,9 +8491,7 @@ def add_journal_entry():
 
     return jsonify({"ok": True, "entry": entry})
 
-
 # ── Calculated Inventory & Projections ────────────────────────────────
-
 
 @app.route("/api/calculated_inventory")
 def calculated_inventory():
@@ -8719,7 +8539,6 @@ def calculated_inventory():
 
     return jsonify({"ok": True, "inventory": available})
 
-
 @app.route("/api/export_inventory_csv")
 def export_inventory_csv():
     """Export calculated inventory as CSV for Matrix Commander / React tool.
@@ -8745,7 +8564,6 @@ def export_inventory_csv():
         mimetype="text/csv",
         headers={"Content-Disposition": "attachment; filename=inventory_calculated.csv"},
     )
-
 
 @app.route("/api/tuesday_projection")
 def tuesday_projection():
@@ -8792,7 +8610,6 @@ def tuesday_projection():
             "projection": projection,
         }
     )
-
 
 @app.route("/api/import_depletion_from_matrix", methods=["POST"])
 def import_depletion_from_matrix():
@@ -8865,9 +8682,7 @@ def import_depletion_from_matrix():
         }
     )
 
-
 # ── Settings Configuration UI ────────────────────────────────────────
-
 
 @app.route("/api/settings_config")
 def get_settings_config():
@@ -8891,7 +8706,6 @@ def get_settings_config():
             "fulfillment_buffer": s.get("fulfillment_buffer", "10"),
         }
     )
-
 
 @app.route("/api/settings_config", methods=["POST"])
 def update_settings_config():
@@ -8928,7 +8742,6 @@ def update_settings_config():
 
     return jsonify({"ok": True, "updated": updated})
 
-
 @app.route("/api/vendor_catalog", methods=["POST"])
 def update_vendor_catalog():
     """Add or update a vendor catalog entry. Body: {sku, vendor, unit_cost, case_qty, moq, wheel_weight_lbs}"""
@@ -8949,7 +8762,6 @@ def update_vendor_catalog():
     save_settings(s)
     return jsonify({"ok": True, "sku": sku})
 
-
 @app.route("/api/vendor_catalog/<sku>", methods=["DELETE"])
 def delete_vendor_catalog(sku):
     """Remove a vendor catalog entry."""
@@ -8960,9 +8772,7 @@ def delete_vendor_catalog(sku):
         save_settings(s)
     return jsonify({"ok": True})
 
-
 # ── Undo Depletion / Audit Trail ─────────────────────────────────────
-
 
 @app.route("/api/undo_depletion", methods=["POST"])
 def undo_depletion():
@@ -9019,7 +8829,6 @@ def undo_depletion():
         }
     )
 
-
 @app.route("/api/audit_log")
 def get_audit_log():
     """Get the audit trail of important actions."""
@@ -9051,9 +8860,7 @@ def get_audit_log():
     log_entries.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
     return jsonify({"entries": log_entries[:100]})
 
-
 # ── Waste / Spoilage Ledger ──────────────────────────────────────────
-
 
 @app.route("/api/waste", methods=["POST"])
 def record_waste():
@@ -9096,7 +8903,6 @@ def record_waste():
 
     return jsonify({"ok": True, "entry": entry})
 
-
 @app.route("/api/waste")
 def get_waste_ledger():
     """Get waste/spoilage history."""
@@ -9123,7 +8929,6 @@ def get_waste_ledger():
         }
     )
 
-
 @app.route("/api/waste/<waste_id>", methods=["DELETE"])
 def delete_waste(waste_id):
     """Delete a waste entry."""
@@ -9133,16 +8938,13 @@ def delete_waste(waste_id):
     save_settings(s)
     return jsonify({"ok": True})
 
-
 # ── Reorder Points / Wed PO Templates ────────────────────────────────
-
 
 @app.route("/api/reorder_points")
 def get_reorder_points():
     """Get per-SKU reorder points."""
     s = _s()
     return jsonify({"reorder_points": s.get("reorder_points", {})})
-
 
 @app.route("/api/reorder_points", methods=["POST"])
 def update_reorder_points():
@@ -9161,7 +8963,6 @@ def update_reorder_points():
     }
     save_settings(s)
     return jsonify({"ok": True, "sku": sku})
-
 
 @app.route("/api/wed_po_draft")
 def wed_po_draft():
@@ -9221,9 +9022,7 @@ def wed_po_draft():
         }
     )
 
-
 # ── Email Wednesday PO ───────────────────────────────────────────────
-
 
 @app.route("/api/email_po", methods=["POST"])
 def email_po():
@@ -9306,9 +9105,7 @@ def email_po():
     except Exception as e:
         return jsonify({"error": f"Email send failed: {str(e)}"}), 500
 
-
 # ── Cut Order PDF + Email ─────────────────────────────────────────────
-
 
 def generate_cut_order_pdf(cut_lines, summary):
     """Generate a simple PDF for the cut order. Returns BytesIO with PDF bytes."""
@@ -9397,7 +9194,6 @@ def generate_cut_order_pdf(cut_lines, summary):
     buf.seek(0)
     return buf
 
-
 @app.route("/api/email_cut_order", methods=["POST"])
 def email_cut_order():
     """Email cut order as PDF attachment via SMTP."""
@@ -9473,7 +9269,6 @@ def email_cut_order():
     except Exception as e:
         return jsonify({"error": f"Email send failed: {str(e)}"}), 500
 
-
 @app.route("/api/schedule_cut_order_email", methods=["POST"])
 def schedule_cut_order_email():
     """Store cut order email schedule config in settings."""
@@ -9487,9 +9282,7 @@ def schedule_cut_order_email():
     save_settings(s)
     return jsonify({"ok": True, "schedule": s["cut_order_email_schedule"]})
 
-
 # ── SKU History for Sparklines ────────────────────────────────────────
-
 
 @app.route("/api/sku_history")
 def sku_history():
@@ -9525,9 +9318,7 @@ def sku_history():
         }
     )
 
-
 # ── Supplier Lead Time Tracking ──────────────────────────────────────
-
 
 @app.route("/api/po_received", methods=["POST"])
 def mark_po_received():
@@ -9600,7 +9391,6 @@ def mark_po_received():
         }
     )
 
-
 @app.route("/api/lead_times")
 def get_lead_times():
     """Get supplier lead time statistics."""
@@ -9647,9 +9437,7 @@ def get_lead_times():
         }
     )
 
-
 # ── Morning Briefing ─────────────────────────────────────────────────
-
 
 @app.route("/api/briefing")
 def morning_briefing():
@@ -9781,9 +9569,7 @@ def morning_briefing():
         }
     )
 
-
 # ── Forecast Accuracy ────────────────────────────────────────────────
-
 
 @app.route("/api/forecast_accuracy", methods=["POST"])
 def record_forecast_accuracy():
@@ -9860,14 +9646,12 @@ def record_forecast_accuracy():
 
     return jsonify({"ok": True, "record": record})
 
-
 @app.route("/api/forecast_accuracy")
 def get_forecast_accuracy():
     """Get forecast accuracy history."""
     s = _s()
     history = s.get("forecast_accuracy", [])
     return jsonify({"history": history})
-
 
 @app.route("/api/forecast_accuracy/summary")
 def forecast_accuracy_summary():
@@ -9924,9 +9708,7 @@ def forecast_accuracy_summary():
         }
     )
 
-
 # ── Launch ──────────────────────────────────────────────────────────────
-
 
 def run_webview():
     """Launch in a native window via pywebview."""
@@ -9944,7 +9726,6 @@ def run_webview():
     webview.create_window("Fulfillment Planner", "http://127.0.0.1:5187", width=1400, height=900, min_size=(1000, 700))
     webview.start()
 
-
 def run_browser():
     """Launch in default browser."""
     STATE["saved"] = load_settings()
@@ -9952,7 +9733,6 @@ def run_browser():
 
     webbrowser.open("http://127.0.0.1:5187")
     app.run(port=5187, debug=False)
-
 
 if __name__ == "__main__":
     import argparse

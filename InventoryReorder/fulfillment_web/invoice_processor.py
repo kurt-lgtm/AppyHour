@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["pdfplumber"]
+# ///
+
 """
 Invoice Processor — RMFG Production Invoice PDF parsing, SKU matching,
 Gmail IMAP polling, and reconciliation engine.
@@ -11,14 +16,12 @@ import difflib
 from email.header import decode_header
 from datetime import datetime, date
 
-
 # ── PDF Parsing ──────────────────────────────────────────────────────
 
 def extract_invoice_id(filename: str) -> str:
     """Extract 'AHB_00254' from 'AHB_00254_Product Production Breakdown.pdf'."""
     m = re.match(r'(AHB_\d+)', filename)
     return m.group(1) if m else filename.replace('.pdf', '')
-
 
 def parse_production_invoice(pdf_bytes: bytes) -> dict:
     """Parse an RMFG production invoice PDF into structured data."""
@@ -58,7 +61,6 @@ def parse_production_invoice(pdf_bytes: bytes) -> dict:
     pdf.close()
     return result
 
-
 def _parse_dollar(val: str) -> float:
     """Parse '$3,853.81' or '$ 3 ,853.81' into float.
     pdfplumber often inserts spaces between digits."""
@@ -75,7 +77,6 @@ def _parse_dollar(val: str) -> float:
     except (ValueError, TypeError):
         return 0.0
 
-
 def _parse_int(val) -> int:
     """Parse '1,635' or '1 ,635' or '7 3' into int.
     pdfplumber often splits digits with spaces."""
@@ -91,7 +92,6 @@ def _parse_int(val) -> int:
     except (ValueError, TypeError):
         return 0
 
-
 def _parse_date(val: str) -> str | None:
     """Parse '3/1/2026' into '2026-03-01'."""
     if not val:
@@ -102,7 +102,6 @@ def _parse_date(val: str) -> str | None:
         except (ValueError, TypeError):
             continue
     return None
-
 
 def _parse_from_tables(tables: list, result: dict) -> dict:
     """Parse structured table data from pdfplumber tables.
@@ -181,7 +180,6 @@ def _parse_from_tables(tables: list, result: dict) -> dict:
     result["mfg_date"] = mfg_date_found
     return result
 
-
 def _parse_table_line(row: list, section: str, has_cases: bool = True) -> dict | None:
     """Parse a line item from a known table structure.
     Full MFG / Meals: [date, product, case_packouts_empty, cases, yield]
@@ -231,7 +229,6 @@ def _parse_table_line(row: list, section: str, has_cases: bool = True) -> dict |
 
     return item if item["product_name"] else None
 
-
 def _extract_totals_row(row: list, label_only: bool = False) -> dict:
     """Extract totals from a structured row like ['FULL MFG TOTALS COUNT', '1 37', '3 ,973', '$ 3 ,853.81'].
     For label_only, there's no cases column — first number is yield."""
@@ -265,7 +262,6 @@ def _extract_totals_row(row: list, label_only: bool = False) -> dict:
         yld = numbers[1] if len(numbers) >= 2 else 0
         return {"cases": cases, "yield": yld, "charge": charge}
 
-
 def _extract_totals(row: list, text: str) -> dict:
     """Extract totals from a TOTALS row (text fallback path)."""
     numbers = re.findall(r'[\d,]+\.?\d*', text)
@@ -292,13 +288,11 @@ def _extract_totals(row: list, text: str) -> dict:
 
     return {"cases": cases, "yield": yld, "charge": charge}
 
-
 def _extract_total_charge(text: str) -> float:
     """Extract total production charge dollar amount.
     Handles pdfplumber spaces: '$ 5 ,315.41'"""
     m = re.search(r'\$\s*([\d,.\s]+)', text)
     return _parse_dollar(m.group(1)) if m else 0.0
-
 
 def _parse_line_item(row: list, section: str) -> dict | None:
     """Parse a single line item row."""
@@ -338,7 +332,6 @@ def _parse_line_item(row: list, section: str) -> dict | None:
             item["product_name"] = cell.strip()
 
     return item if item["product_name"] else None
-
 
 def _parse_from_text(text: str, result: dict) -> dict:
     """Fallback: parse from raw text using regex."""
@@ -415,7 +408,6 @@ def _parse_from_text(text: str, result: dict) -> dict:
     result["mfg_date"] = mfg_date_found
     return result
 
-
 # ── SKU Matching ─────────────────────────────────────────────────────
 
 # Seed translations for known RMFG product names
@@ -450,7 +442,6 @@ SEED_TRANSLATIONS = {
     "Pichin Tomme": "CH-LOU",
 }
 
-
 def build_auto_translations(inventory: dict) -> dict:
     """Build normalized product name → SKU from inventory names."""
     translations = {}
@@ -473,9 +464,7 @@ def build_auto_translations(inventory: dict) -> dict:
                 stripped = name[len(prefix):]
                 translations[stripped.lower()] = sku
 
-
     return translations
-
 
 def match_product_to_sku(product_name: str, sku_translations: dict,
                          inventory: dict) -> tuple[str, float, str]:
@@ -520,7 +509,6 @@ def match_product_to_sku(product_name: str, sku_translations: dict,
             return (all_names[matched_name], round(ratio, 2), "fuzzy")
 
     return ("", 0.0, "unmatched")
-
 
 def get_match_candidates(product_name: str, sku_translations: dict,
                          inventory: dict, top_n: int = 8) -> list[dict]:
@@ -597,7 +585,6 @@ def get_match_candidates(product_name: str, sku_translations: dict,
     results.sort(key=lambda x: -x["score"])
     return results[:top_n]
 
-
 # ── Bulk Weight Extraction ───────────────────────────────────────────
 
 # SKUs purchased as whole pieces — NOT wheels/blocks to be sliced.
@@ -611,7 +598,6 @@ PIECE_SKUS = frozenset({
     "CH-MAFT",     # Maffra (never assigned)
     "CH-TOPR",     # Toma Provence (purchased as pieces)
 })
-
 
 def extract_bulk_weights(csv_rows: list[dict]) -> dict:
     """
@@ -716,11 +702,9 @@ def extract_bulk_weights(csv_rows: list[dict]) -> dict:
 
     return result
 
-
 # ── Yield Ratio Analysis ─────────────────────────────────────────────
 
 SLICE_PER_LB = 2.67
-
 
 def compute_yield_ratios(invoices: list, bulk_weights: dict | None = None) -> dict:
     """
@@ -789,7 +773,6 @@ def compute_yield_ratios(invoices: list, bulk_weights: dict | None = None) -> di
 
     return result
 
-
 def annotate_invoice_yields(invoice: dict, yield_ratios: dict) -> list:
     """
     Annotate each line item with expected yield based on historical ratios.
@@ -832,7 +815,6 @@ def annotate_invoice_yields(invoice: dict, yield_ratios: dict) -> list:
 
     return annotations
 
-
 # ── Gmail IMAP Polling ───────────────────────────────────────────────
 
 def gmail_connect(user: str, password: str,
@@ -842,7 +824,6 @@ def gmail_connect(user: str, password: str,
     conn = imaplib.IMAP4_SSL(host, port)
     conn.login(user, password)
     return conn
-
 
 def search_rmfg_invoices(conn: imaplib.IMAP4_SSL,
                          subject_filter: str = "Production Breakdown",
@@ -926,7 +907,6 @@ def search_rmfg_invoices(conn: imaplib.IMAP4_SSL,
 
     return results
 
-
 # ── Reconciliation Engine ────────────────────────────────────────────
 
 def reconcile_invoice_with_pos(invoice: dict, open_pos: list) -> tuple[list, list]:
@@ -976,7 +956,6 @@ def reconcile_invoice_with_pos(invoice: dict, open_pos: list) -> tuple[list, lis
             })
 
     return matches, closeable
-
 
 def apply_reconciliation(invoice_id: str, settings: dict) -> dict:
     """
