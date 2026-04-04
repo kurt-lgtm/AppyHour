@@ -110,20 +110,24 @@ Target: 80%+ coverage. TDD workflow (RED → GREEN → REFACTOR).
 <!-- GSD:project-start source:PROJECT.md -->
 ## Project
 
-**Matrix Commander — Fulfillment Pipeline Automation**
+**AppyHour Fulfillment Platform**
 
-Matrix Commander is a proof-of-concept Python tool that automates the weekly fulfillment pipeline for a food/beverage subscription company (Appy Hour). It replaces manual steps between the React allocation tool and the final RMFG production email — inventory sync, Shopify order editing (replacing Matrixify), RMFG matrix generation (replacing the portal download), gift order handling, and sheet formatting. Each proven chunk becomes a spec for the React developer to absorb into the unified tool.
+Desktop analytics platform for Elevate Foods — manages inventory forecasting, cut order generation, demand pipeline, and order quality. Current milestone: **v1.1 Cut Order Consolidation** — single source of truth for demand calculation, polished XLSX output, unified logic.
 
-**Core Value:** Produce a correct, ready-to-email RMFG production sheet from Saturday morning to delivery in under 15 minutes, including gift orders — with logic clear enough for the React dev to absorb.
+**Core Value:** Accurate, operator-friendly cut order generation with one code path for demand resolution.
+
+### Current Milestone: v1.1 Cut Order Consolidation
+
+- Phase 8: XLSX v2 + Demand Fixes (in progress)
+- Phase 9: Parameterized Dates + Auto-Discovery
+- Phase 10: Shared Demand Module
 
 ### Constraints
 
-- **React tool is external**: Maintained by separate developer, Matrix Commander works alongside it
-- **Gift orders locked in Shopify**: Cannot use order edit API, must handle at matrix level
-- **Two-pass sequencing**: PR-CJAM must be uploaded before other parents (React tool dependency)
-- **Live data only**: All testing must happen against real Shopify/Recharge data — no staging environment
+- **Live data only**: All testing against real Shopify/Recharge data — no staging
 - **pywebview + netfx**: Desktop app uses .NET Framework backend, not coreclr
-- **Modular code**: Each piece must be clean enough to serve as spec for React dev
+- **PR-CJAM-GEN**: Only generic PR-CJAM; curation-specific variants created by Shopify post-charge
+- **Shared settings JSON**: Schema changes must be backward-compatible across 3 apps
 <!-- GSD:project-end -->
 
 <!-- GSD:stack-start source:codebase/STACK.md -->

@@ -1,111 +1,87 @@
-# Requirements: Matrix Commander
+# Requirements: Cut Order Consolidation (v1.1)
 
 **Defined:** 2026-04-04
-**Core Value:** Produce a correct, ready-to-email RMFG production sheet in under 15 minutes, including gift orders
+**Core Value:** Single source of truth for demand calculation and cut order generation — accurate numbers, no duplicated logic, polished operator XLSX.
 
 ## v1 Requirements
 
-### Pipeline Infrastructure (PIPE)
+### Demand Accuracy (DEM)
 
-- [ ] **PIPE-01**: Checkpoint/resume — JSON-based crash recovery so failure mid-batch doesn't restart from order 0
-- [ ] **PIPE-02**: Rate limiter — leaky-bucket throttle for Shopify GraphQL with exponential backoff on 429s (replace sleep-based)
-- [ ] **PIPE-03**: Pipeline state machine — step-by-step orchestrator with pass/fail tracking per stage
-- [ ] **PIPE-04**: Dry-run mode — preview what sync-shopify would do without touching Shopify (already partial in web)
+- [x] **DEM-01**: All pickable items from Recharge charges counted directly, including MONTHLY boxes (no exclusion)
+- [ ] **DEM-02**: Auto-discover CH-/MT-/AC- SKUs from Shopify orders in last 90 days not in inventory settings
+- [ ] **DEM-03**: First-order projection works correctly for any day of the week
+- [ ] **DEM-04**: Date ranges (WK1/WK2 boundaries, ship tags) parameterized via CLI args or settings, not hardcoded
 
-### Order Sync (SYNC)
+### Cut Order XLSX (CUT)
 
-- [ ] **SYNC-01**: sync-shopify works against live Shopify orders (battle-test existing implementation)
-- [ ] **SYNC-02**: Two-pass flow verified live — PR-CJAM first, verification gate, then all others
-- [ ] **SYNC-03**: Idempotent edits verified live — safe to re-run without creating duplicate line items
-- [ ] **SYNC-04**: Partial failure handling — track which orders failed, retry just those (via checkpoint)
-- [ ] **SYNC-05**: Handle orderEditCommit error-but-applied bug — verify state before retry
+- [ ] **CUT-01**: v2 XLSX with urgency-grouped rows (Shortage / Tight / Healthy)
+- [ ] **CUT-02**: Demand breakdown columns showing RC direct, Shopify addon, +CJAM, +CEXEC separately
+- [ ] **CUT-03**: Raw Materials tab showing cheese wheels (potential slices) and bulk accompaniments (potential packets)
+- [ ] **CUT-04**: Assignments tab with PR-CJAM, CEX-EC, splits, and MONTHLY box slot tables
+- [ ] **CUT-05**: WK1 and WK2 separated in MONTHLY box slot tables, with month changeover support
+- [ ] **CUT-06**: Audit trail — data source counts (RC charges, SH orders, generation timestamp) in subtitle
 
-### Matrix Generation (MATRIX)
+### Logic Consolidation (CON)
 
-- [ ] **MATRIX-01**: generate command works against live Shopify data (battle-test existing implementation)
-- [ ] **MATRIX-02**: Gift order handling verified live — detect, assign children at matrix level, merge into final sheet
-- [ ] **MATRIX-03**: finalize produces correct RMFG-ready XLSX (tab rename, ProductionDay, zips, sort, auto-name)
-- [ ] **MATRIX-04**: MFG name validation catches all unmapped SKUs before sending
+- [ ] **CON-01**: Extract shared demand resolution module (resolve_demand, resolve_pr_cjam, resolve_cex_ec)
+- [ ] **CON-02**: XLSX builder imports shared module instead of duplicating resolution logic
+- [ ] **CON-03**: cut_order_generator.py imports shared module or is retired
+- [ ] **CON-04**: Monthly box slot definitions in one place (not duplicated across files)
+- [ ] **CON-05**: normalize_sku, is_pickable, resolve_curation shared across all consumers
 
-### Inventory (INV)
+### Raw Materials (RAW)
 
-- [ ] **INV-01**: Inventory sync — push calculated inventory to Shopify paid + $0 variants
-- [ ] **INV-02**: Shortage detection verified live — cross-check demand vs inventory, flag shortages
-- [ ] **INV-03**: Swap resolution verified live — interactive shortage swaps with substitution families
-- [ ] **INV-04**: Dietary restriction swap exclusion — NNRS/CORS/NCRS orders excluded from auto-swaps
-- [ ] **INV-05**: Recharge bundle selection pre-fetch — download bundle selections before swaps to know what's customer-chosen vs curation-assigned
-- [ ] **INV-06**: Apply swaps to Shopify — execute decided swaps via order edit API (remove old SKU, add replacement $0 variant)
-
-### End-to-End (E2E)
-
-- [ ] **E2E-01**: Full Saturday flow works end-to-end: React sheets → sync (two passes) → React gift sheet → inventory check → Recharge pre-fetch → discrepancy check → swaps → apply swaps to Shopify → generate final RMFG sheet → email-ready
-- [ ] **E2E-02**: Web UI supports the full flow (not just CLI)
-- [ ] **E2E-03**: All commands produce correct output against live data (not just unit tests)
-
-### Integration (INTG)
-
-- [ ] **INTG-01**: Webhook endpoint — React tool POST triggers Matrix Commander post-processing
-- [ ] **INTG-02**: Code documented as spec for React dev absorption (typed inputs/outputs, pure functions)
+- [ ] **RAW-01**: Cheese wheel inventory extracted from inventory CSV via extract_bulk_weights()
+- [ ] **RAW-02**: Bulk accompaniment inventory extracted from CSV + bulk_conversions settings
+- [ ] **RAW-03**: Wheel potential shown per-SKU in cut order (Wheel Pot. column)
+- [ ] **RAW-04**: Status indicators on raw materials (HIGH / MED / LOW / EMPTY)
 
 ## v2 Requirements
 
 ### Automation
 
-- **AUTO-01**: Charge detection — poll Shopify orders by tag every 5 min, detect batch completion
-- **AUTO-02**: Pre-flight Friday automation — freeze inventory, pull Recharge upcoming, shortage simulation
-- **AUTO-03**: Pre-position Friday night — apply routing tags, zip overrides, sync inventory
-- **AUTO-04**: Operator notification — phone alert when orders ready
-
-### Operator Experience
-
-- **OPS-01**: Operator dashboard — single-screen view for any trained person
-- **OPS-02**: Tuesday cycle automation — same pipeline, smaller batch
-- **OPS-03**: Swap at Recharge bundle_selections level for persistent swaps
+- **AUTO-01**: One-click generation from fulfillment web app (no standalone script needed)
+- **AUTO-02**: Google Drive upload integrated into web app UI
+- **AUTO-03**: Cut order tab in fulfillment web app uses v2 layout with interactive assignment editing
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| React tool allocation logic | Owned by separate developer |
-| Full Option 1 (React absorbs everything) | Future — after Matrix Commander proves the logic |
-| Mobile app / notifications | Desktop-only workflow |
-| Multi-user / auth | Single operator tool |
-| Staging environment | No Shopify staging available — test against live |
+| Matrix Commander pipeline | Separate milestone (v1.0) — different workflow (Saturday fulfillment) |
+| React tool integration | External developer, separate timeline |
+| Charge detection / Saturday automation | Future milestone (autopilot plan) |
+| Web app cut order pane redesign | v2 requirement — after XLSX proven correct |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PIPE-01 | Phase 1 | Pending |
-| PIPE-02 | Phase 1 | Pending |
-| PIPE-03 | Phase 1 | Pending |
-| PIPE-04 | Phase 1 | Pending |
-| SYNC-01 | Phase 2 | Pending |
-| SYNC-02 | Phase 2 | Pending |
-| SYNC-03 | Phase 2 | Pending |
-| SYNC-04 | Phase 2 | Pending |
-| SYNC-05 | Phase 2 | Pending |
-| INV-01 | Phase 3 | Pending |
-| INV-02 | Phase 3 | Pending |
-| INV-03 | Phase 4 | Pending |
-| INV-04 | Phase 4 | Pending |
-| INV-05 | Phase 4 | Pending |
-| INV-06 | Phase 4 | Pending |
-| MATRIX-01 | Phase 5 | Pending |
-| MATRIX-02 | Phase 5 | Pending |
-| MATRIX-03 | Phase 5 | Pending |
-| MATRIX-04 | Phase 5 | Pending |
-| E2E-01 | Phase 6 | Pending |
-| E2E-02 | Phase 6 | Pending |
-| E2E-03 | Phase 6 | Pending |
-| INTG-01 | Phase 7 | Pending |
-| INTG-02 | Phase 7 | Pending |
+| DEM-01 | Phase 8 | Complete |
+| CUT-01 | Phase 8 | In Progress |
+| CUT-02 | Phase 8 | In Progress |
+| CUT-03 | Phase 8 | In Progress |
+| CUT-04 | Phase 8 | In Progress |
+| CUT-05 | Phase 8 | In Progress |
+| CUT-06 | Phase 8 | In Progress |
+| RAW-01 | Phase 8 | In Progress |
+| RAW-02 | Phase 8 | In Progress |
+| RAW-03 | Phase 8 | In Progress |
+| RAW-04 | Phase 8 | In Progress |
+| DEM-02 | Phase 9 | Pending |
+| DEM-03 | Phase 9 | Pending |
+| DEM-04 | Phase 9 | Pending |
+| CON-01 | Phase 10 | Pending |
+| CON-02 | Phase 10 | Pending |
+| CON-03 | Phase 10 | Pending |
+| CON-04 | Phase 10 | Pending |
+| CON-05 | Phase 10 | Pending |
 
 **Coverage:**
-- v1 requirements: 24 total
-- Mapped to phases: 24
-- Unmapped: 0 ✓
+- v1 requirements: 19 total
+- Mapped to phases: 19
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-04*
-*Last updated: 2026-04-04 after roadmap creation*
+*Last updated: 2026-04-04 after milestone v1.1 definition*

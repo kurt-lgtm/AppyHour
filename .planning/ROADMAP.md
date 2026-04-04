@@ -1,119 +1,65 @@
-# Roadmap: Matrix Commander
+# Roadmap: Cut Order Consolidation (v1.1)
 
 ## Overview
 
-Seven phases that prove the Saturday fulfillment workflow chunk by chunk against live data. Each phase delivers an independently useful piece: safety nets first (Phase 1), then the highest-risk sync loop (Phase 2), then inventory and shortage detection (Phase 3), then the swap engine with Recharge pre-fetch (Phase 4), then matrix generation and finalization (Phase 5), then end-to-end flow with web UI (Phase 6), and finally the React webhook integration plus handoff documentation (Phase 7). After Phase 6, the Saturday flow runs in under 15 minutes without touching Matrixify or the RMFG portal.
+Three phases that fix demand accuracy, deliver a polished v2 Cut Order XLSX, and unify duplicated logic into a shared module. Phase 8 delivers the immediate value (correct numbers + polished XLSX), Phase 9 removes hardcoded dates and adds auto-discovery, and Phase 10 eliminates the triple code duplication. After Phase 8, the operator has a production-ready XLSX. After Phase 10, all demand logic lives in one place.
 
 ## Phases
 
 **Phase Numbering:**
-- Integer phases (1, 2, 3): Planned milestone work
-- Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
+- Continues from v1.0 milestone (ended at Phase 7)
+- Integer phases (8, 9, 10): Planned milestone work
+- Decimal phases (8.1, 8.2): Urgent insertions if needed
 
-Decimal phases appear between their surrounding integers in numeric order.
-
-- [ ] **Phase 1: Pipeline Foundation** - CheckpointStore + rate limiter — safety nets before touching live data
-- [ ] **Phase 2: Shopify Sync Battle-Test** - Two-pass order edit loop proven against live orders
-- [ ] **Phase 3: Inventory + Shortage Detection** - Inventory sync to Shopify and shortage flagging
-- [ ] **Phase 4: Recharge Pre-Fetch + Swap Engine** - Bundle selection download, swap logic, and apply to Shopify
-- [ ] **Phase 5: Matrix Generation + Gift Merge + Finalize** - RMFG matrix from live data, gift orders merged, XLSX ready to email
-- [ ] **Phase 6: End-to-End Flow + Web UI** - Full Saturday flow works; web UI covers every step
-- [ ] **Phase 7: React Integration + Handoff Docs** - Webhook endpoint and spec documentation for React developer
+- [ ] **Phase 8: XLSX v2 + Demand Fixes** — Polished 3-tab workbook with correct demand, urgency grouping, raw materials, and assignment tables
+- [ ] **Phase 9: Parameterized Dates + Auto-Discovery** — Remove hardcoded dates, auto-discover new SKUs, fix first-order projection
+- [ ] **Phase 10: Shared Demand Module** — Extract shared resolution logic, retire duplicated code paths
 
 ## Phase Details
 
-### Phase 1: Pipeline Foundation
-**Goal**: Crash-safe pipeline state machine with proactive rate limiting is in place before any live data is touched
-**Depends on**: Nothing (first phase)
-**Requirements**: PIPE-01, PIPE-02, PIPE-03, PIPE-04
+### Phase 8: XLSX v2 + Demand Fixes
+**Goal**: Operator receives a polished, correct Cut Order XLSX every Wednesday — urgency-grouped, demand broken out by source, raw materials visible, assignments editable
+**Depends on**: Nothing (first phase of milestone)
+**Requirements**: DEM-01, CUT-01, CUT-02, CUT-03, CUT-04, CUT-05, CUT-06, RAW-01, RAW-02, RAW-03, RAW-04
 **Success Criteria** (what must be TRUE):
-  1. Operator can kill the process mid-run and resume from the last completed order without restarting from order 0
-  2. The rate limiter holds Shopify GraphQL throughput at or below target pts/sec and backs off cleanly on 429s
-  3. Pipeline state machine transitions forward-only through named stages; illegal transitions are rejected with a clear error
-  4. Dry-run mode prints what sync-shopify would do without issuing any Shopify mutations
-**Plans**: 3 plans
-
-Plans:
-- [ ] 01-01-PLAN.md — CheckpointStore + PipelineState (PIPE-01, PIPE-03): crash-safe JSON checkpoint and forward-only state machine
-- [ ] 01-02-PLAN.md — Rate Limiter (PIPE-02): leaky-bucket throttle + tenacity 429 retry, replaces bare sleep calls
-- [ ] 01-03-PLAN.md — Dry-Run Enforcement + Web Integration (PIPE-04): DryRunGuard at mutation layer, STATE dict replaced by CheckpointStore
-
-### Phase 2: Shopify Sync Battle-Test
-**Goal**: Two-pass Shopify order edit loop works correctly against live orders — idempotent, rate-safe, and partial-failure tolerant
-**Depends on**: Phase 1
-**Requirements**: SYNC-01, SYNC-02, SYNC-03, SYNC-04, SYNC-05
-**Success Criteria** (what must be TRUE):
-  1. sync-shopify completes a live PR-CJAM pass and all-parents pass without duplicate line items on any order
-  2. Re-running sync-shopify on already-synced orders produces no changes (idempotency verified on live data)
-  3. Orders that fail mid-batch are recorded; operator can retry just those orders without touching succeeded ones
-  4. The pass gate stops Pass 2 until operator confirms Pass 1 is visible on live orders
-  5. orderEditCommit error-but-applied orders are detected and not re-committed
+  1. v2 XLSX generates without errors from live Recharge + Shopify data
+  2. Demand numbers match the Recharge queued charges CSV (no MONTHLY exclusion gap)
+  3. SKUs are grouped by urgency (Shortage/Tight/Healthy) with conditional formatting
+  4. Raw Materials tab shows cheese wheels with potential slices and bulk accompaniments with potential packets
+  5. Assignments tab has PR-CJAM, CEX-EC tables with editable cheese cells that feed SUMIF into Cut Order tab
+  6. MONTHLY box slot tables show WK1/WK2 counts separately, split by charge month when changeover occurs
 **Plans**: TBD
 
-### Phase 3: Inventory + Shortage Detection
-**Goal**: Calculated inventory is pushed to Shopify paid and $0 variants, and shortages are flagged before sync begins
-**Depends on**: Phase 1
-**Requirements**: INV-01, INV-02
+### Phase 9: Parameterized Dates + Auto-Discovery
+**Goal**: Operator can generate cut orders for any week without editing code; new SKUs are automatically surfaced
+**Depends on**: Phase 8
+**Requirements**: DEM-02, DEM-03, DEM-04
 **Success Criteria** (what must be TRUE):
-  1. Operator can push inventory counts to Shopify paid and $0 variants from a single command; Shopify variant quantities match the input after the run
-  2. Shortage detection cross-checks demand against inventory and surfaces a list of shorted SKUs before any order edits begin
-  3. Stale inventory snapshot (older than 18 hours) blocks the pipeline unless operator explicitly confirms
+  1. Running the XLSX builder with `--week 2026-04-18` generates for that week's date range (no code edits)
+  2. SKUs appearing on Shopify orders in the last 90 days that aren't in the inventory CSV are flagged in a "New SKUs" section
+  3. First-order projection calculates days-to-Friday correctly regardless of which day the script runs
+  4. Ship tags are derived from the week parameter, not hardcoded
 **Plans**: TBD
 
-### Phase 4: Recharge Pre-Fetch + Swap Engine
-**Goal**: Recharge bundle selections are downloaded before swaps so customer-chosen items are never swapped; shortage swaps are decided and applied back to Shopify
-**Depends on**: Phase 2, Phase 3
-**Requirements**: INV-03, INV-04, INV-05, INV-06
+### Phase 10: Shared Demand Module
+**Goal**: All demand resolution logic lives in one importable module — XLSX builder, web app, and cut_order_generator all share the same code
+**Depends on**: Phase 8
+**Requirements**: CON-01, CON-02, CON-03, CON-04, CON-05
 **Success Criteria** (what must be TRUE):
-  1. Recharge bundle selections are pre-fetched and available before swap decisions are made; customer-chosen items are never swapped
-  2. NNRS/CORS/NCRS orders are excluded from all auto-swaps
-  3. Shortage swaps are applied to Shopify via order edit API (remove old SKU, add replacement $0 variant); swap audit trail lists every decision
-  4. Only _rc_bundle items are eligible for auto-swap; paid/chosen items are untouched
-**Plans**: TBD
-
-### Phase 5: Matrix Generation + Gift Merge + Finalize
-**Goal**: Correct RMFG production XLSX is generated from live Shopify data with gift orders merged in — ready to email without manual edits
-**Depends on**: Phase 2, Phase 4
-**Requirements**: MATRIX-01, MATRIX-02, MATRIX-03, MATRIX-04
-**Success Criteria** (what must be TRUE):
-  1. generate command produces a production matrix from live Shopify line items that matches what the RMFG portal would show (no manual download needed)
-  2. Gift orders are detected, children assigned at matrix level, and merged into the final sheet with correct quantities
-  3. finalize produces an XLSX with tab named "Worksheet", ProductionDay column present, correct sort order, and ISO-week auto-name
-  4. MFG name validation blocks finalize and lists all unmapped SKUs before any XLSX is written
-**Plans**: TBD
-
-### Phase 6: End-to-End Flow + Web UI
-**Goal**: Full Saturday workflow runs end-to-end from React sheets through email-ready RMFG XLSX, and every step is accessible from the web UI
-**Depends on**: Phase 5
-**Requirements**: E2E-01, E2E-02, E2E-03
-**Success Criteria** (what must be TRUE):
-  1. Operator runs the full Saturday sequence (inventory sync → Pass 1 sync → Pass 2 sync → generate → gift merge → finalize) and receives an email-ready RMFG XLSX in under 15 minutes
-  2. Web UI exposes every pipeline step, shows per-order sync progress, and surfaces the Pass 1 confirmation gate without requiring CLI
-  3. All commands produce verified correct output on live data (not just unit tests passing)
-**Plans**: TBD
-**UI hint**: yes
-
-### Phase 7: React Integration + Handoff Docs
-**Goal**: React tool can trigger Matrix Commander post-processing via webhook, and all logic is documented clearly enough for the React developer to absorb it
-**Depends on**: Phase 6
-**Requirements**: INTG-01, INTG-02
-**Success Criteria** (what must be TRUE):
-  1. React tool POST to the webhook endpoint triggers the Matrix Commander post-processing pipeline without manual operator intervention
-  2. Every pipeline component has typed inputs/outputs and a spec comment describing the future TypeScript/React equivalent
-  3. React developer can read the codebase and implement each component in TypeScript without needing to ask about intent or data shapes
+  1. A shared module (e.g. `appyhour/demand.py`) exports resolve_demand, resolve_pr_cjam, resolve_cex_ec, normalize_sku, is_pickable, resolve_curation
+  2. build_cut_order_xlsx_v2.py imports from the shared module (no inline resolution logic)
+  3. fulfillment_web/app.py imports from the shared module (existing tests still pass)
+  4. cut_order_generator.py either imports from shared module or is retired with a pointer to the v2 builder
+  5. MONTHLY_BOX_SLOTS defined in one place, imported by all consumers
 **Plans**: TBD
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7
+Phases execute in numeric order: 8 → 9 → 10 (Phase 9 and 10 can run in parallel after 8)
 
 | Phase | Plans Complete | Status | Completed |
-|-------|----------------|--------|-----------|
-| 1. Pipeline Foundation | 0/3 | Not started | - |
-| 2. Shopify Sync Battle-Test | 0/? | Not started | - |
-| 3. Inventory + Shortage Detection | 0/? | Not started | - |
-| 4. Recharge Pre-Fetch + Swap Engine | 0/? | Not started | - |
-| 5. Matrix Generation + Gift Merge + Finalize | 0/? | Not started | - |
-| 6. End-to-End Flow + Web UI | 0/? | Not started | - |
-| 7. React Integration + Handoff Docs | 0/? | Not started | - |
+|-------|---------------|--------|-----------|
+| 8. XLSX v2 + Demand Fixes | 0/? | In Progress | - |
+| 9. Parameterized Dates + Auto-Discovery | 0/? | Not started | - |
+| 10. Shared Demand Module | 0/? | Not started | - |

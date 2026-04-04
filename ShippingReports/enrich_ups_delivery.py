@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Enrich UPS shipments with delivery dates from Shopify fulfillment data.
 
 UPS invoices don't include delivery dates. This script:
@@ -28,7 +33,6 @@ REST = f"https://{STORE}.myshopify.com/admin/api/2024-01"
 HEADERS = {"X-Shopify-Access-Token": TOKEN, "Content-Type": "application/json"}
 
 HOT_STATES = {"FL", "TX", "AZ", "GA", "SC", "NC", "AL", "MS", "LA", "CA", "NV", "NM", "OK", "AR"}
-
 
 def fetch_fulfilled_orders(after_date):
     """Fetch fulfilled orders with tracking data."""
@@ -61,7 +65,6 @@ def fetch_fulfilled_orders(after_date):
         time.sleep(0.3)
     return orders
 
-
 def build_tracking_map(orders):
     """Build tracking_number -> delivery_date map from Shopify fulfillments."""
     tracking_map = {}
@@ -82,7 +85,6 @@ def build_tracking_map(orders):
                     except (ValueError, AttributeError):
                         pass
     return tracking_map
-
 
 def main():
     invoices = [
@@ -176,7 +178,6 @@ def main():
     for s in slow[:10]:
         print(f"  {s.transit_days}d {s.state}/{s.city} {s.zip_code} ${s.cost:.2f} "
               f"{s.service} {s.hub} {s.ship_date}->{s.delivery_date}")
-
 
 if __name__ == "__main__":
     main()

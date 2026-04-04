@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["google-api-python-client", "python-docx"]
+# ///
+
 """Create cheesemonger onboarding document and upload to Google Drive."""
 import os
 import sys

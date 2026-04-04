@@ -108,5 +108,17 @@ This document evolves at phase transitions and milestone boundaries.
 3. Audit Out of Scope — reasons still valid?
 4. Update Context with current state
 
+## Current Milestone: v1.1 Cut Order Consolidation
+
+**Goal:** Single source of truth for demand calculation and cut order generation — accurate numbers, no duplicated logic, polished operator XLSX.
+
+**Target features:**
+- Polished v2 Cut Order XLSX (urgency-grouped, demand breakdown, raw materials tab)
+- Fix demand accuracy (MONTHLY exclusion removed, all pickable items counted)
+- WK1/WK2 separated in MONTHLY box slot tables with month changeover
+- Auto-discover new SKUs from recent Shopify orders
+- Parameterized dates (no hardcoded week boundaries)
+- Shared demand resolution module (unify 3 duplicated code paths)
+
 ---
-*Last updated: 2026-04-04 after initialization*
+*Last updated: 2026-04-04 after milestone v1.1 start*

@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["openpyxl"]
+# ///
 
 import openpyxl, json, requests, time, csv
 

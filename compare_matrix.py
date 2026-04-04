@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["openpyxl"]
+# ///
+
 """Compare production matrix (Excel) vs Shopify orders for RMFG_20260317."""
 import openpyxl, json, requests, time
 
