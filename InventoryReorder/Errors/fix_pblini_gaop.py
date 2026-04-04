@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Fix AC-PBLINI and CH-GAOP: remove + refund paid items.
 
 Usage:
@@ -19,7 +24,6 @@ HEADERS = {"X-Shopify-Access-Token": TOKEN, "Content-Type": "application/json"}
 COMMIT = "--commit" in sys.argv
 TARGET_SKUS = ["AC-PBLINI", "CH-GAOP"]
 
-
 def gql(query, variables=None):
     payload = {"query": query}
     if variables:
@@ -30,7 +34,6 @@ def gql(query, variables=None):
     if data.get("errors"):
         raise Exception(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
     return data["data"]
-
 
 def fetch_targets():
     paid = []
@@ -85,7 +88,6 @@ def fetch_targets():
                     params = None
         time.sleep(0.5)
     return paid, curation
-
 
 def remove_item(order_info):
     order_gid = order_info["order_gid"]
@@ -153,7 +155,6 @@ def remove_item(order_info):
         return False
     return True
 
-
 def refund_item(order_info):
     order_id = order_info["order_id"]
     if order_info["price"] <= 0:
@@ -186,7 +187,6 @@ def refund_item(order_info):
     except Exception as e:
         print(f"    REFUND FAILED: {e}")
         return False
-
 
 def main():
     mode = "COMMIT" if COMMIT else "DRY-RUN"
@@ -230,7 +230,6 @@ def main():
     print(f"\n{'='*60}")
     print(f"  Done: {success}/{len(paid)} removed+refunded")
     print(f"{'='*60}")
-
 
 if __name__ == "__main__":
     main()

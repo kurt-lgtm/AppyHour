@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 import requests, json, time
 SETTINGS = r"C:\Users\Work\Claude Projects\AppyHour\InventoryReorder\dist\inventory_reorder_settings.json"
 with open(SETTINGS, encoding="utf-8") as f:

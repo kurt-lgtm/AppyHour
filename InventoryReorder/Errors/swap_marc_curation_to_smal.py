@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Swap curation AC-MARC (default recipe, NOT customer-chosen) to AC-SMAL.
 
 Only targets AC-MARC items with _rc_bundle property where the AHB- box does NOT
@@ -23,7 +28,6 @@ COMMIT = "--commit" in sys.argv
 OLD_SKU = "AC-MARC"
 NEW_SKU = "AC-SMAL"
 
-
 def gql(query, variables=None):
     payload = {"query": query}
     if variables:
@@ -34,7 +38,6 @@ def gql(query, variables=None):
     if data.get("errors"):
         raise Exception(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
     return data["data"]
-
 
 def find_smal_variant():
     query = """
@@ -55,7 +58,6 @@ def find_smal_variant():
             print(f"  Found {node['sku']}: ${node['price']} - {node['product']['title']} / {node['title']} ({node['id']})")
     variants.sort(key=lambda v: float(v["price"]))
     return variants[0]["id"] if variants else None
-
 
 def fetch_curation_marc():
     """Find curation AC-MARC orders, then check box_contents via GQL to filter."""
@@ -152,7 +154,6 @@ def fetch_curation_marc():
     print(f"  Customer-chosen (skip): {customer_chosen}")
     print(f"  Default recipe (swappable): {len(swappable)}")
     return swappable
-
 
 def swap_item(order_info, smal_variant_gid):
     order_name = order_info["order_name"]
@@ -260,7 +261,6 @@ def swap_item(order_info, smal_variant_gid):
         print(f"    COMMIT FAILED: {e}")
         return False
 
-
 def main():
     mode = "COMMIT" if COMMIT else "DRY-RUN"
     print(f"\n{'='*60}")
@@ -303,7 +303,6 @@ def main():
     print(f"\n{'='*60}")
     print(f"  Done: {success} swapped, {failed} failed")
     print(f"{'='*60}")
-
 
 if __name__ == "__main__":
     main()

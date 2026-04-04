@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Count orders with both curated MT-SOP and curated MT-JAHH."""
 import requests, json, time
 

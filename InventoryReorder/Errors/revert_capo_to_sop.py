@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Revert 136 extra MT-SOP->MT-CAPO swaps back to MT-SOP.
 
 Finds orders with non-curation MT-CAPO (from our swap) that also have MT-JAHH,
@@ -23,7 +28,6 @@ COMMIT = "--commit" in sys.argv
 REVERT_LIMIT = 136
 SOP_GID = "gid://shopify/ProductVariant/49467543257368"  # $0 MT-SOP*
 
-
 def gql(query, variables=None):
     payload = {"query": query}
     if variables:
@@ -34,7 +38,6 @@ def gql(query, variables=None):
     if data.get("errors"):
         raise Exception(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
     return data["data"]
-
 
 def fetch_swapped_capo():
     """Find orders with non-curation MT-CAPO (our swap) + curation MT-JAHH."""
@@ -84,7 +87,6 @@ def fetch_swapped_capo():
         time.sleep(0.5)
     return targets
 
-
 def swap_item(order_info):
     order_gid = order_info["order_gid"]
     data = gql("""
@@ -131,7 +133,6 @@ def swap_item(order_info):
     print(f"    OK {order_info['order_name']}")
     return True
 
-
 def main():
     mode = "COMMIT" if COMMIT else "DRY-RUN"
     print(f"\n{'='*60}")
@@ -164,7 +165,6 @@ def main():
     print(f"\n{'='*60}")
     print(f"  Done: {s} reverted, {f} failed")
     print(f"{'='*60}")
-
 
 if __name__ == "__main__":
     main()

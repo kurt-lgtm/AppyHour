@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Look up variant and product IDs for swap SKUs."""
 import requests, json, time
 

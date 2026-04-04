@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Fix CH-ALPHA on Shopify _SHIP_2026-03-23: remove+refund if paid, swap to CH-HCGU if curation.
 
 Usage:
@@ -20,7 +25,6 @@ COMMIT = "--commit" in sys.argv
 TARGET_SKU = "CH-ALPHA"
 SWAP_SKU = "CH-HCGU"
 
-
 def gql(query, variables=None):
     payload = {"query": query}
     if variables:
@@ -31,7 +35,6 @@ def gql(query, variables=None):
     if data.get("errors"):
         raise Exception(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
     return data["data"]
-
 
 def find_hcgu_variant():
     query = """
@@ -52,7 +55,6 @@ def find_hcgu_variant():
             print(f"  Found {node['sku']}: ${node['price']} - {node['product']['title']} / {node['title']} ({node['id']})")
     variants.sort(key=lambda v: float(v["price"]))
     return variants[0]["id"] if variants else None
-
 
 def fetch_targets():
     paid = []
@@ -106,7 +108,6 @@ def fetch_targets():
                     params = None
         time.sleep(0.5)
     return paid, curation
-
 
 def edit_order(order_info, action, hcgu_gid=None):
     """action: 'remove' or 'swap'"""
@@ -193,7 +194,6 @@ def edit_order(order_info, action, hcgu_gid=None):
         return False
     return True
 
-
 def refund_order(order_info):
     """Issue refund for removed paid item."""
     order_id = order_info["order_id"]
@@ -224,7 +224,6 @@ def refund_order(order_info):
     except Exception as e:
         print(f"    REFUND FAILED: {e}")
         return False
-
 
 def main():
     mode = "COMMIT" if COMMIT else "DRY-RUN"
@@ -287,7 +286,6 @@ def main():
     print(f"\n{'='*60}")
     print(f"  Done: {success_paid}/{len(paid)} removed+refunded, {success_cur}/{len(curation)} swapped")
     print(f"{'='*60}")
-
 
 if __name__ == "__main__":
     main()

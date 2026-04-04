@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Scan unfulfilled Shopify orders for Class 2/3, 4B, 6, and ROT errors.
 
 Class 2/3: Box product with blank SKU
@@ -36,7 +41,6 @@ RC_HEADERS = {
 }
 _rc_sub_cache = {}
 
-
 def rc_get_subscription(sub_id):
     """Fetch Recharge subscription by ID (cached)."""
     if not RC_TOKEN or not sub_id:
@@ -71,7 +75,6 @@ if os.path.exists(_NAME_MAP_FILE):
     # Star variants override non-star (curation items are what box_contents refers to)
     _NAME_TO_SKU.update(_NAME_TO_SKU_STAR)
 
-
 def gql(query, variables=None):
     payload = {"query": query}
     if variables:
@@ -82,7 +85,6 @@ def gql(query, variables=None):
     if data.get("errors"):
         raise Exception(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
     return data["data"]
-
 
 def parse_box_contents(text):
     """Parse box_contents string into {sku: qty}. Format: '2x Product Name\\n1x Other'."""
@@ -103,7 +105,6 @@ def parse_box_contents(text):
             result[sku] = result.get(sku, 0) + qty
     return result
 
-
 def get_box_contents_for_order(order_id):
     """Fetch box_contents via GraphQL customAttributes for an order."""
     data = gql("""{
@@ -119,7 +120,6 @@ def get_box_contents_for_order(order_id):
             if attr["key"] == "box_contents" and attr.get("value"):
                 return attr["value"]
     return None
-
 
 def fetch_all_unfulfilled():
     orders = []
@@ -148,14 +148,12 @@ def fetch_all_unfulfilled():
         time.sleep(0.5)
     return orders
 
-
 def get_curation_from_box(sku):
     """AHB-MCUST-CORS-MDT -> MDT (last segment)."""
     parts = sku.split("-")
     if len(parts) >= 3:
         return parts[-1]
     return None
-
 
 def analyze_order(order):
     tags = order.get("tags", "")
@@ -359,7 +357,6 @@ def analyze_order(order):
 
     return errors
 
-
 def main():
     print("Fetching unfulfilled Shopify orders...")
     orders = fetch_all_unfulfilled()
@@ -403,7 +400,6 @@ def main():
     # Print all
     for r in results:
         print(f"  [{r['class']}] {r['order']} | {r['customer']} | {r['details']}")
-
 
 if __name__ == "__main__":
     main()

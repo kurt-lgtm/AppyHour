@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Three fixes:
 1. Swap 7 CH-EBRIE curation to CH-PBRIE
 2. Swap 350 of the FOWC->BRZ swapped orders to CH-WMANG instead
@@ -21,7 +26,6 @@ HEADERS = {"X-Shopify-Access-Token": TOKEN, "Content-Type": "application/json"}
 
 COMMIT = "--commit" in sys.argv
 
-
 def gql(query, variables=None):
     payload = {"query": query}
     if variables:
@@ -32,7 +36,6 @@ def gql(query, variables=None):
     if data.get("errors"):
         raise Exception(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
     return data["data"]
-
 
 def swap_order(order_gid, old_sku, new_variant_gid, staff_note):
     data = gql("""
@@ -76,7 +79,6 @@ def swap_order(order_gid, old_sku, new_variant_gid, staff_note):
     if data["orderEditCommit"]["userErrors"]:
         return False
     return True
-
 
 def remove_and_refund(order_info):
     order_gid = order_info["order_gid"]
@@ -135,7 +137,6 @@ def remove_and_refund(order_info):
         except Exception as e:
             print(f"      REFUND FAILED: {e}")
     return True
-
 
 def main():
     mode = "COMMIT" if COMMIT else "DRY-RUN"
@@ -301,7 +302,6 @@ def main():
     print(f"    BRZ->WMANG: {s2}/{len(brz_swap_targets)}")
     print(f"    FOWC refund: {s3}/{len(fowc_refund_targets)}")
     print(f"{'='*60}")
-
 
 if __name__ == "__main__":
     main()

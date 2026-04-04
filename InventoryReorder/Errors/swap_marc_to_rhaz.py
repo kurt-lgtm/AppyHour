@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Swap AC-MARC to AC-RHAZ on AHB-XSPR orders (all 13) and half of BL-SDB orders (27).
 
 Usage:
@@ -20,7 +25,6 @@ COMMIT = "--commit" in sys.argv
 OLD_SKU = "AC-MARC"
 NEW_SKU = "AC-RHAZ"
 
-
 def gql(query, variables=None):
     payload = {"query": query}
     if variables:
@@ -31,7 +35,6 @@ def gql(query, variables=None):
     if data.get("errors"):
         raise Exception(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
     return data["data"]
-
 
 # Look up $0 variant for AC-RHAZ
 def find_rhaz_variant():
@@ -54,7 +57,6 @@ def find_rhaz_variant():
     # Prefer $0 variant
     variants.sort(key=lambda v: float(v["price"]))
     return variants[0]["id"] if variants else None
-
 
 # Fetch target orders
 def fetch_targets():
@@ -125,7 +127,6 @@ def fetch_targets():
         time.sleep(0.5)
 
     return xspr_targets, sdb_targets
-
 
 def swap_item(order_info, rhaz_variant_gid):
     """Remove AC-MARC, add AC-RHAZ via order edit."""
@@ -237,7 +238,6 @@ def swap_item(order_info, rhaz_variant_gid):
         print(f"    COMMIT FAILED: {e}")
         return False
 
-
 def main():
     mode = "COMMIT" if COMMIT else "DRY-RUN"
     print(f"\n{'='*60}")
@@ -286,7 +286,6 @@ def main():
     print(f"\n{'='*60}")
     print(f"  Done: {success} swapped, {failed} failed")
     print(f"{'='*60}")
-
 
 if __name__ == "__main__":
     main()

@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Check which class 2/3 charges were fixed (404 = date-shuffled = fixed)."""
 import csv
 import json

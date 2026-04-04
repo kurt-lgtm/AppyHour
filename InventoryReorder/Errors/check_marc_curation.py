@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Check if curated AC-MARC items were customer-chosen (box_contents) or default recipe."""
 import requests, json, time
 

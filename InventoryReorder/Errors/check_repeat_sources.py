@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Check if repeat SKUs are paid, customer-chosen, or default curation."""
 import requests, json, time, csv
 

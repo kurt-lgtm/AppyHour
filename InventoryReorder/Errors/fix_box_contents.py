@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Fix orders to match customer box_contents selections.
 
 Uses $0 variants only. Removes wrong curation items, adds correct ones.
@@ -60,7 +65,6 @@ ORDERS = [
     },
 ]
 
-
 def gql(query, variables=None):
     payload = {"query": query}
     if variables:
@@ -72,14 +76,11 @@ def gql(query, variables=None):
         raise Exception(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
     return data["data"]
 
-
 def is_food(sku):
     return any(sku.startswith(p) for p in FOOD_PREFIXES)
 
-
 def is_keep(sku):
     return any(sku.startswith(p) for p in KEEP_PREFIXES)
-
 
 def fix_order(order_info, commit=False):
     order_name = order_info["name"]
@@ -234,7 +235,6 @@ def fix_order(order_info, commit=False):
         print(f"  CANCELLED {order_name} due to errors")
         return False
 
-
 def main():
     commit = "--commit" in sys.argv
 
@@ -258,7 +258,6 @@ def main():
     print(f"{mode}: {success} ok, {failed} failed")
     if not commit:
         print("Use --commit to apply changes.")
-
 
 if __name__ == "__main__":
     main()

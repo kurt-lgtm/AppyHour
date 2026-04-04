@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Find unfulfilled orders with unresolved parent SKUs.
 
 Detects cases where Matrixify silently rejected child SKU imports
@@ -39,7 +44,6 @@ MONTHLY_BOXES = {"AHB-MED", "AHB-LGE", "AHB-CMED"}
 CUSTOM_BOX_PREFIXES = ("AHB-MCUST", "AHB-LCUST")
 SPECIALTY_PREFIX = "AHB-X"
 
-
 def resolve_curation_from_box_sku(sku):
     if not sku:
         return None
@@ -52,7 +56,6 @@ def resolve_curation_from_box_sku(sku):
             if seg in KNOWN_CURATIONS:
                 return seg
     return None
-
 
 def fetch_all_unfulfilled():
     orders = []
@@ -80,7 +83,6 @@ def fetch_all_unfulfilled():
                     params = None
         time.sleep(0.5)
     return orders
-
 
 def check_order(order):
     """Check one order for unresolved parent SKUs. Returns list of issues."""
@@ -209,7 +211,6 @@ def check_order(order):
 
     return issues
 
-
 def main():
     print("Fetching unfulfilled Shopify orders...")
     orders = fetch_all_unfulfilled()
@@ -261,7 +262,6 @@ def main():
     print("\n=== ALL ISSUES ===")
     for r in results:
         print(f"  {r['order_number']} | {r['customer']:<25} | {r['parent_sku']:<18} | {r['issue']}")
-
 
 if __name__ == "__main__":
     main()

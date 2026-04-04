@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Find customers with successive curation charges using the same suffix.
 
 When Recharge rotates curations monthly, the box SKU suffix should change
@@ -25,7 +30,6 @@ RC_HEADERS = {
     "X-Recharge-Version": "2021-11",
 }
 
-
 def extract_curation_suffix(box_sku):
     """Extract curation suffix from box SKU.
 
@@ -42,7 +46,6 @@ def extract_curation_suffix(box_sku):
     if len(parts) < 3:
         return None
     return parts[-1]
-
 
 def fetch_charges(status, min_date=None):
     """Fetch charges with given status using cursor pagination.
@@ -93,7 +96,6 @@ def fetch_charges(status, min_date=None):
             break
     return charges
 
-
 def get_active_subscription_count(customer_id):
     """Count active subscriptions for a customer (to detect multi-sub customers)."""
     resp = requests.get("https://api.rechargeapps.com/subscriptions",
@@ -108,7 +110,6 @@ def get_active_subscription_count(customer_id):
     box_subs = [s for s in subs
                 if (s.get("sku") or "").startswith(("AHB-MCUST", "AHB-LCUST"))]
     return len(box_subs)
-
 
 # --- Fetch charges ---
 # Get recent successful charges (last 4 months) and upcoming queued charges

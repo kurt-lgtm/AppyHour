@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Fix Class 2/3 Shopify orders: remove food items, add correct AHB- box SKU + PR-CJAM-GEN.
 
 Class 2/3 orders have a promotional "AppyHour Box" product with blank SKU.
@@ -40,7 +45,6 @@ BOX_MAP = [
     (lambda t: "8 item" in t.lower() or "medium" in t.lower(), "AHB-MED"),
 ]
 
-
 def fetch_all_unfulfilled():
     """Fetch all unfulfilled orders via REST pagination."""
     orders = []
@@ -69,7 +73,6 @@ def fetch_all_unfulfilled():
         time.sleep(0.5)
     return orders
 
-
 def gql(query, variables=None):
     """Execute a Shopify GraphQL query."""
     payload = {"query": query}
@@ -81,7 +84,6 @@ def gql(query, variables=None):
     if data.get("errors"):
         raise Exception(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
     return data["data"]
-
 
 def lookup_variant_ids():
     """Look up variant IDs for AHB-MED, AHB-LGE, AHB-CMED, PR-CJAM-GEN by SKU."""
@@ -112,14 +114,12 @@ def lookup_variant_ids():
         print(f"  WARNING: Could not find variants for: {missing}")
     return result
 
-
 def determine_box_sku(variant_title):
     """Determine box SKU from the promo product variant title."""
     for test_fn, sku in BOX_MAP:
         if test_fn(variant_title):
             return sku
     return None
-
 
 def find_class23_orders(orders):
     """Identify Class 2/3 orders and plan changes."""
@@ -224,7 +224,6 @@ def find_class23_orders(orders):
 
     return results
 
-
 def print_plan(results):
     """Print dry-run summary."""
     print(f"\n{'='*80}")
@@ -249,7 +248,6 @@ def print_plan(results):
         if not r['box_sku']:
             print(f"  *** WARNING: Could not determine box SKU from variant title!")
         print()
-
 
 def apply_changes(results, variant_ids):
     """Apply changes via Shopify GraphQL order edit mutations."""
@@ -507,7 +505,6 @@ def apply_changes(results, variant_ids):
     print(f"RESULTS: {success} succeeded, {failed} failed")
     print(f"{'='*40}")
 
-
 def main():
     commit = "--commit" in sys.argv
     # --single ORDER_NUM: only process one order (for testing)
@@ -559,7 +556,6 @@ def main():
         return
 
     apply_changes(results, variant_ids)
-
 
 if __name__ == "__main__":
     main()

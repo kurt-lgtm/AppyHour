@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Fix shortage SKUs on Recharge queued charges for 3/21 (v2 - parent box lookup).
 
 Finds the AHB- parent subscription on each charge, then modifies its
@@ -56,14 +61,12 @@ SWAP_PRODUCTS = {
     "CH-FONTAL": "9974091219224",
 }
 
-
 def _headers(write=False):
     return {
         "X-Recharge-Access-Token": RC_TOKEN_WRITE if write else RC_TOKEN_READ,
         "Content-Type": "application/json",
         "X-Recharge-Version": "2021-11",
     }
-
 
 def rc_get(endpoint, params=None):
     for attempt in range(5):
@@ -78,7 +81,6 @@ def rc_get(endpoint, params=None):
         return resp.json()
     raise Exception(f"Max retries on GET {endpoint}")
 
-
 def rc_put(endpoint, body):
     for attempt in range(5):
         resp = requests.put(f"{BASE_URL}{endpoint}", headers=_headers(write=True),
@@ -92,13 +94,11 @@ def rc_put(endpoint, body):
         return resp.json()
     raise Exception(f"Max retries on PUT {endpoint}")
 
-
 def _extract_variant_id(li):
     evid = li.get("external_variant_id")
     if isinstance(evid, dict):
         return str(evid.get("ecommerce", "") or "")
     return str(evid or li.get("shopify_variant_id") or li.get("variant_id") or "")
-
 
 def find_parent_box_sub(charge):
     """Find the AHB- parent subscription ID on a charge."""
@@ -113,7 +113,6 @@ def find_parent_box_sub(charge):
             return str(li["purchase_item_id"])
     return None
 
-
 def find_target_variant_in_bs(bs_items, target_sku, charge):
     """Find the variant_id of the target SKU in bundle_selection items by cross-referencing charge line items."""
     # First find the variant_id of the target SKU from the charge
@@ -124,7 +123,6 @@ def find_target_variant_in_bs(bs_items, target_sku, charge):
             if vid:
                 return vid
     return None
-
 
 def main():
     mode = "COMMIT" if COMMIT else "DRY-RUN"
@@ -273,7 +271,6 @@ def main():
     print(f"\n{'='*60}")
     print(f"  Results: {results['swapped']} swapped, {results['skipped']} skipped, {results['already_done']} already done, {results['failed']} failed")
     print(f"{'='*60}")
-
 
 if __name__ == "__main__":
     main()

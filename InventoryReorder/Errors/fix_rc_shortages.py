@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Fix shortage SKUs on Recharge queued charges for 3/21.
 
 Actions:
@@ -62,14 +67,12 @@ PRODUCT_IDS = {
     "CH-EBRIE": "9977241534744",
 }
 
-
 def _headers(write=False):
     return {
         "X-Recharge-Access-Token": RC_TOKEN_WRITE if write else RC_TOKEN_READ,
         "Content-Type": "application/json",
         "X-Recharge-Version": "2021-11",
     }
-
 
 def rc_get(endpoint, params=None):
     for attempt in range(5):
@@ -84,7 +87,6 @@ def rc_get(endpoint, params=None):
         return resp.json()
     raise Exception(f"Max retries on GET {endpoint}")
 
-
 def rc_put(endpoint, body):
     for attempt in range(5):
         resp = requests.put(f"{BASE_URL}{endpoint}", headers=_headers(write=True),
@@ -97,7 +99,6 @@ def rc_put(endpoint, body):
         time.sleep(0.3)
         return resp.json()
     raise Exception(f"Max retries on PUT {endpoint}")
-
 
 def rc_delete(endpoint):
     for attempt in range(5):
@@ -112,13 +113,11 @@ def rc_delete(endpoint):
         time.sleep(0.5)
         return
 
-
 def _extract_variant_id(li):
     evid = li.get("external_variant_id")
     if isinstance(evid, dict):
         return str(evid.get("ecommerce", "") or "")
     return str(evid or li.get("shopify_variant_id") or li.get("variant_id") or "")
-
 
 def main():
     mode = "COMMIT" if COMMIT else "DRY-RUN"
@@ -307,7 +306,6 @@ def main():
     print(f"\n{'='*60}")
     print(f"  Results: {results['removed']} removed, {results['swapped']} swapped, {results['skipped']} skipped, {results['failed']} failed")
     print(f"{'='*60}")
-
 
 if __name__ == "__main__":
     main()

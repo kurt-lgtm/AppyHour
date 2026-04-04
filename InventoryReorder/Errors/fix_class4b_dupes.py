@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Fix Class 4B duplicate curation items — remove one copy of each duplicated food SKU.
 
 These are orders where the Recharge curation tool wrote items twice (double-curation-write bug).
@@ -23,7 +28,6 @@ GQL_URL = f"https://{STORE}.myshopify.com/admin/api/2024-01/graphql.json"
 HEADERS = {"X-Shopify-Access-Token": TOKEN, "Content-Type": "application/json"}
 
 FOOD_PREFIXES = ("CH-", "MT-", "AC-", "CEX-")
-
 
 def fetch_all_unfulfilled():
     orders = []
@@ -52,7 +56,6 @@ def fetch_all_unfulfilled():
         time.sleep(0.5)
     return orders
 
-
 def gql(query, variables=None):
     payload = {"query": query}
     if variables:
@@ -63,7 +66,6 @@ def gql(query, variables=None):
     if data.get("errors"):
         raise Exception(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
     return data["data"]
-
 
 def find_4b_orders(orders):
     results = []
@@ -138,7 +140,6 @@ def find_4b_orders(orders):
 
     return results
 
-
 def print_plan(results):
     print(f"\n{'='*80}")
     print(f"CLASS 4B DUPLICATE CURATION ITEMS: {len(results)} orders")
@@ -149,7 +150,6 @@ def print_plan(results):
         print(f"Order {r['order_name']} | {r['customer']} | {r['box_sku']}")
         print(f"  REMOVE DUPES: {skus}")
         print()
-
 
 def apply_changes(results):
     success = 0
@@ -290,7 +290,6 @@ def apply_changes(results):
     print(f"RESULTS: {success} succeeded, {failed} failed")
     print(f"{'='*40}")
 
-
 def main():
     commit = "--commit" in sys.argv
     single_order = None
@@ -325,7 +324,6 @@ def main():
         return
 
     apply_changes(results)
-
 
 if __name__ == "__main__":
     main()

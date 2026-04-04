@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Re-scan 'standalone' AC-MARC checking for ALL AHB- and BL- SKUs on order."""
 import requests, json, time
 from collections import defaultdict

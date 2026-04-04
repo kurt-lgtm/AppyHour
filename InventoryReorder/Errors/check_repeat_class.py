@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Check if repeat-SKU orders have Class 4B (duplicate items) or Class 13 issues."""
 import requests, json, time, csv
 from collections import Counter

@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Fix Class 2/3 Recharge upcoming charges — replace curation items in bundle selections.
 
 ~564 upcoming charges have a blank-SKU "AppyHour Box" promo product with curation items
@@ -28,14 +33,12 @@ with open(SETTINGS, encoding="utf-8") as f:
 RC_TOKEN_READ = settings["recharge_api_token"]
 RC_TOKEN_WRITE = "sk_2x2_f998f08c853bd9391790b7760b449a60140c37dc0b3da48c4a54f7e0c7e67d10"
 
-
 def _headers(write=False):
     return {
         "X-Recharge-Access-Token": RC_TOKEN_WRITE if write else RC_TOKEN_READ,
         "Content-Type": "application/json",
         "X-Recharge-Version": "2021-11",
     }
-
 
 RC_HEADERS = _headers(write=False)
 BASE_URL = "https://api.rechargeapps.com"
@@ -58,14 +61,12 @@ VARIANT_PR_CJAM = "49542974046488"
 VARIANT_EBRIE = "51232419578136"
 EBRIE_PRODUCT_ID = "9977241534744"
 
-
 def _extract_variant_id(li):
     """Extract variant ID from a charge line_item (v2021-11 nesting)."""
     evid = li.get("external_variant_id")
     if isinstance(evid, dict):
         return str(evid.get("ecommerce", "") or "")
     return str(evid or li.get("shopify_variant_id") or li.get("variant_id") or "")
-
 
 def _determine_box_sku(variant_title):
     """Determine box SKU from the promo product variant title."""
@@ -75,7 +76,6 @@ def _determine_box_sku(variant_title):
     if "medium" in vt or "8 item" in vt:
         return "AHB-MED"
     return None
-
 
 # ── API helpers ──────────────────────────────────────────────────────────────
 
@@ -98,7 +98,6 @@ def rc_get(endpoint, params=None):
         return resp.json()
     raise Exception(f"Max retries on GET {endpoint}")
 
-
 def rc_put(endpoint, body):
     for attempt in range(5):
         resp = requests.put(f"{BASE_URL}{endpoint}", headers=_headers(write=True),
@@ -117,7 +116,6 @@ def rc_put(endpoint, body):
         time.sleep(0.3)
         return resp.json()
     raise Exception(f"Max retries on PUT {endpoint}")
-
 
 def rc_post(endpoint, body=None):
     for attempt in range(5):
@@ -138,7 +136,6 @@ def rc_post(endpoint, body=None):
         return resp.json()
     raise Exception(f"Max retries on POST {endpoint}")
 
-
 def rc_delete(endpoint):
     for attempt in range(5):
         resp = requests.delete(f"{BASE_URL}{endpoint}", headers=_headers(write=True),
@@ -158,7 +155,6 @@ def rc_delete(endpoint):
         time.sleep(0.5)
         return
     raise Exception(f"Max retries on DELETE {endpoint}")
-
 
 # ── Fetch all queued charges ─────────────────────────────────────────────────
 
@@ -182,7 +178,6 @@ def fetch_queued_charges():
             break
     print(f"Got {len(charges)} queued charges\n")
     return charges
-
 
 # ── Identify Class 2/3 charges ───────────────────────────────────────────────
 
@@ -271,7 +266,6 @@ def classify_charges(charges):
 
     return results
 
-
 # ── Build replacement items ──────────────────────────────────────────────────
 
 def build_replacement_items(box_sku, existing_bs_items, is_brie_promo=False):
@@ -330,7 +324,6 @@ def build_replacement_items(box_sku, existing_bs_items, is_brie_promo=False):
             })
 
     return items
-
 
 # ── Fix a single charge ──────────────────────────────────────────────────────
 
@@ -529,7 +522,6 @@ def fix_charge(entry, dry_run=False):
 
     return _verify_charge(result, entry, check_charge, price_before, box_sku)
 
-
 def _verify_charge(result, entry, check_charge, price_before, box_sku):
     """Run safety checks on the resulting charge after fix."""
     scheduled_before = entry["scheduled_at"]
@@ -605,7 +597,6 @@ def _verify_charge(result, entry, check_charge, price_before, box_sku):
     result["status"] = "SUCCESS"
     print(f"  SUCCESS: curation removed, {box_sku} added, price {price_before} -> {new_price}")
     return result
-
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
@@ -746,7 +737,6 @@ def main():
         _print_summary(results)
         print(f"\nDone! Results saved to {CSV_OUTPUT}")
 
-
 def _write_csv(results):
     fieldnames = ["charge_id", "scheduled", "customer", "email", "rc_customer_id",
                   "rc_subscription_id", "bundle_selection_id", "status", "box_sku",
@@ -757,14 +747,12 @@ def _write_csv(results):
         writer.writerows(results)
     print(f"\nCSV written: {CSV_OUTPUT}")
 
-
 def _print_summary(results):
     from collections import Counter
     counts = Counter(r["status"] for r in results)
     print(f"\n--- Summary ({len(results)} charges) ---")
     for status, count in counts.most_common():
         print(f"  {status}: {count}")
-
 
 if __name__ == "__main__":
     main()

@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Swap 120 curated MT-SOP to MT-CAPO on orders that also have curated MT-JAHH.
 Only swaps default recipe (not customer-chosen via box_contents).
 
@@ -21,7 +26,6 @@ COMMIT = "--commit" in sys.argv
 SWAP_LIMIT = 178
 CAPO_GID = "gid://shopify/ProductVariant/49936397336856"  # $0 Capocollo*
 
-
 def gql(query, variables=None):
     payload = {"query": query}
     if variables:
@@ -32,7 +36,6 @@ def gql(query, variables=None):
     if data.get("errors"):
         raise Exception(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
     return data["data"]
-
 
 def fetch_candidates():
     """Find orders with both curated MT-SOP and curated MT-JAHH."""
@@ -78,7 +81,6 @@ def fetch_candidates():
         time.sleep(0.5)
     return candidates
 
-
 def check_box_contents(order_gid):
     """Check if customer chose MT-SOP via box_contents. Returns True if customer-chosen."""
     try:
@@ -109,7 +111,6 @@ def check_box_contents(order_gid):
     except Exception:
         pass
     return False  # default: assume swappable
-
 
 def swap_item(order_info):
     order_gid = order_info["order_gid"]
@@ -160,7 +161,6 @@ def swap_item(order_info):
     print(f"    OK {order_info['order_name']}")
     return True
 
-
 def main():
     mode = "COMMIT" if COMMIT else "DRY-RUN"
     print(f"\n{'='*60}")
@@ -209,7 +209,6 @@ def main():
     print(f"\n{'='*60}")
     print(f"  Done: {s} swapped, {f} failed")
     print(f"{'='*60}")
-
 
 if __name__ == "__main__":
     main()

@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """List paid AC-MARC orders that are NOT from BL-SDB bundle."""
 import requests, json, time
 

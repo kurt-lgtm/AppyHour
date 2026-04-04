@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """
 Scan unfulfilled Shopify orders for error patterns BEYOND classes 1/2/3.
 
@@ -48,7 +53,6 @@ CUSTOM_BOX_PREFIXES = ("AHB-MCUST", "AHB-LCUST")
 # Specialty boxes to skip
 SPECIALTY_PREFIX = "AHB-X"
 
-
 def fetch_all_unfulfilled():
     """Fetch all unfulfilled orders from Shopify."""
     orders = []
@@ -79,7 +83,6 @@ def fetch_all_unfulfilled():
         time.sleep(0.5)
     return orders
 
-
 def extract_skus(line_items):
     """Extract (sku, qty, title, price) tuples from line items."""
     result = []
@@ -91,30 +94,24 @@ def extract_skus(line_items):
         result.append((sku, qty, title, price))
     return result
 
-
 def get_curation_from_box(sku):
     """Extract curation suffix from box SKU like AHB-MCUST-MDT -> MDT."""
     m = re.match(r"AHB-[ML]CUST-([A-Z]+)", sku)
     return m.group(1) if m else None
-
 
 def get_curation_from_pr(sku):
     """Extract curation from PR-CJAM-MDT -> MDT."""
     m = re.match(r"PR-CJAM-([A-Z]+)", sku)
     return m.group(1) if m else None
 
-
 def is_reship(tags):
     return "reship" in (tags or "").lower()
-
 
 def is_first_order(tags):
     return "Subscription First Order" in (tags or "")
 
-
 def is_specialty_box(skus):
     return any(s.startswith(SPECIALTY_PREFIX) for s, _, _, _ in skus)
-
 
 def analyze_order(order):
     """Analyze a single order for new error classes. Returns list of (class, detail) tuples."""
@@ -296,7 +293,6 @@ def analyze_order(order):
 
     return errors
 
-
 def main():
     print("Fetching unfulfilled Shopify orders...")
     orders = fetch_all_unfulfilled()
@@ -370,7 +366,6 @@ def main():
             print(f"  Detail: {r['Detail']}")
             items_preview = r['All Items'][:200]
             print(f"  Items: {items_preview}...")
-
 
 if __name__ == "__main__":
     main()

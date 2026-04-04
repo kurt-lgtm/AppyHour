@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Quick scan: find all unfulfilled orders with TR- SKUs."""
 import requests, json, time
 

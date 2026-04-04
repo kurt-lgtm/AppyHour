@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Find orders matching Anik's token pattern:
 - Subscription was swapped shortly after creation
 - Charge processed with OLD SKU (MONG) but subscription is now different
@@ -17,7 +22,6 @@ RC_HEADERS = {
     "X-Recharge-Version": "2021-11",
 }
 
-
 def rc_get(endpoint, params=None):
     for attempt in range(5):
         resp = requests.get(f"{BASE_URL}{endpoint}", headers=RC_HEADERS,
@@ -29,7 +33,6 @@ def rc_get(endpoint, params=None):
         time.sleep(0.5)
         return resp.json()
     raise Exception(f"Max retries on GET {endpoint}")
-
 
 CSV_PATH = r"C:\Users\Work\Claude Projects\AppyHour\InventoryReorder\Errors\recharge-errors-2026-03-21.csv"
 customers = []

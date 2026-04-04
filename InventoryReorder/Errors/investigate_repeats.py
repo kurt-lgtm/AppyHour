@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Investigate #119274 and #118978 on Recharge for unusual patterns."""
 import requests, json, time
 
@@ -18,7 +23,6 @@ TOKEN = settings["shopify_access_token"]
 REST_BASE = f"https://{STORE}.myshopify.com/admin/api/2024-01"
 SH_HEADERS = {"X-Shopify-Access-Token": TOKEN, "Content-Type": "application/json"}
 
-
 def rc_get(endpoint, params=None):
     for attempt in range(5):
         resp = requests.get(f"{BASE_URL}{endpoint}", headers=RC_HEADERS,
@@ -30,7 +34,6 @@ def rc_get(endpoint, params=None):
         time.sleep(0.5)
         return resp.json()
     raise Exception(f"Max retries on GET {endpoint}")
-
 
 cases = [
     {"email": "damgoodwin@gmail.com", "order": "119274", "issue": "Should have rotated from MONG"},

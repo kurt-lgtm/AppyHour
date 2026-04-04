@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Check how many orders have 2+ MT-SOP after the BRAS->SOP swap."""
 import requests, json, time
 

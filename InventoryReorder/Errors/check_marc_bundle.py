@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Check how many AC-MARC are from BL-SDB (Spring Dessert Bundle) orders."""
 import requests, json, time
 

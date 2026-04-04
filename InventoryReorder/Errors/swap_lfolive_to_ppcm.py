@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Swap all AC-LFOLIVE to AC-PPCM on _SHIP_2026-03-23 orders.
 Keeps 1 AC-LFOLIVE on order #114227.
 
@@ -22,7 +27,6 @@ OLD_SKU = "AC-LFOLIVE"
 NEW_SKU = "AC-PPCM"
 SKIP_ORDER = "114227"
 
-
 def gql(query, variables=None):
     payload = {"query": query}
     if variables:
@@ -33,7 +37,6 @@ def gql(query, variables=None):
     if data.get("errors"):
         raise Exception(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
     return data["data"]
-
 
 # Find $0 PPCM variant
 def find_ppcm_variant():
@@ -55,7 +58,6 @@ def find_ppcm_variant():
             print(f"  Found {node['sku']}: ${node['price']} - {node['product']['title']} / {node['title']} ({node['id']})")
     variants.sort(key=lambda v: float(v["price"]))
     return variants[0]["id"] if variants else None
-
 
 def fetch_targets():
     targets = []
@@ -101,7 +103,6 @@ def fetch_targets():
                     params = None
         time.sleep(0.5)
     return targets
-
 
 def swap_item(order_info, ppcm_gid):
     order_name = order_info["order_name"]
@@ -188,7 +189,6 @@ def swap_item(order_info, ppcm_gid):
     print(f"    OK {order_name}")
     return True
 
-
 def main():
     mode = "COMMIT" if COMMIT else "DRY-RUN"
     print(f"\n{'='*60}")
@@ -229,7 +229,6 @@ def main():
     print(f"\n{'='*60}")
     print(f"  Done: {success} swapped, {failed} failed")
     print(f"{'='*60}")
-
 
 if __name__ == "__main__":
     main()

@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Remove PK- line items from unfulfilled Shopify orders that contain TR- line items.
 
 TR- and PK- are non-pickable SKU prefixes. Orders with TR- items should not
@@ -26,7 +31,6 @@ if "--single" in sys.argv:
     idx = sys.argv.index("--single")
     if idx + 1 < len(sys.argv):
         SINGLE = int(sys.argv[idx + 1])
-
 
 def fetch_all_unfulfilled():
     """Fetch all unfulfilled orders via REST pagination."""
@@ -61,7 +65,6 @@ def fetch_all_unfulfilled():
         time.sleep(0.5)
     return orders
 
-
 def gql(query, variables=None):
     """Execute a Shopify GraphQL query."""
     payload = {"query": query}
@@ -73,7 +76,6 @@ def gql(query, variables=None):
     if data.get("errors"):
         raise Exception(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
     return data["data"]
-
 
 def find_tr_orders_with_pk(orders):
     """Find orders that have TR- line items AND PK- line items to remove."""
@@ -116,7 +118,6 @@ def find_tr_orders_with_pk(orders):
             })
 
     return results
-
 
 def remove_pk_items(order_info):
     """Remove PK- line items from an order via GraphQL order edit."""
@@ -245,7 +246,6 @@ def remove_pk_items(order_info):
             pass
         return False
 
-
 def main():
     mode = "COMMIT" if COMMIT else "DRY-RUN"
     print(f"\n{'='*60}")
@@ -291,7 +291,6 @@ def main():
     print(f"\n{'='*60}")
     print(f"  Done: {success} edited, {failed} failed")
     print(f"{'='*60}")
-
 
 if __name__ == "__main__":
     main()

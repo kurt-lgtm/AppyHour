@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Swap curated SKUs on unfulfilled custom box orders.
 
 Replaces specific curation items (_rc_bundle only) with substitute SKUs.
@@ -38,7 +43,6 @@ SWAP_ANY = {"CH-BRZ"}
 # Tag filter — only process orders with this tag (set to "" for all unfulfilled)
 TAG_FILTER = "RMFG_20260324"
 
-
 def gql(query, variables=None):
     payload = {"query": query}
     if variables:
@@ -49,7 +53,6 @@ def gql(query, variables=None):
     if data.get("errors"):
         raise Exception(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
     return data["data"]
-
 
 def fetch_all_unfulfilled():
     orders = []
@@ -78,7 +81,6 @@ def fetch_all_unfulfilled():
                     params = None
         time.sleep(0.5)
     return orders
-
 
 def find_swap_orders(orders):
     # Track per-SKU counts against limits
@@ -128,7 +130,6 @@ def find_swap_orders(orders):
                 "swaps": swaps_needed,
             })
     return results
-
 
 def fix_order(order_info, commit=False):
     name = order_info["order"]
@@ -243,7 +244,6 @@ def fix_order(order_info, commit=False):
         print(f"    CANCELLED due to errors")
         return "failed"
 
-
 def main():
     commit = "--commit" in sys.argv
     single = None
@@ -328,7 +328,6 @@ def main():
     print(f"Log saved: {log_path}")
     if not commit:
         print("Use --commit to apply changes.")
-
 
 if __name__ == "__main__":
     main()

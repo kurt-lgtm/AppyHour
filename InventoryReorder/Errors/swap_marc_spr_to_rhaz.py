@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Swap AC-MARC to AC-RHAZ on 40 AHB-SPR orders.
 
 Usage:
@@ -22,7 +27,6 @@ NEW_SKU = "AC-RHAZ"
 RHAZ_GID = "gid://shopify/ProductVariant/50823380631832"  # $0 variant
 SWAP_LIMIT = 40
 
-
 def gql(query, variables=None):
     payload = {"query": query}
     if variables:
@@ -33,7 +37,6 @@ def gql(query, variables=None):
     if data.get("errors"):
         raise Exception(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
     return data["data"]
-
 
 def fetch_spr_marc():
     targets = []
@@ -83,7 +86,6 @@ def fetch_spr_marc():
                     params = None
         time.sleep(0.5)
     return targets
-
 
 def swap_item(order_info):
     order_name = order_info["order_name"]
@@ -177,7 +179,6 @@ def swap_item(order_info):
     print(f"    COMMITTED {order_name}")
     return True
 
-
 def main():
     mode = "COMMIT" if COMMIT else "DRY-RUN"
     print(f"\n{'='*60}")
@@ -213,7 +214,6 @@ def main():
     print(f"\n{'='*60}")
     print(f"  Done: {success} swapped, {failed} failed")
     print(f"{'='*60}")
-
 
 if __name__ == "__main__":
     main()

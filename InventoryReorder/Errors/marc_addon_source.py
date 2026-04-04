@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Check if the 105 paid AC-MARC add-ons come from any bundle (BL- SKU or _bundle_id property)."""
 import requests, json, time
 from collections import defaultdict

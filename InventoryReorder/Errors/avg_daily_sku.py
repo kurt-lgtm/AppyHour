@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Calculate average daily sales for a SKU from recent Shopify orders."""
 import requests, json, time, datetime, sys
 from collections import defaultdict

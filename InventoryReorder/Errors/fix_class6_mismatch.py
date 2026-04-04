@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Fix Class 6 curation mismatch — replace wrong curation items with correct recipe.
 
 Only fixes clean 1:1 mismatches where ALL curation items match a single wrong curation.
@@ -42,7 +47,6 @@ RC_HEADERS = {
     "X-Recharge-Version": "2021-11",
 }
 
-
 def fetch_rc_charge(charge_id):
     """Fetch a single Recharge charge by ID. Returns charge dict or None."""
     if not RC_TOKEN or not charge_id:
@@ -57,7 +61,6 @@ def fetch_rc_charge(charge_id):
         return resp.json().get("charge")
     except Exception:
         return None
-
 
 def check_rc_items(order, expected_curation, actual_curation):
     """Check Recharge charge to determine if items were customer-chosen.
@@ -107,7 +110,6 @@ def check_rc_items(order, expected_curation, actual_curation):
     # RC items don't match either recipe → customer may have customized
     return {"rc_status": "customer_chosen", "rc_items": rc_skus, "rc_charge_id": charge_id}
 
-
 def fetch_all_unfulfilled():
     orders = []
     url = f"{REST_BASE}/orders.json"
@@ -135,7 +137,6 @@ def fetch_all_unfulfilled():
         time.sleep(0.5)
     return orders
 
-
 def gql(query, variables=None):
     payload = {"query": query}
     if variables:
@@ -147,13 +148,11 @@ def gql(query, variables=None):
         raise Exception(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
     return data["data"]
 
-
 def get_curation_from_box(sku):
     parts = sku.split("-")
     if len(parts) >= 3:
         return parts[-1]
     return None
-
 
 def lookup_variant_ids(skus_needed):
     """Look up variant IDs for a set of SKUs via GraphQL.
@@ -203,7 +202,6 @@ def lookup_variant_ids(skus_needed):
     if missing:
         print(f"  WARNING: Could not find variants for: {sorted(missing)}")
     return variant_map
-
 
 def find_class6_orders(orders):
     results = []
@@ -308,7 +306,6 @@ def find_class6_orders(orders):
 
     return results
 
-
 def print_plan(results):
     safe = [r for r in results if r["rc_status"] != "customer_chosen"]
     skipped = [r for r in results if r["rc_status"] == "customer_chosen"]
@@ -341,7 +338,6 @@ def print_plan(results):
         print()
 
     return safe
-
 
 def apply_changes(results, variant_map):
     success = 0
@@ -489,7 +485,6 @@ def apply_changes(results, variant_map):
     print(f"RESULTS: {success} succeeded, {failed} failed")
     print(f"{'='*40}")
 
-
 def main():
     commit = "--commit" in sys.argv
     single_order = None
@@ -538,7 +533,6 @@ def main():
         return
 
     apply_changes(safe_results, variant_map)
-
 
 if __name__ == "__main__":
     main()

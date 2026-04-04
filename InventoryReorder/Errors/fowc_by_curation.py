@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Break down remaining CH-FOWC curation orders by curation type."""
 import requests, json, time
 from collections import Counter

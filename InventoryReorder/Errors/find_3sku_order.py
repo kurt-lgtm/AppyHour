@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Find an order with AC-PRPE, AC-MARC, and CH-ALP."""
 import requests, json, time
 

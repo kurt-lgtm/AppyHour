@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Check how many 'standalone' AC-MARC orders have a BL- item at qty 0 (removed bundle)."""
 import requests, json, time
 from collections import defaultdict

@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Fix the rc-upcoming CSV by looking up customer_id, email, and subscription_id
 from the Recharge charges API using charge IDs already in the file."""
 import requests, json, time, csv

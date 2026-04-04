@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Verify Class 4B duplicate curation orders before removal.
 
 Checks whether "duplicate" items are truly double-written curation errors vs:
@@ -43,7 +48,6 @@ FOOD_PREFIXES = ("CH-", "MT-", "AC-", "CEX-")
 # Orders to skip per user instruction
 SKIP_ORDERS = {"#115034", "#105347"}
 
-
 def fetch_all_unfulfilled():
     """Fetch all unfulfilled open orders via REST API."""
     orders = []
@@ -72,7 +76,6 @@ def fetch_all_unfulfilled():
         time.sleep(0.5)
     return orders
 
-
 def gql(query, variables=None):
     """Execute a Shopify GraphQL query."""
     payload = {"query": query}
@@ -84,7 +87,6 @@ def gql(query, variables=None):
     if data.get("errors"):
         raise Exception(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
     return data["data"]
-
 
 def find_4b_candidates(orders):
     """Identify Class 4B candidate orders from REST data (same logic as fix script)."""
@@ -175,7 +177,6 @@ def find_4b_candidates(orders):
 
     return results
 
-
 def fetch_graphql_details(order_id):
     """Fetch line item customAttributes via GraphQL for box_contents check."""
     query = """
@@ -201,7 +202,6 @@ def fetch_graphql_details(order_id):
 
     data = gql(query)
     return data.get("order")
-
 
 def parse_box_contents(box_contents_str):
     """Parse box_contents format: '1x Product Name\\n2x Product Name\\n...'
@@ -234,7 +234,6 @@ def parse_box_contents(box_contents_str):
 
     return result, unresolved
 
-
 def resolve_name_to_sku(name):
     """Try to match a product name to a SKU using the mapping file."""
     # Exact match (case-insensitive)
@@ -253,7 +252,6 @@ def resolve_name_to_sku(name):
             return sku
 
     return None
-
 
 def verify_order(candidate, gql_data):
     """Verify a single Class 4B candidate order.
@@ -399,7 +397,6 @@ def verify_order(candidate, gql_data):
         "reason": order_reason,
     }
 
-
 def print_report(results):
     """Print the verification report."""
     safe = [r for r in results if r["verdict"] == "SAFE TO FIX"]
@@ -449,7 +446,6 @@ def print_report(results):
         dupe_skus = ", ".join(v["sku"] for v in r["sku_verdicts"])
         print(f"{r['order_name']:<12} {r['customer'][:24]:<25} {r['box_sku'][:21]:<22} {dupe_skus[:29]:<30} {r['verdict']:<15}")
 
-
 def _print_order_detail(r):
     """Print detailed info for a single order."""
     print(f"\n  Order {r['order_name']} | {r['customer']} | {r['email']}")
@@ -476,7 +472,6 @@ def _print_order_detail(r):
             print(f"    -> {reason}")
 
     print(f"  >>> VERDICT: {r['verdict']} — {r['reason']}")
-
 
 def main():
     print("=" * 60)
@@ -513,7 +508,6 @@ def main():
 
     print("\nStep 4: Generating report...")
     print_report(results)
-
 
 if __name__ == "__main__":
     main()

@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Swap curated CH-FOWC to CH-BRZ, keeping paid, customer-chosen, and BYO.
 
 Keep enough to match available inventory (49). Swap the rest.
@@ -24,7 +29,6 @@ NEW_SKU = "CH-BRZ"
 AVAILABLE = 49
 BRZ_GID = None  # will look up
 
-
 def gql(query, variables=None):
     payload = {"query": query}
     if variables:
@@ -36,7 +40,6 @@ def gql(query, variables=None):
         raise Exception(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
     return data["data"]
 
-
 def find_brz_variant():
     data = gql('{ productVariants(first: 5, query: "sku:CH-BRZ") { edges { node { id sku price product { title } } } } }')
     variants = []
@@ -47,7 +50,6 @@ def find_brz_variant():
             print(f"  {n['sku']}: ${n['price']} - {n['product']['title']} ({n['id']})")
     variants.sort(key=lambda v: float(v["price"]))
     return variants[0]["id"]
-
 
 def fetch_all_fowc():
     """Fetch all FOWC orders, classify as keep vs swap."""
@@ -107,7 +109,6 @@ def fetch_all_fowc():
         time.sleep(0.5)
     return keep, check_curation
 
-
 def check_box_contents_fowc(order_gid):
     """Check if customer chose CH-FOWC via box_contents."""
     try:
@@ -138,7 +139,6 @@ def check_box_contents_fowc(order_gid):
     except Exception:
         pass
     return False
-
 
 def swap_item(order_info, brz_gid):
     order_gid = order_info["order_gid"]
@@ -184,7 +184,6 @@ def swap_item(order_info, brz_gid):
         return False
     print(f"    OK {order_info['order_name']}")
     return True
-
 
 def main():
     mode = "COMMIT" if COMMIT else "DRY-RUN"
@@ -251,7 +250,6 @@ def main():
     print(f"\n{'='*60}")
     print(f"  Done: {s} swapped, {f} failed")
     print(f"{'='*60}")
-
 
 if __name__ == "__main__":
     main()

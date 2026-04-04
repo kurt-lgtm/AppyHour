@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Enrich RC upcoming class 2/3/4B CSV with subscription IDs from Recharge API."""
 import csv
 import json
@@ -20,7 +25,6 @@ RC_HEADERS = {
 }
 
 import requests
-
 
 def fetch_charge(charge_id):
     """Fetch a single charge from Recharge."""
@@ -45,7 +49,6 @@ def fetch_charge(charge_id):
                 print(f"  FAILED charge {charge_id}: {e}")
                 return None
     return None
-
 
 def main():
     with open(INPUT, encoding="utf-8") as f:
@@ -97,7 +100,6 @@ def main():
         writer.writerows(rows)
 
     print(f"Written to: {OUTPUT}")
-
 
 if __name__ == "__main__":
     main()

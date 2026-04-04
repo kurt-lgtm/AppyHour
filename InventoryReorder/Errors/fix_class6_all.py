@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Fix all remaining Class 6 curation mismatches.
 
 Uses box_contents (customer customization) when available, falls back to curation recipe.
@@ -29,7 +34,6 @@ with open(PLAN_FILE, encoding="utf-8") as f:
 with open(VARIANT_FILE, encoding="utf-8") as f:
     VARIANT_MAP = json.load(f)
 
-
 def gql(query, variables=None):
     payload = {"query": query}
     if variables:
@@ -40,7 +44,6 @@ def gql(query, variables=None):
     if data.get("errors"):
         raise Exception(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
     return data["data"]
-
 
 def fix_order(order_plan, commit=False):
     name = order_plan["name"]
@@ -174,7 +177,6 @@ def fix_order(order_plan, commit=False):
         print(f"  CANCELLED {name} due to errors")
         return False
 
-
 def main():
     commit = "--commit" in sys.argv
     single = None
@@ -202,7 +204,6 @@ def main():
     print(f"{mode}: {success} ok, {failed} failed, {skipped} already correct")
     if not commit:
         print("Use --commit to apply changes.")
-
 
 if __name__ == "__main__":
     main()

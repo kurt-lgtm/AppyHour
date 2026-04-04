@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Find orders tagged _SHIP_2026-03-23 with duplicate CH-LOU line items."""
 import requests, json, time
 

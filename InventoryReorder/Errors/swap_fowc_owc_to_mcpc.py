@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Swap 20 OWC curation CH-FOWC to CH-MCPC. Over-request to handle locked orders."""
 import requests, json, sys, time
 
@@ -14,7 +19,6 @@ HEADERS = {"X-Shopify-Access-Token": TOKEN, "Content-Type": "application/json"}
 COMMIT = "--commit" in sys.argv
 TARGET_SUCCESS = 20
 
-
 def gql(query, variables=None):
     payload = {"query": query}
     if variables:
@@ -25,7 +29,6 @@ def gql(query, variables=None):
     if data.get("errors"):
         raise Exception(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
     return data["data"]
-
 
 print("Looking up CH-MCPC variant...")
 vdata = gql('{ productVariants(first: 5, query: "sku:CH-MCPC") { edges { node { id sku price product { title } } } } }')

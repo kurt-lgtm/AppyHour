@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Shortage check: _SHIP_2026-03-23 orders + 3/21 queued charges vs inventory + PO#436."""
 import requests, json, time, csv
 from collections import defaultdict

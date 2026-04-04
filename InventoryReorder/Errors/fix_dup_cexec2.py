@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Remove duplicate CEX-EC-* — handle merged line items by setting qty to 1."""
 import requests, json, sys, time
 
@@ -11,7 +16,6 @@ REST_BASE = f"https://{STORE}.myshopify.com/admin/api/2024-01"
 GQL_URL = f"https://{STORE}.myshopify.com/admin/api/2024-01/graphql.json"
 HEADERS = {"X-Shopify-Access-Token": TOKEN, "Content-Type": "application/json"}
 
-
 def gql(query, variables=None):
     payload = {"query": query}
     if variables:
@@ -22,7 +26,6 @@ def gql(query, variables=None):
     if data.get("errors"):
         raise Exception(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
     return data["data"]
-
 
 def fetch_all_unfulfilled():
     orders = []
@@ -49,7 +52,6 @@ def fetch_all_unfulfilled():
                     params = None
         time.sleep(0.5)
     return orders
-
 
 def find_dup_cexec(orders):
     results = []
@@ -80,7 +82,6 @@ def find_dup_cexec(orders):
             "total_qty": sum(c["qty"] for c in cex_lines),
         })
     return results
-
 
 def fix_order(r):
     order_gid = f"gid://shopify/Order/{r['order_id']}"
@@ -183,7 +184,6 @@ def fix_order(r):
 
     print(f"    COMMITTED {order_name}")
     return True
-
 
 commit = "--commit" in sys.argv
 

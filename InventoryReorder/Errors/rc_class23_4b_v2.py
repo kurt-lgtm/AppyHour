@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Find Class 2/3 and 4B in Recharge queued charges with customer + subscription IDs.
 Uses cursor-based pagination (required for Recharge API 2021-11)."""
 import requests, json, time, csv

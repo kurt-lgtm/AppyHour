@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Check where CH-TTBRIE demand comes from."""
 import requests, json, time
 from collections import defaultdict

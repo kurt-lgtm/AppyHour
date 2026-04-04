@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Find a customer-chosen CH-FOWC order example."""
 import requests, json, time
 

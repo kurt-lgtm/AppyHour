@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Show an example one-time purchase AC-MARC order with all line items."""
 import requests, json, time
 

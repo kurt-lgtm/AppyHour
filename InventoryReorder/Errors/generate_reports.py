@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["openpyxl"]
+# ///
+
 """Generate error order spreadsheets from the error CSV."""
 import csv
 import re
@@ -13,7 +18,6 @@ SETTINGS = r"C:\Users\Work\Claude Projects\AppyHour\InventoryReorder\dist\invent
 
 # SKUs that should never appear as CEX-EC resolution (unless paid)
 ASSIGNMENT_EXCLUDE = {"CH-MAFT"}
-
 
 def style_sheet(ws, headers, data_rows, col_widths):
     hdr_font = Font(name="Calibri", bold=True, color="FFFFFF", size=11)
@@ -37,11 +41,9 @@ def style_sheet(ws, headers, data_rows, col_widths):
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
 
-
 def get_ship_tag(tags):
     m = re.search(r"_SHIP_(\d{4}-\d{2}-\d{2})", tags or "")
     return m.group(1) if m else ""
-
 
 def get_total(row):
     try:
@@ -49,10 +51,8 @@ def get_total(row):
     except ValueError:
         return 0.0
 
-
 def has_purchased_extras(items):
     return bool(re.search(r"\d+x (CEX-E[A-Z]|EX-E[A-Z])", items))
-
 
 def main():
     rows_all = []
@@ -400,7 +400,6 @@ def main():
     wb2.save(path2)
     print(f"Saved: {path2}")
     print(f"  Orders with purchased extras: {len(extras_orders)}")
-
 
 if __name__ == "__main__":
     main()

@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Refund and remove paid AC-LFOLIVE from _SHIP_2026-03-23 orders.
 
 Only targets PAID items (no _rc_bundle property). Curation items are left alone.
@@ -21,7 +26,6 @@ HEADERS = {"X-Shopify-Access-Token": TOKEN, "Content-Type": "application/json"}
 COMMIT = "--commit" in sys.argv
 TARGET_SKU = "AC-LFOLIVE"
 
-
 def gql(query, variables=None):
     payload = {"query": query}
     if variables:
@@ -32,7 +36,6 @@ def gql(query, variables=None):
     if data.get("errors"):
         raise Exception(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
     return data["data"]
-
 
 def fetch_all_unfulfilled():
     orders = []
@@ -60,7 +63,6 @@ def fetch_all_unfulfilled():
                     params = None
         time.sleep(0.5)
     return orders
-
 
 def find_paid_lfolive(orders):
     """Find orders with paid (non-curation) AC-LFOLIVE."""
@@ -91,7 +93,6 @@ def find_paid_lfolive(orders):
                 "total": price * qty,
             })
     return results
-
 
 def refund_and_remove(info):
     """Remove item via order edit, then refund via REST API."""
@@ -245,7 +246,6 @@ def refund_and_remove(info):
 
     return True
 
-
 def main():
     mode = "COMMIT" if COMMIT else "DRY-RUN"
     print(f"\n{'='*60}")
@@ -290,7 +290,6 @@ def main():
     print(f"\n{'='*60}")
     print(f"  Done: {success} processed, {failed} failed")
     print(f"{'='*60}")
-
 
 if __name__ == "__main__":
     main()

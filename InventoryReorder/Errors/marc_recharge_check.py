@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Cross-reference the 89 'standalone' paid AC-MARC orders with Recharge charges."""
 import requests, json, time, csv
 from collections import defaultdict

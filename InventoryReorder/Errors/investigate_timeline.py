@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Investigate timeline for sub 766730792 (damgoodwin #119274).
 Check events, subscription history, and which API token made changes."""
 import requests, json, time
@@ -14,7 +19,6 @@ RC_HEADERS = {
     "X-Recharge-Version": "2021-11",
 }
 
-
 def rc_get(endpoint, params=None):
     for attempt in range(5):
         resp = requests.get(f"{BASE_URL}{endpoint}", headers=RC_HEADERS,
@@ -26,7 +30,6 @@ def rc_get(endpoint, params=None):
         time.sleep(0.5)
         return resp.json()
     raise Exception(f"Max retries on GET {endpoint}")
-
 
 SUB_ID = 766730792
 CUSTOMER_ID = 232206299

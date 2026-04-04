@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Check how many paid AC-MARC are from AHB-X specialty boxes."""
 import requests, json, time
 from collections import defaultdict

@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Remove PK-FCUST line items from unfulfilled orders that contain TR- SKUs.
 
 Usage:
@@ -16,7 +21,6 @@ TOKEN = settings["shopify_access_token"]
 REST_BASE = f"https://{STORE}.myshopify.com/admin/api/2024-01"
 GQL_URL = f"https://{STORE}.myshopify.com/admin/api/2024-01/graphql.json"
 HEADERS = {"X-Shopify-Access-Token": TOKEN, "Content-Type": "application/json"}
-
 
 def fetch_all_unfulfilled():
     """Fetch all unfulfilled orders via REST pagination."""
@@ -46,7 +50,6 @@ def fetch_all_unfulfilled():
         time.sleep(0.5)
     return orders
 
-
 def gql(query, variables=None):
     """Execute a Shopify GraphQL query."""
     payload = {"query": query}
@@ -58,7 +61,6 @@ def gql(query, variables=None):
     if data.get("errors"):
         raise Exception(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
     return data["data"]
-
 
 def find_orders_to_fix(orders):
     """Find unfulfilled orders that have TR- SKUs AND PK-FCUST."""
@@ -101,7 +103,6 @@ def find_orders_to_fix(orders):
 
     return results
 
-
 def print_plan(results):
     """Print dry-run summary."""
     print(f"\n{'='*80}")
@@ -114,7 +115,6 @@ def print_plan(results):
         for pk in r['pk_fcust_lines']:
             print(f"  REMOVE: {pk['sku']} x{pk['qty']} — {pk['title']}")
         print()
-
 
 def apply_changes(results):
     """Remove PK-FCUST via Shopify GraphQL order edit mutations."""
@@ -246,7 +246,6 @@ def apply_changes(results):
     print(f"RESULTS: {success} succeeded, {failed} failed")
     print(f"{'='*40}")
 
-
 def main():
     commit = "--commit" in sys.argv
     single_order = None
@@ -281,7 +280,6 @@ def main():
         return
 
     apply_changes(results)
-
 
 if __name__ == "__main__":
     main()

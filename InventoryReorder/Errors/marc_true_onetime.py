@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Find a true one-time purchase AC-MARC (no props at all) and show full order."""
 import requests, json, time
 

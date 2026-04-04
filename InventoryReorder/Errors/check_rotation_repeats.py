@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Find orders where curation didn't rotate — same suffix on Recharge sub and Shopify order.
 
 Checks all unfulfilled orders with stale _SHIP prop dates against Recharge subscriptions.
@@ -28,7 +33,6 @@ RC_HEADERS = {
 
 CUSTOM_PREFIXES = ("AHB-MCUST", "AHB-LCUST")
 
-
 def fetch_all_unfulfilled():
     orders = []
     url = f"{BASE}/orders.json"
@@ -55,12 +59,10 @@ def fetch_all_unfulfilled():
         time.sleep(0.5)
     return orders
 
-
 def get_curation_suffix(sku):
     """AHB-MCUST-CORS-MDT -> MDT"""
     parts = sku.split("-")
     return parts[-1] if len(parts) >= 3 else None
-
 
 def rc_get_subscription(sub_id):
     try:
@@ -71,7 +73,6 @@ def rc_get_subscription(sub_id):
     except Exception:
         pass
     return None
-
 
 def main():
     print("Fetching unfulfilled orders...")
@@ -196,7 +197,6 @@ def main():
         w.writeheader()
         w.writerows(repeats)
     print(f"\nCSV saved: {out}")
-
 
 if __name__ == "__main__":
     main()

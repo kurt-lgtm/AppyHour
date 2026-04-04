@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Find Class 2/3, 4B, and 13 in Recharge queued charges — with proper customer/sub IDs.
 
 Excludes:
@@ -33,7 +38,6 @@ if os.path.exists(_NAME_MAP_FILE):
                 if _key not in _NAME_TO_SKU:
                     _NAME_TO_SKU[_key] = _info["sku"]
 
-
 def _parse_box_contents(text):
     """Parse box_contents string into {sku: qty}."""
     result = {}
@@ -50,7 +54,6 @@ def _parse_box_contents(text):
         if sku:
             result[sku] = result.get(sku, 0) + qty
     return result
-
 
 RC_TOKEN = settings["recharge_api_token"]
 RC_HEADERS = {

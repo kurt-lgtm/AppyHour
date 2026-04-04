@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Find a simple MT-SOP curation order example."""
 import requests, json, time
 

@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Check repeat-SKU orders for Class 4B: only flag curation dupes on single-box orders."""
 import requests, json, time, csv
 from collections import Counter

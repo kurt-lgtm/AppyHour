@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Check what other curated meats are on orders with curated MT-SOP but no MT-JAHH."""
 import requests, json, time
 from collections import Counter

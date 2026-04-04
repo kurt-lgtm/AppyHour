@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Check demand for all BRIE SKUs on _SHIP_2026-03-23."""
 import requests, json, time
 from collections import defaultdict

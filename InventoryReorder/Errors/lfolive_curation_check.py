@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Check if any AC-LFOLIVE curation items are in 'no nuts' or similar curations."""
 import requests, json, time
 from collections import defaultdict

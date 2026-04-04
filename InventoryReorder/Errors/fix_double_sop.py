@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Fix 6 orders with double MT-SOP: change the swapped one (no _rc_bundle) to MT-CAPO."""
 import requests, json, sys, time
 
@@ -13,7 +18,6 @@ HEADERS = {"X-Shopify-Access-Token": TOKEN, "Content-Type": "application/json"}
 COMMIT = "--commit" in sys.argv
 TARGET_ORDERS = ["120540", "120348", "120062", "119387", "119322", "110025"]
 
-
 def gql(query, variables=None):
     payload = {"query": query}
     if variables:
@@ -24,7 +28,6 @@ def gql(query, variables=None):
     if data.get("errors"):
         raise Exception(f"GraphQL errors: {json.dumps(data['errors'], indent=2)}")
     return data["data"]
-
 
 # Find $0 MT-CAPO variant
 print("Looking up MT-CAPO variant...")

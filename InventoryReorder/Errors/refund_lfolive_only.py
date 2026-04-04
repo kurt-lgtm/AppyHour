@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """Issue refunds for the 27 AC-LFOLIVE orders already edited (items already removed).
 
 The items were set to qty 0 via order edit. This script just processes the refunds.
