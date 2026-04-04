@@ -6,7 +6,7 @@ Source of truth: meal-type-export CSV from RMFG Translator portal.
 Last synced: 2026-03-30
 """
 
-NAME_TO_SKU = {
+NAME_TO_SKU: dict[str, str] = {
     # Accessories / Accompaniments (AC-)
     "Apple Maple Butter Mini": "AC-APMB",
     "Apricot with Orange & Honey Mini Jam": "AC-APOH",
@@ -245,4 +245,4 @@ NAME_TO_SKU = {
     "Triple Cream Brie": "CH-EBRIE",
 }
 
-FOOD_PREFIXES = ("CH-", "MT-", "AC-", "CEX-")
+FOOD_PREFIXES: tuple[str, ...] = ("CH-", "MT-", "AC-", "CEX-")

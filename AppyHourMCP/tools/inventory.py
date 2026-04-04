@@ -5,18 +5,18 @@ Wraps the same logic as GelPackCalculator/app/routers/inventory.py.
 
 import asyncio
 import json
-from typing import Optional
+import types
 from pydantic import BaseModel, Field, ConfigDict
 
 from utils import get_inventory_settings, format_error, to_json
 
 
 # Lazy-loaded client singletons
-_module = None
-_recharge = None
+_module: types.ModuleType | None = None
+_recharge: object | None = None
 
 
-def _get_module():
+def _get_module() -> types.ModuleType:
     """Lazy-import inventory_reorder module."""
     global _module
     if _module is None:
@@ -25,7 +25,7 @@ def _get_module():
     return _module
 
 
-def _get_recharge():
+def _get_recharge() -> object:
     """Get or create the RechargeClient singleton."""
     global _recharge
     if _recharge is None:
@@ -38,7 +38,7 @@ def _get_recharge():
     return _recharge
 
 
-def register(mcp):
+def register(mcp: object) -> None:
     """Register inventory & forecasting tools on the MCP server."""
 
     # -----------------------------------------------------------------------

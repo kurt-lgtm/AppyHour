@@ -10,7 +10,6 @@ import re
 import time
 import csv
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Dict
 from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict
 
@@ -18,10 +17,24 @@ import requests
 
 from utils import get_shopify_auth, shopify_graphql, format_error, to_json, APPYHOUR_ROOT
 
+# Dietary restriction box SKU fragments — orders with these are excluded from
+# automatic swaps because their contents are curated for the restriction.
+DIETARY_RESTRICTION_FRAGMENTS = ("NNRS", "CORS", "NCRS")
 
-def _lookup_variant_gids(base, headers, skus):
+
+def _has_dietary_restriction(line_items: list[dict]) -> bool:
+    """Check if any line item SKU contains a dietary restriction fragment."""
+    for li in line_items:
+        sku = (li.get("sku") or "").strip().upper()
+        for frag in DIETARY_RESTRICTION_FRAGMENTS:
+            if frag in sku:
+                return True
+    return False
+
+
+def _lookup_variant_gids(base: str, headers: dict[str, str], skus: set[str]) -> dict[str, str]:
     """Look up $0 variant GIDs for a set of SKUs. Prefers cheapest variant."""
-    variant_map = {}
+    variant_map: dict[str, tuple[str, float]] = {}
     sku_list = sorted(skus)
     batch_size = 10
     for i in range(0, len(sku_list), batch_size):
@@ -51,7 +64,7 @@ def _lookup_variant_gids(base, headers, skus):
     return {sku: gid for sku, (gid, _) in variant_map.items()}
 
 
-def _swap_order_skus(base, headers, order_gid, swaps, variant_gids):
+def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: dict[str, str], variant_gids: dict[str, str]) -> list[str]:
     """Swap SKUs on a single order. Returns list of swap descriptions."""
     data = shopify_graphql(base, headers, """
         mutation orderEditBegin($id: ID!) {
@@ -125,7 +138,7 @@ def _swap_order_skus(base, headers, order_gid, swaps, variant_gids):
     return swapped
 
 
-def register(mcp):
+def register(mcp: object) -> None:
     """Register order edit tools on the MCP server."""
 
     class SwapInput(BaseModel):
@@ -133,7 +146,7 @@ def register(mcp):
         model_config = ConfigDict(str_strip_whitespace=True)
 
         ship_tag: str = Field(..., description="Ship date tag to filter orders (e.g. '_SHIP_2026-03-23')")
-        swaps: Dict[str, str] = Field(..., description="Map of old_sku -> new_sku (e.g. {'CH-LEON': 'CH-LOU'})")
+        swaps: dict[str, str] = Field(..., description="Map of old_sku -> new_sku (e.g. {'CH-LEON': 'CH-LOU'})")
         box_sku: str = Field("", description="Optional: only process orders containing this box SKU (e.g. 'AHB-MCUST-SPN')")
         dry_run: bool = Field(True, description="If true (default), preview without modifying orders")
 
@@ -196,10 +209,16 @@ def register(mcp):
                 time.sleep(0.1)
 
             # Filter by ship tag + box SKU + swappable SKUs
+            # Exclude dietary restriction orders (NNRS/CORS/NCRS)
             targets = []
+            skipped_dietary = 0
             for o in all_orders:
                 tags = [t.strip() for t in o.get("tags", "").split(",")]
                 if params.ship_tag not in tags:
+                    continue
+                order_line_items = o.get("line_items", [])
+                if _has_dietary_restriction(order_line_items):
+                    skipped_dietary += 1
                     continue
                 has_box = not params.box_sku
                 swap_skus = set()
@@ -225,6 +244,7 @@ def register(mcp):
                     "box_sku": params.box_sku or "(any)",
                     "variant_gids": variant_gids,
                     "orders_to_swap": len(targets),
+                    "skipped_dietary_restriction": skipped_dietary,
                     "preview": preview,
                 })
 
@@ -268,6 +288,7 @@ def register(mcp):
             return to_json({
                 "swapped": len(results),
                 "failed": len(errors_list),
+                "skipped_dietary_restriction": skipped_dietary,
                 "csv_path": csv_path,
                 "results": results[:20],
                 "errors": errors_list[:20],

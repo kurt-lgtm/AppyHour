@@ -33,13 +33,13 @@ def _get_credentials_path() -> str:
     )
 
 
-def _get_client():
+def _get_client() -> object:
     """Lazy-initialize and return a GoogleIntegration instance."""
     from google_integration import GoogleIntegration
     return GoogleIntegration(_get_credentials_path())
 
 
-def register(mcp):
+def register(mcp: object) -> None:
     """Register Google Sheets tools on the MCP server."""
 
     @mcp.tool()

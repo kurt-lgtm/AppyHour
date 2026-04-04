@@ -1,3 +1,8 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["requests"]
+# ///
+
 """
 Shared utilities for the AppyHour MCP server.
 Handles path setup, settings loading, and error formatting.
@@ -12,7 +17,6 @@ from typing import Any, Optional
 
 logger = logging.getLogger("appyhour_mcp.utils")
 
-
 # ---------------------------------------------------------------------------
 # Path setup — add sibling project directories so we can import their modules
 # ---------------------------------------------------------------------------
@@ -24,7 +28,6 @@ GELCALC_DIR = APPYHOUR_ROOT / "GelPackCalculator"
 INVENTORY_DIR = APPYHOUR_ROOT / "InventoryReorder"
 SHIPPING_DIR = APPYHOUR_ROOT / "ShippingReports"
 
-
 def setup_paths():
     """Add sibling project directories to sys.path (idempotent)."""
     for p in [GELCALC_DIR, INVENTORY_DIR, SHIPPING_DIR]:
@@ -32,10 +35,8 @@ def setup_paths():
         if s not in sys.path:
             sys.path.insert(0, s)
 
-
 # Run at import time so tools can do top-level imports
 setup_paths()
-
 
 # ---------------------------------------------------------------------------
 # Settings cache
@@ -43,7 +44,6 @@ setup_paths()
 
 _gelcalc_settings: Optional[dict] = None
 _inventory_settings: Optional[dict] = None
-
 
 def get_gelcalc_settings() -> dict:
     """Load GelPackCalculator settings (cached)."""
@@ -57,7 +57,6 @@ def get_gelcalc_settings() -> dict:
             _gelcalc_settings = {}
     return _gelcalc_settings
 
-
 def get_inventory_settings() -> dict:
     """Load InventoryReorder settings (cached)."""
     global _inventory_settings
@@ -69,13 +68,11 @@ def get_inventory_settings() -> dict:
             _inventory_settings = {}
     return _inventory_settings
 
-
 def reload_settings():
     """Force-reload all settings caches."""
     global _gelcalc_settings, _inventory_settings
     _gelcalc_settings = None
     _inventory_settings = None
-
 
 # ---------------------------------------------------------------------------
 # Error handling
@@ -101,7 +98,6 @@ def format_error(e: Exception, context: str = "") -> str:
 
     return f"{prefix}{etype}: {e}"
 
-
 # ---------------------------------------------------------------------------
 # Response formatting
 # ---------------------------------------------------------------------------
@@ -109,7 +105,6 @@ def format_error(e: Exception, context: str = "") -> str:
 def to_json(data: Any, indent: int = 2) -> str:
     """Serialize data to a JSON string, handling common types."""
     return json.dumps(data, indent=indent, default=str)
-
 
 # ---------------------------------------------------------------------------
 # Shopify helpers (shared across shopify, order_edit, matrix_qc, shipping)
@@ -132,7 +127,6 @@ def get_shopify_auth() -> tuple:
     headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
     return base, headers
 
-
 def active_line_items(order: dict) -> list:
     """Return line items with net quantity > 0, excluding refunded/removed items.
 
@@ -154,7 +148,6 @@ def active_line_items(order: dict) -> list:
         for li in order.get("line_items", [])
         if li.get("quantity", 0) - refunded.get(li["id"], 0) > 0
     ]
-
 
 def shopify_graphql(base: str, headers: dict, query: str, variables: Optional[dict] = None) -> dict:
     """Execute a Shopify GraphQL query. Returns the 'data' key."""

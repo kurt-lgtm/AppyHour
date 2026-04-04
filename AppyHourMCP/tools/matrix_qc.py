@@ -10,7 +10,6 @@ import time
 import csv
 import re
 import os
-from typing import Optional
 from collections import Counter
 from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict
@@ -21,9 +20,9 @@ from utils import get_shopify_auth, format_error, to_json, APPYHOUR_ROOT
 from tools.constants import NAME_TO_SKU, FOOD_PREFIXES
 
 
-def _fetch_orders_by_tag(base, headers, tag, fields="id,name,line_items,email"):
+def _fetch_orders_by_tag(base: str, headers: dict[str, str], tag: str, fields: str = "id,name,line_items,email") -> list[dict]:
     """Fetch all unfulfilled orders matching a specific tag."""
-    all_orders = []
+    all_orders: list[dict] = []
     url = f"{base}/orders.json"
     params = {
         "status": "open",
@@ -50,7 +49,7 @@ def _fetch_orders_by_tag(base, headers, tag, fields="id,name,line_items,email"):
     return all_orders
 
 
-def _parse_matrix(xlsx_path):
+def _parse_matrix(xlsx_path: str) -> tuple[dict[str, dict[str, int]], dict[str, str], dict[str, str]]:
     """Parse production matrix Excel file. Returns (matrix, order_names, order_emails)."""
     import openpyxl
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
@@ -82,7 +81,7 @@ def _parse_matrix(xlsx_path):
     return matrix, order_names, order_emails
 
 
-def register(mcp):
+def register(mcp: object) -> None:
     """Register matrix QC tools on the MCP server."""
 
     class ValidateMatrixInput(BaseModel):

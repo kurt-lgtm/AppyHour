@@ -9,7 +9,6 @@ import json
 import logging
 import re
 import time
-from typing import Optional, List
 
 logger = logging.getLogger("appyhour_mcp.shopify")
 from pydantic import BaseModel, Field, ConfigDict
@@ -19,9 +18,9 @@ import requests
 from utils import get_gelcalc_settings, get_shopify_auth, format_error, to_json
 
 
-def _fetch_unfulfilled_orders(base, headers, tag=None, fields="id,name,tags,shipping_address,line_items,customer,email"):
+def _fetch_unfulfilled_orders(base: str, headers: dict[str, str], tag: str | None = None, fields: str = "id,name,tags,shipping_address,line_items,customer,email") -> list[dict]:
     """Fetch all unfulfilled orders with pagination. Optional tag filter."""
-    all_orders = []
+    all_orders: list[dict] = []
     url = f"{base}/orders.json"
     params = {
         "status": "open",
@@ -49,7 +48,7 @@ def _fetch_unfulfilled_orders(base, headers, tag=None, fields="id,name,tags,ship
     return all_orders
 
 
-def _graphql(base, headers, query, variables=None):
+def _graphql(base: str, headers: dict[str, str], query: str, variables: dict | None = None) -> dict:
     """Execute a Shopify GraphQL query."""
     url = f"{base}/graphql.json"
     body = {"query": query}
@@ -63,7 +62,7 @@ def _graphql(base, headers, query, variables=None):
     return data["data"]
 
 
-def register(mcp):
+def register(mcp: object) -> None:
     """Register Shopify tools on the MCP server."""
 
     # -----------------------------------------------------------------------
@@ -74,18 +73,18 @@ def register(mcp):
         """Input for fetching Shopify orders by tag filters."""
         model_config = ConfigDict(str_strip_whitespace=True)
 
-        and_tags: List[str] = Field(default_factory=list, description="Tags that ALL must be present on the order")
-        or_tags: List[str] = Field(default_factory=list, description="At least ONE of these tags must be present")
-        exclude_tags: List[str] = Field(default_factory=list, description="Orders with any of these tags are excluded")
+        and_tags: list[str] = Field(default_factory=list, description="Tags that ALL must be present on the order")
+        or_tags: list[str] = Field(default_factory=list, description="At least ONE of these tags must be present")
+        exclude_tags: list[str] = Field(default_factory=list, description="Orders with any of these tags are excluded")
         limit: int = Field(50, description="Max number of orders to return", ge=1, le=250)
 
     class AnalyzeOrdersInput(BaseModel):
         """Input for fetching and thermally analyzing Shopify orders."""
         model_config = ConfigDict(str_strip_whitespace=True)
 
-        and_tags: List[str] = Field(default_factory=list, description="Tags that ALL must be present on the order")
-        or_tags: List[str] = Field(default_factory=list, description="At least ONE of these tags must be present")
-        exclude_tags: List[str] = Field(default_factory=list, description="Orders with any of these tags are excluded")
+        and_tags: list[str] = Field(default_factory=list, description="Tags that ALL must be present on the order")
+        or_tags: list[str] = Field(default_factory=list, description="At least ONE of these tags must be present")
+        exclude_tags: list[str] = Field(default_factory=list, description="Orders with any of these tags are excluded")
         limit: int = Field(50, description="Max number of orders to analyze", ge=1, le=250)
 
     class UpdateTagsInput(BaseModel):
@@ -93,8 +92,8 @@ def register(mcp):
         model_config = ConfigDict(str_strip_whitespace=True)
 
         order_id: int = Field(..., description="Shopify order ID (numeric)")
-        add_tags: List[str] = Field(default_factory=list, description="Tags to add to the order")
-        remove_tags: List[str] = Field(default_factory=list, description="Tags to remove from the order")
+        add_tags: list[str] = Field(default_factory=list, description="Tags to add to the order")
+        remove_tags: list[str] = Field(default_factory=list, description="Tags to remove from the order")
 
     # -----------------------------------------------------------------------
     # Tools

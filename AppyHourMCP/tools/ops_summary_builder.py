@@ -107,12 +107,12 @@ RESOLUTION_ALIASES = {
 FCS = ["GRIPCA", "RMFG", "COG"]
 
 
-def _load_settings() -> dict:
+def _load_settings() -> dict[str, str]:
     with open(_APPDATA_SETTINGS, encoding="utf-8") as f:
         return json.load(f)
 
 
-def _get_google_client():
+def _get_google_client() -> object:
     from google_integration import GoogleIntegration
     settings = _load_settings()
     creds = settings.get("google_credentials_path", "")
@@ -158,7 +158,7 @@ def _week_start(dt: datetime) -> datetime:
     return dt - timedelta(days=dt.weekday())
 
 
-def _load_shipment_volumes() -> dict:
+def _load_shipment_volumes() -> dict[datetime, dict[str, float]]:
     """Load weekly shipment volumes per FC from the Excel source.
 
     Returns {week_monday_datetime: {"GRIPCA": n, "RMFG": n, "COG": n, "SUM": n}}.
@@ -193,7 +193,7 @@ def _load_shipment_volumes() -> dict:
         else:
             continue
 
-        def _num(idx):
+        def _num(idx: int) -> float:
             v = row1[idx] if idx < len(row1) else None
             if v is None or v == "":
                 return 0
@@ -224,7 +224,7 @@ def _col_letter(n: int) -> str:
     return result
 
 
-def build_ops_summary(dry_run: bool = False) -> dict:
+def build_ops_summary(dry_run: bool = False) -> dict[str, object]:
     """Rebuild the Ops Summary Report from UPDATE_Operational Issues data.
 
     Reads all raw data, computes weekly pivots by FC, writes counts
@@ -349,7 +349,7 @@ def build_ops_summary(dry_run: bool = False) -> dict:
         resolution_rows.append(row)
 
     # Total Reships percent row (after Full Reship and Partial Reship)
-    def _count_reships(week, fc):
+    def _count_reships(week: datetime, fc: str) -> int:
         """Count all reship variants for a given week+FC."""
         data = resolution_pivot.get((week, fc), {})
         reship_keys = ("Full Reship", "Partial Reship", "Reship Box", "FullReship")
@@ -478,7 +478,7 @@ def build_ops_summary(dry_run: bool = False) -> dict:
     }
 
 
-def _format_ops_summary(sheets_svc, num_weeks, total_rows):
+def _format_ops_summary(sheets_svc: object, num_weeks: int, total_rows: int) -> None:
     """Apply formatting to the Ops Summary Report tab."""
     # Get sheet ID
     meta = sheets_svc.spreadsheets().get(
@@ -665,8 +665,8 @@ def _format_ops_summary(sheets_svc, num_weeks, total_rows):
     ).execute()
 
 
-def _build_cost_of_issues_tab(gclient, all_weeks, cost_row_70, cost_row_71,
-                                week_fc_total, week_total):
+def _build_cost_of_issues_tab(gclient: object, all_weeks: list[datetime], cost_row_70: list, cost_row_71: list,
+                                week_fc_total: Counter, week_total: Counter) -> None:
     """Create/update the Cost of Issues tab with summary data and charts."""
     sheets_svc = gclient._sheets
 
@@ -882,7 +882,7 @@ def _build_cost_of_issues_tab(gclient, all_weeks, cost_row_70, cost_row_71,
         ).execute()
 
 
-def _get_shopify_client():
+def _get_shopify_client() -> object:
     """Get a ShopifyClient instance for order lookups."""
     from gel_pack_shopify import ShopifyClient
     settings = _load_settings()
@@ -942,7 +942,7 @@ def _extract_ship_date(tags_str: str) -> datetime | None:
 def build_shipments_from_shopify(
     weeks_back: int = 12,
     dry_run: bool = False,
-) -> dict:
+) -> dict[str, object]:
     """Query Shopify for fulfilled orders and count shipments by FC per week.
 
     Looks for orders with tags starting with RMFG_*, COG_*, or GRIPCA_*
@@ -1101,7 +1101,7 @@ def build_shipments_from_shopify(
     }
 
 
-def register(mcp):
+def register(mcp: object) -> None:
     """Register Ops Summary builder tools on the MCP server."""
 
     @mcp.tool()

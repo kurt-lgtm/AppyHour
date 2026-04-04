@@ -5,10 +5,11 @@ as readable MCP resources and tools.
 """
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 
-def _find_memory_dir():
+def _find_memory_dir() -> Path:
     """Derive Claude Code memory directory from home path."""
     home = Path.home()
     # Claude Code encodes the project path: colons become double-dash, separators become dash
@@ -29,7 +30,7 @@ def _load_settings() -> dict:
         return json.load(f)
 
 
-def _make_reader(path: Path):
+def _make_reader(path: Path) -> Callable[[], str]:
     """Create a no-arg closure that reads a specific file."""
 
     def reader() -> str:
@@ -40,7 +41,7 @@ def _make_reader(path: Path):
     return reader
 
 
-def register(mcp):
+def register(mcp: object) -> None:
     """Register context/memory resources and live data tools on the MCP server."""
 
     # ── Memory file resources ────────────────────────────────────────
@@ -123,7 +124,7 @@ def register(mcp):
         # Replay journal on last snapshot
         snap_by_id = {sn["id"]: sn for sn in snapshots}
 
-        def _load_snap(snap_id):
+        def _load_snap(snap_id: str) -> tuple[dict[str, int], dict[str, int]]:
             sn = snap_by_id.get(snap_id)
             if not sn:
                 return {}, {}

@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["mcp"]
+# ///
+
 """
 AppyHour Unified MCP Server
 
@@ -27,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from mcp.server.fastmcp import FastMCP
 
 # Initialize MCP server
-mcp = FastMCP("appyhour_mcp")
+mcp: FastMCP = FastMCP("appyhour_mcp")
 
 # Import tool modules — each module registers tools on the shared `mcp` instance
 # We pass `mcp` via a module-level setter pattern
@@ -44,7 +50,6 @@ gorgias_sheets_sync.register(mcp)
 ops_summary_builder.register(mcp)
 order_edit.register(mcp)
 matrix_qc.register(mcp)
-
 
 if __name__ == "__main__":
     try:

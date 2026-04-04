@@ -4,13 +4,12 @@ Wraps the same logic as GelPackCalculator/app/routers/gelcalc.py.
 """
 
 import json
-from typing import Optional
 from pydantic import BaseModel, Field, ConfigDict
 
 from utils import get_gelcalc_settings, format_error, to_json
 
 
-def register(mcp):
+def register(mcp: object) -> None:
     """Register gel pack calculator tools on the MCP server."""
 
     # -----------------------------------------------------------------------
@@ -24,11 +23,11 @@ def register(mcp):
         origin: str = Field("TX", description="Origin hub state code (e.g. 'TX', 'TN', 'CA')")
         dest_state: str = Field(..., description="Destination state code (e.g. 'CA', 'FL', 'NY')")
         peak_temp_f: float = Field(..., description="Peak forecast temperature in Fahrenheit for destination")
-        avg_temp_f: Optional[float] = Field(None, description="Average transit temperature in F (defaults to peak if omitted)")
-        transit_days: Optional[int] = Field(None, description="Override transit days (1, 2, or 3). Auto-detected from state config if omitted.")
-        box_l: Optional[float] = Field(None, description="Box length in inches (uses default if omitted)")
-        box_w: Optional[float] = Field(None, description="Box width in inches")
-        box_h: Optional[float] = Field(None, description="Box height in inches")
+        avg_temp_f: float | None = Field(None, description="Average transit temperature in F (defaults to peak if omitted)")
+        transit_days: int | None = Field(None, description="Override transit days (1, 2, or 3). Auto-detected from state config if omitted.")
+        box_l: float | None = Field(None, description="Box length in inches (uses default if omitted)")
+        box_w: float | None = Field(None, description="Box width in inches")
+        box_h: float | None = Field(None, description="Box height in inches")
 
     class WeatherInput(BaseModel):
         """Input for weather forecast lookup."""

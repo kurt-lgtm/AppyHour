@@ -27,7 +27,7 @@ def _load_gorgias_config() -> tuple[tuple[str, str], str]:
     return (email, token), f"https://{subdomain}.gorgias.com/api"
 
 
-def _gorgias_get(endpoint: str, params: dict | None = None) -> dict:
+def _gorgias_get(endpoint: str, params: dict[str, str] | None = None) -> dict:
     """Make an authenticated GET request to the Gorgias API."""
     auth, base_url = _load_gorgias_config()
     url = f"{base_url}/{endpoint}"
@@ -36,10 +36,10 @@ def _gorgias_get(endpoint: str, params: dict | None = None) -> dict:
     return resp.json()
 
 
-def _gorgias_paginate(endpoint: str, params: dict | None = None, limit: int = 100) -> list:
+def _gorgias_paginate(endpoint: str, params: dict[str, str] | None = None, limit: int = 100) -> list[dict]:
     """Paginate through Gorgias API results using cursor pagination."""
     auth, base_url = _load_gorgias_config()
-    results = []
+    results: list[dict] = []
     params = dict(params or {})
     params.setdefault("limit", min(limit, 100))
     cursor = None
@@ -62,7 +62,7 @@ def _gorgias_paginate(endpoint: str, params: dict | None = None, limit: int = 10
     return results[:limit]
 
 
-def register(mcp):
+def register(mcp: object) -> None:
     """Register Gorgias tools on the MCP server."""
 
     @mcp.tool()
@@ -142,6 +142,17 @@ def register(mcp):
         try:
             ticket = _gorgias_get(f"tickets/{ticket_id}")
             messages = _gorgias_paginate(f"tickets/{ticket_id}/messages", limit=50)
+
+            # Extract custom fields (Issue Type, Resolution, Category)
+            raw_cf = ticket.get("custom_fields") or []
+            custom_fields = {}
+            for cf in raw_cf:
+                field_id = cf.get("field_id") or cf.get("id")
+                value = cf.get("value")
+                name = cf.get("name", "")
+                if field_id and value:
+                    custom_fields[str(field_id)] = {"name": name, "value": value}
+
             return json.dumps({
                 "id": ticket.get("id"),
                 "subject": ticket.get("subject"),
@@ -149,6 +160,7 @@ def register(mcp):
                 "channel": ticket.get("channel"),
                 "created": ticket.get("created_datetime"),
                 "tags": [tag.get("name") for tag in ticket.get("tags", [])],
+                "custom_fields": custom_fields,
                 "customer": ticket.get("customer", {}),
                 "messages": [{
                     "sender": m.get("sender", {}).get("email", ""),

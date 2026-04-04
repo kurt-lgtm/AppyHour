@@ -6,7 +6,7 @@ Wraps the same logic as GelPackCalculator/app/routers/shipping.py.
 import json
 import time
 import re
-from typing import Optional
+import types
 from pathlib import Path
 from datetime import datetime, timedelta
 from pydantic import BaseModel, Field, ConfigDict, field_validator
@@ -18,11 +18,11 @@ from utils import format_error, to_json, SHIPPING_DIR, GELCALC_DIR, get_inventor
 
 
 # Lazy-loaded modules
-_analyze = None
-_recommend = None
+_analyze: types.ModuleType | None = None
+_recommend: types.ModuleType | None = None
 
 
-def _get_analyze():
+def _get_analyze() -> types.ModuleType:
     """Lazy-import reports.analyze module."""
     global _analyze
     if _analyze is None:
@@ -31,7 +31,7 @@ def _get_analyze():
     return _analyze
 
 
-def _get_recommend():
+def _get_recommend() -> types.ModuleType:
     """Lazy-import reports.recommend module."""
     global _recommend
     if _recommend is None:
@@ -40,7 +40,7 @@ def _get_recommend():
     return _recommend
 
 
-def _load_shipments():
+def _load_shipments() -> list[dict]:
     """Load shipments from the most recent output file."""
     output_file = SHIPPING_DIR / "output" / "shipments.json"
     if not output_file.exists():
@@ -56,7 +56,7 @@ def _load_shipments():
     return analyze.load_shipments(str(output_file))
 
 
-def register(mcp):
+def register(mcp: object) -> None:
     """Register shipping analysis tools on the MCP server."""
 
     # -----------------------------------------------------------------------
@@ -77,14 +77,14 @@ def register(mcp):
             GroupByChoice.STATE,
             description="Group results by: state, carrier, hub, or zone"
         )
-        carrier: Optional[str] = Field(None, description="Filter to a specific carrier (e.g. 'OnTrac', 'UPS', 'FedEx')")
+        carrier: str | None = Field(None, description="Filter to a specific carrier (e.g. 'OnTrac', 'UPS', 'FedEx')")
 
     class TransitAnalysisInput(BaseModel):
         """Input for transit time analysis."""
         model_config = ConfigDict(str_strip_whitespace=True)
 
         group_by: str = Field("state", description="Group results by: state, carrier, or hub")
-        carrier: Optional[str] = Field(None, description="Filter to a specific carrier")
+        carrier: str | None = Field(None, description="Filter to a specific carrier")
 
         @field_validator("group_by")
         @classmethod

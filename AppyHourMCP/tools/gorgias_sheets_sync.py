@@ -27,9 +27,9 @@ SPREADSHEET_ID = "190AmXF8hy-M8lmt8q9uhOkyOMi7AmU0jJAd1KOpjWdA"
 TAB_NAME = "UPDATE_Operational Issues"
 
 # Gorgias custom field IDs
-FIELD_ISSUE_TYPE = "13282"    # Maps to column H (Issue Type)
-FIELD_RESOLUTION = "13284"    # Maps to column I (Resolution)
-FIELD_CATEGORY = "58260"      # Maps to column B (Contact Reason)
+FIELD_ISSUE_TYPE = "13282"  # Maps to column H (Issue Type)
+FIELD_RESOLUTION = "13284"  # Maps to column I (Resolution)
+FIELD_CATEGORY = "58260"  # Maps to column B (Contact Reason)
 
 # ── Valid Issue Type prefixes (column H) from original sheet ──────────
 VALID_ISSUE_PREFIXES = (
@@ -97,14 +97,14 @@ FC_TAG_MAP = {
 }
 
 
-def _load_settings() -> dict:
+def _load_settings() -> dict[str, str]:
     if not _APPDATA_SETTINGS.exists():
         raise FileNotFoundError("AppyHour settings not found.")
     with open(_APPDATA_SETTINGS, encoding="utf-8") as f:
         return json.load(f)
 
 
-def _gorgias_auth() -> tuple[str, str]:
+def _gorgias_auth() -> tuple[tuple[str, str], str]:
     s = _load_settings()
     email = s.get("gorgias_email", "")
     token = s.get("gorgias_api_token", "")
@@ -114,7 +114,7 @@ def _gorgias_auth() -> tuple[str, str]:
     return (email, token), f"https://{subdomain}.gorgias.com/api"
 
 
-def _get_first_customer_message_date(ticket: dict, auth=None, base_url=None) -> str:
+def _get_first_customer_message_date(ticket: dict, auth: tuple[str, str] | None = None, base_url: str | None = None) -> str:
     """Get the datetime of the first customer message in a ticket.
 
     Falls back to ticket created_datetime if messages can't be fetched.
@@ -143,9 +143,12 @@ def _get_first_customer_message_date(ticket: dict, auth=None, base_url=None) -> 
                     if customer_email and sender_email == customer_email:
                         return m.get("created_datetime", ticket.get("created_datetime", ""))
                     # If no from_agent field, check sender isn't a support address
-                    if from_agent is None and sender_email and \
-                       not sender_email.endswith("@appyhourbox.com") and \
-                       not sender_email.endswith("@gorgias.com"):
+                    if (
+                        from_agent is None
+                        and sender_email
+                        and not sender_email.endswith("@appyhourbox.com")
+                        and not sender_email.endswith("@gorgias.com")
+                    ):
                         return m.get("created_datetime", ticket.get("created_datetime", ""))
         except Exception:
             pass
@@ -169,7 +172,7 @@ def _extract_order_from_text(text: str) -> str:
     return ""
 
 
-def _extract_order_number(ticket: dict, gorgias_auth=None, gorgias_base=None) -> str:
+def _extract_order_number(ticket: dict, gorgias_auth: tuple[str, str] | None = None, gorgias_base: str | None = None) -> str:
     """Extract order number from ticket subject, messages, or Shopify lookup.
 
     Tries in order:
@@ -210,15 +213,16 @@ def _extract_order_number(ticket: dict, gorgias_auth=None, gorgias_base=None) ->
     return ""
 
 
-_shopify_client = None
+_shopify_client: object | None = None
 
 
-def _get_shopify_client():
+def _get_shopify_client() -> object | None:
     """Get or create a ShopifyClient for order lookups."""
     global _shopify_client
     if _shopify_client is None:
         try:
             from gel_pack_shopify import ShopifyClient
+
             settings = _load_settings()
             store = settings.get("store_url", "")
             cid = settings.get("shopify_client_id", "")
@@ -237,14 +241,17 @@ def _shopify_latest_order(email: str) -> str:
         if not client:
             return ""
         for fs in ("shipped", "fulfilled"):
-            resp = client._get("orders.json", params={
-                "email": email,
-                "status": "any",
-                "fulfillment_status": fs,
-                "limit": 5,
-                "order": "created_at desc",
-                "fields": "name,tags",
-            })
+            resp = client._get(
+                "orders.json",
+                params={
+                    "email": email,
+                    "status": "any",
+                    "fulfillment_status": fs,
+                    "limit": 5,
+                    "order": "created_at desc",
+                    "fields": "name,tags",
+                },
+            )
             orders = resp.get("orders", [])
             for order in orders:
                 tags = (order.get("tags", "") or "").lower()
@@ -263,7 +270,7 @@ def _extract_gorgias_link(ticket: dict, subdomain: str = "appyhour") -> str:
     return f"https://{subdomain}.gorgias.com/app/views/{GORGIAS_OPS_VIEW_ID}/{ticket['id']}"
 
 
-def _matches_valid_prefix(value: str, prefixes: tuple) -> bool:
+def _matches_valid_prefix(value: str, prefixes: tuple[str, ...]) -> bool:
     return any(value.startswith(p) for p in prefixes)
 
 
@@ -288,20 +295,60 @@ def _extract_fc_tag(ticket: dict) -> str:
 
 
 US_STATES = [
-    "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado",
-    "Connecticut", "Delaware", "Florida", "Georgia", "Hawaii", "Idaho",
-    "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana",
-    "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota",
-    "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada",
-    "New Hampshire", "New Jersey", "New Mexico", "New York",
-    "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon",
-    "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota",
-    "Tennessee", "Texas", "Utah", "Vermont", "Virginia", "Washington",
-    "West Virginia", "Wisconsin", "Wyoming",
+    "Alabama",
+    "Alaska",
+    "Arizona",
+    "Arkansas",
+    "California",
+    "Colorado",
+    "Connecticut",
+    "Delaware",
+    "Florida",
+    "Georgia",
+    "Hawaii",
+    "Idaho",
+    "Illinois",
+    "Indiana",
+    "Iowa",
+    "Kansas",
+    "Kentucky",
+    "Louisiana",
+    "Maine",
+    "Maryland",
+    "Massachusetts",
+    "Michigan",
+    "Minnesota",
+    "Mississippi",
+    "Missouri",
+    "Montana",
+    "Nebraska",
+    "Nevada",
+    "New Hampshire",
+    "New Jersey",
+    "New Mexico",
+    "New York",
+    "North Carolina",
+    "North Dakota",
+    "Ohio",
+    "Oklahoma",
+    "Oregon",
+    "Pennsylvania",
+    "Rhode Island",
+    "South Carolina",
+    "South Dakota",
+    "Tennessee",
+    "Texas",
+    "Utah",
+    "Vermont",
+    "Virginia",
+    "Washington",
+    "West Virginia",
+    "Wisconsin",
+    "Wyoming",
 ]
 
 
-def sync_gorgias_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict:
+def sync_gorgias_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict[str, object]:
     """Pull shipping/fulfillment tickets from Gorgias and append to Google Sheet.
 
     Args:
@@ -315,11 +362,11 @@ def sync_gorgias_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict:
 
     # Read existing order numbers from the sheet to avoid duplicates
     from google_integration import GoogleIntegration
+
     settings = _load_settings()
     creds_path = settings.get("google_credentials_path", "")
     if not creds_path or not os.path.exists(creds_path):
-        creds_path = str(Path(__file__).resolve().parent.parent.parent
-                         / "shipping-perfomance-review-accd39ac4b78.json")
+        creds_path = str(Path(__file__).resolve().parent.parent.parent / "shipping-perfomance-review-accd39ac4b78.json")
     gclient = GoogleIntegration(creds_path)
 
     existing_rows = gclient.read_sheet(SPREADSHEET_ID, f"'{TAB_NAME}'!C:D")
@@ -385,11 +432,9 @@ def sync_gorgias_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict:
             # Extract order number (subject → messages → Shopify)
             order_num = _extract_order_number(t, gorgias_auth=auth, gorgias_base=base_url)
 
-            # Skip duplicates (by order number or Gorgias link)
+            # Skip duplicates (by Gorgias link — unique per ticket)
+            # Order numbers are NOT unique: same order can have multiple tickets
             gorgias_link = _extract_gorgias_link(t)
-            if order_num and order_num in existing_orders:
-                skipped_dup += 1
-                continue
             if gorgias_link and gorgias_link in existing_links:
                 skipped_dup += 1
                 continue
@@ -397,6 +442,7 @@ def sync_gorgias_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict:
             # Format date as Month-DD (based on first customer message, not ticket creation)
             first_msg_dt = _get_first_customer_message_date(t, auth=auth, base_url=base_url)
             import time as _time_sync
+
             _time_sync.sleep(0.3)  # rate limit after message fetch
             try:
                 dt = datetime.fromisoformat(first_msg_dt.replace("Z", "+00:00"))
@@ -432,16 +478,32 @@ def sync_gorgias_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict:
         if not cursor:
             break
 
-    # Write to sheet
+    # Write to sheet (reverse so oldest-first, since Gorgias paginates newest-first)
+    new_rows.reverse()
+    append_result = None
     if new_rows and not dry_run:
         svc = gclient._sheets
-        svc.spreadsheets().values().append(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"'{TAB_NAME}'!A1",
-            valueInputOption="USER_ENTERED",
-            insertDataOption="INSERT_ROWS",
-            body={"values": new_rows},
-        ).execute()
+        append_result = (
+            svc.spreadsheets()
+            .values()
+            .append(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"'{TAB_NAME}'!A1",
+                valueInputOption="USER_ENTERED",
+                insertDataOption="OVERWRITE",
+                body={"values": new_rows},
+            )
+            .execute()
+        )
+
+        # Verify rows were actually written
+        updated_range = append_result.get("updates", {}).get("updatedRange", "")
+        updated_rows = append_result.get("updates", {}).get("updatedRows", 0)
+        if updated_rows != len(new_rows):
+            raise RuntimeError(
+                f"Append verification failed: expected {len(new_rows)} rows, "
+                f"API reported {updated_rows}. Range: {updated_range}"
+            )
 
     return {
         "checked": checked,
@@ -450,11 +512,15 @@ def sync_gorgias_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict:
         "skipped_invalid_tag": skipped_tag,
         "dry_run": dry_run,
         "rows": new_rows,
+        "append_range": append_result.get("updates", {}).get("updatedRange", "") if append_result else None,
     }
 
 
 def _search_gorgias_by_order(
-    order_num: str, auth, base_url: str, customer_email: str = "",
+    order_num: str,
+    auth: tuple[str, str],
+    base_url: str,
+    customer_email: str = "",
 ) -> dict | None:
     """Search Gorgias for a ticket matching the given order.
 
@@ -618,25 +684,63 @@ def _extract_fc_from_shopify_tags(order: dict) -> str:
     for tag in tags_str.split(","):
         tag_lower = tag.strip().lower()
         for key, fc in FC_TAG_MAP.items():
-            if re.search(r'\b' + re.escape(key) + r'\b', tag_lower):
+            if re.search(r"\b" + re.escape(key) + r"\b", tag_lower):
                 return fc
     return ""
 
 
 STATE_CODE_TO_NAME = {
-    "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas",
-    "CA": "California", "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware",
-    "FL": "Florida", "GA": "Georgia", "HI": "Hawaii", "ID": "Idaho",
-    "IL": "Illinois", "IN": "Indiana", "IA": "Iowa", "KS": "Kansas",
-    "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine", "MD": "Maryland",
-    "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi",
-    "MO": "Missouri", "MT": "Montana", "NE": "Nebraska", "NV": "Nevada",
-    "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York",
-    "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma",
-    "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island", "SC": "South Carolina",
-    "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas", "UT": "Utah",
-    "VT": "Vermont", "VA": "Virginia", "WA": "Washington", "WV": "West Virginia",
-    "WI": "Wisconsin", "WY": "Wyoming", "DC": "District of Columbia",
+    "AL": "Alabama",
+    "AK": "Alaska",
+    "AZ": "Arizona",
+    "AR": "Arkansas",
+    "CA": "California",
+    "CO": "Colorado",
+    "CT": "Connecticut",
+    "DE": "Delaware",
+    "FL": "Florida",
+    "GA": "Georgia",
+    "HI": "Hawaii",
+    "ID": "Idaho",
+    "IL": "Illinois",
+    "IN": "Indiana",
+    "IA": "Iowa",
+    "KS": "Kansas",
+    "KY": "Kentucky",
+    "LA": "Louisiana",
+    "ME": "Maine",
+    "MD": "Maryland",
+    "MA": "Massachusetts",
+    "MI": "Michigan",
+    "MN": "Minnesota",
+    "MS": "Mississippi",
+    "MO": "Missouri",
+    "MT": "Montana",
+    "NE": "Nebraska",
+    "NV": "Nevada",
+    "NH": "New Hampshire",
+    "NJ": "New Jersey",
+    "NM": "New Mexico",
+    "NY": "New York",
+    "NC": "North Carolina",
+    "ND": "North Dakota",
+    "OH": "Ohio",
+    "OK": "Oklahoma",
+    "OR": "Oregon",
+    "PA": "Pennsylvania",
+    "RI": "Rhode Island",
+    "SC": "South Carolina",
+    "SD": "South Dakota",
+    "TN": "Tennessee",
+    "TX": "Texas",
+    "UT": "Utah",
+    "VT": "Vermont",
+    "VA": "Virginia",
+    "WA": "Washington",
+    "WV": "West Virginia",
+    "WI": "Wisconsin",
+    "WY": "Wyoming",
+    "DC": "District of Columbia",
 }
 
 
@@ -652,7 +756,7 @@ def _extract_state_from_shopify(order: dict) -> str:
     return ""
 
 
-def enrich_incomplete_rows(dry_run: bool = False) -> dict:
+def enrich_incomplete_rows(dry_run: bool = False) -> dict[str, object]:
     """Enrich rows in UPDATE_Operational Issues that have order numbers but
     missing fields (Gorgias Link, Carrier, State, FC Tag, Issue Type, Resolution).
 
@@ -671,11 +775,11 @@ def enrich_incomplete_rows(dry_run: bool = False) -> dict:
 
     # Read all rows
     from google_integration import GoogleIntegration
+
     settings = _load_settings()
     creds_path = settings.get("google_credentials_path", "")
     if not creds_path or not os.path.exists(creds_path):
-        creds_path = str(Path(__file__).resolve().parent.parent.parent
-                         / "shipping-perfomance-review-accd39ac4b78.json")
+        creds_path = str(Path(__file__).resolve().parent.parent.parent / "shipping-perfomance-review-accd39ac4b78.json")
     gclient = GoogleIntegration(creds_path)
 
     all_rows = gclient.read_sheet(SPREADSHEET_ID, f"'{TAB_NAME}'!A:J")
@@ -691,8 +795,9 @@ def enrich_incomplete_rows(dry_run: bool = False) -> dict:
         while len(row) < 10:
             row.append("")
 
-        date_str, contact_reason, order_num, gorgias_link, carrier, \
-            state, fc_tag, issue_type, resolution, comment = row[:10]
+        date_str, contact_reason, order_num, gorgias_link, carrier, state, fc_tag, issue_type, resolution, comment = (
+            row[:10]
+        )
 
         missing_fields = []
         if not gorgias_link.strip():
@@ -727,10 +832,7 @@ def enrich_incomplete_rows(dry_run: bool = False) -> dict:
             shopify_order = _shopify_order_by_name(order_num)
             _time.sleep(0.3)  # rate limit
             if shopify_order:
-                customer_email = (
-                    shopify_order.get("email", "")
-                    or shopify_order.get("customer", {}).get("email", "")
-                )
+                customer_email = shopify_order.get("email", "") or shopify_order.get("customer", {}).get("email", "")
                 # If this order is a reship, find the original order instead
                 order_tags = (shopify_order.get("tags", "") or "").lower()
                 if "reship" in order_tags and customer_email:
@@ -744,12 +846,13 @@ def enrich_incomplete_rows(dry_run: bool = False) -> dict:
         # Look up Gorgias ticket (by order or by ticket ID from link)
         if has_link and not has_order:
             # Extract ticket ID from Gorgias link and fetch directly
-            tid_match = re.search(r'/(\d+)(?:[?#]|\s*$)', gorgias_link.strip())
+            tid_match = re.search(r"/(\d+)(?:[?#]|\s*$)", gorgias_link.strip())
             if tid_match:
                 try:
                     resp = requests.get(
                         f"{base_url}/tickets/{tid_match.group(1)}",
-                        auth=auth, timeout=30,
+                        auth=auth,
+                        timeout=30,
                     )
                     if resp.status_code == 200:
                         ticket = resp.json()
@@ -764,7 +867,10 @@ def enrich_incomplete_rows(dry_run: bool = False) -> dict:
                 _time.sleep(0.3)
         elif any(f in missing_fields for f in ("gorgias_link", "issue_type", "resolution", "state", "fc_tag")):
             ticket = _search_gorgias_by_order(
-                order_num, auth, base_url, customer_email=customer_email,
+                order_num,
+                auth,
+                base_url,
+                customer_email=customer_email,
             )
             _time.sleep(0.3)  # rate limit
 
@@ -844,16 +950,20 @@ def enrich_incomplete_rows(dry_run: bool = False) -> dict:
 
         if fields_filled:
             sheet_row = row_idx + 1  # 1-indexed
-            enriched.append({
-                "row": sheet_row,
-                "order": order_num,
-                "filled": fields_filled,
-                "values": new_values,
-            })
-            updates.append({
-                "range": f"'{TAB_NAME}'!A{sheet_row}:J{sheet_row}",
-                "values": [new_values],
-            })
+            enriched.append(
+                {
+                    "row": sheet_row,
+                    "order": order_num,
+                    "filled": fields_filled,
+                    "values": new_values,
+                }
+            )
+            updates.append(
+                {
+                    "range": f"'{TAB_NAME}'!A{sheet_row}:J{sheet_row}",
+                    "values": [new_values],
+                }
+            )
 
     # Batch update the sheet
     if updates and not dry_run:
@@ -870,10 +980,7 @@ def enrich_incomplete_rows(dry_run: bool = False) -> dict:
         "total_rows": len(all_rows) - 1,
         "rows_enriched": len(enriched),
         "dry_run": dry_run,
-        "enriched": [
-            {"row": e["row"], "order": e["order"], "filled": e["filled"]}
-            for e in enriched[:20]
-        ],
+        "enriched": [{"row": e["row"], "order": e["order"], "filled": e["filled"]} for e in enriched[:20]],
     }
 
 
@@ -891,7 +998,7 @@ def _extract_tracking_from_shopify(order: dict) -> str:
     return ""
 
 
-def _fetch_first_customer_message_body(ticket: dict, auth, base_url: str) -> str:
+def _fetch_first_customer_message_body(ticket: dict, auth: tuple[str, str], base_url: str) -> str:
     """Fetch the first customer message body from a Gorgias ticket.
 
     Returns the first 1000 chars of the first non-internal-note message body,
@@ -934,7 +1041,8 @@ def _extract_concern_from_text(subject: str, body: str, ticket: dict) -> str:
 
     # Pattern: "expir" (expired, expires, expiry) — capture product name only
     match = re.search(
-        r"(expir\w+)\s+([A-Z][a-z]\w+(?:\s+[A-Z][a-z]\w+)*)", text,
+        r"(expir\w+)\s+([A-Z][a-z]\w+(?:\s+[A-Z][a-z]\w+)*)",
+        text,
     )
     if match:
         return f"{match.group(1).capitalize()} {match.group(2).strip()}"
@@ -1028,7 +1136,7 @@ def _extract_product_from_concern(concern: str) -> str:
     return ""
 
 
-def sync_food_safety_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict:
+def sync_food_safety_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict[str, object]:
     """Pull food safety tickets from Gorgias and append to UPDATE_Food Safety tab.
 
     Filters on Order::Spoiled Item and Order::Quality Complaint issue types.
@@ -1044,11 +1152,11 @@ def sync_food_safety_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict
 
     # Read existing rows to get next ID and avoid duplicates
     from google_integration import GoogleIntegration
+
     settings = _load_settings()
     creds_path = settings.get("google_credentials_path", "")
     if not creds_path or not os.path.exists(creds_path):
-        creds_path = str(Path(__file__).resolve().parent.parent.parent
-                         / "shipping-perfomance-review-accd39ac4b78.json")
+        creds_path = str(Path(__file__).resolve().parent.parent.parent / "shipping-perfomance-review-accd39ac4b78.json")
     gclient = GoogleIntegration(creds_path)
 
     existing_rows = gclient.read_sheet(SPREADSHEET_ID, f"'{FOOD_SAFETY_TAB}'!A:J")
@@ -1096,9 +1204,7 @@ def sync_food_safety_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict
         for t in items:
             created_str = t.get("created_datetime", "")
             try:
-                ticket_dt = datetime.fromisoformat(
-                    created_str.replace("Z", "+00:00")
-                ).replace(tzinfo=None)
+                ticket_dt = datetime.fromisoformat(created_str.replace("Z", "+00:00")).replace(tzinfo=None)
             except (ValueError, AttributeError):
                 ticket_dt = datetime.now()
             if ticket_dt < since_dt:
@@ -1129,6 +1235,7 @@ def sync_food_safety_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict
             # Fetch messages once — reused for date, concern, and product
             msg_body = _fetch_first_customer_message_body(t, auth=auth, base_url=base_url)
             import time as _time_fs
+
             _time_fs.sleep(0.3)  # rate limit after message fetch
 
             # Get complaint date from first customer message
@@ -1196,15 +1303,30 @@ def sync_food_safety_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict
             break
 
     # Write to sheet
+    append_result = None
     if new_rows and not dry_run:
         svc = gclient._sheets
-        svc.spreadsheets().values().append(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"'{FOOD_SAFETY_TAB}'!A1",
-            valueInputOption="USER_ENTERED",
-            insertDataOption="INSERT_ROWS",
-            body={"values": new_rows},
-        ).execute()
+        append_result = (
+            svc.spreadsheets()
+            .values()
+            .append(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"'{FOOD_SAFETY_TAB}'!A1",
+                valueInputOption="USER_ENTERED",
+                insertDataOption="OVERWRITE",
+                body={"values": new_rows},
+            )
+            .execute()
+        )
+
+        # Verify rows were actually written
+        updated_range = append_result.get("updates", {}).get("updatedRange", "")
+        updated_rows = append_result.get("updates", {}).get("updatedRows", 0)
+        if updated_rows != len(new_rows):
+            raise RuntimeError(
+                f"Append verification failed: expected {len(new_rows)} rows, "
+                f"API reported {updated_rows}. Range: {updated_range}"
+            )
 
     return {
         "checked": checked,
@@ -1213,10 +1335,11 @@ def sync_food_safety_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict
         "skipped_invalid_tag": skipped_tag,
         "dry_run": dry_run,
         "rows": new_rows,
+        "append_range": append_result.get("updates", {}).get("updatedRange", "") if append_result else None,
     }
 
 
-def register(mcp):
+def register(mcp: object) -> None:
     """Register Gorgias-to-Sheets sync tools on the MCP server."""
 
     @mcp.tool()
@@ -1277,6 +1400,7 @@ def register(mcp):
                 "new_rows_appended": sync_result["new_rows"],
                 "skipped_duplicate": sync_result["skipped_duplicate"],
                 "skipped_invalid_tag": sync_result["skipped_invalid_tag"],
+                "append_range": sync_result.get("append_range"),
             }
 
             # Step 2: Enrich incomplete rows
@@ -1286,13 +1410,17 @@ def register(mcp):
                 "enriched": enrich_result.get("enriched", [])[:20],
             }
 
-            return json.dumps({
-                "dry_run": dry_run,
-                "sync": sync_summary,
-                "enrich": enrich_summary,
-            }, indent=2)
+            return json.dumps(
+                {
+                    "dry_run": dry_run,
+                    "sync": sync_summary,
+                    "enrich": enrich_summary,
+                },
+                indent=2,
+            )
         except Exception as e:
             import traceback
+
             return json.dumps({"error": str(e), "trace": traceback.format_exc()})
 
     @mcp.tool()
@@ -1315,6 +1443,7 @@ def register(mcp):
             return json.dumps(result, indent=2)
         except Exception as e:
             import traceback
+
             return json.dumps({"error": str(e), "trace": traceback.format_exc()})
 
     @mcp.tool()
@@ -1347,4 +1476,5 @@ def register(mcp):
             return json.dumps(summary, indent=2)
         except Exception as e:
             import traceback
+
             return json.dumps({"error": str(e), "trace": traceback.format_exc()})
