@@ -2165,6 +2165,7 @@ function switchView(view) {
         runway: document.getElementById('runway-view'),
         log: document.getElementById('log-view'),
         swapmanager: document.getElementById('swapmanager-view'),
+        curations: document.getElementById('curations-view'),
     };
 
     Object.values(views).forEach(v => { if (v) v.style.display = 'none'; });
@@ -2179,6 +2180,7 @@ function switchView(view) {
     else if (view === 'runway') loadRunway();
     else if (view === 'log') loadActivityLog();
     else if (view === 'swapmanager') loadSwapManager();
+    else if (view === 'curations') loadCurations();
 }
 
 // ── Swap Manager ────────────────────────────────────────────────────────
@@ -5844,4 +5846,531 @@ function renderRunwayGrid(skus, labels) {
 
     html += '</tbody></table>';
     grid.innerHTML = html;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Curation Manager
+// ═══════════════════════════════════════════════════════════════════
+
+let curationsCache = [];
+let skuCatalog = { cheese: [], meat: [], accompaniment: [], other: [] };
+let addonBundlesCache = [];
+let curFilter = 'all';
+let editingCurationKey = null; // null = new
+
+async function loadCurations() {
+    try {
+        const [curRes, skuRes] = await Promise.all([
+            fetch('/api/curations/'),
+            fetch('/api/curations/sku-catalog'),
+        ]);
+        const curData = await curRes.json();
+        const skuData = await skuRes.json();
+        curationsCache = curData.curations || [];
+        skuCatalog = skuData;
+        renderCurationCards();
+    } catch (e) {
+        document.getElementById('curations-grid').innerHTML =
+            '<div style="color:var(--red);padding:20px">Failed to load curations: ' + e.message + '</div>';
+    }
+}
+
+function renderCurationCards() {
+    const grid = document.getElementById('curations-grid');
+    const filtered = curFilter === 'all'
+        ? curationsCache
+        : curationsCache.filter(c => c.type === curFilter);
+
+    if (filtered.length === 0) {
+        grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:60px;color:var(--fg2)">' +
+            '<div style="font-size:24px;margin-bottom:8px">No curations found</div>' +
+            '<div style="font-size:13px">Click <b>+ Rotation</b> or <b>+ Monthly</b> to create one</div></div>';
+        return;
+    }
+
+    grid.innerHTML = filtered.map(c => {
+        const recipe = c.recipe || [];
+        const chips = recipe.slice(0, 8).map(item => {
+            const sku = Array.isArray(item) ? item[0] : item;
+            const qty = Array.isArray(item) && item.length > 1 ? item[1] : 1;
+            const cls = sku.startsWith('CH-') ? 'cheese' : sku.startsWith('MT-') ? 'meat' : 'acc';
+            return '<span class="cur-sku-chip ' + cls + '">' + sku + (qty > 1 ? ' x' + qty : '') + '</span>';
+        }).join('');
+        const more = recipe.length > 8 ? '<span class="cur-sku-chip">+' + (recipe.length - 8) + '</span>' : '';
+
+        const pr = c.pr_cjam || {};
+        const prCh = typeof pr === 'object' ? (pr.cheese || '') : '';
+        const ec = c.cex_ec || '';
+
+        const assigns = [];
+        if (prCh) assigns.push('<span class="cur-card-assign"><span class="dot pr"></span>PR: ' + prCh + '</span>');
+        if (ec) assigns.push('<span class="cur-card-assign"><span class="dot ec"></span>EC: ' + ec + '</span>');
+
+        const dates = c.type === 'monthly' && c.effective_start
+            ? '<div class="cur-card-dates">' + c.effective_start + ' → ' + (c.effective_end || '?') + ' | ' + (c.applies_to || []).join(', ') + '</div>'
+            : '';
+
+        const addons = (c.addons || []).length > 0
+            ? '<div style="font-size:10px;color:var(--orange);margin-top:4px">' + c.addons.length + ' addon(s)</div>'
+            : '';
+
+        return '<div class="cur-card ' + (c.active === false ? 'inactive' : '') + '" onclick="openCurationEditor(\'' + c.key + '\')">' +
+            '<div class="cur-card-header">' +
+                '<span class="cur-card-key">' + c.key + '</span>' +
+                '<span class="cur-card-label">' + (c.label || '') + '</span>' +
+                '<span class="cur-card-type ' + c.type + '">' + c.type + '</span>' +
+            '</div>' +
+            '<div class="cur-card-recipe">' + chips + more + '</div>' +
+            '<div class="cur-card-assignments">' + assigns.join('') + '</div>' +
+            dates + addons +
+        '</div>';
+    }).join('');
+}
+
+function filterCurations(type) {
+    curFilter = type;
+    document.querySelectorAll('.cur-filter').forEach(b => {
+        b.classList.toggle('active', b.dataset.filter === type);
+        b.className = b.className.replace(/btn-accent|btn-dim/g, b.dataset.filter === type ? 'btn-accent' : 'btn-dim');
+    });
+    renderCurationCards();
+}
+
+function createCuration(type) {
+    editingCurationKey = null;
+    document.getElementById('cur-edit-key').value = '';
+    document.getElementById('cur-edit-key').disabled = false;
+    document.getElementById('cur-edit-label').value = '';
+    document.getElementById('cur-edit-type').value = type;
+    document.getElementById('cur-edit-active').checked = true;
+    document.getElementById('cur-recipe-list').innerHTML = '';
+    document.getElementById('cur-recipe-count').textContent = '0 items';
+    document.getElementById('cur-edit-prcjam-cheese').value = '';
+    document.getElementById('cur-edit-prcjam-jam').value = '';
+    document.getElementById('cur-edit-cexec').value = '';
+    document.getElementById('cur-splits-list').innerHTML = '';
+    document.getElementById('cur-validation').textContent = '';
+    document.getElementById('cur-delete-btn').style.display = 'none';
+    toggleMonthlyFields();
+    populateSkuDropdowns();
+    loadAddonCheckboxes([]);
+    document.getElementById('cur-editor-overlay').style.display = '';
+}
+
+function openCurationEditor(key) {
+    const cur = curationsCache.find(c => c.key === key);
+    if (!cur) return;
+    editingCurationKey = key;
+
+    document.getElementById('cur-edit-key').value = key;
+    document.getElementById('cur-edit-key').disabled = true;
+    document.getElementById('cur-edit-label').value = cur.label || '';
+    document.getElementById('cur-edit-type').value = cur.type || 'rotation';
+    document.getElementById('cur-edit-active').checked = cur.active !== false;
+
+    toggleMonthlyFields();
+    populateSkuDropdowns();
+
+    // Monthly fields
+    if (cur.type === 'monthly') {
+        document.getElementById('cur-edit-start').value = cur.effective_start || '';
+        document.getElementById('cur-edit-end').value = cur.effective_end || '';
+        document.querySelectorAll('.cur-applies-to').forEach(cb => {
+            cb.checked = (cur.applies_to || []).includes(cb.value);
+        });
+    }
+
+    // Recipe
+    renderRecipeList(cur.recipe || []);
+
+    // Assignments
+    const pr = cur.pr_cjam || {};
+    document.getElementById('cur-edit-prcjam-cheese').value = typeof pr === 'object' ? (pr.cheese || '') : '';
+    document.getElementById('cur-edit-prcjam-jam').value = typeof pr === 'object' ? (pr.jam || '') : '';
+    document.getElementById('cur-edit-cexec').value = cur.cex_ec || '';
+
+    // Splits
+    renderSplits(cur.cexec_splits || {});
+
+    // Addons
+    loadAddonCheckboxes(cur.addons || []);
+
+    document.getElementById('cur-delete-btn').style.display = '';
+    document.getElementById('cur-validation').textContent = '';
+    document.getElementById('cur-editor-overlay').style.display = '';
+}
+
+function closeCurationEditor() {
+    document.getElementById('cur-editor-overlay').style.display = 'none';
+}
+
+function toggleMonthlyFields() {
+    const isMonthly = document.getElementById('cur-edit-type').value === 'monthly';
+    document.getElementById('cur-monthly-fields').style.display = isMonthly ? '' : 'none';
+}
+
+function populateSkuDropdowns() {
+    const addSel = document.getElementById('cur-add-sku');
+    addSel.innerHTML = '<option value="">-- Select SKU --</option>';
+    const groups = { 'Cheese': skuCatalog.cheese, 'Meat': skuCatalog.meat, 'Accompaniment': skuCatalog.accompaniment };
+    for (const [label, items] of Object.entries(groups)) {
+        const og = document.createElement('optgroup');
+        og.label = label;
+        (items || []).forEach(s => {
+            const opt = document.createElement('option');
+            opt.value = s.sku;
+            opt.textContent = s.sku + ' \u2014 ' + s.name;
+            og.appendChild(opt);
+        });
+        addSel.appendChild(og);
+    }
+
+    // PR-CJAM cheese
+    const prCh = document.getElementById('cur-edit-prcjam-cheese');
+    const prVal = prCh.value;
+    prCh.innerHTML = '<option value="">-- None --</option>';
+    (skuCatalog.cheese || []).forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.sku; opt.textContent = s.sku + ' \u2014 ' + s.name;
+        prCh.appendChild(opt);
+    });
+    prCh.value = prVal;
+
+    // PR-CJAM jam
+    const prJam = document.getElementById('cur-edit-prcjam-jam');
+    const jamVal = prJam.value;
+    prJam.innerHTML = '<option value="">-- None --</option>';
+    (skuCatalog.accompaniment || []).forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.sku; opt.textContent = s.sku + ' \u2014 ' + s.name;
+        prJam.appendChild(opt);
+    });
+    prJam.value = jamVal;
+
+    // CEX-EC cheese
+    const ecSel = document.getElementById('cur-edit-cexec');
+    const ecVal = ecSel.value;
+    ecSel.innerHTML = '<option value="">-- None --</option>';
+    (skuCatalog.cheese || []).forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.sku; opt.textContent = s.sku + ' \u2014 ' + s.name;
+        ecSel.appendChild(opt);
+    });
+    ecSel.value = ecVal;
+}
+
+function renderRecipeList(recipe) {
+    const list = document.getElementById('cur-recipe-list');
+    const nameMap = {};
+    [...(skuCatalog.cheese||[]), ...(skuCatalog.meat||[]), ...(skuCatalog.accompaniment||[]), ...(skuCatalog.other||[])].forEach(s => {
+        nameMap[s.sku] = s.name;
+    });
+
+    list.innerHTML = recipe.map((item, i) => {
+        const sku = Array.isArray(item) ? item[0] : item;
+        const qty = Array.isArray(item) && item.length > 1 ? item[1] : 1;
+        const name = nameMap[sku] || '';
+        return '<div class="cur-recipe-row" data-idx="' + i + '">' +
+            '<span class="cur-recipe-sku">' + sku + '</span>' +
+            '<span class="cur-recipe-name">' + name + '</span>' +
+            '<input type="number" class="cur-recipe-qty" value="' + qty + '" min="1" onchange="updateRecipeQty(' + i + ', this.value)">' +
+            '<span class="cur-recipe-remove" onclick="removeRecipeItem(' + i + ')">&#10005;</span>' +
+        '</div>';
+    }).join('');
+
+    document.getElementById('cur-recipe-count').textContent = recipe.length + ' items';
+}
+
+function getRecipeFromEditor() {
+    const rows = document.querySelectorAll('#cur-recipe-list .cur-recipe-row');
+    const recipe = [];
+    rows.forEach(row => {
+        const sku = row.querySelector('.cur-recipe-sku').textContent;
+        const qty = parseInt(row.querySelector('.cur-recipe-qty').value) || 1;
+        recipe.push([sku, qty]);
+    });
+    return recipe;
+}
+
+function addRecipeItem() {
+    const sel = document.getElementById('cur-add-sku');
+    if (!sel.value) return;
+    const qty = parseInt(document.getElementById('cur-add-qty').value) || 1;
+    const recipe = getRecipeFromEditor();
+    recipe.push([sel.value, qty]);
+    renderRecipeList(recipe);
+    sel.value = '';
+    document.getElementById('cur-add-qty').value = '1';
+}
+
+function removeRecipeItem(idx) {
+    const recipe = getRecipeFromEditor();
+    recipe.splice(idx, 1);
+    renderRecipeList(recipe);
+}
+
+function updateRecipeQty(idx, val) {
+    // Input already updates in DOM; getRecipeFromEditor reads live values
+}
+
+function renderSplits(splits) {
+    const list = document.getElementById('cur-splits-list');
+    const entries = Object.entries(splits);
+    if (entries.length === 0) {
+        list.innerHTML = '<div style="font-size:11px;color:var(--fg2);padding:4px 0">No splits (100% to primary)</div>';
+        return;
+    }
+    list.innerHTML = entries.map(([sku, pct], i) =>
+        '<div class="cur-split-row">' +
+            '<select class="settings-input cur-split-sku" style="font-size:11px" data-idx="' + i + '">' +
+                '<option value="">--</option>' +
+                (skuCatalog.cheese || []).map(s => '<option value="' + s.sku + '"' + (s.sku === sku ? ' selected' : '') + '>' + s.sku + '</option>').join('') +
+            '</select>' +
+            '<input type="number" class="cur-split-pct" value="' + pct + '" min="0" max="100" data-idx="' + i + '">' +
+            '<span style="font-size:11px;color:var(--fg2)">%</span>' +
+            '<span style="color:var(--red);cursor:pointer;font-size:12px" onclick="removeSplit(' + i + ')">&#10005;</span>' +
+        '</div>'
+    ).join('');
+}
+
+function getSplitsFromEditor() {
+    const splits = {};
+    document.querySelectorAll('.cur-split-row').forEach(row => {
+        const sku = row.querySelector('.cur-split-sku')?.value;
+        const pct = parseInt(row.querySelector('.cur-split-pct')?.value) || 0;
+        if (sku && pct > 0) splits[sku] = pct;
+    });
+    return splits;
+}
+
+function addCexecSplit() {
+    const splits = getSplitsFromEditor();
+    splits[''] = 50;
+    renderSplits(splits);
+}
+
+function removeSplit(idx) {
+    const entries = Object.entries(getSplitsFromEditor());
+    entries.splice(idx, 1);
+    renderSplits(Object.fromEntries(entries));
+}
+
+async function loadAddonCheckboxes(selectedAddons) {
+    try {
+        const res = await fetch('/api/curations/addons');
+        const data = await res.json();
+        addonBundlesCache = data.addons || [];
+    } catch (e) {
+        addonBundlesCache = [];
+    }
+
+    const container = document.getElementById('cur-addons-list');
+    if (addonBundlesCache.length === 0) {
+        container.innerHTML = '<div style="font-size:11px;color:var(--fg2);padding:8px">No addon bundles. Create one from the toolbar.</div>';
+        return;
+    }
+
+    container.innerHTML = addonBundlesCache.map(a => {
+        const checked = selectedAddons.includes(a.key) ? ' checked' : '';
+        const children = (a.children || []).map(c => Array.isArray(c) ? c[0] : c).join(', ');
+        return '<div class="cur-addon-check"><label>' +
+            '<input type="checkbox" class="cur-addon-cb" value="' + a.key + '"' + checked + '>' +
+            '<span style="font-family:\'Space Mono\',monospace;font-size:11px;color:var(--orange)">' + a.key + '</span>' +
+            '<span style="margin-left:4px">' + a.name + '</span></label>' +
+            '<span class="addon-detail" style="margin-left:auto">' + children + '</span></div>';
+    }).join('');
+}
+
+function getSelectedAddons() {
+    return [...document.querySelectorAll('.cur-addon-cb:checked')].map(cb => cb.value);
+}
+
+async function saveCuration() {
+    const key = document.getElementById('cur-edit-key').value.trim().toUpperCase();
+    if (!key) {
+        document.getElementById('cur-validation').textContent = 'Key is required';
+        return;
+    }
+
+    const data = {
+        type: document.getElementById('cur-edit-type').value,
+        label: document.getElementById('cur-edit-label').value.trim(),
+        recipe: getRecipeFromEditor(),
+        pr_cjam: {
+            cheese: document.getElementById('cur-edit-prcjam-cheese').value,
+            jam: document.getElementById('cur-edit-prcjam-jam').value,
+        },
+        cex_ec: document.getElementById('cur-edit-cexec').value,
+        cexec_splits: getSplitsFromEditor(),
+        addons: getSelectedAddons(),
+        active: document.getElementById('cur-edit-active').checked,
+    };
+
+    if (data.type === 'monthly') {
+        data.applies_to = [...document.querySelectorAll('.cur-applies-to:checked')].map(cb => cb.value);
+        data.effective_start = document.getElementById('cur-edit-start').value;
+        data.effective_end = document.getElementById('cur-edit-end').value;
+    }
+
+    try {
+        const res = await fetch('/api/curations/' + encodeURIComponent(key), {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+        });
+        const result = await res.json();
+        if (result.warnings && result.warnings.length > 0) {
+            document.getElementById('cur-validation').textContent = result.warnings.join(' | ');
+        }
+        closeCurationEditor();
+        await loadCurations();
+    } catch (e) {
+        document.getElementById('cur-validation').textContent = 'Save failed: ' + e.message;
+    }
+}
+
+async function deleteCurationConfirm() {
+    const key = editingCurationKey;
+    if (!key || !confirm('Delete curation "' + key + '"? This cannot be undone.')) return;
+    try {
+        await fetch('/api/curations/' + encodeURIComponent(key), { method: 'DELETE' });
+        closeCurationEditor();
+        await loadCurations();
+    } catch (e) {
+        document.getElementById('cur-validation').textContent = 'Delete failed: ' + e.message;
+    }
+}
+
+async function duplicateCuration() {
+    const key = editingCurationKey;
+    if (!key) {
+        document.getElementById('cur-validation').textContent = 'Save the curation first before duplicating';
+        return;
+    }
+    const newKey = prompt('Enter key for the duplicate:', key + '-COPY');
+    if (!newKey) return;
+    try {
+        await fetch('/api/curations/' + encodeURIComponent(key) + '/duplicate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ new_key: newKey.toUpperCase() }),
+        });
+        closeCurationEditor();
+        await loadCurations();
+    } catch (e) {
+        document.getElementById('cur-validation').textContent = 'Duplicate failed: ' + e.message;
+    }
+}
+
+// ── Addon Bundles Modal ──────────────────────────────────────────────
+
+async function showAddonBundles() {
+    try {
+        const res = await fetch('/api/curations/addons');
+        addonBundlesCache = (await res.json()).addons || [];
+    } catch (e) {
+        addonBundlesCache = [];
+    }
+    renderAddonList();
+    document.getElementById('addon-overlay').style.display = '';
+}
+
+function closeAddonBundles() { document.getElementById('addon-overlay').style.display = 'none'; }
+
+function renderAddonList() {
+    const container = document.getElementById('addon-list');
+    if (addonBundlesCache.length === 0) {
+        container.innerHTML = '<div style="padding:20px;text-align:center;color:var(--fg2)">No addon bundles yet</div>';
+        return;
+    }
+    container.innerHTML = addonBundlesCache.map(a => {
+        const children = (a.children || []).map(c => {
+            const sku = Array.isArray(c) ? c[0] : c;
+            const qty = Array.isArray(c) && c.length > 1 ? c[1] : 1;
+            return qty > 1 ? sku + ' x' + qty : sku;
+        }).join(', ');
+        return '<div class="addon-row">' +
+            '<span class="addon-key">' + a.key + '</span>' +
+            '<span class="addon-name">' + a.name + '</span>' +
+            '<span class="addon-children">' + (children || 'empty') + '</span>' +
+            '<span style="color:var(--red);cursor:pointer;font-size:12px" onclick="deleteAddon(\'' + a.key + '\')">&#10005;</span></div>';
+    }).join('');
+}
+
+async function createAddonBundle() {
+    const key = document.getElementById('addon-new-key').value.trim().toUpperCase();
+    const name = document.getElementById('addon-new-name').value.trim();
+    if (!key) return;
+    try {
+        await fetch('/api/curations/addons/' + encodeURIComponent(key), {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name || key, children: [] }),
+        });
+        document.getElementById('addon-new-key').value = '';
+        document.getElementById('addon-new-name').value = '';
+        await showAddonBundles();
+    } catch (e) { /* silent */ }
+}
+
+async function deleteAddon(key) {
+    if (!confirm('Delete addon bundle "' + key + '"?')) return;
+    try {
+        await fetch('/api/curations/addons/' + encodeURIComponent(key), { method: 'DELETE' });
+        await showAddonBundles();
+    } catch (e) { /* silent */ }
+}
+
+// ── Demand Preview Modal ──────────────────────────────────────────────
+
+function showDemandPreview() {
+    const container = document.getElementById('demand-counts-inputs');
+    document.getElementById('demand-target-date').value = new Date().toISOString().split('T')[0];
+
+    const active = curationsCache.filter(c => c.active !== false);
+    container.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:8px">' +
+        active.map(c =>
+            '<div style="display:flex;align-items:center;gap:4px">' +
+                '<label style="font-family:\'Space Mono\',monospace;font-size:10px;color:var(--accent)">' + c.key + '</label>' +
+                '<input type="number" class="settings-input demand-count-input" data-key="' + c.key + '" value="100" min="0" style="width:60px;font-size:11px">' +
+            '</div>'
+        ).join('') +
+    '</div>';
+
+    document.getElementById('demand-results').innerHTML = '';
+    document.getElementById('demand-total').textContent = '';
+    document.getElementById('demand-preview-overlay').style.display = '';
+}
+
+function closeDemandPreview() { document.getElementById('demand-preview-overlay').style.display = 'none'; }
+
+async function runDemandPreview() {
+    const boxCounts = {};
+    document.querySelectorAll('.demand-count-input').forEach(inp => {
+        const val = parseInt(inp.value) || 0;
+        if (val > 0) boxCounts[inp.dataset.key] = val;
+    });
+
+    try {
+        const res = await fetch('/api/curations/demand-preview', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ box_counts: boxCounts, target_date: document.getElementById('demand-target-date').value }),
+        });
+        const data = await res.json();
+        const demand = data.demand || [];
+
+        document.getElementById('demand-total').textContent = demand.length + ' SKUs | ' + demand.reduce((s, d) => s + d[1], 0) + ' total units';
+
+        let html = '<table class="demand-table"><thead><tr><th>SKU</th><th>Category</th><th style="text-align:right">Qty</th></tr></thead><tbody>';
+        demand.forEach(([sku, qty]) => {
+            const cat = sku.startsWith('CH-') ? 'Cheese' : sku.startsWith('MT-') ? 'Meat' : sku.startsWith('AC-') ? 'Acc' : 'Other';
+            const color = sku.startsWith('CH-') ? 'var(--cheese)' : sku.startsWith('MT-') ? 'var(--red)' : 'var(--green)';
+            html += '<tr><td style="color:' + color + '">' + sku + '</td><td style="color:var(--fg2)">' + cat + '</td><td style="text-align:right;font-weight:600">' + qty + '</td></tr>';
+        });
+        html += '</tbody></table>';
+        document.getElementById('demand-results').innerHTML = html;
+    } catch (e) {
+        document.getElementById('demand-results').innerHTML = '<div style="color:var(--red)">Error: ' + e.message + '</div>';
+    }
 }

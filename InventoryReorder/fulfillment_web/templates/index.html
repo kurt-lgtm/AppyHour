@@ -27,6 +27,7 @@
         <button class="btn btn-accent view-btn" id="view-invoices" onclick="switchView('invoices')">&#128196; Invoices</button>
         <button class="btn btn-accent view-btn" id="view-settings" onclick="switchView('settings')">&#9881; Settings</button>
         <button class="btn btn-accent view-btn" id="view-swapmanager" onclick="switchView('swapmanager')">&#9674; Swaps</button>
+        <button class="btn btn-accent view-btn" id="view-curations" onclick="switchView('curations')">&#9881; Curations</button>
         <div class="toolbar-sep"></div>
         <button class="btn btn-green" onclick="syncDropbox()">&#9729; Dropbox</button>
         <button class="btn btn-green" onclick="syncRecharge({force:true})">&#128176; Recharge</button>
@@ -925,6 +926,161 @@
                 </div>
                 <div id="swap-status" style="font-family:'Space Mono',monospace;font-size:11px;color:var(--accent);margin-top:6px"></div>
             </div>
+        </div>
+    </div>
+
+    <!-- ═══ Curations View ═══ -->
+    <div id="curations-view" style="display:none;padding:12px">
+        <!-- Toolbar -->
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+            <span style="font-family:'Space Mono',monospace;font-size:13px;font-weight:600;color:var(--accent);letter-spacing:1px">CURATIONS</span>
+            <div style="display:flex;gap:4px">
+                <button class="btn btn-accent btn-sm cur-filter active" data-filter="all" onclick="filterCurations('all')">All</button>
+                <button class="btn btn-dim btn-sm cur-filter" data-filter="rotation" onclick="filterCurations('rotation')">Rotation</button>
+                <button class="btn btn-dim btn-sm cur-filter" data-filter="monthly" onclick="filterCurations('monthly')">Monthly</button>
+            </div>
+            <div style="margin-left:auto;display:flex;gap:6px">
+                <button class="btn btn-green btn-sm" onclick="createCuration('rotation')">+ Rotation</button>
+                <button class="btn btn-blue btn-sm" onclick="createCuration('monthly')">+ Monthly</button>
+                <button class="btn btn-orange btn-sm" onclick="showAddonBundles()">Addon Bundles</button>
+                <button class="btn btn-dim btn-sm" onclick="showDemandPreview()">Demand Preview</button>
+            </div>
+        </div>
+
+        <!-- Curation cards grid -->
+        <div id="curations-grid" class="cur-grid"></div>
+    </div>
+
+    <!-- Curation editor modal -->
+    <div id="cur-editor-overlay" class="cur-overlay" style="display:none">
+        <div class="cur-editor-backdrop" onclick="closeCurationEditor()"></div>
+        <div class="cur-editor-panel">
+            <div class="cur-editor-header">
+                <input type="text" id="cur-edit-key" class="cur-key-input" placeholder="Curation key (e.g. MONG)">
+                <input type="text" id="cur-edit-label" class="cur-label-input" placeholder="Display name">
+                <select id="cur-edit-type" class="settings-input" style="width:120px" onchange="toggleMonthlyFields()">
+                    <option value="rotation">Rotation</option>
+                    <option value="monthly">Monthly</option>
+                </select>
+                <label class="cur-active-toggle">
+                    <input type="checkbox" id="cur-edit-active" checked> Active
+                </label>
+                <button class="btn btn-dim btn-sm" onclick="closeCurationEditor()" style="margin-left:auto">Close</button>
+            </div>
+
+            <!-- Monthly-only fields -->
+            <div id="cur-monthly-fields" style="display:none;margin-bottom:12px">
+                <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+                    <label style="font-family:'Space Mono',monospace;font-size:11px;color:var(--fg2)">APPLIES TO</label>
+                    <label class="cur-checkbox"><input type="checkbox" value="AHB-MED" class="cur-applies-to"> AHB-MED</label>
+                    <label class="cur-checkbox"><input type="checkbox" value="AHB-LGE" class="cur-applies-to"> AHB-LGE</label>
+                    <label class="cur-checkbox"><input type="checkbox" value="AHB-CMED" class="cur-applies-to"> AHB-CMED</label>
+                    <div style="margin-left:16px;display:flex;gap:8px;align-items:center">
+                        <label style="font-family:'Space Mono',monospace;font-size:11px;color:var(--fg2)">FROM</label>
+                        <input type="date" id="cur-edit-start" class="settings-input" style="width:150px">
+                        <label style="font-family:'Space Mono',monospace;font-size:11px;color:var(--fg2)">TO</label>
+                        <input type="date" id="cur-edit-end" class="settings-input" style="width:150px">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recipe editor -->
+            <div style="display:flex;gap:12px;min-height:400px">
+                <!-- Left: recipe items -->
+                <div class="panel" style="flex:2">
+                    <div class="panel-header">
+                        <span class="icon">&#9881;</span> Recipe
+                        <span id="cur-recipe-count" style="margin-left:auto;font-size:11px;color:var(--fg2)">0 items</span>
+                    </div>
+                    <div class="panel-body" id="cur-recipe-list" style="max-height:350px;overflow-y:auto"></div>
+                    <div style="padding:8px;display:flex;gap:4px">
+                        <select id="cur-add-sku" class="settings-input" style="flex:1;font-size:12px">
+                            <option value="">-- Select SKU --</option>
+                        </select>
+                        <input type="number" id="cur-add-qty" class="settings-input" value="1" min="1" style="width:50px;font-size:12px">
+                        <button class="btn btn-green btn-sm" onclick="addRecipeItem()">+ Add</button>
+                    </div>
+                </div>
+
+                <!-- Middle: assignments -->
+                <div class="panel" style="flex:1">
+                    <div class="panel-header"><span class="icon">&#9733;</span> Assignments</div>
+                    <div class="panel-body" style="padding:10px">
+                        <div class="cur-assign-group">
+                            <label class="cur-assign-label">PR-CJAM Cheese</label>
+                            <select id="cur-edit-prcjam-cheese" class="settings-input" style="width:100%">
+                                <option value="">-- None --</option>
+                            </select>
+                        </div>
+                        <div class="cur-assign-group">
+                            <label class="cur-assign-label">PR-CJAM Jam</label>
+                            <select id="cur-edit-prcjam-jam" class="settings-input" style="width:100%">
+                                <option value="">-- None --</option>
+                            </select>
+                        </div>
+                        <div class="cur-assign-group">
+                            <label class="cur-assign-label">CEX-EC Cheese</label>
+                            <select id="cur-edit-cexec" class="settings-input" style="width:100%">
+                                <option value="">-- None --</option>
+                            </select>
+                        </div>
+                        <div class="cur-assign-group" id="cur-splits-group">
+                            <label class="cur-assign-label">CEX-EC Splits</label>
+                            <div id="cur-splits-list"></div>
+                            <button class="btn btn-dim btn-sm" onclick="addCexecSplit()" style="margin-top:4px;width:100%">+ Split</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right: addon bundles -->
+                <div class="panel" style="flex:1">
+                    <div class="panel-header"><span class="icon">&#9733;</span> Addon Bundles</div>
+                    <div class="panel-body" id="cur-addons-list" style="padding:10px"></div>
+                </div>
+            </div>
+
+            <!-- Validation + save -->
+            <div style="display:flex;align-items:center;gap:8px;margin-top:12px">
+                <div id="cur-validation" style="flex:1;font-family:'Space Mono',monospace;font-size:11px;color:var(--yellow)"></div>
+                <button class="btn btn-red btn-sm" onclick="deleteCurationConfirm()" id="cur-delete-btn" style="display:none">Delete</button>
+                <button class="btn btn-blue btn-sm" onclick="duplicateCuration()">Duplicate</button>
+                <button class="btn btn-green" onclick="saveCuration()">Save Curation</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Addon bundles modal -->
+    <div id="addon-overlay" class="cur-overlay" style="display:none">
+        <div class="cur-editor-backdrop" onclick="closeAddonBundles()"></div>
+        <div class="cur-editor-panel" style="max-width:600px">
+            <div class="cur-editor-header">
+                <span style="font-family:'Space Mono',monospace;font-size:13px;font-weight:600;color:var(--accent)">ADDON BUNDLES</span>
+                <button class="btn btn-dim btn-sm" onclick="closeAddonBundles()" style="margin-left:auto">Close</button>
+            </div>
+            <div id="addon-list" style="margin-bottom:12px"></div>
+            <div style="display:flex;gap:4px;align-items:center">
+                <input type="text" id="addon-new-key" class="settings-input" placeholder="Bundle SKU (e.g. BL-EXTRA)" style="width:200px">
+                <input type="text" id="addon-new-name" class="settings-input" placeholder="Display name" style="flex:1">
+                <button class="btn btn-green btn-sm" onclick="createAddonBundle()">+ Create</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Demand preview modal -->
+    <div id="demand-preview-overlay" class="cur-overlay" style="display:none">
+        <div class="cur-editor-backdrop" onclick="closeDemandPreview()"></div>
+        <div class="cur-editor-panel" style="max-width:800px">
+            <div class="cur-editor-header">
+                <span style="font-family:'Space Mono',monospace;font-size:13px;font-weight:600;color:var(--accent)">DEMAND PREVIEW (SKU Dedup)</span>
+                <button class="btn btn-dim btn-sm" onclick="closeDemandPreview()" style="margin-left:auto">Close</button>
+            </div>
+            <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+                <input type="date" id="demand-target-date" class="settings-input" style="width:150px">
+                <button class="btn btn-accent btn-sm" onclick="runDemandPreview()">Calculate</button>
+                <span id="demand-total" style="margin-left:auto;font-family:'Rajdhani',sans-serif;font-size:14px;color:var(--fg2)"></span>
+            </div>
+            <div id="demand-counts-inputs" style="margin-bottom:12px"></div>
+            <div id="demand-results" style="max-height:400px;overflow-y:auto"></div>
         </div>
     </div>
 

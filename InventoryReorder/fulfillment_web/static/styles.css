@@ -2343,3 +2343,354 @@ td[data-field="goodW2"] { padding-left: 20px; }
 .smart-po-vendor-header span:nth-child(2) {
     font-size: 10px; font-weight: 400; color: #888;
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   Curation Manager
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Card grid */
+.cur-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 12px;
+    padding-bottom: 40px;
+    max-height: calc(100vh - 130px);
+    overflow-y: auto;
+}
+
+.cur-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px;
+    cursor: pointer;
+    transition: border-color 0.15s, box-shadow 0.15s;
+    position: relative;
+}
+.cur-card:hover {
+    border-color: var(--accent2);
+    box-shadow: 0 0 12px rgba(0,212,255,0.08);
+}
+.cur-card.inactive {
+    opacity: 0.5;
+}
+
+.cur-card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+.cur-card-key {
+    font-family: 'Space Mono', monospace;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 1px;
+}
+.cur-card-label {
+    font-size: 12px;
+    color: var(--fg2);
+}
+.cur-card-type {
+    margin-left: auto;
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: rgba(0,212,255,0.1);
+    color: var(--accent);
+}
+.cur-card-type.monthly {
+    background: rgba(255,136,0,0.1);
+    color: var(--orange);
+}
+
+.cur-card-recipe {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+.cur-sku-chip {
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: var(--bg2);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    white-space: nowrap;
+}
+.cur-sku-chip.cheese { border-left: 2px solid var(--cheese); }
+.cur-sku-chip.meat { border-left: 2px solid var(--red); }
+.cur-sku-chip.acc { border-left: 2px solid var(--green); }
+
+.cur-card-assignments {
+    display: flex;
+    gap: 8px;
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 11px;
+    color: var(--fg2);
+}
+.cur-card-assign {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+}
+.cur-card-assign .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    display: inline-block;
+}
+.cur-card-assign .dot.pr { background: var(--blue); }
+.cur-card-assign .dot.ec { background: var(--orange); }
+
+.cur-card-dates {
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 11px;
+    color: var(--orange);
+    margin-top: 6px;
+}
+
+/* Filter buttons */
+.cur-filter.active {
+    background: var(--accent) !important;
+    color: var(--bg) !important;
+}
+
+/* Editor overlay */
+.cur-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.cur-editor-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+}
+.cur-editor-panel {
+    position: relative;
+    z-index: 1;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+    width: 90vw;
+    max-width: 960px;
+    max-height: 90vh;
+    overflow-y: auto;
+    box-shadow: var(--shadow-lg);
+}
+.cur-editor-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+}
+
+.cur-key-input {
+    font-family: 'Space Mono', monospace;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--accent);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 6px 10px;
+    width: 160px;
+    letter-spacing: 1px;
+}
+.cur-label-input {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    color: var(--fg);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 6px 10px;
+    width: 200px;
+}
+.cur-active-toggle {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: var(--fg2);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+}
+
+/* Recipe list in editor */
+#cur-recipe-list .cur-recipe-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+}
+#cur-recipe-list .cur-recipe-row:hover {
+    background: var(--surface2);
+}
+#cur-recipe-list .cur-recipe-sku {
+    font-family: 'Rajdhani', sans-serif;
+    font-weight: 500;
+    color: var(--fg);
+    flex: 1;
+}
+#cur-recipe-list .cur-recipe-name {
+    font-size: 11px;
+    color: var(--fg2);
+    flex: 2;
+}
+#cur-recipe-list .cur-recipe-qty {
+    width: 40px;
+    text-align: center;
+    font-family: 'Rajdhani', sans-serif;
+    font-weight: 600;
+    color: var(--accent);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 2px;
+}
+#cur-recipe-list .cur-recipe-remove {
+    color: var(--red);
+    cursor: pointer;
+    font-size: 14px;
+    opacity: 0.6;
+    transition: opacity 0.15s;
+}
+#cur-recipe-list .cur-recipe-remove:hover { opacity: 1; }
+
+/* Assignment groups */
+.cur-assign-group {
+    margin-bottom: 12px;
+}
+.cur-assign-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--fg2);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+    display: block;
+}
+
+/* Checkbox styling */
+.cur-checkbox {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 12px;
+    color: var(--fg);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+}
+
+/* Addon bundle list */
+.addon-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+}
+.addon-row:hover { background: var(--surface2); }
+.addon-key {
+    font-family: 'Space Mono', monospace;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--orange);
+    width: 150px;
+}
+.addon-name {
+    flex: 1;
+    color: var(--fg);
+}
+.addon-children {
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 11px;
+    color: var(--fg2);
+}
+
+/* Demand preview table */
+.demand-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+.demand-table th {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 6px 8px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    background: var(--bg2);
+}
+.demand-table td {
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--border);
+    font-family: 'Rajdhani', sans-serif;
+    font-weight: 500;
+}
+.demand-table tr:hover td { background: var(--surface2); }
+
+/* CEX-EC split row */
+.cur-split-row {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    margin-bottom: 4px;
+}
+.cur-split-row select { flex: 1; }
+.cur-split-row input[type="number"] {
+    width: 50px;
+    text-align: center;
+    font-family: 'Rajdhani', sans-serif;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--fg);
+    padding: 2px 4px;
+}
+
+/* Addon checkbox in editor */
+.cur-addon-check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 0;
+    font-size: 12px;
+    color: var(--fg);
+    border-bottom: 1px solid var(--border);
+}
+.cur-addon-check label {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.cur-addon-check .addon-detail {
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 11px;
+    color: var(--fg2);
+}

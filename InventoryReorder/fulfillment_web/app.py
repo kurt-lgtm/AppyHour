@@ -192,6 +192,11 @@ else:
     app = Flask(__name__)
 STATE = {"saved": {}, "csv_demand": {}}
 
+# Register curation management blueprint
+import curation_routes
+curation_routes.init(lambda: STATE, save_settings)
+app.register_blueprint(curation_routes.bp)
+
 def _s():
     """Get current settings."""
     return STATE["saved"]
