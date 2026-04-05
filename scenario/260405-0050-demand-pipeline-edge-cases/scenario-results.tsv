@@ -1,0 +1,26 @@
+iteration	dimension	classification	severity	title	description	parent
+1	error_path	new	CRITICAL	Zero queued charges returns 404	Recharge API returns no charges in 28-day window; STATE never updated; downstream uses stale/empty demand	-
+2	concurrent	new	CRITICAL	Shopify sync races Recharge background sync	shopify_sync reads stale STATE before recharge bg thread finishes; merge produces wrong counts	-
+3	temporal	new	HIGH	Saturday boundary window misclassifies charges	Running sync ON Saturday pushes today's charges to next Saturday window due to days_to_sat=7 logic	-
+4	data_variation	new	CRITICAL	Bare CEX-EC with MONTHLY curation drops demand	AHB-LGE resolves to MONTHLY; bare CEX-EC suffix=None; extra cheese demand silently dropped	-
+5	integration	new	HIGH	Recharge 429 exhausts 3 retries silently	Background sync catches all exceptions with bare except:pass; no logging no retry no error state	-
+6	state_transition	new	MEDIUM	Cold start restores stale data before fresh sync fails	setdefault populates STATE with old settings; if fresh sync fails stale data used without warning	-
+7	concurrent	new	HIGH	Renamed duplicate depletion XLSX causes double depletion	Filename dedup fails when operator renames copy; same shipment depleted twice	-
+8	edge_case	new	MEDIUM	Unfulfilled orders without _SHIP_ tag excluded	Gap between order creation and tag assignment; demand invisible to both sources	-
+9	recovery	new	HIGH	Crash between STATE write and settings save causes re-depletion	Depletion applied to STATE but not persisted; restart reprocesses same file	-
+10	temporal	new	MEDIUM	MONG projection zero on 3-day acquisition gap	Site outage or promo gap drops daily_rate to 0; projection misses recovery surge	-
+11	scale	new	MEDIUM	2000+ charges cause 30-60s sync; operator acts on stale data	Long sync window allows cut order export with partial/stale STATE	-
+12	abuse	new	HIGH	Rapid sync clicks cause concurrent foreground syncs	No mutex; two syncs write STATE simultaneously; last writer wins with mixed data	-
+13	data_variation	new	HIGH	CEX-EC split percentages rounding truncation loses demand	int() truncation on fractional splits; qty=1 with 0.6/0.3 split yields 0+0=0 demand	-
+14	integration	new	MEDIUM	Shopify API version 2024-01 deprecation	Silent behavioral change when API version sunsets; fulfillment_status filter semantics may shift	-
+15	edge_case+concurrent	new	HIGH	Shopify prcjam double-counted after restart	STATE lost on restart; subtraction of old_sh_prcjam is empty; Shopify counts added on top of persisted totals	-
+16	permission	new	MEDIUM	Recharge token expires mid-pagination	401 on page 4+; 750 partial charges discarded entirely; falls back to stale cache	-
+17	temporal	new	CRITICAL	save_settings race between recharge and shopify sync	Recharge second save (line 6300) uses stale s object; overwrites Shopify demand data in settings	-
+18	edge_case	new	HIGH	Unknown box SKU returns None curation	New AHB-XLGE not in resolver; PR-CJAM and CEX-EC demand silently dropped for new product	-
+19	recovery	new	HIGH	Journal with no snapshots yields negative inventory	compute_running_inventory starts from empty; depletions go negative; runway shows false all-clear	-
+20	happy_path	new	HIGH	No acquisition/churn signal in demand pipeline	first_order_demand and recurring_demand computed but never used in forecasting; blind to growth/decline	-
+21	temporal+data	new	MEDIUM	8-week rolling average masks seasonal spikes	Holiday surge inflates average 76%; cut order over-orders after promo ends; cheese expires	-
+22	error+recovery	new	CRITICAL	Partial JSON on disk full corrupts settings	Truncated write loses all demand data, depletion history, API tokens	-
+23	scale+temporal	new	MEDIUM	Growing unfulfilled orders slow Shopify sync linearly	No server-side tag filter; fetches all unfulfilled then filters client-side; O(n) API calls	-
+24	temporal+acquisition	new	MEDIUM	MONG projection drops to 0 near Monday midnight	hours_remaining approaches 0; projected_additional=0; under-projects for remaining demand window	-
+25	concurrent+state	new	CRITICAL	auto_deplete and compute_running_inventory use different inventory sources	auto_deplete modifies STATE dict; journal doesn't get entry; calculated_inventory diverges from runtime inventory	-
