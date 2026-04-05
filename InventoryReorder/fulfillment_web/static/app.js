@@ -2153,8 +2153,9 @@ function toggleMoreMenu() {
 
 function switchView(view) {
     currentView = view;
-    document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
-    document.getElementById(`view-${view}`).classList.add('active');
+    document.querySelectorAll('.view-btn, .sb-nav').forEach(b => b.classList.remove('active'));
+    const navEl = document.getElementById(`view-${view}`);
+    if (navEl) navEl.classList.add('active');
 
     const views = {
         dashboard: document.getElementById('content'),
