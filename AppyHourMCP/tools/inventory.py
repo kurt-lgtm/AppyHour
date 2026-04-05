@@ -149,9 +149,9 @@ def register(mcp: object) -> None:
             charges = await asyncio.to_thread(rc.get_queued_charges)
             resolved = mod.resolve_queued_charges(charges)
 
-            first_month = next(iter(resolved.values()), {})
-            pr_cjam = first_month.get("pr_cjam", 0)
-            cex_ec = first_month.get("cex_ec", 0)
+            # pr_cjam/cex_ec must be assignment config (dicts), not charge counts
+            pr_cjam = settings.get("pr_cjam", {})
+            cex_ec = settings.get("cex_ec", {})
 
             forecast = mod.forecast_cohort_demand(
                 cohorts, retention, recipes, pr_cjam, cex_ec,
@@ -197,10 +197,11 @@ def register(mcp: object) -> None:
             resolved = mod.resolve_queued_charges(charges)
             first_month = next(iter(resolved.values()), {})
 
+            # pr_cjam/cex_ec must be assignment config (dicts), not charge counts
             forecast = mod.forecast_cohort_demand(
                 cohorts, retention, recipes,
-                first_month.get("pr_cjam", 0),
-                first_month.get("cex_ec", 0),
+                settings.get("pr_cjam", {}),
+                settings.get("cex_ec", {}),
                 forecast_months=3,
             )
 

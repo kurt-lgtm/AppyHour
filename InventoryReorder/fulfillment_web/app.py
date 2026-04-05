@@ -1268,6 +1268,7 @@ KNOWN_CURATIONS = {
     "SS",
     "GEN",
     "MS",
+    "TRAY",
 }
 _MONTHLY_PATTERNS = {"AHB-MED", "AHB-LGE", "AHB-CMED", "AHB-CUR-MS", "AHB-BVAL", "AHB-MCUST-MS", "AHB-MCUST-NMS"}
 
@@ -1523,8 +1524,9 @@ def map_depletion_to_skus(product_totals, sku_translations, inventory):
     all_skus = set(inventory.keys()) | set(sku_translations.values())
 
     for product, qty in product_totals.items():
-        # Skip non-depletable items (tasting guides, trays, etc.)
-        if "tasting guide" in product.lower() or "(tray)" in product.lower():
+        # Skip non-depletable items (tasting guides, packaging trays — NOT tray subscription products)
+        lower_prod = product.lower()
+        if "tasting guide" in lower_prod or lower_prod in ("tray", "tray insert", "tray liner"):
             continue
 
         sku = None
@@ -6105,7 +6107,20 @@ def _recharge_sync_foreground(api_token, req, save_to_state=False):
     elapsed = round(_time.time() - t0, 1)
 
     if not all_charges:
-        return jsonify({"error": "No queued charges found"}), 404
+        # Return last-known-good demand with stale warning instead of failing
+        cached = STATE.get("recharge_cached_response")
+        last_sync = STATE.get("recharge_last_sync")
+        if cached and last_sync:
+            age_hours = round((datetime.datetime.now() - last_sync).total_seconds() / 3600, 1)
+            cached["from_cache"] = True
+            cached["stale_warning"] = f"No queued charges found — using cached data from {age_hours}h ago"
+            cached["cache_age_hours"] = age_hours
+            if save_to_state:
+                return cached
+            return jsonify(cached)
+        if save_to_state:
+            return {"error": "No queued charges found and no cached data available"}
+        return jsonify({"error": "No queued charges found and no cached data available"}), 404
 
     # Resolve into cheese demand using per-charge box context
     pr_cjam = s.get("pr_cjam", {})
@@ -6200,7 +6215,7 @@ def _recharge_sync_foreground(api_token, req, save_to_state=False):
                 week_cexec[week_idx][suffix] += qty
                 if suffix in splits:
                     for ssku, pct in splits[suffix].items():
-                        week_demands[week_idx][normalize_sku(ssku)] += int(qty * pct)
+                        week_demands[week_idx][normalize_sku(ssku)] += round(qty * pct)
                 else:
                     ec = cex_ec.get(suffix, "")
                     if ec:
@@ -6209,12 +6224,15 @@ def _recharge_sync_foreground(api_token, req, save_to_state=False):
 
             # Bare CEX-EC — resolve suffix from box curation
             if upper == "CEX-EC":
-                suffix = curation if curation and curation not in ("MONTHLY", None) else None
+                suffix = curation if curation and curation not in (None,) else None
+                # MONTHLY boxes still get CEX-EC — use "MONTHLY" as lookup key
+                if not suffix and curation == "MONTHLY":
+                    suffix = "MONTHLY"
                 if suffix:
                     week_cexec[week_idx][suffix] += qty
                     if suffix in splits:
                         for ssku, pct in splits[suffix].items():
-                            week_demands[week_idx][normalize_sku(ssku)] += int(qty * pct)
+                            week_demands[week_idx][normalize_sku(ssku)] += round(qty * pct)
                     else:
                         ec = cex_ec.get(suffix, "")
                         if isinstance(ec, str) and ec:
@@ -6295,10 +6313,10 @@ def _recharge_sync_foreground(api_token, req, save_to_state=False):
     now = datetime.datetime.now()
     STATE["recharge_last_sync"] = now
     STATE["recharge_cached_response"] = result
-    s = _s()
-    s["recharge_last_sync_iso"] = now.isoformat()
-    save_settings(s)
-    STATE["saved"] = s
+    fresh_s = load_settings()
+    fresh_s["recharge_last_sync_iso"] = now.isoformat()
+    save_settings(fresh_s)
+    STATE["saved"] = fresh_s
 
     if save_to_state:
         return result  # background worker — no Flask response needed
@@ -6487,16 +6505,28 @@ def shopify_sync():
                 elif is_subscription:
                     recurring_total[nsku] += qty
 
-    # Compute weekly average per SKU from fulfilled history
+    # Compute weekly demand per SKU — EWMA (trend-aware) + flat average fallback
     num_weeks_with_data = max(1, len(week_sku_totals))
     all_skus_seen = set()
     for wk_data in week_sku_totals.values():
         all_skus_seen.update(wk_data.keys())
 
+    # EWMA: recent weeks weighted more heavily (alpha from settings, default 0.3)
+    shopify_ewma = compute_ewma(week_sku_totals)
+
+    # Flat average kept for backward compatibility
     shopify_weekly = {}
     for sku in all_skus_seen:
         total = sum(week_sku_totals[wk].get(sku, 0) for wk in week_sku_totals)
         shopify_weekly[sku] = round(total / num_weeks_with_data)
+
+    # Track first-order weekly total for growth multiplier
+    this_week_first_orders = sum(first_order_total.values())
+    fo_history = s.get("first_order_weekly_history", [])
+    fo_history.append(this_week_first_orders)
+    if len(fo_history) > 12:
+        fo_history = fo_history[-12:]
+    s["first_order_weekly_history"] = fo_history
 
     # Unfulfilled orders = pending demand for current week
     # Also extract PR-CJAM and CEX-EC curation counts from unfulfilled orders
@@ -6590,8 +6620,7 @@ def shopify_sync():
             et = datetime.timezone(datetime.timedelta(hours=-4))
         now_et = datetime.datetime.now(et)
         days_to_monday = (7 - now_et.weekday()) % 7
-        if days_to_monday == 0 and now_et.hour >= 23:
-            days_to_monday = 7
+        # Removed: days_to_monday=7 override on Monday night caused 7x projection inflation
         next_monday_midnight = (now_et + datetime.timedelta(days=days_to_monday)).replace(
             hour=23, minute=59, second=0, microsecond=0
         )
@@ -6652,6 +6681,8 @@ def shopify_sync():
     # Save to settings — re-read fresh to avoid overwriting Recharge data
     fresh_s = load_settings()
     fresh_s["shopify_api_demand"] = shopify_weekly
+    fresh_s["shopify_ewma_demand"] = shopify_ewma
+    fresh_s["first_order_weekly_history"] = s.get("first_order_weekly_history", [])
     fresh_s["shopify_unfulfilled"] = dict(unfulfilled_demand)
     fresh_s["rmfg_direct_sat"] = existing_direct
     fresh_s["rmfg_direct_sh"] = dict(sh_direct_demand)
@@ -6692,9 +6723,10 @@ def shopify_sync():
     now = datetime.datetime.now()
     STATE["shopify_last_sync"] = now
     STATE["shopify_cached_response"] = result
-    s["shopify_last_sync_iso"] = now.isoformat()
-    save_settings(s)
-    STATE["saved"] = s
+    fresh_s2 = load_settings()
+    fresh_s2["shopify_last_sync_iso"] = now.isoformat()
+    save_settings(fresh_s2)
+    STATE["saved"] = fresh_s2
 
     return jsonify(result)
 
@@ -7750,6 +7782,16 @@ def auto_deplete():
                 total_applied[sku] = {"before": before, "after": after, "depleted": int(qty)}
 
         STATE["rmfg_inventory"] = inv
+        # Write journal entry so compute_running_inventory stays in sync
+        journal = s.setdefault("inventory_journal", [])
+        journal.append({
+            "ts": datetime.datetime.now().isoformat(),
+            "type": "depletion",
+            "label": f"Auto-depletion: {dep_label}",
+            "sku_deltas": {sku: -int(qty) for sku, qty in sku_totals.items()},
+            "source_file": dep_label,
+            "order_count": order_count,
+        })
         _take_snapshot(f"Post-depletion: {dep_label}", source="depletion")
         total_order_count += order_count
         all_unmatched.extend(unmatched)
@@ -8384,6 +8426,547 @@ def detect_production_events(old_snap, new_snap, depletion_between):
             )
 
     return events
+
+# ── EWMA Forecasting & Growth Multiplier ──────────────────────────────
+
+def compute_ewma(week_sku_totals, alpha=None):
+    """Exponential weighted moving average per SKU.
+
+    Recent weeks weighted more heavily than old weeks.
+    alpha=0.3 means each new week gets 30% weight, history gets 70%.
+
+    Args:
+        week_sku_totals: {week_num: {sku: qty}} — week_num 0=most recent
+        alpha: decay factor (0.1=slow react, 0.5=fast react). Default from settings.
+
+    Returns: {sku: ewma_weekly_qty}
+    """
+    if alpha is None:
+        alpha = float(_s().get("shopify_ewma_alpha", 0.3))
+
+    # Collect all SKUs
+    all_skus = set()
+    for wk_data in week_sku_totals.values():
+        all_skus.update(wk_data.keys())
+
+    if not week_sku_totals:
+        return {}
+
+    # Sort weeks oldest-first (highest week_num = oldest)
+    sorted_weeks = sorted(week_sku_totals.keys(), reverse=True)
+
+    ewma = {}
+    for sku in all_skus:
+        val = None
+        for wk in sorted_weeks:
+            qty = float(week_sku_totals[wk].get(sku, 0))
+            if val is None:
+                val = qty
+            else:
+                val = alpha * qty + (1.0 - alpha) * val
+        ewma[sku] = round(val) if val is not None else 0
+
+    return ewma
+
+
+def compute_growth_multiplier():
+    """Week-over-week first-order growth rate as demand multiplier.
+
+    Uses first_order_weekly_history (list of weekly first-order totals).
+    Returns a multiplier: >1.0 = growing, <1.0 = shrinking, 1.0 = stable.
+    Clamped to prevent wild swings.
+
+    Returns: float multiplier
+    """
+    s = _s()
+    if not s.get("growth_multiplier_enabled", True):
+        return 1.0
+
+    history = s.get("first_order_weekly_history", [])
+    if len(history) < 3:
+        return 1.0
+
+    # Last 4 weeks (or whatever is available)
+    recent = history[-4:]
+    if recent[0] <= 0:
+        return 1.0
+
+    # Compound weekly growth rate
+    try:
+        growth_rate = (recent[-1] / recent[0]) ** (1.0 / (len(recent) - 1))
+    except (ZeroDivisionError, ValueError):
+        return 1.0
+
+    # Clamp to configured range (default ±20%)
+    clamp = s.get("growth_multiplier_clamp", [0.85, 1.20])
+    lo = float(clamp[0]) if isinstance(clamp, (list, tuple)) and len(clamp) >= 2 else 0.85
+    hi = float(clamp[1]) if isinstance(clamp, (list, tuple)) and len(clamp) >= 2 else 1.20
+
+    return max(lo, min(hi, growth_rate))
+
+
+@app.route("/api/demand_final")
+def demand_final():
+    """Return authoritative demand per SKU: max(curation_floor, ewma × growth_multiplier).
+
+    This is the single source of truth for "how much do we need."
+    """
+    # Curation floor
+    floor_data = compute_curation_floor()
+
+    # EWMA from Shopify historical data
+    s = _s()
+    ewma_demand = s.get("shopify_ewma_demand", s.get("shopify_api_demand", {}))
+
+    # Growth multiplier
+    growth = compute_growth_multiplier()
+
+    # Inventory
+    inv = STATE.get("rmfg_inventory", {})
+
+    # Combine: final = max(floor, ewma × growth)
+    all_skus = set(floor_data.keys()) | set(ewma_demand.keys())
+    result = []
+    for sku in sorted(all_skus):
+        floor_qty = floor_data.get(sku, {}).get("floor", 0) if isinstance(floor_data.get(sku), dict) else 0
+        ewma_qty = round(float(ewma_demand.get(sku, 0)) * growth)
+        final = max(floor_qty, ewma_qty)
+        available = inv.get(sku, 0)
+        runway = round(available / final, 1) if final > 0 else 99.0
+
+        if runway < 1.0:
+            status = "CRITICAL"
+        elif runway < 2.0:
+            status = "WARNING"
+        else:
+            status = "OK"
+
+        result.append({
+            "sku": sku,
+            "floor": floor_qty,
+            "ewma": ewma_demand.get(sku, 0),
+            "growth_multiplier": round(growth, 3),
+            "ewma_adjusted": ewma_qty,
+            "final_demand": final,
+            "available": available,
+            "runway_weeks": runway,
+            "status": status,
+            "demand_source": "floor" if floor_qty >= ewma_qty else "ewma",
+        })
+
+    status_order = {"CRITICAL": 0, "WARNING": 1, "OK": 2}
+    result.sort(key=lambda x: (status_order.get(x["status"], 3), -x["final_demand"]))
+
+    return jsonify({
+        "ok": True,
+        "growth_multiplier": round(growth, 3),
+        "skus": result,
+        "summary": {
+            "total_skus": len(result),
+            "critical": sum(1 for r in result if r["status"] == "CRITICAL"),
+            "warning": sum(1 for r in result if r["status"] == "WARNING"),
+            "ok": sum(1 for r in result if r["status"] == "OK"),
+            "floor_dominant": sum(1 for r in result if r["demand_source"] == "floor"),
+            "ewma_dominant": sum(1 for r in result if r["demand_source"] == "ewma"),
+        },
+    })
+
+
+# ── Recipe Diff & Auto-Ramp ─────────────────────────────────────────────
+
+def compute_recipe_diff(old_recipes, new_recipes):
+    """Compare two recipe dicts and return additions, removals, and swaps."""
+    diff = {}
+    all_curations = set(old_recipes.keys()) | set(new_recipes.keys())
+    for cur in all_curations:
+        old_items = old_recipes.get(cur, [])
+        new_items = new_recipes.get(cur, [])
+        old_skus = [normalize_sku(item[0]) if isinstance(item, (list, tuple)) else normalize_sku(item) for item in old_items]
+        new_skus = [normalize_sku(item[0]) if isinstance(item, (list, tuple)) else normalize_sku(item) for item in new_items]
+        old_set, new_set = set(old_skus), set(new_skus)
+        added = sorted(new_set - old_set)
+        removed = sorted(old_set - new_set)
+        swaps = []
+        for i in range(min(len(old_skus), len(new_skus))):
+            if old_skus[i] != new_skus[i]:
+                swaps.append({"slot": i, "old": old_skus[i], "new": new_skus[i]})
+        if added or removed or swaps:
+            diff[cur] = {"added": added, "removed": removed, "swaps": swaps}
+    return diff
+
+
+def apply_auto_ramp(diff, settings):
+    """Create sku_ramp entries for new SKUs detected in recipe diff."""
+    ramp = settings.get("sku_ramp", {})
+    ramp_weeks = int(settings.get("default_ramp_weeks", 3))
+    today = datetime.date.today().isoformat()
+    created = []
+    for cur, changes in diff.items():
+        for swap in changes.get("swaps", []):
+            new_sku, old_sku = swap["new"], swap["old"]
+            if new_sku not in ramp:
+                ramp[new_sku] = {"replaces": old_sku, "intro_date": today, "ramp_weeks": ramp_weeks, "curation": cur, "auto_created": True}
+                created.append({"sku": new_sku, "replaces": old_sku, "curation": cur})
+        for sku in changes.get("added", []):
+            if sku not in ramp and not any(s["new"] == sku for s in changes.get("swaps", [])):
+                ramp[sku] = {"replaces": None, "intro_date": today, "ramp_weeks": ramp_weeks, "curation": cur, "auto_created": True, "use_curation_average": True}
+                created.append({"sku": sku, "replaces": None, "curation": cur})
+    settings["sku_ramp"] = ramp
+    return created
+
+
+def get_ramped_demand(sku, base_demand, settings):
+    """Get demand for a SKU with ramp-up blend for new introductions."""
+    ramp = settings.get("sku_ramp", {})
+    entry = ramp.get(sku)
+    if not entry:
+        return base_demand.get(sku, 0)
+    intro_date = entry.get("intro_date")
+    ramp_weeks = entry.get("ramp_weeks", 3)
+    replaces = entry.get("replaces")
+    if not intro_date:
+        return base_demand.get(sku, 0)
+    try:
+        intro = datetime.date.fromisoformat(intro_date)
+    except (ValueError, TypeError):
+        return base_demand.get(sku, 0)
+    weeks_since = (datetime.date.today() - intro).days // 7
+    if weeks_since >= ramp_weeks:
+        return base_demand.get(sku, 0)
+    actual = base_demand.get(sku, 0)
+    if replaces:
+        inherited = base_demand.get(replaces, 0)
+    elif entry.get("use_curation_average"):
+        floor_data = compute_curation_floor()
+        inherited = floor_data.get(sku, {}).get("floor", 0) if isinstance(floor_data.get(sku), dict) else 0
+    else:
+        inherited = 0
+    blend = weeks_since / ramp_weeks
+    return round(inherited * (1.0 - blend) + actual * blend)
+
+
+@app.route("/api/recipe_diff", methods=["POST"])
+def recipe_diff():
+    """Compare current recipes against proposed. Body: {new_recipes: {curation: [[sku, qty], ...]}}"""
+    data = request.json or {}
+    new_recipes = data.get("new_recipes", {})
+    if not new_recipes:
+        return jsonify({"error": "new_recipes required"}), 400
+    s = _s()
+    diff = compute_recipe_diff(s.get("curation_recipes", {}), new_recipes)
+    if not diff:
+        return jsonify({"ok": True, "changes": False, "message": "No recipe changes detected"})
+    preview_settings = dict(s)
+    preview_settings["sku_ramp"] = dict(s.get("sku_ramp", {}))
+    ramp_entries = apply_auto_ramp(diff, preview_settings)
+    ewma = s.get("shopify_ewma_demand", s.get("shopify_api_demand", {}))
+    demand_impact = []
+    for entry in ramp_entries:
+        new_sku, old_sku = entry["sku"], entry.get("replaces")
+        inherited = ewma.get(old_sku, 0) if old_sku else 0
+        actual = ewma.get(new_sku, 0)
+        floor_data = compute_curation_floor()
+        floor_qty = floor_data.get(old_sku, {}).get("floor", 0) if old_sku and isinstance(floor_data.get(old_sku), dict) else 0
+        demand_impact.append({"new_sku": new_sku, "replaces": old_sku, "curation": entry["curation"],
+                              "inherited_demand": max(inherited, floor_qty), "current_actual": actual,
+                              "week_1_demand": max(inherited, floor_qty), "week_4_demand": actual})
+    return jsonify({"ok": True, "changes": True, "diff": diff, "ramp_entries": ramp_entries, "demand_impact": demand_impact})
+
+
+@app.route("/api/recipe_apply", methods=["POST"])
+def recipe_apply():
+    """Apply new recipes and auto-create ramp entries. Body: {new_recipes: {curation: [[sku, qty], ...]}}"""
+    data = request.json or {}
+    new_recipes = data.get("new_recipes", {})
+    if not new_recipes:
+        return jsonify({"error": "new_recipes required"}), 400
+    s = load_settings()
+    current_recipes = s.get("curation_recipes", {})
+    recipe_history = s.setdefault("recipe_history", [])
+    recipe_history.append({"date": datetime.datetime.now().isoformat(), "recipes": dict(current_recipes)})
+    if len(recipe_history) > 12:
+        recipe_history[:] = recipe_history[-12:]
+    diff = compute_recipe_diff(current_recipes, new_recipes)
+    ramp_entries = apply_auto_ramp(diff, s)
+    s["curation_recipes"].update(new_recipes)
+    save_settings(s)
+    STATE["saved"] = s
+    return jsonify({"ok": True, "diff": diff, "ramp_entries_created": len(ramp_entries),
+                    "ramp_entries": ramp_entries, "recipe_history_entries": len(recipe_history)})
+
+
+# ── PO Draft Generator ─────────────────────────────────────────────────
+
+@app.route("/api/po_draft")
+def po_draft():
+    """Auto-generate PO draft lines for SKUs with runway < reorder threshold.
+
+    Uses demand_final (max of curation floor and EWMA × growth) to determine
+    what needs ordering. Rounds up to vendor case_qty from vendor_catalog.
+    Returns draft PO lines for Tommy to review and approve.
+    """
+    s = _s()
+    reorder_weeks = float(s.get("reorder_runway_weeks", 2.0))
+    safety_weeks = float(s.get("safety_weeks", 1.0))
+    vendor_catalog = s.get("vendor_catalog", {})
+
+    # Get final demand per SKU
+    floor_data = compute_curation_floor()
+    ewma_demand = s.get("shopify_ewma_demand", s.get("shopify_api_demand", {}))
+    growth = compute_growth_multiplier()
+    inv = STATE.get("rmfg_inventory", {})
+
+    # Open POs — subtract already-ordered quantities
+    open_pos = s.get("open_pos", [])
+    incoming = {}
+    for po in open_pos:
+        if po.get("status") in ("open", "ordered", "confirmed", "in_transit"):
+            sku = po.get("sku", "")
+            qty = po.get("qty", 0)
+            if sku and qty > 0:
+                incoming[sku] = incoming.get(sku, 0) + qty
+
+    draft_lines = []
+    for sku in sorted(set(floor_data.keys()) | set(ewma_demand.keys())):
+        floor_qty = floor_data.get(sku, {}).get("floor", 0) if isinstance(floor_data.get(sku), dict) else 0
+        ewma_qty = round(float(ewma_demand.get(sku, 0)) * growth)
+        weekly_demand = max(floor_qty, ewma_qty)
+
+        if weekly_demand <= 0:
+            continue
+
+        available = inv.get(sku, 0) + incoming.get(sku, 0)
+        runway = available / weekly_demand if weekly_demand > 0 else 99.0
+
+        if runway >= reorder_weeks:
+            continue
+
+        # Calculate order quantity
+        target_stock = weekly_demand * (reorder_weeks + safety_weeks)
+        deficit = max(0, target_stock - available)
+
+        if deficit <= 0:
+            continue
+
+        # Round up to vendor case quantity
+        vinfo = vendor_catalog.get(sku, {})
+        case_qty = int(vinfo.get("case_qty", 1)) if isinstance(vinfo, dict) else 1
+        if case_qty > 1:
+            import math
+            order_qty = math.ceil(deficit / case_qty) * case_qty
+        else:
+            order_qty = int(math.ceil(deficit)) if 'math' in dir() else int(deficit) + (1 if deficit % 1 else 0)
+
+        vendor = vinfo.get("vendor", "Unknown") if isinstance(vinfo, dict) else "Unknown"
+        unit_cost = float(vinfo.get("unit_cost", 0)) if isinstance(vinfo, dict) else 0
+        lead_time = int(vinfo.get("lead_time", 14)) if isinstance(vinfo, dict) else 14
+
+        import datetime as _dt
+        eta = (_dt.date.today() + _dt.timedelta(days=lead_time)).isoformat()
+
+        draft_lines.append({
+            "sku": sku,
+            "vendor": vendor,
+            "order_qty": order_qty,
+            "case_qty": case_qty,
+            "unit_cost": unit_cost,
+            "total_cost": round(order_qty * unit_cost, 2),
+            "lead_time_days": lead_time,
+            "eta": eta,
+            "current_available": inv.get(sku, 0),
+            "incoming": incoming.get(sku, 0),
+            "weekly_demand": weekly_demand,
+            "current_runway": round(runway, 1),
+            "runway_after_po": round((available + order_qty) / weekly_demand, 1) if weekly_demand > 0 else 99.0,
+            "demand_source": "floor" if floor_qty >= ewma_qty else "ewma",
+        })
+
+    # Sort by urgency (lowest runway first)
+    draft_lines.sort(key=lambda x: x["current_runway"])
+
+    total_cost = sum(line["total_cost"] for line in draft_lines)
+    total_units = sum(line["order_qty"] for line in draft_lines)
+
+    return jsonify({
+        "ok": True,
+        "draft_lines": draft_lines,
+        "summary": {
+            "total_lines": len(draft_lines),
+            "total_units": total_units,
+            "total_cost": round(total_cost, 2),
+            "growth_multiplier": round(growth, 3),
+            "reorder_threshold_weeks": reorder_weeks,
+            "safety_buffer_weeks": safety_weeks,
+        },
+    })
+
+
+@app.route("/api/po_approve", methods=["POST"])
+def po_approve():
+    """Approve PO draft lines and add to open_pos.
+
+    Body: {lines: [{sku, vendor, order_qty, unit_cost, eta}, ...]}
+    """
+    data = request.json or {}
+    lines = data.get("lines", [])
+
+    if not lines:
+        return jsonify({"error": "No PO lines provided"}), 400
+
+    s = load_settings()
+    open_pos = s.setdefault("open_pos", [])
+    approved = []
+
+    for line in lines:
+        po_entry = {
+            "sku": line.get("sku", ""),
+            "qty": line.get("order_qty", 0),
+            "vendor": line.get("vendor", ""),
+            "unit_cost": line.get("unit_cost", 0),
+            "eta": line.get("eta", ""),
+            "status": "ordered",
+            "approved_date": datetime.date.today().isoformat(),
+            "type": "PO",
+        }
+        open_pos.append(po_entry)
+        approved.append(po_entry)
+
+    # Track in PO history
+    po_history = s.setdefault("po_approval_history", [])
+    po_history.append({
+        "date": datetime.datetime.now().isoformat(),
+        "lines": len(approved),
+        "total_qty": sum(a["qty"] for a in approved),
+        "total_cost": round(sum(a["qty"] * a["unit_cost"] for a in approved), 2),
+    })
+
+    save_settings(s)
+    STATE["saved"] = s
+
+    return jsonify({
+        "ok": True,
+        "approved": len(approved),
+        "total_qty": sum(a["qty"] for a in approved),
+    })
+
+
+# ── Curation Floor Demand ──────────────────────────────────────────────
+
+def compute_curation_floor():
+    """Compute minimum demand per SKU from active curation recipes + subscription counts.
+
+    Floor = sum across all curations of (subscription_count × qty_per_box).
+    Includes PR-CJAM cheese (1 per box) and CEX-EC cheese (~40% of large boxes).
+    This is the absolute minimum you must order — regardless of forecast.
+
+    Returns: {sku: {"floor": int, "sources": {curation: qty, ...}}}
+    """
+    s = _s()
+    recipes = s.get("curation_recipes", {})
+    pr_cjam = s.get("pr_cjam", {})
+    cex_ec_map = s.get("cex_ec", {})
+    splits = s.get("cexec_splits", {})
+
+    # Get subscription counts per curation from STATE (set by recharge_sync)
+    prcjam_sat = STATE.get("rmfg_prcjam_sat") or s.get("rmfg_prcjam_sat", {})
+    cexec_sat = STATE.get("rmfg_cexec_sat") or s.get("rmfg_cexec_sat", {})
+
+    floor = defaultdict(lambda: {"floor": 0, "sources": {}})
+
+    for curation, recipe in recipes.items():
+        box_count = int(prcjam_sat.get(curation, 0))
+        if box_count <= 0:
+            continue
+
+        # Recipe items: each subscriber gets qty of each SKU
+        for item in recipe:
+            sku = normalize_sku(item[0]) if isinstance(item, (list, tuple)) else normalize_sku(item)
+            qty = item[1] if isinstance(item, (list, tuple)) and len(item) > 1 else 1
+            demand = box_count * qty
+            floor[sku]["floor"] += demand
+            floor[sku]["sources"][f"{curation}_recipe"] = demand
+
+        # PR-CJAM: 1 bonus cheese per box
+        pj = pr_cjam.get(curation, {})
+        if isinstance(pj, dict):
+            cheese = pj.get("cheese", "")
+            if cheese:
+                nsku = normalize_sku(cheese)
+                floor[nsku]["floor"] += box_count
+                floor[nsku]["sources"][f"{curation}_prcjam"] = box_count
+
+    # CEX-EC: extra cheese for large boxes
+    for curation, ec_count in cexec_sat.items():
+        ec_count = int(ec_count)
+        if ec_count <= 0:
+            continue
+        if curation in splits:
+            for ssku, pct in splits[curation].items():
+                demand = round(ec_count * pct)
+                nsku = normalize_sku(ssku)
+                floor[nsku]["floor"] += demand
+                floor[nsku]["sources"][f"{curation}_cexec_split"] = demand
+        else:
+            ec = cex_ec_map.get(curation, "")
+            if ec and isinstance(ec, str):
+                nsku = normalize_sku(ec)
+                floor[nsku]["floor"] += ec_count
+                floor[nsku]["sources"][f"{curation}_cexec"] = ec_count
+
+    return dict(floor)
+
+
+@app.route("/api/curation_floor")
+def curation_floor():
+    """Return curation-floor demand per SKU with runway calculation.
+
+    Compares floor demand against available inventory to show
+    runway in weeks and red/amber/green status.
+    """
+    floor_data = compute_curation_floor()
+    inv = STATE.get("rmfg_inventory", {})
+
+    result = []
+    for sku in sorted(floor_data.keys()):
+        info = floor_data[sku]
+        floor_qty = info["floor"]
+        available = inv.get(sku, 0)
+        runway_weeks = round(available / floor_qty, 1) if floor_qty > 0 else 99.0
+
+        if runway_weeks < 1.0:
+            status = "CRITICAL"
+        elif runway_weeks < 2.0:
+            status = "WARNING"
+        else:
+            status = "OK"
+
+        result.append({
+            "sku": sku,
+            "available": available,
+            "floor_demand": floor_qty,
+            "runway_weeks": runway_weeks,
+            "status": status,
+            "sources": info["sources"],
+        })
+
+    # Sort: CRITICAL first, then WARNING, then OK
+    status_order = {"CRITICAL": 0, "WARNING": 1, "OK": 2}
+    result.sort(key=lambda x: (status_order.get(x["status"], 3), -x["floor_demand"]))
+
+    critical_count = sum(1 for r in result if r["status"] == "CRITICAL")
+    warning_count = sum(1 for r in result if r["status"] == "WARNING")
+
+    return jsonify({
+        "ok": True,
+        "skus": result,
+        "summary": {
+            "total_skus": len(result),
+            "critical": critical_count,
+            "warning": warning_count,
+            "ok": len(result) - critical_count - warning_count,
+        },
+    })
+
 
 # ── Running Inventory (Journal-based) ──────────────────────────────────
 
