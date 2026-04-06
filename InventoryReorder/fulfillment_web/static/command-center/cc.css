@@ -1,0 +1,673 @@
+/* Command Center — Dark Navy Theme (no red anywhere) */
+
+/* ── Layout ── */
+.cc-layout {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 16px;
+    height: calc(100vh - 60px);
+    padding: 16px;
+    overflow: hidden;
+}
+
+@media (max-width: 1100px) {
+    .cc-layout {
+        grid-template-columns: 1fr;
+    }
+    .cc-sidebar {
+        display: none;
+    }
+}
+
+/* ── Main Panel ── */
+.cc-main {
+    overflow-y: auto;
+    padding-right: 8px;
+}
+
+.cc-main::-webkit-scrollbar { width: 6px; }
+.cc-main::-webkit-scrollbar-track { background: transparent; }
+.cc-main::-webkit-scrollbar-thumb { background: #2a2a4a; border-radius: 3px; }
+
+/* ── Header ── */
+.cc-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #2a2a4a;
+}
+
+.cc-greeting {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 20px;
+    font-weight: 500;
+    color: #eaeaea;
+}
+
+.cc-energy {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.cc-energy-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: #8892a0;
+    text-transform: uppercase;
+}
+
+.cc-energy-btn {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    padding: 4px 10px;
+    border: 1px solid #2a2a4a;
+    border-radius: 4px;
+    background: transparent;
+    color: #8892a0;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.cc-energy-btn:hover {
+    border-color: #4ecca3;
+    color: #eaeaea;
+}
+
+.cc-energy-btn.active {
+    background: #1a3a2a;
+    border-color: #4ecca3;
+    color: #4ecca3;
+}
+
+/* ── Morning Brief ── */
+.cc-brief {
+    background: #16213e;
+    border: 1px solid #2a2a4a;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    overflow: hidden;
+}
+
+.cc-brief-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: #8892a0;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    border-bottom: 1px solid #2a2a4a;
+}
+
+.cc-brief-dismiss {
+    background: none;
+    border: none;
+    color: #8892a0;
+    font-size: 16px;
+    cursor: pointer;
+    padding: 0 4px;
+}
+
+.cc-brief-dismiss:hover { color: #eaeaea; }
+
+.cc-brief-body {
+    padding: 12px 14px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 14px;
+    color: #c0c8d4;
+    line-height: 1.6;
+}
+
+.cc-brief-item {
+    padding: 3px 0;
+}
+
+.cc-brief-item .cc-brief-icon {
+    margin-right: 8px;
+}
+
+/* ── Sections ── */
+.cc-section {
+    margin-bottom: 20px;
+}
+
+.cc-section-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: #6366f1;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin-bottom: 8px;
+    padding-left: 4px;
+    cursor: default;
+}
+
+.cc-section-collapsed .cc-task-list {
+    display: none;
+}
+
+.cc-section-collapsed .cc-section-label {
+    cursor: pointer;
+    color: #8892a0;
+}
+
+.cc-section-collapsed .cc-section-label:hover {
+    color: #eaeaea;
+}
+
+.cc-badge {
+    display: inline-block;
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 12px;
+    background: #2a2a4a;
+    color: #8892a0;
+    padding: 1px 8px;
+    border-radius: 10px;
+    margin-left: 6px;
+}
+
+/* ── Task Cards ── */
+.cc-task-card {
+    background: #16213e;
+    border: 1px solid #2a2a4a;
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    position: relative;
+}
+
+.cc-task-card:hover {
+    border-color: #3a3a5a;
+    background: #1a2548;
+}
+
+.cc-task-card.cc-task-frog {
+    border-left: 3px solid #f5a623;
+}
+
+.cc-task-card.cc-task-personal {
+    border-left: 3px solid #6366f1;
+}
+
+.cc-task-card.cc-task-blocked {
+    opacity: 0.6;
+    border-left: 3px solid #f5a623;
+}
+
+.cc-task-card.cc-task-done {
+    opacity: 0.5;
+    text-decoration: line-through;
+}
+
+.cc-task-title {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+    color: #eaeaea;
+    margin-bottom: 6px;
+}
+
+.cc-task-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: #8892a0;
+}
+
+.cc-task-priority {
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.cc-task-priority.high { color: #f5a623; }
+.cc-task-priority.medium { color: #8892a0; }
+.cc-task-priority.low { color: #5a6070; }
+
+.cc-task-est {
+    color: #6a7080;
+}
+
+.cc-task-source {
+    font-size: 10px;
+    color: #5a6070;
+    font-style: italic;
+}
+
+.cc-task-actions {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    gap: 6px;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.cc-task-card:hover .cc-task-actions {
+    opacity: 1;
+}
+
+.cc-task-action-btn {
+    font-size: 12px;
+    padding: 4px 10px;
+    border: 1px solid #2a2a4a;
+    border-radius: 4px;
+    background: #1a1a2e;
+    color: #8892a0;
+    cursor: pointer;
+    font-family: 'Space Mono', monospace;
+}
+
+.cc-task-action-btn:hover {
+    background: #2a2a4a;
+    color: #eaeaea;
+}
+
+.cc-task-action-btn.cc-start-btn {
+    border-color: #4ecca3;
+    color: #4ecca3;
+}
+
+.cc-task-action-btn.cc-start-btn:hover {
+    background: #1a3a2a;
+}
+
+/* ── Checklist (inline in card) ── */
+.cc-checklist {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid #2a2a4a;
+}
+
+.cc-checklist-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 0;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    color: #c0c8d4;
+    cursor: pointer;
+}
+
+.cc-checklist-item:hover {
+    color: #eaeaea;
+}
+
+.cc-checklist-item.done {
+    text-decoration: line-through;
+    color: #5a6070;
+}
+
+.cc-checklist-check {
+    width: 16px;
+    height: 16px;
+    border: 1.5px solid #3a3a5a;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: all 0.15s;
+}
+
+.cc-checklist-item.done .cc-checklist-check {
+    background: #4ecca3;
+    border-color: #4ecca3;
+    color: #1a1a2e;
+    font-size: 11px;
+}
+
+.cc-checklist-progress {
+    margin-top: 6px;
+    height: 3px;
+    background: #2a2a4a;
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.cc-checklist-progress-fill {
+    height: 100%;
+    background: #4ecca3;
+    border-radius: 2px;
+    transition: width 0.3s ease;
+}
+
+/* ── Add Task Bar ── */
+.cc-add-bar {
+    display: flex;
+    gap: 8px;
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid #2a2a4a;
+}
+
+.cc-add-bar input {
+    flex: 1;
+    background: #16213e;
+    border: 1px solid #2a2a4a;
+    border-radius: 6px;
+    padding: 8px 12px;
+    color: #eaeaea;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 14px;
+}
+
+.cc-add-bar input:focus {
+    outline: none;
+    border-color: #6366f1;
+}
+
+.cc-add-bar input::placeholder {
+    color: #5a6070;
+}
+
+.cc-add-bar select {
+    background: #16213e;
+    border: 1px solid #2a2a4a;
+    border-radius: 6px;
+    padding: 8px;
+    color: #8892a0;
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+}
+
+.cc-add-btn {
+    background: #6366f1;
+    border: none;
+    border-radius: 6px;
+    color: white;
+    font-size: 18px;
+    width: 36px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.cc-add-btn:hover {
+    background: #5558e6;
+}
+
+/* ── Right Sidebar ── */
+.cc-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    overflow-y: auto;
+    padding-left: 8px;
+    border-left: 1px solid #2a2a4a;
+}
+
+.cc-sidebar-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: #6366f1;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin-bottom: 8px;
+}
+
+/* ── Progress ── */
+.cc-progress {
+    padding: 12px;
+    background: #16213e;
+    border-radius: 8px;
+}
+
+.cc-progress-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: #8892a0;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 8px;
+}
+
+.cc-progress-bar {
+    height: 6px;
+    background: #2a2a4a;
+    border-radius: 3px;
+    overflow: hidden;
+    margin-bottom: 6px;
+}
+
+.cc-progress-fill {
+    height: 100%;
+    background: #4ecca3;
+    border-radius: 3px;
+    transition: width 0.3s ease;
+}
+
+.cc-progress-text {
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 13px;
+    color: #8892a0;
+}
+
+/* ── Chat ── */
+.cc-chat {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 200px;
+}
+
+.cc-chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+    background: #12192e;
+    border-radius: 8px 8px 0 0;
+    border: 1px solid #2a2a4a;
+    border-bottom: none;
+    max-height: 300px;
+}
+
+.cc-chat-messages::-webkit-scrollbar { width: 4px; }
+.cc-chat-messages::-webkit-scrollbar-thumb { background: #2a2a4a; border-radius: 2px; }
+
+.cc-chat-system {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    color: #8892a0;
+    padding: 6px 0;
+    font-style: italic;
+}
+
+.cc-chat-user {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    color: #eaeaea;
+    padding: 6px 0;
+    text-align: right;
+}
+
+.cc-chat-assistant {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    color: #c0c8d4;
+    padding: 6px 0;
+    line-height: 1.5;
+}
+
+.cc-chat-input {
+    display: flex;
+    border: 1px solid #2a2a4a;
+    border-top: none;
+    border-radius: 0 0 8px 8px;
+    overflow: hidden;
+}
+
+.cc-chat-input input {
+    flex: 1;
+    background: #16213e;
+    border: none;
+    padding: 10px 12px;
+    color: #eaeaea;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+}
+
+.cc-chat-input input:focus { outline: none; }
+.cc-chat-input input::placeholder { color: #5a6070; }
+
+.cc-chat-input button {
+    background: #6366f1;
+    border: none;
+    color: white;
+    padding: 0 14px;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.cc-chat-input button:hover { background: #5558e6; }
+
+/* ── Active Task (expanded) ── */
+.cc-active-task {
+    background: #16213e;
+    border: 2px solid #4ecca3;
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 16px;
+}
+
+.cc-active-title {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 16px;
+    font-weight: 600;
+    color: #eaeaea;
+    margin-bottom: 12px;
+}
+
+.cc-timer {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 12px;
+}
+
+.cc-timer-display {
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 32px;
+    font-weight: 400;
+    color: #4ecca3;
+    letter-spacing: 2px;
+}
+
+.cc-timer-bar {
+    flex: 1;
+    height: 4px;
+    background: #2a2a4a;
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.cc-timer-fill {
+    height: 100%;
+    background: #4ecca3;
+    border-radius: 2px;
+    transition: width 1s linear;
+}
+
+.cc-active-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.cc-active-actions button {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    padding: 6px 14px;
+    border: 1px solid #2a2a4a;
+    border-radius: 6px;
+    background: transparent;
+    color: #8892a0;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.cc-active-actions button:hover {
+    background: #2a2a4a;
+    color: #eaeaea;
+}
+
+.cc-active-actions .cc-done-btn {
+    border-color: #4ecca3;
+    color: #4ecca3;
+}
+
+.cc-active-actions .cc-done-btn:hover {
+    background: #1a3a2a;
+}
+
+.cc-active-actions .cc-blocked-btn {
+    border-color: #f5a623;
+    color: #f5a623;
+}
+
+.cc-active-actions .cc-blocked-btn:hover {
+    background: #2a2a1e;
+}
+
+/* ── Animations ── */
+
+/* Spring-back on checklist toggle */
+@keyframes cc-spring {
+    0%   { transform: scale(1); }
+    30%  { transform: scale(0.92); }
+    60%  { transform: scale(1.05); }
+    100% { transform: scale(1); }
+}
+
+.cc-check-spring {
+    animation: cc-spring 0.3s ease;
+}
+
+/* Pulse on Done button when all checklist items complete */
+@keyframes cc-pulse {
+    0%   { transform: scale(1); }
+    50%  { transform: scale(1.08); box-shadow: 0 0 12px rgba(78, 204, 163, 0.4); }
+    100% { transform: scale(1); }
+}
+
+.cc-pulse {
+    animation: cc-pulse 0.5s ease;
+}
+
+/* Card slide-up on completion */
+@keyframes cc-slide-up {
+    0%   { opacity: 1; transform: translateY(0); }
+    100% { opacity: 0; transform: translateY(-20px); }
+}
+
+.cc-task-completing {
+    animation: cc-slide-up 0.25s ease forwards;
+}
+
+/* Focused task highlight (J/K nav) */
+.cc-task-card.cc-task-focused {
+    outline: 2px solid #6366f1;
+    outline-offset: 2px;
+}
+
+/* Timer auto-paused state */
+.cc-timer-paused .cc-timer-display {
+    opacity: 0.5;
+}
+
+.cc-timer-paused .cc-timer-display::after {
+    content: ' PAUSED';
+    font-size: 12px;
+    color: #f5a623;
+    letter-spacing: 1px;
+}

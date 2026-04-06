@@ -6,6 +6,7 @@
     <title>Fulfillment Planner</title>
     <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/styles.css?v=74">
+    <link rel="stylesheet" href="/static/command-center/cc.css?v=1">
 </head>
 <body>
 
@@ -21,8 +22,15 @@
         </div>
 
         <div class="sb-section">
+            <div class="sb-section-label">HOME</div>
+            <button class="sb-nav active" id="view-commandcenter" onclick="switchView('commandcenter')">
+                <span class="sb-icon">&#9776;</span> Command Center
+            </button>
+        </div>
+
+        <div class="sb-section">
             <div class="sb-section-label">OVERVIEW</div>
-            <button class="sb-nav active" id="view-runway" onclick="switchView('runway')">
+            <button class="sb-nav" id="view-runway" onclick="switchView('runway')">
                 <span class="sb-icon">&#9201;</span> Runway
             </button>
             <button class="sb-nav" id="view-dashboard" onclick="switchView('dashboard')">
@@ -621,8 +629,109 @@
         </div>
     </div>
 
+    <!-- ══ Command Center View ══ -->
+    <div id="commandcenter-view">
+        <div class="cc-layout">
+            <!-- Left: Task list -->
+            <div class="cc-main">
+                <div class="cc-header">
+                    <div class="cc-greeting" id="cc-greeting"></div>
+                    <div class="cc-energy">
+                        <span class="cc-energy-label">Energy:</span>
+                        <button class="cc-energy-btn" data-level="high" onclick="ccSetEnergy('high')">High</button>
+                        <button class="cc-energy-btn active" data-level="medium" onclick="ccSetEnergy('medium')">Med</button>
+                        <button class="cc-energy-btn" data-level="low" onclick="ccSetEnergy('low')">Low</button>
+                    </div>
+                </div>
+
+                <!-- Morning Brief -->
+                <div class="cc-brief" id="cc-brief" style="display:none">
+                    <div class="cc-brief-header">
+                        <span>MORNING BRIEF</span>
+                        <button class="cc-brief-dismiss" onclick="ccDismissBrief()">&times;</button>
+                    </div>
+                    <div class="cc-brief-body" id="cc-brief-body"></div>
+                </div>
+
+                <!-- Active Task (expanded when running) -->
+                <div class="cc-active-task" id="cc-active-task" style="display:none"></div>
+
+                <!-- Task Sections -->
+                <div class="cc-section" id="cc-quickwins">
+                    <div class="cc-section-label">QUICK WINS</div>
+                    <div class="cc-task-list" id="cc-quickwins-list"></div>
+                </div>
+
+                <div class="cc-section" id="cc-frog">
+                    <div class="cc-section-label">YOUR FROG</div>
+                    <div class="cc-task-list" id="cc-frog-list"></div>
+                </div>
+
+                <div class="cc-section" id="cc-today">
+                    <div class="cc-section-label">TODAY</div>
+                    <div class="cc-task-list" id="cc-today-list"></div>
+                </div>
+
+                <div class="cc-section" id="cc-personal">
+                    <div class="cc-section-label">PERSONAL</div>
+                    <div class="cc-task-list" id="cc-personal-list"></div>
+                </div>
+
+                <div class="cc-section cc-section-collapsed" id="cc-blocked">
+                    <div class="cc-section-label" onclick="ccToggleSection('cc-blocked')">WAITING ON <span class="cc-badge" id="cc-blocked-count">0</span></div>
+                    <div class="cc-task-list" id="cc-blocked-list"></div>
+                </div>
+
+                <div class="cc-section cc-section-collapsed" id="cc-completed">
+                    <div class="cc-section-label" onclick="ccToggleSection('cc-completed')">COMPLETED TODAY <span class="cc-badge" id="cc-completed-count">0</span></div>
+                    <div class="cc-task-list" id="cc-completed-list"></div>
+                </div>
+
+                <!-- Add task -->
+                <div class="cc-add-bar">
+                    <input type="text" id="cc-add-input" placeholder="Add a task..." onkeydown="if(event.key==='Enter')ccAddTask()">
+                    <select id="cc-add-type">
+                        <option value="work">Work</option>
+                        <option value="personal">Personal</option>
+                    </select>
+                    <button class="cc-add-btn" onclick="ccAddTask()">+</button>
+                </div>
+            </div>
+
+            <!-- Right: Status + Chat -->
+            <div class="cc-sidebar">
+                <div class="cc-progress">
+                    <div class="cc-progress-label">TODAY</div>
+                    <div class="cc-progress-bar">
+                        <div class="cc-progress-fill" id="cc-progress-fill" style="width:0%"></div>
+                    </div>
+                    <div class="cc-progress-text" id="cc-progress-text">0 of 0</div>
+                </div>
+
+                <div class="cc-deadlines" id="cc-deadlines">
+                    <div class="cc-sidebar-label">UPCOMING</div>
+                </div>
+
+                <div class="cc-streaks" id="cc-streaks">
+                    <div class="cc-sidebar-label">STREAKS</div>
+                </div>
+
+                <div class="cc-chat">
+                    <div class="cc-sidebar-label">ASK CLAUDE</div>
+                    <div class="cc-chat-messages" id="cc-chat-messages">
+                        <div class="cc-chat-system">What can I help with?</div>
+                    </div>
+                    <div class="cc-chat-input">
+                        <input type="text" id="cc-chat-input" placeholder="Type anything..." onkeydown="if(event.key==='Enter')ccSendChat()">
+                        <button onclick="ccSendChat()">&#9654;</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- ══ Runway View ══ (hidden by default) -->
-    <div id="runway-view">
+    <div id="runway-view" style="display:none">
         <div id="briefing-banner" class="briefing-banner" style="display:none"></div>
         <div id="runway-header">
             <div class="cal-summary" style="align-items:center">
@@ -1327,5 +1436,6 @@
 </div>
 
 <script src="/static/app.js?v=66"></script>
+<script src="/static/command-center/cc.js?v=1"></script>
 </body>
 </html>

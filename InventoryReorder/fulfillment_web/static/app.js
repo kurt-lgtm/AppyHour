@@ -41,6 +41,9 @@ document.addEventListener('DOMContentLoaded', () => {
     log('Fulfillment Planner loaded. Auto-running...', '');
     setMascotExpression('loading', 'Booting up...');
 
+    // Load Command Center on startup (it's the default view)
+    if (typeof ccLoad === 'function') ccLoad();
+
     // Auto-run full pipeline on startup
     setTimeout(() => runAll(), 300);
 
@@ -2158,6 +2161,7 @@ function switchView(view) {
     if (navEl) navEl.classList.add('active');
 
     const views = {
+        commandcenter: document.getElementById('commandcenter-view'),
         dashboard: document.getElementById('content'),
         calendar: document.getElementById('calendar-view'),
         invoices: document.getElementById('invoices-view'),
@@ -2174,7 +2178,8 @@ function switchView(view) {
     const target = views[view];
     if (target) target.style.display = '';
 
-    if (view === 'calendar' && !calendarData) loadCalendar();
+    if (view === 'commandcenter' && typeof ccLoad === 'function') ccLoad();
+    else if (view === 'calendar' && !calendarData) loadCalendar();
     else if (view === 'invoices') loadInvoices();
     else if (view === 'settings') loadSettingsView();
     else if (view === 'cutorder') loadCutOrder();

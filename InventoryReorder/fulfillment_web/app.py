@@ -26,6 +26,7 @@ from flask import Flask, render_template, jsonify, request, send_file
 # Ship date computation (shared with generate_cut_order.py)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from ship_dates import ship_dates_json
+import command_center
 
 # ── Constants ───────────────────────────────────────────────────────────
 
@@ -10314,6 +10315,141 @@ def run_webview():
     webview.create_window("Fulfillment Planner", "http://127.0.0.1:5187", width=1400, height=900, min_size=(1000, 700))
     webview.start()
 
+# ── Command Center Routes ───────────────────────────────────────────────
+
+@app.route("/api/cc/tasks", methods=["GET"])
+def cc_list_tasks():
+    status = request.args.get("status")
+    type_ = request.args.get("type")
+    day = request.args.get("day_of_week")
+    day = int(day) if day is not None else None
+    return jsonify(command_center.list_tasks(status=status, type=type_, day_of_week=day))
+
+@app.route("/api/cc/tasks", methods=["POST"])
+def cc_create_task():
+    data = request.json
+    title = data.pop("title", "")
+    type_ = data.pop("type", "work")
+    checklist = data.pop("checklist", None)
+    return jsonify(command_center.create_task(title, type_, checklist=checklist, **data))
+
+@app.route("/api/cc/tasks/<task_id>", methods=["GET"])
+def cc_get_task(task_id):
+    task = command_center.get_task(task_id)
+    if task is None:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(task)
+
+@app.route("/api/cc/tasks/<task_id>", methods=["PATCH"])
+def cc_update_task(task_id):
+    task = command_center.update_task(task_id, **request.json)
+    if task is None:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(task)
+
+@app.route("/api/cc/tasks/<task_id>", methods=["DELETE"])
+def cc_delete_task(task_id):
+    command_center.delete_task(task_id)
+    return jsonify({"status": "deleted"})
+
+@app.route("/api/cc/tasks/<task_id>/checklist", methods=["GET"])
+def cc_get_checklist(task_id):
+    return jsonify(command_center.get_checklist(task_id))
+
+@app.route("/api/cc/tasks/<task_id>/checklist", methods=["POST"])
+def cc_add_checklist_item(task_id):
+    data = request.json
+    item = command_center.add_checklist_item(task_id, data["title"], data.get("position"))
+    return jsonify(item)
+
+@app.route("/api/cc/tasks/<task_id>/checklist/<item_id>/toggle", methods=["POST"])
+def cc_toggle_checklist(task_id, item_id):
+    item = command_center.toggle_checklist_item(item_id)
+    if item is None:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(item)
+
+@app.route("/api/cc/tasks/<task_id>/checklist/reorder", methods=["POST"])
+def cc_reorder_checklist(task_id):
+    command_center.reorder_checklist(task_id, request.json["item_ids"])
+    return jsonify({"status": "reordered"})
+
+@app.route("/api/cc/recurring", methods=["GET"])
+def cc_list_recurring():
+    return jsonify(command_center.list_recurring())
+
+@app.route("/api/cc/recurring", methods=["POST"])
+def cc_create_recurring():
+    data = request.json
+    title = data.pop("title", "")
+    day = data.pop("day_of_week", 0)
+    return jsonify(command_center.create_recurring(title, day, **data))
+
+@app.route("/api/cc/recurring/<rec_id>", methods=["PATCH"])
+def cc_update_recurring(rec_id):
+    rec = command_center.update_recurring(rec_id, **request.json)
+    if rec is None:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(rec)
+
+@app.route("/api/cc/recurring/<rec_id>", methods=["DELETE"])
+def cc_delete_recurring(rec_id):
+    command_center.delete_recurring(rec_id)
+    return jsonify({"status": "deleted"})
+
+@app.route("/api/cc/recurring/spawn", methods=["POST"])
+def cc_spawn_recurring():
+    energy = (request.json or {}).get("energy_level", "medium")
+    spawned = command_center.spawn_today_recurring(energy)
+    return jsonify({"spawned": len(spawned), "tasks": spawned})
+
+@app.route("/api/cc/blockers", methods=["GET"])
+def cc_list_blockers():
+    return jsonify(command_center.get_active_blockers())
+
+@app.route("/api/cc/blockers", methods=["POST"])
+def cc_create_blocker():
+    data = request.json
+    task_id = data.pop("task_id")
+    type_ = data.pop("type", "unknown")
+    return jsonify(command_center.create_blocker(task_id, type_, **data))
+
+@app.route("/api/cc/blockers/<blocker_id>/resolve", methods=["POST"])
+def cc_resolve_blocker(blocker_id):
+    return jsonify(command_center.resolve_blocker(blocker_id))
+
+@app.route("/api/cc/today", methods=["GET"])
+def cc_today():
+    energy = request.args.get("energy", "medium")
+    return jsonify(command_center.get_today_tasks(energy))
+
+@app.route("/api/cc/slack-trawl", methods=["POST"])
+def cc_slack_trawl():
+    messages = request.json.get("messages", [])
+    created = command_center.process_slack_trawl(messages)
+    return jsonify({"created": len(created), "tasks": created})
+
+@app.route("/api/cc/brief", methods=["GET"])
+def cc_get_brief():
+    brief = command_center.get_morning_brief()
+    if brief is None:
+        return jsonify({"status": "no brief today"})
+    return jsonify(brief)
+
+@app.route("/api/cc/brief", methods=["POST"])
+def cc_post_brief():
+    command_center.store_morning_brief(request.json)
+    return jsonify({"status": "stored"})
+
+@app.route("/api/cc/streaks", methods=["GET"])
+def cc_streaks():
+    return jsonify(command_center.get_streaks())
+
+@app.route("/api/cc/stats", methods=["GET"])
+def cc_stats():
+    return jsonify(command_center.get_daily_stats())
+
+
 def run_browser():
     """Launch in default browser."""
     STATE["saved"] = load_settings()
@@ -10330,6 +10466,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     STATE["saved"] = load_settings()
+    command_center.init_db()
+    command_center.seed_recurring_if_empty()
 
     if args.browser:
         run_browser()
