@@ -721,6 +721,10 @@
                     <div class="cc-chat-messages" id="cc-chat-messages">
                         <div class="cc-chat-system">What can I help with?</div>
                     </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px;font-family:'Space Mono',monospace;font-size:10px;color:#5a6070">
+                        <span id="cc-chat-model-label">haiku</span>
+                        <button onclick="ccSetChatModel(ccChatModel==='claude-haiku-4-5'?'claude-sonnet-4-5-20250514':'claude-haiku-4-5');document.getElementById('cc-chat-model-label').textContent=ccChatModel.includes('haiku')?'haiku':'sonnet'" style="border:1px solid #2a2a4a;border-radius:4px;background:transparent;color:#6366f1;padding:2px 8px;font-size:10px;cursor:pointer;font-family:'Space Mono',monospace">Deep Think</button>
+                    </div>
                     <div class="cc-chat-input">
                         <input type="text" id="cc-chat-input" placeholder="Type anything..." onkeydown="if(event.key==='Enter')ccSendChat()">
                         <button onclick="ccSendChat()">&#9654;</button>

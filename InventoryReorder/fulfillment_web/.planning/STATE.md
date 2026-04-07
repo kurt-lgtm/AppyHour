@@ -12,9 +12,9 @@ Last Updated: 2026-04-06T14:03:00-04:00
 | 2 | UI Shell + Tab Integration | DONE |
 | 3 | Timer + Task Execution Flow | DONE |
 | 4 | Day-of-Week Rules + Morning Brief | DONE |
-| 5 | Blocker Handling + Monitoring | NOT STARTED |
-| 6 | Priority Engine + Energy Scheduling | NOT STARTED |
-| 7 | Ask Claude Chat Panel | NOT STARTED |
+| 5 | Blocker Handling + Monitoring | DONE |
+| 6 | Priority Engine + Energy Scheduling | DONE |
+| 7 | Ask Claude Chat Panel | DONE |
 | 8 | End-of-Day + Weekly Review | NOT STARTED |
 | 9 | Polish + Compassionate Design Pass | NOT STARTED |
 

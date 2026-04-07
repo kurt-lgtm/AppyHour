@@ -7,15 +7,47 @@ let ccTimerInterval = null;
 let ccTimerSeconds = 0;
 let ccBriefDismissed = false;
 let ccSelectedTaskId = null;
+let ccLightenedDay = false;
+let ccOverwhelmDismissed = false;
+const CC_WIP_LIMIT = 3;  // Max active tasks at once
 
 /* ── Load ── */
 
 function ccLoad() {
+    ccAutoEnergy();
     ccSpawnRecurring();
     ccFetchToday();
     ccFetchBrief();
     ccFetchStreaks();
     ccUpdateGreeting();
+
+    // Auto-refresh every 5 minutes (re-check energy, re-fetch tasks)
+    if (!ccLoad._interval) {
+        ccLoad._interval = setInterval(() => {
+            if (typeof currentView !== 'undefined' && currentView === 'commandcenter') {
+                ccAutoEnergy();
+                ccFetchToday();
+            }
+        }, 5 * 60 * 1000);
+    }
+}
+
+function ccAutoEnergy() {
+    // After 3pm, auto-degrade energy if user hasn't manually set it today
+    const hour = new Date().getHours();
+    if (hour >= 15 && ccEnergyLevel === 'high') {
+        ccEnergyLevel = 'medium';
+        ccUpdateEnergyButtons();
+    } else if (hour >= 17 && ccEnergyLevel === 'medium') {
+        ccEnergyLevel = 'low';
+        ccUpdateEnergyButtons();
+    }
+}
+
+function ccUpdateEnergyButtons() {
+    document.querySelectorAll('.cc-energy-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.level === ccEnergyLevel);
+    });
 }
 
 async function ccFetchBrief() {
@@ -121,16 +153,29 @@ async function ccFetchToday() {
 function ccRender() {
     if (!ccData) return;
 
+    // Count total active work tasks
+    const totalWork = (ccData.quick_wins?.length || 0) + (ccData.today?.length || 0) + (ccData.frog ? 1 : 0);
+
+    // Overwhelm detection (12+ tasks) — show once per session
+    if (totalWork >= 12 && !ccOverwhelmDismissed && !ccLightenedDay) {
+        ccShowOverwhelmBanner(totalWork);
+    }
+
+    // Lightened day — if active, only show top 2 tasks + frog
+    if (ccLightenedDay) {
+        if (ccData.today) ccData.today = ccData.today.slice(0, 2);
+        ccData.quick_wins = [];
+    }
+
     // Brief
     if (!ccBriefDismissed) {
         const brief = document.getElementById('cc-brief');
         const briefBody = document.getElementById('cc-brief-body');
         if (brief && briefBody) {
-            const totalTasks = (ccData.quick_wins?.length || 0) + (ccData.today?.length || 0) + (ccData.frog ? 1 : 0);
             const blocked = ccData.blocked?.length || 0;
             const personal = ccData.personal?.length || 0;
             briefBody.innerHTML = `
-                <div class="cc-brief-item">${totalTasks} work tasks today${blocked > 0 ? ` &middot; ${blocked} waiting` : ''}</div>
+                <div class="cc-brief-item">${totalWork} work tasks today${blocked > 0 ? ` &middot; ${blocked} waiting` : ''}${ccLightenedDay ? ' &middot; Lightened day active' : ''}</div>
                 ${personal > 0 ? `<div class="cc-brief-item">${personal} personal items</div>` : ''}
                 <div class="cc-brief-item">Energy: ${ccEnergyLevel}</div>
             `;
@@ -223,6 +268,12 @@ function ccRenderCard(task, isFrog, isPersonal) {
                 ${sourceStr ? `<span class="cc-task-source">${sourceStr}</span>` : ''}
             </div>
             ${checklistHtml}
+            ${task.status === 'blocked' && task.blocker ? `
+                <div class="cc-blocker-info">
+                    <span>${task.blocker.type === 'person' ? 'Waiting on ' + ccEsc(task.blocker.who || '?') : ccEsc(task.blocker.note || 'Blocked')}${task.blocker.check_back_at ? ' &middot; check back ' + ccFormatDate(task.blocker.check_back_at) : ''}</span>
+                    <button class="cc-blocker-resolve-btn" onclick="event.stopPropagation(); ccResolveBlocker('${task.blocker.id}')">Resolved</button>
+                </div>
+            ` : ''}
             <div class="cc-task-actions">
                 ${task.status === 'active' ? `<button class="cc-task-action-btn cc-start-btn" onclick="event.stopPropagation(); ccStartTask('${task.id}')">Start</button>` : ''}
                 ${task.status === 'active' ? `<button class="cc-task-action-btn" onclick="event.stopPropagation(); ccDoneTask('${task.id}')">Done</button>` : ''}
@@ -245,17 +296,85 @@ function ccUpdateProgress() {
     const fill = document.getElementById('cc-progress-fill');
     const text = document.getElementById('cc-progress-text');
     if (fill) fill.style.width = pct + '%';
-    if (text) text.textContent = `${done} of ${all} tasks`;
+    if (text) {
+        let label = `${done} of ${all} tasks`;
+        if (ccLightenedDay) label += ' (lightened)';
+        text.textContent = label;
+    }
+
+    // Update energy mode in greeting
+    const greetEl = document.getElementById('cc-greeting');
+    if (greetEl) {
+        const hour = new Date().getHours();
+        const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+        const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        const now = new Date();
+        const greeting = hour < 12 ? 'Good morning.' : hour < 17 ? 'Good afternoon.' : 'Good evening.';
+        const modeLabel = hour >= 15 ? '  Afternoon mode' : '';
+        greetEl.textContent = `${greeting}  ${dayNames[now.getDay()]}, ${months[now.getMonth()]} ${now.getDate()}${modeLabel}`;
+    }
 }
 
 /* ── Actions ── */
 
 function ccSetEnergy(level) {
     ccEnergyLevel = level;
-    document.querySelectorAll('.cc-energy-btn').forEach(b => {
-        b.classList.toggle('active', b.dataset.level === level);
-    });
+    ccUpdateEnergyButtons();
     ccFetchToday();
+}
+
+/* ── Overwhelm + Lightened Day + WIP ── */
+
+function ccShowOverwhelmBanner(count) {
+    const main = document.querySelector('.cc-main');
+    if (!main) return;
+
+    let banner = document.getElementById('cc-overwhelm-banner');
+    if (banner) return; // Already showing
+
+    banner = document.createElement('div');
+    banner.id = 'cc-overwhelm-banner';
+    banner.style.cssText = 'background:#1a2548;border:1px solid #f5a623;border-radius:8px;padding:14px;margin-bottom:16px;font-family:"DM Sans",sans-serif;font-size:14px;color:#c0c8d4;line-height:1.6';
+    banner.innerHTML = `
+        <div style="color:#f5a623;font-family:'Space Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Heads up</div>
+        <div>${count} tasks on the list today. That's a lot. Two options:</div>
+        <div style="display:flex;gap:8px;margin-top:10px">
+            <button onclick="ccLightenDay()" style="font-family:'Space Mono',monospace;font-size:11px;padding:6px 14px;border:1px solid #f5a623;border-radius:6px;background:#2a2a1e;color:#f5a623;cursor:pointer">Lighten my day (top 3 only)</button>
+            <button onclick="ccDismissOverwhelm()" style="font-family:'Space Mono',monospace;font-size:11px;padding:6px 14px;border:1px solid #2a2a4a;border-radius:6px;background:transparent;color:#8892a0;cursor:pointer">I'm fine, keep going</button>
+        </div>
+    `;
+
+    // Insert after brief or at top
+    const brief = document.getElementById('cc-brief');
+    if (brief && brief.style.display !== 'none') {
+        brief.after(banner);
+    } else {
+        const header = document.querySelector('.cc-header');
+        if (header) header.after(banner);
+    }
+}
+
+function ccLightenDay() {
+    ccLightenedDay = true;
+    ccDismissOverwhelm();
+    ccRender();
+}
+
+function ccDismissOverwhelm() {
+    ccOverwhelmDismissed = true;
+    const banner = document.getElementById('cc-overwhelm-banner');
+    if (banner) banner.remove();
+}
+
+function ccCheckWipLimit() {
+    // WIP limit: prevent starting more than CC_WIP_LIMIT tasks
+    // Count tasks that are currently "in progress" (have been started but not done/blocked)
+    if (!ccData) return true;
+
+    // For now, we track WIP by counting active tasks the user has started this session
+    // Since we only have one timer, WIP = 1 if timer is running, 0 if not
+    // Future: track multiple in-progress tasks
+    return !ccActiveTaskId; // Can start if nothing is running
 }
 
 function ccSelectTask(taskId) {
@@ -391,23 +510,160 @@ function ccStopTimer() {
     if (activeEl) activeEl.style.display = 'none';
 }
 
-async function ccBlockTask(taskId) {
-    const note = prompt('What\'s blocking you?');
-    if (note === null) return;
-    const who = prompt('Waiting on who? (leave blank if N/A)');
+function ccBlockTask(taskId) {
+    // Show inline blocker form instead of browser prompts
+    ccShowBlockerForm(taskId);
+}
+
+let ccBlockerFormTaskId = null;
+let ccBlockerFormType = 'person';
+
+function ccShowBlockerForm(taskId) {
+    ccBlockerFormTaskId = taskId;
+    ccBlockerFormType = 'person';
+
+    // Insert form into the active task area or below the task card
+    const container = document.getElementById('cc-active-task');
+    if (!container || container.style.display === 'none') {
+        // Not in active view — show a floating form
+        const main = document.querySelector('.cc-main');
+        if (!main) return;
+        let formEl = document.getElementById('cc-blocker-form-float');
+        if (!formEl) {
+            formEl = document.createElement('div');
+            formEl.id = 'cc-blocker-form-float';
+            main.prepend(formEl);
+        }
+        formEl.innerHTML = ccBlockerFormHtml(taskId);
+        formEl.scrollIntoView({behavior: 'smooth'});
+    } else {
+        // In active view — append to it
+        let formEl = document.getElementById('cc-blocker-form-inline');
+        if (!formEl) {
+            formEl = document.createElement('div');
+            formEl.id = 'cc-blocker-form-inline';
+            container.appendChild(formEl);
+        }
+        formEl.innerHTML = ccBlockerFormHtml(taskId);
+    }
+}
+
+function ccBlockerFormHtml(taskId) {
+    return `
+        <div class="cc-blocker-form">
+            <div class="cc-blocker-title">What's blocking you?</div>
+            <div class="cc-blocker-types">
+                <button class="cc-blocker-type-btn active" data-type="person" onclick="ccSetBlockerType(this, 'person')">Waiting on someone</button>
+                <button class="cc-blocker-type-btn" data-type="data" onclick="ccSetBlockerType(this, 'data')">Need data/file</button>
+                <button class="cc-blocker-type-btn" data-type="unknown" onclick="ccSetBlockerType(this, 'unknown')">I don't know how</button>
+                <button class="cc-blocker-type-btn" data-type="toobig" onclick="ccSetBlockerType(this, 'toobig')">Too big / overwhelmed</button>
+            </div>
+            <div class="cc-blocker-fields">
+                <div class="cc-blocker-row" id="cc-blocker-who-row">
+                    <input type="text" id="cc-blocker-who" placeholder="Who? (Tommy, Anik, RMFG...)" />
+                </div>
+                <input type="text" id="cc-blocker-note" placeholder="Brief note (optional)" />
+                <div class="cc-blocker-row">
+                    <select id="cc-blocker-checkback">
+                        <option value="">Check back...</option>
+                        <option value="2h">In 2 hours</option>
+                        <option value="tomorrow">Tomorrow</option>
+                        <option value="2d">In 2 days</option>
+                        <option value="1w">In 1 week</option>
+                        <option value="monitor">Auto-monitor (Slack/Gmail)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="cc-blocker-actions">
+                <button class="cc-blocker-submit" onclick="ccSubmitBlocker('${taskId}')">Set Blocker</button>
+                <button class="cc-blocker-cancel" onclick="ccCancelBlockerForm()">Cancel</button>
+            </div>
+        </div>
+    `;
+}
+
+function ccSetBlockerType(btn, type) {
+    ccBlockerFormType = type;
+    document.querySelectorAll('.cc-blocker-type-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+
+    const whoRow = document.getElementById('cc-blocker-who-row');
+    if (whoRow) {
+        whoRow.style.display = (type === 'person') ? '' : 'none';
+    }
+
+    // For "too big" — change note placeholder
+    const noteEl = document.getElementById('cc-blocker-note');
+    if (noteEl) {
+        if (type === 'toobig') {
+            noteEl.placeholder = "What's the ONE next tiny action you can do?";
+        } else if (type === 'unknown') {
+            noteEl.placeholder = "What do you need to figure out?";
+        } else {
+            noteEl.placeholder = "Brief note (optional)";
+        }
+    }
+}
+
+async function ccSubmitBlocker(taskId) {
+    const who = document.getElementById('cc-blocker-who')?.value || null;
+    const note = document.getElementById('cc-blocker-note')?.value || '';
+    const checkback = document.getElementById('cc-blocker-checkback')?.value || '';
+
+    let checkBackAt = null;
+    const now = new Date();
+    if (checkback === '2h') {
+        checkBackAt = new Date(now.getTime() + 2 * 60 * 60 * 1000).toISOString();
+    } else if (checkback === 'tomorrow') {
+        const tomorrow = new Date(now);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        tomorrow.setHours(9, 0, 0, 0);
+        checkBackAt = tomorrow.toISOString();
+    } else if (checkback === '2d') {
+        checkBackAt = new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000).toISOString();
+    } else if (checkback === '1w') {
+        checkBackAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    }
+
+    let type = ccBlockerFormType;
+    let monitorSource = 'none';
+
+    if (type === 'toobig') {
+        type = 'unknown'; // Store as unknown in DB, the note captures the real intent
+    }
+    if (type === 'person' && checkback === 'monitor') {
+        monitorSource = 'slack';
+    }
 
     await fetch('/api/cc/blockers', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
             task_id: taskId,
-            type: who ? 'person' : 'unknown',
-            who: who || null,
-            note: note
+            type: type,
+            who: who,
+            note: note,
+            monitor_source: monitorSource,
+            monitor_query: who || '',
+            check_back_at: checkBackAt
         })
     });
 
+    ccCancelBlockerForm();
     ccStopTimer();
+    ccFetchToday();
+}
+
+function ccCancelBlockerForm() {
+    const float = document.getElementById('cc-blocker-form-float');
+    if (float) float.innerHTML = '';
+    const inline = document.getElementById('cc-blocker-form-inline');
+    if (inline) inline.innerHTML = '';
+    ccBlockerFormTaskId = null;
+}
+
+async function ccResolveBlocker(blockerId) {
+    await fetch(`/api/cc/blockers/${blockerId}/resolve`, {method: 'POST'});
     ccFetchToday();
 }
 
@@ -516,18 +772,103 @@ async function ccToggleActiveCheck(itemId) {
     }
 }
 
-/* ── Chat (placeholder — Phase 7) ── */
+/* ── Chat (connected to Claude API) ── */
 
-function ccSendChat() {
+let ccChatModel = 'claude-haiku-4-5';
+let ccChatLoading = false;
+
+async function ccSendChat() {
     const input = document.getElementById('cc-chat-input');
     const msg = input.value.trim();
-    if (!msg) return;
+    if (!msg || ccChatLoading) return;
 
     const messages = document.getElementById('cc-chat-messages');
     messages.innerHTML += `<div class="cc-chat-user">${ccEsc(msg)}</div>`;
-    messages.innerHTML += `<div class="cc-chat-assistant">Chat will be connected in Phase 7. For now, use Claude Code directly.</div>`;
-    messages.scrollTop = messages.scrollHeight;
     input.value = '';
+    ccChatLoading = true;
+
+    // Show typing indicator
+    const typingId = 'cc-typing-' + Date.now();
+    messages.innerHTML += `<div class="cc-chat-assistant" id="${typingId}" style="color:#5a6070">Thinking...</div>`;
+    messages.scrollTop = messages.scrollHeight;
+
+    try {
+        const resp = await fetch('/api/cc/chat', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                message: msg,
+                model: ccChatModel,
+                energy_level: ccEnergyLevel
+            })
+        });
+        const data = await resp.json();
+
+        // Remove typing indicator
+        const typingEl = document.getElementById(typingId);
+        if (typingEl) typingEl.remove();
+
+        // Show response
+        const responseHtml = ccFormatChatResponse(data.response || 'No response');
+        const modelLabel = (data.model || ccChatModel).split('-').pop();
+        const budgetInfo = data.budget ? ` · $${(data.budget.spent_cents/100).toFixed(2)}/$${(data.budget.limit_cents/100).toFixed(2)}` : '';
+
+        messages.innerHTML += `
+            <div class="cc-chat-assistant">
+                ${responseHtml}
+                <div style="font-size:10px;color:#5a6070;margin-top:6px;font-family:'Space Mono',monospace">
+                    ${modelLabel}${data.tokens ? ` · ${data.tokens.input + data.tokens.output} tokens` : ''}${budgetInfo}
+                </div>
+            </div>
+        `;
+
+        // Action buttons for certain responses
+        if (data.response && (data.response.includes('Subject:') || data.response.includes('Hi ') || data.response.includes('Dear '))) {
+            messages.innerHTML += `
+                <div style="display:flex;gap:6px;padding:4px 0">
+                    <button onclick="ccChatAction('copy')" style="font-size:10px;padding:3px 8px;border:1px solid #2a2a4a;border-radius:4px;background:transparent;color:#8892a0;cursor:pointer;font-family:'Space Mono',monospace">Copy</button>
+                    <button onclick="ccChatAction('task')" style="font-size:10px;padding:3px 8px;border:1px solid #2a2a4a;border-radius:4px;background:transparent;color:#8892a0;cursor:pointer;font-family:'Space Mono',monospace">Add to tasks</button>
+                </div>
+            `;
+        }
+    } catch (e) {
+        const typingEl = document.getElementById(typingId);
+        if (typingEl) typingEl.textContent = 'Connection error. Check if API key is configured.';
+    }
+
+    ccChatLoading = false;
+    messages.scrollTop = messages.scrollHeight;
+}
+
+function ccFormatChatResponse(text) {
+    // Basic markdown-like formatting
+    return ccEsc(text)
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\n/g, '<br>')
+        .replace(/`(.*?)`/g, '<code style="background:#2a2a4a;padding:1px 4px;border-radius:3px;font-family:\'Rajdhani\',monospace;font-size:12px">$1</code>');
+}
+
+function ccChatAction(action) {
+    if (action === 'copy') {
+        const msgs = document.querySelectorAll('.cc-chat-assistant');
+        const last = msgs[msgs.length - 1];
+        if (last) navigator.clipboard.writeText(last.textContent);
+    } else if (action === 'task') {
+        const msgs = document.querySelectorAll('.cc-chat-assistant');
+        const last = msgs[msgs.length - 1];
+        if (last) {
+            const title = 'Follow up: ' + last.textContent.substring(0, 60);
+            fetch('/api/cc/tasks', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({title, type: 'work', source: 'chat'})
+            }).then(() => ccFetchToday());
+        }
+    }
+}
+
+function ccSetChatModel(model) {
+    ccChatModel = model;
 }
 
 /* ── Helpers ── */
@@ -550,6 +891,22 @@ function ccEsc(str) {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+}
+
+function ccFormatDate(isoStr) {
+    if (!isoStr) return '';
+    try {
+        const d = new Date(isoStr);
+        const now = new Date();
+        const diffH = Math.round((d - now) / (1000 * 60 * 60));
+        if (diffH <= 0) return 'now';
+        if (diffH < 24) return `in ${diffH}h`;
+        const diffD = Math.round(diffH / 24);
+        if (diffD === 1) return 'tomorrow';
+        return `in ${diffD}d`;
+    } catch (e) {
+        return '';
+    }
 }
 
 /* ── Keyboard Nav ── */

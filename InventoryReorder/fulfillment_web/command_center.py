@@ -1022,3 +1022,129 @@ def get_daily_stats() -> dict:
         "minutes_tracked": total_minutes,
         "date": today_str,
     }
+
+
+# ---------------------------------------------------------------------------
+# Ask Claude Chat
+# ---------------------------------------------------------------------------
+
+# Chat history per session (resets on app restart)
+_chat_history: list[dict] = []
+
+# Monthly budget tracking
+_chat_budget_path = DB_DIR / "chat_budget.json"
+CHAT_MONTHLY_BUDGET_CENTS = 200  # $2.00/month default
+
+
+def _load_chat_budget() -> dict:
+    """Load chat budget tracking."""
+    if _chat_budget_path.exists():
+        with open(_chat_budget_path) as f:
+            return json.load(f)
+    return {"month": "", "spent_cents": 0}
+
+
+def _save_chat_budget(budget: dict) -> None:
+    """Save chat budget tracking."""
+    _chat_budget_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(_chat_budget_path, "w") as f:
+        json.dump(budget, f)
+
+
+def check_chat_budget() -> tuple[bool, int, int]:
+    """Check if chat budget allows another message.
+
+    Returns (allowed, spent_cents, limit_cents).
+    """
+    budget = _load_chat_budget()
+    current_month = date.today().strftime("%Y-%m")
+
+    # Reset monthly counter
+    if budget.get("month") != current_month:
+        budget = {"month": current_month, "spent_cents": 0}
+        _save_chat_budget(budget)
+
+    return (
+        budget["spent_cents"] < CHAT_MONTHLY_BUDGET_CENTS,
+        budget["spent_cents"],
+        CHAT_MONTHLY_BUDGET_CENTS,
+    )
+
+
+def record_chat_cost(input_tokens: int, output_tokens: int, model: str) -> None:
+    """Record cost of a chat message."""
+    # Haiku pricing: $0.80/M input, $4/M output (approximate)
+    # Sonnet pricing: $3/M input, $15/M output
+    if "haiku" in model:
+        cost_cents = (input_tokens * 0.00008) + (output_tokens * 0.0004)
+    else:
+        cost_cents = (input_tokens * 0.0003) + (output_tokens * 0.0015)
+
+    budget = _load_chat_budget()
+    current_month = date.today().strftime("%Y-%m")
+    if budget.get("month") != current_month:
+        budget = {"month": current_month, "spent_cents": 0}
+
+    budget["spent_cents"] += round(cost_cents, 2)
+    _save_chat_budget(budget)
+
+
+def build_system_prompt(energy_level: str = "medium") -> str:
+    """Build the system prompt for the Ask Claude chat panel."""
+    now = datetime.now(timezone(timedelta(hours=-4)))
+    today_tasks = get_today_tasks(energy_level)
+    active_blockers = get_active_blockers()
+
+    frog_title = today_tasks["frog"]["title"] if today_tasks["frog"] else "none"
+    task_count = len(today_tasks.get("today", [])) + len(today_tasks.get("quick_wins", []))
+    blocked_count = len(today_tasks.get("blocked", []))
+    personal_count = len(today_tasks.get("personal", []))
+
+    # Build inventory alerts if available
+    brief = get_morning_brief()
+    inv_alerts = ""
+    if brief and brief.get("inventory_alerts"):
+        inv_alerts = "\n".join(
+            f"  - {a['sku']}: {a.get('qty', '?')} units, {a.get('runway_weeks', '?')} weeks runway"
+            for a in brief["inventory_alerts"]
+        )
+
+    return f"""You are the Ask Claude assistant inside the Command Center app for AppyHour (Elevate Foods), a subscription cheese/charcuterie box company.
+
+Current context:
+- Date: {now.strftime('%A, %B %d, %Y')} at {now.strftime('%I:%M %p')} EDT
+- Energy level: {energy_level}
+- Today's frog: {frog_title}
+- Work tasks remaining: {task_count}
+- Blocked tasks: {blocked_count}
+- Personal tasks: {personal_count}
+{f'- Inventory alerts:{chr(10)}{inv_alerts}' if inv_alerts else '- No inventory alerts'}
+
+Your role:
+- Answer questions about the business, operations, inventory, shipping
+- Help draft emails (POs to RMFG, customer responses)
+- Research tasks the user doesn't know how to do
+- Suggest next actions
+- Be concise and direct — this is a sidebar chat, not a full conversation
+
+You are a collaborator, not a coach. State facts and offer help. Never say "you've got this" or evaluate performance. Never use red/urgent/failure language — use "needs attention" or "worth checking" instead.
+
+Keep responses under 150 words unless the user asks for detail."""
+
+
+def get_chat_history() -> list[dict]:
+    """Get current session chat history."""
+    return _chat_history
+
+
+def add_chat_message(role: str, content: str) -> None:
+    """Add a message to chat history."""
+    _chat_history.append({"role": role, "content": content})
+    # Keep last 20 messages to prevent context growth
+    if len(_chat_history) > 20:
+        _chat_history[:] = _chat_history[-20:]
+
+
+def clear_chat_history() -> None:
+    """Clear chat history."""
+    _chat_history.clear()

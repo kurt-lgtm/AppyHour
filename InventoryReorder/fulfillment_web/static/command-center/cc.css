@@ -671,3 +671,157 @@
     color: #f5a623;
     letter-spacing: 1px;
 }
+
+/* ── Blocker Form (inline) ── */
+.cc-blocker-form {
+    background: #1a2548;
+    border: 1px solid #f5a623;
+    border-radius: 8px;
+    padding: 14px;
+    margin-top: 12px;
+    animation: cc-slide-down 0.2s ease;
+}
+
+@keyframes cc-slide-down {
+    0%   { opacity: 0; transform: translateY(-10px); }
+    100% { opacity: 1; transform: translateY(0); }
+}
+
+.cc-blocker-title {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: #f5a623;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 10px;
+}
+
+.cc-blocker-types {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+}
+
+.cc-blocker-type-btn {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 12px;
+    padding: 6px 12px;
+    border: 1px solid #2a2a4a;
+    border-radius: 16px;
+    background: transparent;
+    color: #8892a0;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.cc-blocker-type-btn:hover {
+    border-color: #f5a623;
+    color: #eaeaea;
+}
+
+.cc-blocker-type-btn.active {
+    background: #2a2a1e;
+    border-color: #f5a623;
+    color: #f5a623;
+}
+
+.cc-blocker-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.cc-blocker-fields input,
+.cc-blocker-fields select {
+    background: #16213e;
+    border: 1px solid #2a2a4a;
+    border-radius: 6px;
+    padding: 8px 10px;
+    color: #eaeaea;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+}
+
+.cc-blocker-fields input:focus,
+.cc-blocker-fields select:focus {
+    outline: none;
+    border-color: #f5a623;
+}
+
+.cc-blocker-fields input::placeholder {
+    color: #5a6070;
+}
+
+.cc-blocker-row {
+    display: flex;
+    gap: 8px;
+}
+
+.cc-blocker-row input {
+    flex: 1;
+}
+
+.cc-blocker-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.cc-blocker-submit {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    padding: 6px 16px;
+    border: 1px solid #f5a623;
+    border-radius: 6px;
+    background: #2a2a1e;
+    color: #f5a623;
+    cursor: pointer;
+}
+
+.cc-blocker-submit:hover {
+    background: #3a3a2e;
+}
+
+.cc-blocker-cancel {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    padding: 6px 16px;
+    border: 1px solid #2a2a4a;
+    border-radius: 6px;
+    background: transparent;
+    color: #8892a0;
+    cursor: pointer;
+}
+
+.cc-blocker-cancel:hover {
+    color: #eaeaea;
+}
+
+/* ── Waiting On cards ── */
+.cc-task-card.cc-task-blocked .cc-blocker-info {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid #2a2a3a;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 12px;
+    color: #f5a623;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.cc-blocker-resolve-btn {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    padding: 3px 10px;
+    border: 1px solid #4ecca3;
+    border-radius: 4px;
+    background: transparent;
+    color: #4ecca3;
+    cursor: pointer;
+}
+
+.cc-blocker-resolve-btn:hover {
+    background: #1a3a2a;
+}

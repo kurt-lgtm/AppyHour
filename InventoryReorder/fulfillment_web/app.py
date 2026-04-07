@@ -10449,6 +10449,87 @@ def cc_streaks():
 def cc_stats():
     return jsonify(command_center.get_daily_stats())
 
+@app.route("/api/cc/chat", methods=["POST"])
+def cc_chat():
+    """Non-streaming chat endpoint. Returns full response."""
+    data = request.json
+    message = data.get("message", "").strip()
+    model = data.get("model", "claude-haiku-4-5")
+    energy = data.get("energy_level", "medium")
+
+    if not message:
+        return jsonify({"error": "empty message"}), 400
+
+    # Budget check
+    allowed, spent, limit = command_center.check_chat_budget()
+    if not allowed:
+        return jsonify({
+            "response": f"Monthly chat budget reached (${spent/100:.2f} of ${limit/100:.2f}). Resets next month.",
+            "model": model,
+            "budget": {"spent_cents": spent, "limit_cents": limit, "allowed": False}
+        })
+
+    # Get API key from settings or env
+    import os
+    api_key = STATE.get("saved", {}).get("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return jsonify({
+            "response": "No API key configured. Add 'anthropic_api_key' in Settings or set ANTHROPIC_API_KEY environment variable.",
+            "model": model,
+            "budget": {"spent_cents": spent, "limit_cents": limit, "allowed": True}
+        })
+
+    # Build messages
+    command_center.add_chat_message("user", message)
+    system_prompt = command_center.build_system_prompt(energy)
+
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+
+        resp = client.messages.create(
+            model=model,
+            max_tokens=512,
+            system=system_prompt,
+            messages=command_center.get_chat_history(),
+        )
+
+        assistant_text = resp.content[0].text
+        command_center.add_chat_message("assistant", assistant_text)
+
+        # Record cost
+        command_center.record_chat_cost(
+            resp.usage.input_tokens,
+            resp.usage.output_tokens,
+            model,
+        )
+
+        _, spent_after, limit = command_center.check_chat_budget()
+
+        return jsonify({
+            "response": assistant_text,
+            "model": model,
+            "tokens": {"input": resp.usage.input_tokens, "output": resp.usage.output_tokens},
+            "budget": {"spent_cents": spent_after, "limit_cents": limit, "allowed": True}
+        })
+
+    except Exception as e:
+        return jsonify({"response": f"Chat error: {str(e)}", "model": model}), 500
+
+@app.route("/api/cc/chat/history", methods=["GET"])
+def cc_chat_history():
+    return jsonify(command_center.get_chat_history())
+
+@app.route("/api/cc/chat/clear", methods=["POST"])
+def cc_chat_clear():
+    command_center.clear_chat_history()
+    return jsonify({"status": "cleared"})
+
+@app.route("/api/cc/chat/budget", methods=["GET"])
+def cc_chat_budget():
+    allowed, spent, limit = command_center.check_chat_budget()
+    return jsonify({"spent_cents": spent, "limit_cents": limit, "allowed": allowed})
+
 
 def run_browser():
     """Launch in default browser."""
