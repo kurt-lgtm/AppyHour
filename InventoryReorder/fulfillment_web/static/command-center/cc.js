@@ -259,7 +259,7 @@ function ccRenderCard(task, isFrog, isPersonal) {
         ? `<span>${doneCount}/${checklist.length}</span>` : '';
 
     return `
-        <div class="${classes.join(' ')}" onclick="ccSelectTask('${task.id}')">
+        <div class="${classes.join(' ')}" role="article" aria-label="${ccEsc(task.title)}" onclick="ccSelectTask('${task.id}')">
             <div class="cc-task-title">${ccEsc(task.title)}</div>
             <div class="cc-task-meta">
                 <span class="cc-task-priority ${task.priority || 'medium'}">${(task.priority || 'med').toUpperCase()}</span>
@@ -416,6 +416,7 @@ async function ccDoneTask(taskId) {
         body: JSON.stringify({status: 'done'})
     });
     if (ccActiveTaskId === taskId) ccStopTimer();
+    ccCheckBreakReminder();
     ccFetchToday();
 }
 
@@ -871,6 +872,183 @@ function ccSetChatModel(model) {
     ccChatModel = model;
 }
 
+/* ── End of Day + Weekly Review ── */
+
+async function ccShowEOD() {
+    try {
+        const resp = await fetch('/api/cc/eod');
+        const data = await resp.json();
+        ccRenderEOD(data);
+    } catch (e) {
+        console.error('EOD fetch failed:', e);
+    }
+}
+
+function ccRenderEOD(data) {
+    const main = document.querySelector('.cc-main');
+    if (!main) return;
+
+    const completedHtml = data.completed.map(t =>
+        `<div style="padding:3px 0;color:#c0c8d4">&#10003; ${ccEsc(t.title)}${t.actual_minutes ? ` <span style="color:#5a6070">(${t.actual_minutes}min)</span>` : ''}</div>`
+    ).join('') || '<div style="color:#5a6070">No tasks completed yet</div>';
+
+    const carryHtml = data.carrying_forward.map(t =>
+        `<div style="padding:3px 0;color:#c0c8d4">&rarr; ${ccEsc(t.title)}</div>`
+    ).join('') || '<div style="color:#5a6070">Nothing carrying forward</div>';
+
+    const blockerHtml = data.open_blockers.map(b =>
+        `<div style="padding:3px 0;color:#f5a623">&bull; ${ccEsc(b.title)} &mdash; ${ccEsc(b.who || b.note || b.type)}</div>`
+    ).join('') || '<div style="color:#5a6070">No open blockers</div>';
+
+    const tomorrowHtml = data.tomorrow_preview.map(t =>
+        `<div style="padding:3px 0;color:#c0c8d4">&rarr; ${ccEsc(t.title)}</div>`
+    ).join('') || '<div style="color:#5a6070">No recurring tasks tomorrow</div>';
+
+    const hours = Math.floor(data.minutes_tracked / 60);
+    const mins = data.minutes_tracked % 60;
+    const timeStr = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+
+    // Insert EOD card at top of main
+    let eodEl = document.getElementById('cc-eod-card');
+    if (!eodEl) {
+        eodEl = document.createElement('div');
+        eodEl.id = 'cc-eod-card';
+        main.prepend(eodEl);
+    }
+
+    eodEl.innerHTML = `
+        <div style="background:#16213e;border:1px solid #4ecca3;border-radius:10px;padding:16px;margin-bottom:16px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                <div style="font-family:'Space Mono',monospace;font-size:11px;color:#4ecca3;text-transform:uppercase;letter-spacing:1.5px">Wrap Up &middot; ${data.day_of_week}</div>
+                <button onclick="document.getElementById('cc-eod-card').remove()" style="background:none;border:none;color:#5a6070;font-size:16px;cursor:pointer">&times;</button>
+            </div>
+
+            <div style="margin-bottom:12px">
+                <div style="font-family:'Space Mono',monospace;font-size:10px;color:#8892a0;text-transform:uppercase;margin-bottom:6px">Done today (${data.completed_count})</div>
+                ${completedHtml}
+            </div>
+
+            <div style="margin-bottom:12px">
+                <div style="font-family:'Space Mono',monospace;font-size:10px;color:#8892a0;text-transform:uppercase;margin-bottom:6px">Moving to tomorrow (${data.carrying_count})</div>
+                ${carryHtml}
+            </div>
+
+            ${data.blocker_count > 0 ? `
+                <div style="margin-bottom:12px">
+                    <div style="font-family:'Space Mono',monospace;font-size:10px;color:#8892a0;text-transform:uppercase;margin-bottom:6px">Open blockers (${data.blocker_count})</div>
+                    ${blockerHtml}
+                </div>
+            ` : ''}
+
+            <div style="margin-bottom:12px">
+                <div style="font-family:'Space Mono',monospace;font-size:10px;color:#8892a0;text-transform:uppercase;margin-bottom:6px">Tomorrow</div>
+                ${tomorrowHtml}
+            </div>
+
+            <div style="border-top:1px solid #2a2a4a;padding-top:10px;font-family:'DM Sans',sans-serif;font-size:13px;color:#8892a0">
+                ${data.completed_count} tasks &middot; ${timeStr} tracked
+            </div>
+        </div>
+    `;
+
+    eodEl.scrollIntoView({behavior: 'smooth'});
+}
+
+async function ccShowWeeklyReview() {
+    try {
+        const resp = await fetch('/api/cc/weekly-review');
+        const data = await resp.json();
+        ccRenderWeeklyReview(data);
+    } catch (e) {
+        console.error('Weekly review fetch failed:', e);
+    }
+}
+
+function ccRenderWeeklyReview(data) {
+    const main = document.querySelector('.cc-main');
+    if (!main) return;
+
+    const hours = Math.floor(data.total_actual_minutes / 60);
+    const mins = data.total_actual_minutes % 60;
+    const timeStr = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+
+    const estHours = Math.floor(data.total_estimated_minutes / 60);
+    const estMins = data.total_estimated_minutes % 60;
+    const estStr = estHours > 0 ? `${estHours}h ${estMins}m` : `${estMins}m`;
+
+    const fasterMsg = data.faster_than_estimated
+        ? `<div style="color:#4ecca3;margin-top:6px">You were ${data.time_saved_minutes}min faster than estimated. You're faster than you think.</div>`
+        : '';
+
+    const sourceHtml = Object.entries(data.by_source).map(([src, count]) =>
+        `<span style="color:#c0c8d4">${src}: ${count}</span>`
+    ).join(' &middot; ');
+
+    const waitingHtml = data.waiting_on.map(w =>
+        `<div style="padding:3px 0;display:flex;justify-content:space-between;color:#f5a623">
+            <span>${ccEsc(w.title)}</span>
+            <span style="color:#5a6070;font-size:12px">${ccEsc(w.who || w.note || '')}</span>
+        </div>`
+    ).join('') || '<div style="color:#5a6070">Nothing waiting</div>';
+
+    const streakHtml = data.streaks.slice(0, 5).map(s =>
+        `<div style="display:flex;justify-content:space-between;padding:2px 0;color:#c0c8d4">
+            <span>${ccEsc(s.title)}</span>
+            <span style="color:#f5a623">&#128293; ${s.weeks}w</span>
+        </div>`
+    ).join('') || '<div style="color:#5a6070">No streaks yet</div>';
+
+    let reviewEl = document.getElementById('cc-weekly-review');
+    if (!reviewEl) {
+        reviewEl = document.createElement('div');
+        reviewEl.id = 'cc-weekly-review';
+        main.prepend(reviewEl);
+    }
+
+    reviewEl.innerHTML = `
+        <div style="background:#16213e;border:1px solid #6366f1;border-radius:10px;padding:16px;margin-bottom:16px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                <div style="font-family:'Space Mono',monospace;font-size:11px;color:#6366f1;text-transform:uppercase;letter-spacing:1.5px">Weekly Review &middot; ${data.week_start}</div>
+                <button onclick="document.getElementById('cc-weekly-review').remove()" style="background:none;border:none;color:#5a6070;font-size:16px;cursor:pointer">&times;</button>
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px">
+                <div style="background:#1a2548;border-radius:6px;padding:10px;text-align:center">
+                    <div style="font-family:'Rajdhani',sans-serif;font-size:24px;color:#4ecca3">${data.completed_count}</div>
+                    <div style="font-family:'Space Mono',monospace;font-size:10px;color:#8892a0">COMPLETED</div>
+                </div>
+                <div style="background:#1a2548;border-radius:6px;padding:10px;text-align:center">
+                    <div style="font-family:'Rajdhani',sans-serif;font-size:24px;color:#eaeaea">${timeStr}</div>
+                    <div style="font-family:'Space Mono',monospace;font-size:10px;color:#8892a0">TRACKED</div>
+                </div>
+                <div style="background:#1a2548;border-radius:6px;padding:10px;text-align:center">
+                    <div style="font-family:'Rajdhani',sans-serif;font-size:24px;color:#eaeaea">${data.blockers_resolved}/${data.blockers_created}</div>
+                    <div style="font-family:'Space Mono',monospace;font-size:10px;color:#8892a0">BLOCKERS</div>
+                </div>
+            </div>
+
+            ${fasterMsg}
+
+            <div style="margin:12px 0">
+                <div style="font-family:'Space Mono',monospace;font-size:10px;color:#8892a0;text-transform:uppercase;margin-bottom:6px">Task sources</div>
+                <div style="font-family:'DM Sans',sans-serif;font-size:13px">${sourceHtml || 'No data'}</div>
+            </div>
+
+            <div style="margin:12px 0">
+                <div style="font-family:'Space Mono',monospace;font-size:10px;color:#8892a0;text-transform:uppercase;margin-bottom:6px">Still waiting on</div>
+                ${waitingHtml}
+            </div>
+
+            <div style="margin:12px 0">
+                <div style="font-family:'Space Mono',monospace;font-size:10px;color:#8892a0;text-transform:uppercase;margin-bottom:6px">Streaks</div>
+                ${streakHtml}
+            </div>
+        </div>
+    `;
+
+    reviewEl.scrollIntoView({behavior: 'smooth'});
+}
+
 /* ── Helpers ── */
 
 function ccFindTask(taskId) {
@@ -906,6 +1084,99 @@ function ccFormatDate(isoStr) {
         return `in ${diffD}d`;
     } catch (e) {
         return '';
+    }
+}
+
+/* ── Bad Day Protocol — Triage Carryovers ── */
+
+async function ccBadDayTriage() {
+    try {
+        const resp = await fetch('/api/cc/carryovers');
+        const tasks = await resp.json();
+        if (tasks.length === 0) {
+            alert('No carried-forward tasks. All clear!');
+            return;
+        }
+        ccShowTriageFlow(tasks, 0);
+    } catch (e) {
+        console.error('Triage fetch failed:', e);
+    }
+}
+
+function ccShowTriageFlow(tasks, index) {
+    if (index >= tasks.length) {
+        // Done triaging
+        const main = document.querySelector('.cc-main');
+        const triageEl = document.getElementById('cc-triage-card');
+        if (triageEl) triageEl.remove();
+        ccFetchToday();
+        return;
+    }
+
+    const task = tasks[index];
+    const main = document.querySelector('.cc-main');
+    if (!main) return;
+
+    let triageEl = document.getElementById('cc-triage-card');
+    if (!triageEl) {
+        triageEl = document.createElement('div');
+        triageEl.id = 'cc-triage-card';
+        main.prepend(triageEl);
+    }
+
+    const remaining = tasks.length - index;
+    const ageDays = task.age_days || 0;
+
+    triageEl.innerHTML = `
+        <div style="background:#16213e;border:1px solid #f5a623;border-radius:10px;padding:16px;margin-bottom:16px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                <div style="font-family:'Space Mono',monospace;font-size:11px;color:#f5a623;text-transform:uppercase;letter-spacing:1px">
+                    Triage &middot; ${remaining} remaining
+                </div>
+                <button onclick="document.getElementById('cc-triage-card').remove()" style="background:none;border:none;color:#5a6070;font-size:16px;cursor:pointer">&times;</button>
+            </div>
+
+            <div style="font-family:'DM Sans',sans-serif;font-size:15px;color:#eaeaea;margin-bottom:4px">${ccEsc(task.title)}</div>
+            <div style="font-family:'Space Mono',monospace;font-size:11px;color:#5a6070;margin-bottom:12px">
+                Added ${ageDays} day${ageDays !== 1 ? 's' : ''} ago
+                ${task.source !== 'manual' ? ' &middot; from ' + task.source : ''}
+            </div>
+
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <button onclick="ccTriageAction('${task.id}', 'keep', ${JSON.stringify(tasks).replace(/'/g, "\\'")})" style="font-family:'Space Mono',monospace;font-size:11px;padding:8px 16px;border:1px solid #4ecca3;border-radius:6px;background:transparent;color:#4ecca3;cursor:pointer">Still need to do it</button>
+                <button onclick="ccTriageAction('${task.id}', 'done', ${JSON.stringify(tasks).replace(/'/g, "\\'")})" style="font-family:'Space Mono',monospace;font-size:11px;padding:8px 16px;border:1px solid #6366f1;border-radius:6px;background:transparent;color:#6366f1;cursor:pointer">It handled itself</button>
+                <button onclick="ccTriageAction('${task.id}', 'archive', ${JSON.stringify(tasks).replace(/'/g, "\\'")})" style="font-family:'Space Mono',monospace;font-size:11px;padding:8px 16px;border:1px solid #5a6070;border-radius:6px;background:transparent;color:#5a6070;cursor:pointer">Not important</button>
+            </div>
+        </div>
+    `;
+
+    triageEl.scrollIntoView({behavior: 'smooth'});
+}
+
+async function ccTriageAction(taskId, action, tasks) {
+    await fetch(`/api/cc/triage/${taskId}`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({action})
+    });
+
+    const index = tasks.findIndex(t => t.id === taskId);
+    ccShowTriageFlow(tasks, index + 1);
+}
+
+/* ── Break Reminder ── */
+
+let ccTasksCompletedSinceBreak = 0;
+
+function ccCheckBreakReminder() {
+    ccTasksCompletedSinceBreak++;
+    if (ccTasksCompletedSinceBreak >= 3) {
+        ccTasksCompletedSinceBreak = 0;
+        const chat = document.getElementById('cc-chat-messages');
+        if (chat) {
+            chat.innerHTML += `<div class="cc-chat-system">You've done 3 tasks in a row. Good time for a 5-minute break.</div>`;
+            chat.scrollTop = chat.scrollHeight;
+        }
     }
 }
 

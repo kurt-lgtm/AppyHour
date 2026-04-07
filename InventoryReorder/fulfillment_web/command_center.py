@@ -112,6 +112,7 @@ def init_db() -> None:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _now_iso() -> str:
     return datetime.now(timezone(timedelta(hours=-4))).isoformat()
 
@@ -133,6 +134,7 @@ def _new_id() -> str:
 # ---------------------------------------------------------------------------
 # Tasks CRUD
 # ---------------------------------------------------------------------------
+
 
 def create_task(
     title: str,
@@ -161,8 +163,22 @@ def create_task(
            energy, deadline, estimated_minutes, recurring_id, day_of_week,
            created_at, notes, tags)
            VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (task_id, title, type, source, source_ref, priority, energy,
-         deadline, estimated_minutes, recurring_id, day_of_week, now, notes, tags_json),
+        (
+            task_id,
+            title,
+            type,
+            source,
+            source_ref,
+            priority,
+            energy,
+            deadline,
+            estimated_minutes,
+            recurring_id,
+            day_of_week,
+            now,
+            notes,
+            tags_json,
+        ),
     )
 
     if checklist:
@@ -193,8 +209,17 @@ def update_task(task_id: str, **kwargs) -> dict | None:
     """Update task fields. Pass only fields to change."""
     db = get_db()
     allowed = {
-        "title", "type", "status", "priority", "energy", "deadline",
-        "estimated_minutes", "actual_minutes", "notes", "tags", "completed_at",
+        "title",
+        "type",
+        "status",
+        "priority",
+        "energy",
+        "deadline",
+        "estimated_minutes",
+        "actual_minutes",
+        "notes",
+        "tags",
+        "completed_at",
     }
     updates = {k: v for k, v in kwargs.items() if k in allowed}
     if not updates:
@@ -257,6 +282,7 @@ def list_tasks(
 # Checklist
 # ---------------------------------------------------------------------------
 
+
 def get_checklist(task_id: str) -> list[dict]:
     """Get ordered checklist items for a task."""
     db = get_db()
@@ -317,6 +343,7 @@ def reorder_checklist(task_id: str, item_ids: list[str]) -> None:
 # Recurring Tasks
 # ---------------------------------------------------------------------------
 
+
 def create_recurring(
     title: str,
     day_of_week: int,
@@ -338,8 +365,18 @@ def create_recurring(
         """INSERT INTO recurring_tasks (id, title, type, day_of_week, time, energy,
            estimated_minutes, priority, checklist_template, active, skip_on_low_energy)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)""",
-        (rec_id, title, type, day_of_week, time, energy,
-         estimated_minutes, priority, template_json, int(skip_on_low_energy)),
+        (
+            rec_id,
+            title,
+            type,
+            day_of_week,
+            time,
+            energy,
+            estimated_minutes,
+            priority,
+            template_json,
+            int(skip_on_low_energy),
+        ),
     )
     db.commit()
     return get_recurring(rec_id)
@@ -376,9 +413,16 @@ def update_recurring(recurring_id: str, **kwargs) -> dict | None:
     """Update recurring task fields."""
     db = get_db()
     allowed = {
-        "title", "type", "day_of_week", "time", "energy",
-        "estimated_minutes", "priority", "checklist_template",
-        "active", "skip_on_low_energy",
+        "title",
+        "type",
+        "day_of_week",
+        "time",
+        "energy",
+        "estimated_minutes",
+        "priority",
+        "checklist_template",
+        "active",
+        "skip_on_low_energy",
     }
     updates = {k: v for k, v in kwargs.items() if k in allowed}
     if not updates:
@@ -457,6 +501,7 @@ def spawn_today_recurring(energy_level: str = "medium") -> list[dict]:
 # Blockers
 # ---------------------------------------------------------------------------
 
+
 def create_blocker(
     task_id: str,
     type: str = "unknown",
@@ -476,8 +521,7 @@ def create_blocker(
         """INSERT INTO blockers (id, task_id, type, who, note, monitor_source,
            monitor_query, check_back_at, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (blocker_id, task_id, type, who, note, monitor_source,
-         monitor_query, check_back_at, now),
+        (blocker_id, task_id, type, who, note, monitor_source, monitor_query, check_back_at, now),
     )
     db.execute("UPDATE tasks SET status = 'blocked' WHERE id = ?", (task_id,))
     db.commit()
@@ -529,9 +573,9 @@ def _get_active_blocker_for_task(task_id: str) -> dict | None:
 
 # Energy fit cross-table: user_energy → task_energy → score (0.0-1.0)
 ENERGY_FIT = {
-    "high":   {"high": 1.0, "medium": 0.7, "low": 0.3},
+    "high": {"high": 1.0, "medium": 0.7, "low": 0.3},
     "medium": {"high": 0.5, "medium": 1.0, "low": 0.7},
-    "low":    {"high": 0.1, "medium": 0.5, "low": 1.0},
+    "low": {"high": 0.1, "medium": 0.5, "low": 1.0},
 }
 
 # Impact by priority
@@ -553,17 +597,17 @@ def _time_pressure(task: dict) -> float:
         hours_until = (deadline - now).total_seconds() / 3600
 
         if hours_until <= 0:
-            return 1.0      # Overdue
+            return 1.0  # Overdue
         elif hours_until <= 2:
-            return 0.95      # Imminent
+            return 0.95  # Imminent
         elif hours_until <= 8:
-            return 0.8       # Today
+            return 0.8  # Today
         elif hours_until <= 24:
-            return 0.6       # Tomorrow
+            return 0.6  # Tomorrow
         elif hours_until <= 72:
-            return 0.4       # This week
+            return 0.4  # This week
         else:
-            return 0.2       # Far out
+            return 0.2  # Far out
     except (ValueError, TypeError):
         return 0.3
 
@@ -584,6 +628,7 @@ def compute_urgency(task: dict, energy_level: str = "medium") -> float:
 # ---------------------------------------------------------------------------
 # Today View
 # ---------------------------------------------------------------------------
+
 
 def get_today_tasks(energy_level: str = "medium") -> dict:
     """Get today's prioritized task list, separated by category.
@@ -647,30 +692,122 @@ def get_today_tasks(energy_level: str = "medium") -> dict:
 # ---------------------------------------------------------------------------
 
 DEFAULT_RECURRING = [
-    {"title": "Shipping review + Gorgias triage", "day_of_week": 0, "energy": "medium", "priority": "high",
-     "estimated_minutes": 30, "checklist_template": ["Check weekend shipping issues", "Review Gorgias queue", "Resolve food safety tickets"]},
-    {"title": "Plan the week", "day_of_week": 0, "energy": "high", "priority": "medium",
-     "estimated_minutes": 20, "checklist_template": ["Review last week's carry-forwards", "Check upcoming deadlines", "Set top 3 priorities"]},
-    {"title": "Weekly call with Tommy — cut order review", "day_of_week": 1, "energy": "high", "priority": "high",
-     "estimated_minutes": 45, "time": "10:00",
-     "checklist_template": ["Review demand numbers", "Check inventory vs demand gaps", "Discuss allocations with Tommy", "Submit cut order by 7PM EST"]},
-    {"title": "Pull Recharge demand", "day_of_week": 1, "energy": "medium", "priority": "high",
-     "estimated_minutes": 15, "checklist_template": ["Run demand pull", "Review charge counts", "Flag anomalies"]},
-    {"title": "Pay bills", "day_of_week": 1, "energy": "low", "priority": "medium",
-     "estimated_minutes": 20, "skip_on_low_energy": True},
-    {"title": "React tool prep + inventory review", "day_of_week": 2, "energy": "medium", "priority": "high",
-     "estimated_minutes": 30, "checklist_template": ["Review inventory snapshot", "Check depletion since last week", "Prep React tool inputs"]},
-    {"title": "Make PO for next week", "day_of_week": 2, "energy": "medium", "priority": "high",
-     "estimated_minutes": 20, "checklist_template": ["Check runway for all SKUs", "Draft PO quantities", "Send PO to RMFG"]},
-    {"title": "React tool run + swaps + Shopify sync", "day_of_week": 3, "energy": "high", "priority": "high",
-     "estimated_minutes": 90, "checklist_template": ["Run React tool", "Review output for errors", "Execute swap cascade", "Sync to Shopify", "Verify order counts"]},
-    {"title": "Ship day prep + RMFG email", "day_of_week": 4, "energy": "high", "priority": "high",
-     "estimated_minutes": 60, "checklist_template": ["Gel pack calculations", "Finalize shipping manifest", "Email RMFG final files", "Confirm carrier routing"]},
-    {"title": "Weekly review", "day_of_week": 4, "energy": "low", "priority": "medium",
-     "estimated_minutes": 30, "time": "16:00",
-     "checklist_template": ["Review completed tasks", "Check Waiting On list", "Review backlog", "Plan next week's priorities", "Archive done items"]},
-    {"title": "Shipping monitoring", "day_of_week": 5, "energy": "low", "priority": "medium",
-     "estimated_minutes": 20, "checklist_template": ["Check carrier tracking", "Flag delays", "Review delivery stats"]},
+    {
+        "title": "Shipping review + Gorgias triage",
+        "day_of_week": 0,
+        "energy": "medium",
+        "priority": "high",
+        "estimated_minutes": 30,
+        "checklist_template": ["Check weekend shipping issues", "Review Gorgias queue", "Resolve food safety tickets"],
+    },
+    {
+        "title": "Plan the week",
+        "day_of_week": 0,
+        "energy": "high",
+        "priority": "medium",
+        "estimated_minutes": 20,
+        "checklist_template": ["Review last week's carry-forwards", "Check upcoming deadlines", "Set top 3 priorities"],
+    },
+    {
+        "title": "Weekly call with Tommy — cut order review",
+        "day_of_week": 1,
+        "energy": "high",
+        "priority": "high",
+        "estimated_minutes": 45,
+        "time": "10:00",
+        "checklist_template": [
+            "Review demand numbers",
+            "Check inventory vs demand gaps",
+            "Discuss allocations with Tommy",
+            "Submit cut order by 7PM EST",
+        ],
+    },
+    {
+        "title": "Pull Recharge demand",
+        "day_of_week": 1,
+        "energy": "medium",
+        "priority": "high",
+        "estimated_minutes": 15,
+        "checklist_template": ["Run demand pull", "Review charge counts", "Flag anomalies"],
+    },
+    {
+        "title": "Pay bills",
+        "day_of_week": 1,
+        "energy": "low",
+        "priority": "medium",
+        "estimated_minutes": 20,
+        "skip_on_low_energy": True,
+    },
+    {
+        "title": "React tool prep + inventory review",
+        "day_of_week": 2,
+        "energy": "medium",
+        "priority": "high",
+        "estimated_minutes": 30,
+        "checklist_template": [
+            "Review inventory snapshot",
+            "Check depletion since last week",
+            "Prep React tool inputs",
+        ],
+    },
+    {
+        "title": "Make PO for next week",
+        "day_of_week": 2,
+        "energy": "medium",
+        "priority": "high",
+        "estimated_minutes": 20,
+        "checklist_template": ["Check runway for all SKUs", "Draft PO quantities", "Send PO to RMFG"],
+    },
+    {
+        "title": "React tool run + swaps + Shopify sync",
+        "day_of_week": 3,
+        "energy": "high",
+        "priority": "high",
+        "estimated_minutes": 90,
+        "checklist_template": [
+            "Run React tool",
+            "Review output for errors",
+            "Execute swap cascade",
+            "Sync to Shopify",
+            "Verify order counts",
+        ],
+    },
+    {
+        "title": "Ship day prep + RMFG email",
+        "day_of_week": 4,
+        "energy": "high",
+        "priority": "high",
+        "estimated_minutes": 60,
+        "checklist_template": [
+            "Gel pack calculations",
+            "Finalize shipping manifest",
+            "Email RMFG final files",
+            "Confirm carrier routing",
+        ],
+    },
+    {
+        "title": "Weekly review",
+        "day_of_week": 4,
+        "energy": "low",
+        "priority": "medium",
+        "estimated_minutes": 30,
+        "time": "16:00",
+        "checklist_template": [
+            "Review completed tasks",
+            "Check Waiting On list",
+            "Review backlog",
+            "Plan next week's priorities",
+            "Archive done items",
+        ],
+    },
+    {
+        "title": "Shipping monitoring",
+        "day_of_week": 5,
+        "energy": "low",
+        "priority": "medium",
+        "estimated_minutes": 20,
+        "checklist_template": ["Check carrier tracking", "Flag delays", "Review delivery stats"],
+    },
 ]
 
 
@@ -693,7 +830,7 @@ def seed_recurring_if_empty() -> int:
 
 # Slack config
 SLACK_CHANNEL_ID = "C095UVCKCBB"  # #reship-and-order-requests
-SLACK_USER_ID = "U08R19137UL"     # Kurt
+SLACK_USER_ID = "U08R19137UL"  # Kurt
 
 # Commitment type → checklist template
 COMMITMENT_CHECKLISTS = {
@@ -727,27 +864,62 @@ COMMITMENT_CHECKLISTS = {
 # Keywords that signal each commitment type
 COMMITMENT_SIGNALS = {
     "carrier_change": [
-        "don't use", "stop using", "no more", "switch to",
-        "ontrac", "usps", "ups", "fedex", "carrier",
-        "not use", "won't use", "will not use",
+        "don't use",
+        "stop using",
+        "no more",
+        "switch to",
+        "ontrac",
+        "usps",
+        "ups",
+        "fedex",
+        "carrier",
+        "not use",
+        "won't use",
+        "will not use",
     ],
     "reship": [
-        "reship", "re-ship", "send another", "send replacement",
-        "ship again", "send again", "replacement",
+        "reship",
+        "re-ship",
+        "send another",
+        "send replacement",
+        "ship again",
+        "send again",
+        "replacement",
     ],
     "refund": [
-        "refund", "credit", "reimburse", "money back",
-        "charge back", "comp", "free",
+        "refund",
+        "credit",
+        "reimburse",
+        "money back",
+        "charge back",
+        "comp",
+        "free",
     ],
     "subscription_change": [
-        "switch to", "change to", "swap to", "move to",
-        "cancel", "skip", "pause", "add to",
-        "curation", "cmed", "mong", "spm", "mdt",
+        "switch to",
+        "change to",
+        "swap to",
+        "move to",
+        "cancel",
+        "skip",
+        "pause",
+        "add to",
+        "curation",
+        "cmed",
+        "mong",
+        "spm",
+        "mdt",
     ],
     "follow_up": [
-        "i'll look into", "let me check", "i'll get back",
-        "will check", "will look", "looking into",
-        "i'll find out", "let me see", "will follow up",
+        "i'll look into",
+        "let me check",
+        "i'll get back",
+        "will check",
+        "will look",
+        "looking into",
+        "i'll find out",
+        "let me see",
+        "will follow up",
     ],
 }
 
@@ -881,6 +1053,7 @@ def process_slack_trawl(messages: list[dict]) -> list[dict]:
 # Morning Brief
 # ---------------------------------------------------------------------------
 
+
 def store_morning_brief(brief_data: dict) -> None:
     """Store morning brief data in the database for the UI to display.
 
@@ -938,6 +1111,7 @@ def get_morning_brief() -> dict | None:
 # Stats / Streaks
 # ---------------------------------------------------------------------------
 
+
 def get_streaks() -> list[dict]:
     """Calculate weekly streaks for key recurring tasks.
 
@@ -982,11 +1156,13 @@ def get_streaks() -> list[dict]:
                 break
 
         if weeks > 0:
-            streaks.append({
-                "title": rec["title"],
-                "weeks": weeks,
-                "day_of_week": rec["day_of_week"],
-            })
+            streaks.append(
+                {
+                    "title": rec["title"],
+                    "weeks": weeks,
+                    "day_of_week": rec["day_of_week"],
+                }
+            )
 
     streaks.sort(key=lambda s: s["weeks"], reverse=True)
     return streaks
@@ -1021,6 +1197,136 @@ def get_daily_stats() -> dict:
         "blocked": blocked,
         "minutes_tracked": total_minutes,
         "date": today_str,
+    }
+
+
+# ---------------------------------------------------------------------------
+# End of Day Summary
+# ---------------------------------------------------------------------------
+
+
+def get_eod_summary() -> dict:
+    """Generate end-of-day wrap-up summary.
+
+    Shows what was accomplished (not what was missed).
+    """
+    db = get_db()
+    today_str = date.today().isoformat()
+    now = datetime.now(timezone(timedelta(hours=-4)))
+
+    # Completed today
+    completed = db.execute(
+        """SELECT title, actual_minutes, source, completed_at
+           FROM tasks WHERE status = 'done' AND completed_at LIKE ?
+           ORDER BY completed_at""",
+        (f"{today_str}%",),
+    ).fetchall()
+
+    # Moving to tomorrow (active tasks not done)
+    carrying = db.execute(
+        """SELECT title, priority, estimated_minutes
+           FROM tasks WHERE status = 'active' AND type = 'work'
+           ORDER BY created_at""",
+    ).fetchall()
+
+    # Open blockers
+    blockers = db.execute(
+        """SELECT b.who, b.note, b.type, t.title
+           FROM blockers b JOIN tasks t ON b.task_id = t.id
+           WHERE b.resolved_at IS NULL""",
+    ).fetchall()
+
+    # Time tracked
+    total_min = sum(r["actual_minutes"] or 0 for r in completed)
+
+    # Tomorrow preview (next day's recurring tasks)
+    tomorrow_dow = (now.weekday() + 1) % 7
+    tomorrow_recurring = db.execute(
+        "SELECT title FROM recurring_tasks WHERE active = 1 AND day_of_week = ?",
+        (tomorrow_dow,),
+    ).fetchall()
+
+    return {
+        "date": today_str,
+        "day_of_week": now.strftime("%A"),
+        "completed": [dict(r) for r in completed],
+        "completed_count": len(completed),
+        "carrying_forward": [dict(r) for r in carrying],
+        "carrying_count": len(carrying),
+        "open_blockers": [dict(r) for r in blockers],
+        "blocker_count": len(blockers),
+        "minutes_tracked": total_min,
+        "tomorrow_preview": [dict(r) for r in tomorrow_recurring],
+    }
+
+
+def get_weekly_review() -> dict:
+    """Generate weekly review data for Friday wrap-up.
+
+    Covers Mon-Fri of the current week.
+    """
+    db = get_db()
+    now = datetime.now(timezone(timedelta(hours=-4)))
+
+    # Find Monday of this week
+    monday = now.date() - timedelta(days=now.weekday())
+    week_start = monday.isoformat()
+    week_end = (monday + timedelta(days=5)).isoformat()
+
+    # Completed this week
+    completed = db.execute(
+        """SELECT title, actual_minutes, estimated_minutes, completed_at, source
+           FROM tasks WHERE status = 'done' AND completed_at >= ? AND completed_at < ?
+           ORDER BY completed_at""",
+        (week_start, week_end + "Z"),
+    ).fetchall()
+
+    # Time analytics
+    total_actual = sum(r["actual_minutes"] or 0 for r in completed)
+    total_estimated = sum(r["estimated_minutes"] or 0 for r in completed)
+
+    # Tasks by source
+    by_source = {}
+    for r in completed:
+        src = r["source"] or "manual"
+        by_source[src] = by_source.get(src, 0) + 1
+
+    # Blockers this week
+    blockers_created = db.execute(
+        "SELECT COUNT(*) as n FROM blockers WHERE created_at >= ?",
+        (week_start,),
+    ).fetchone()["n"]
+
+    blockers_resolved = db.execute(
+        "SELECT COUNT(*) as n FROM blockers WHERE resolved_at IS NOT NULL AND resolved_at >= ?",
+        (week_start,),
+    ).fetchone()["n"]
+
+    # Waiting on (still unresolved)
+    waiting = db.execute(
+        """SELECT b.who, b.note, b.type, t.title, b.created_at
+           FROM blockers b JOIN tasks t ON b.task_id = t.id
+           WHERE b.resolved_at IS NULL
+           ORDER BY b.created_at""",
+    ).fetchall()
+
+    # Streaks
+    streaks = get_streaks()
+
+    return {
+        "week_start": week_start,
+        "week_end": week_end,
+        "completed": [dict(r) for r in completed],
+        "completed_count": len(completed),
+        "total_actual_minutes": total_actual,
+        "total_estimated_minutes": total_estimated,
+        "faster_than_estimated": total_estimated > 0 and total_actual < total_estimated,
+        "time_saved_minutes": max(0, total_estimated - total_actual) if total_estimated > 0 else 0,
+        "by_source": by_source,
+        "blockers_created": blockers_created,
+        "blockers_resolved": blockers_resolved,
+        "waiting_on": [dict(r) for r in waiting],
+        "streaks": streaks,
     }
 
 
@@ -1112,13 +1418,13 @@ def build_system_prompt(energy_level: str = "medium") -> str:
     return f"""You are the Ask Claude assistant inside the Command Center app for AppyHour (Elevate Foods), a subscription cheese/charcuterie box company.
 
 Current context:
-- Date: {now.strftime('%A, %B %d, %Y')} at {now.strftime('%I:%M %p')} EDT
+- Date: {now.strftime("%A, %B %d, %Y")} at {now.strftime("%I:%M %p")} EDT
 - Energy level: {energy_level}
 - Today's frog: {frog_title}
 - Work tasks remaining: {task_count}
 - Blocked tasks: {blocked_count}
 - Personal tasks: {personal_count}
-{f'- Inventory alerts:{chr(10)}{inv_alerts}' if inv_alerts else '- No inventory alerts'}
+{f"- Inventory alerts:{chr(10)}{inv_alerts}" if inv_alerts else "- No inventory alerts"}
 
 Your role:
 - Answer questions about the business, operations, inventory, shipping
@@ -1148,3 +1454,113 @@ def add_chat_message(role: str, content: str) -> None:
 def clear_chat_history() -> None:
     """Clear chat history."""
     _chat_history.clear()
+
+
+# ---------------------------------------------------------------------------
+# Backup / Snapshots
+# ---------------------------------------------------------------------------
+
+SNAPSHOT_DIR = DB_DIR / "snapshots"
+SNAPSHOT_RETENTION_DAYS = 30
+
+
+def create_daily_snapshot() -> str | None:
+    """Create a daily JSON snapshot of all tasks. Returns path or None if already exists."""
+    today_str = date.today().isoformat()
+    SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    path = SNAPSHOT_DIR / f"{today_str}.json"
+
+    if path.exists():
+        return None  # Already snapshotted today
+
+    db = get_db()
+    tasks = db.execute("SELECT * FROM tasks").fetchall()
+    checklist = db.execute("SELECT * FROM checklist_items").fetchall()
+    recurring = db.execute("SELECT * FROM recurring_tasks").fetchall()
+    blockers = db.execute("SELECT * FROM blockers").fetchall()
+
+    snapshot = {
+        "date": today_str,
+        "created_at": _now_iso(),
+        "tasks": [dict(r) for r in tasks],
+        "checklist_items": [dict(r) for r in checklist],
+        "recurring_tasks": [dict(r) for r in recurring],
+        "blockers": [dict(r) for r in blockers],
+    }
+
+    with open(path, "w") as f:
+        json.dump(snapshot, f, indent=2)
+
+    # Clean old snapshots
+    _cleanup_old_snapshots()
+
+    return str(path)
+
+
+def _cleanup_old_snapshots() -> int:
+    """Remove snapshots older than retention period. Returns count removed."""
+    if not SNAPSHOT_DIR.exists():
+        return 0
+    cutoff = date.today() - timedelta(days=SNAPSHOT_RETENTION_DAYS)
+    removed = 0
+    for f in SNAPSHOT_DIR.glob("*.json"):
+        try:
+            file_date = date.fromisoformat(f.stem)
+            if file_date < cutoff:
+                f.unlink()
+                removed += 1
+        except ValueError:
+            pass
+    return removed
+
+
+# ---------------------------------------------------------------------------
+# Bad Day Protocol — Triage piled-up tasks
+# ---------------------------------------------------------------------------
+
+
+def get_carryover_tasks() -> list[dict]:
+    """Get tasks that have been active for more than 1 day (carried forward).
+
+    These are candidates for the Bad Day Protocol triage.
+    """
+    db = get_db()
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+
+    rows = db.execute(
+        """SELECT * FROM tasks
+           WHERE status = 'active' AND created_at < ?
+           ORDER BY created_at""",
+        (yesterday,),
+    ).fetchall()
+
+    tasks = []
+    for row in rows:
+        task = dict(row)
+        task["tags"] = json.loads(task.get("tags", "[]"))
+        task["checklist"] = get_checklist(task["id"])
+        # Calculate age in days
+        try:
+            created = datetime.fromisoformat(task["created_at"])
+            age = (datetime.now(timezone(timedelta(hours=-4))) - created).days
+            task["age_days"] = age
+        except (ValueError, TypeError):
+            task["age_days"] = 0
+        tasks.append(task)
+
+    return tasks
+
+
+def triage_task(task_id: str, action: str) -> dict | None:
+    """Triage a carried-forward task.
+
+    action: 'keep' | 'archive' | 'done'
+    """
+    if action == "keep":
+        # Reset created_at to today so it stops looking old
+        return update_task(task_id, notes="Triaged: still needed")
+    elif action == "archive":
+        return update_task(task_id, status="archived")
+    elif action == "done":
+        return update_task(task_id, status="done")
+    return get_task(task_id)
