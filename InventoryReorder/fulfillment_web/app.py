@@ -10603,6 +10603,16 @@ def run_webview():
 # ── Command Center Routes ───────────────────────────────────────────────
 
 
+@app.errorhandler(Exception)
+def _cc_error_handler(e):
+    """Catch unhandled exceptions on /api/cc/ routes and return JSON 500."""
+    if request.path.startswith("/api/cc/"):
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    raise e
+
+
 @app.route("/api/cc/tasks", methods=["GET"])
 def cc_list_tasks():
     status = request.args.get("status")
@@ -10614,11 +10624,15 @@ def cc_list_tasks():
 
 @app.route("/api/cc/tasks", methods=["POST"])
 def cc_create_task():
-    data = request.json
-    title = data.pop("title", "")
-    type_ = data.pop("type", "work")
-    checklist = data.pop("checklist", None)
-    return jsonify(command_center.create_task(title, type_, checklist=checklist, **data))
+    data = request.json or {}
+    title = data.get("title", "")
+    type_ = data.get("type", "work")
+    checklist = data.get("checklist")
+    if not title:
+        return jsonify({"error": "title is required"}), 400
+    safe_keys = {"priority", "energy", "deadline", "estimated_minutes", "notes", "tags", "day_of_week", "source"}
+    extras = {k: v for k, v in data.items() if k in safe_keys}
+    return jsonify(command_center.create_task(title, type_, checklist=checklist, **extras))
 
 
 @app.route("/api/cc/tasks/<task_id>", methods=["GET"])
@@ -10650,8 +10664,11 @@ def cc_get_checklist(task_id):
 
 @app.route("/api/cc/tasks/<task_id>/checklist", methods=["POST"])
 def cc_add_checklist_item(task_id):
-    data = request.json
-    item = command_center.add_checklist_item(task_id, data["title"], data.get("position"))
+    data = request.json or {}
+    title = data.get("title")
+    if not title:
+        return jsonify({"error": "title is required"}), 400
+    item = command_center.add_checklist_item(task_id, title, data.get("position"))
     return jsonify(item)
 
 
@@ -10710,10 +10727,14 @@ def cc_list_blockers():
 
 @app.route("/api/cc/blockers", methods=["POST"])
 def cc_create_blocker():
-    data = request.json
-    task_id = data.pop("task_id")
-    type_ = data.pop("type", "unknown")
-    return jsonify(command_center.create_blocker(task_id, type_, **data))
+    data = request.json or {}
+    task_id = data.get("task_id")
+    if not task_id:
+        return jsonify({"error": "task_id is required"}), 400
+    type_ = data.get("type", "unknown")
+    safe_keys = {"who", "note", "monitor_source", "monitor_query", "check_back_at"}
+    extras = {k: v for k, v in data.items() if k in safe_keys}
+    return jsonify(command_center.create_blocker(task_id, type_, **extras))
 
 
 @app.route("/api/cc/blockers/<blocker_id>/resolve", methods=["POST"])
@@ -10763,7 +10784,7 @@ def cc_chat():
     """Non-streaming chat endpoint. Returns full response."""
     data = request.json
     message = data.get("message", "").strip()
-    model = data.get("model", "claude-haiku-4-5")
+    model = data.get("model", "claude-haiku-4-5-20251001")
     energy = data.get("energy_level", "medium")
 
     if not message:

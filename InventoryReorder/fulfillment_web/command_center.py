@@ -10,6 +10,7 @@ import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from typing import Optional
 
 # ---------------------------------------------------------------------------
@@ -104,6 +105,12 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_checklist_task ON checklist_items(task_id);
         CREATE INDEX IF NOT EXISTS idx_blockers_task ON blockers(task_id);
         CREATE INDEX IF NOT EXISTS idx_blockers_resolved ON blockers(resolved_at);
+
+        CREATE TABLE IF NOT EXISTS morning_briefs (
+            date TEXT PRIMARY KEY,
+            data TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
     """)
     db.commit()
 
@@ -113,8 +120,11 @@ def init_db() -> None:
 # ---------------------------------------------------------------------------
 
 
+_TZ = ZoneInfo("America/New_York")
+
+
 def _now_iso() -> str:
-    return datetime.now(timezone(timedelta(hours=-4))).isoformat()
+    return datetime.now(_TZ).isoformat()
 
 
 def _row_to_dict(row: sqlite3.Row | None) -> dict | None:
@@ -220,6 +230,7 @@ def update_task(task_id: str, **kwargs) -> dict | None:
         "notes",
         "tags",
         "completed_at",
+        "created_at",
     }
     updates = {k: v for k, v in kwargs.items() if k in allowed}
     if not updates:
@@ -456,7 +467,7 @@ def spawn_today_recurring(energy_level: str = "medium") -> list[dict]:
     Skips low-energy-skip templates when energy is low.
     """
     db = get_db()
-    today_dow = datetime.now(timezone(timedelta(hours=-4))).weekday()
+    today_dow = datetime.now(_TZ).weekday()
     today_str = date.today().isoformat()
 
     templates = db.execute(
@@ -593,7 +604,7 @@ def _time_pressure(task: dict) -> float:
 
     try:
         deadline = datetime.fromisoformat(deadline_str)
-        now = datetime.now(timezone(timedelta(hours=-4)))
+        now = datetime.now(_TZ)
         hours_until = (deadline - now).total_seconds() / 3600
 
         if hours_until <= 0:
@@ -683,7 +694,7 @@ def get_today_tasks(energy_level: str = "medium") -> dict:
         "completed_today": completed,
         "energy_level": energy_level,
         "date": today_str,
-        "day_of_week": datetime.now(timezone(timedelta(hours=-4))).strftime("%A"),
+        "day_of_week": datetime.now(_TZ).strftime("%A"),
     }
 
 
@@ -1069,14 +1080,6 @@ def store_morning_brief(brief_data: dict) -> None:
     db = get_db()
     today_str = date.today().isoformat()
 
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS morning_briefs (
-            date TEXT PRIMARY KEY,
-            data TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        )
-    """)
-
     db.execute(
         "INSERT OR REPLACE INTO morning_briefs (date, data, created_at) VALUES (?, ?, ?)",
         (today_str, json.dumps(brief_data), _now_iso()),
@@ -1088,15 +1091,6 @@ def get_morning_brief() -> dict | None:
     """Get today's morning brief data."""
     db = get_db()
     today_str = date.today().isoformat()
-
-    # Ensure table exists
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS morning_briefs (
-            date TEXT PRIMARY KEY,
-            data TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        )
-    """)
 
     row = db.execute(
         "SELECT data FROM morning_briefs WHERE date = ?",
@@ -1212,7 +1206,7 @@ def get_eod_summary() -> dict:
     """
     db = get_db()
     today_str = date.today().isoformat()
-    now = datetime.now(timezone(timedelta(hours=-4)))
+    now = datetime.now(_TZ)
 
     # Completed today
     completed = db.execute(
@@ -1266,7 +1260,7 @@ def get_weekly_review() -> dict:
     Covers Mon-Fri of the current week.
     """
     db = get_db()
-    now = datetime.now(timezone(timedelta(hours=-4)))
+    now = datetime.now(_TZ)
 
     # Find Monday of this week
     monday = now.date() - timedelta(days=now.weekday())
@@ -1397,7 +1391,7 @@ def record_chat_cost(input_tokens: int, output_tokens: int, model: str) -> None:
 
 def build_system_prompt(energy_level: str = "medium") -> str:
     """Build the system prompt for the Ask Claude chat panel."""
-    now = datetime.now(timezone(timedelta(hours=-4)))
+    now = datetime.now(_TZ)
     today_tasks = get_today_tasks(energy_level)
     active_blockers = get_active_blockers()
 
@@ -1542,7 +1536,7 @@ def get_carryover_tasks() -> list[dict]:
         # Calculate age in days
         try:
             created = datetime.fromisoformat(task["created_at"])
-            age = (datetime.now(timezone(timedelta(hours=-4))) - created).days
+            age = (datetime.now(_TZ) - created).days
             task["age_days"] = age
         except (ValueError, TypeError):
             task["age_days"] = 0
@@ -1558,7 +1552,7 @@ def triage_task(task_id: str, action: str) -> dict | None:
     """
     if action == "keep":
         # Reset created_at to today so it stops looking old
-        return update_task(task_id, notes="Triaged: still needed")
+        return update_task(task_id, created_at=_now_iso(), notes="Triaged: still needed")
     elif action == "archive":
         return update_task(task_id, status="archived")
     elif action == "done":

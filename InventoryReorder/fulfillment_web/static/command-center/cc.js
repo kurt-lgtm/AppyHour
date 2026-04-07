@@ -670,15 +670,32 @@ async function ccResolveBlocker(blockerId) {
 
 async function ccSkipTask(taskId) {
     ccStopTimer();
+    try {
+        await fetch(`/api/cc/tasks/${taskId}`, {
+            method: 'PATCH',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({notes: 'Skipped — deferred to later'})
+        });
+    } catch (e) {
+        console.error('Skip failed:', e);
+    }
     ccFetchToday();
 }
 
-function ccExtendTimer(minutes) {
-    // Just keeps running — the estimated_minutes doesn't change, timer just goes longer
-    // Visual: timer bar resets its % calc
+async function ccExtendTimer(minutes) {
     const task = ccFindTask(ccActiveTaskId);
     if (task) {
-        task.estimated_minutes = (task.estimated_minutes || 25) + minutes;
+        const newEstimate = (task.estimated_minutes || 25) + minutes;
+        task.estimated_minutes = newEstimate;
+        try {
+            await fetch(`/api/cc/tasks/${ccActiveTaskId}`, {
+                method: 'PATCH',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({estimated_minutes: newEstimate})
+            });
+        } catch (e) {
+            console.error('Extend timer persist failed:', e);
+        }
     }
 }
 
@@ -775,7 +792,7 @@ async function ccToggleActiveCheck(itemId) {
 
 /* ── Chat (connected to Claude API) ── */
 
-let ccChatModel = 'claude-haiku-4-5';
+let ccChatModel = 'claude-haiku-4-5-20251001';
 let ccChatLoading = false;
 
 async function ccSendChat() {
