@@ -9,27 +9,34 @@ let ccBriefDismissed = false;
 let ccSelectedTaskId = null;
 let ccLightenedDay = false;
 let ccOverwhelmDismissed = false;
+let _ccLoaded = false;
 const CC_WIP_LIMIT = 3;  // Max active tasks at once
 
 /* ── Load ── */
 
 function ccLoad() {
+    if (_ccLoaded) return;
+    _ccLoaded = true;
+
     ccAutoEnergy();
     ccSpawnRecurring();
+
+    // Auto-build brief from live data, then fetch everything
+    fetch('/api/cc/build-brief', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}' })
+        .then(() => ccFetchBrief())
+        .catch(() => ccFetchBrief());
+
     ccFetchToday();
-    ccFetchBrief();
     ccFetchStreaks();
     ccUpdateGreeting();
 
     // Auto-refresh every 5 minutes (re-check energy, re-fetch tasks)
-    if (!ccLoad._interval) {
-        ccLoad._interval = setInterval(() => {
-            if (typeof currentView !== 'undefined' && currentView === 'commandcenter') {
-                ccAutoEnergy();
-                ccFetchToday();
-            }
-        }, 5 * 60 * 1000);
-    }
+    setInterval(() => {
+        if (typeof currentView !== 'undefined' && currentView === 'commandcenter') {
+            ccAutoEnergy();
+            ccFetchToday();
+        }
+    }, 5 * 60 * 1000);
 }
 
 function ccAutoEnergy() {

@@ -124,6 +124,26 @@ def init_db() -> None:
             data TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS decisions (
+            id TEXT PRIMARY KEY,
+            question TEXT NOT NULL,
+            options TEXT NOT NULL DEFAULT '[]',
+            context TEXT DEFAULT '',
+            source TEXT NOT NULL DEFAULT 'system',
+            answer TEXT,
+            answered_at TEXT,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_decisions_pending ON decisions(answered_at);
+
+        CREATE TABLE IF NOT EXISTS activity_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event TEXT NOT NULL,
+            detail TEXT DEFAULT '',
+            ts TEXT NOT NULL
+        );
     """)
     db.commit()
 
@@ -646,7 +666,102 @@ def compute_urgency(task: dict, energy_level: str = "medium") -> float:
     impact = IMPACT_SCORE.get(task.get("priority", "medium"), 0.6)
     blocker = BLOCKER_RISK.get(task.get("status", "active"), 0.5)
 
-    return (energy_fit * 0.35) + (time_press * 0.35) + (impact * 0.20) + (blocker * 0.10)
+    score = (energy_fit * 0.35) + (time_press * 0.35) + (impact * 0.20) + (blocker * 0.10)
+    return score
+
+
+def urgency_tier(score: float) -> str:
+    """Map urgency score → visual tier for UI color/glow."""
+    if score >= 0.85:
+        return "critical"   # amber glow, pulse
+    elif score >= 0.65:
+        return "high"       # amber text
+    elif score >= 0.45:
+        return "medium"     # default
+    else:
+        return "low"        # dim
+
+
+# ---------------------------------------------------------------------------
+# Decisions Queue (absorbed from mission-control)
+# ---------------------------------------------------------------------------
+
+
+def create_decision(
+    question: str,
+    options: list[str] | None = None,
+    context: str = "",
+    source: str = "system",
+) -> dict:
+    """Create a pending decision for the user to answer."""
+    db = get_db()
+    did = _new_id()
+    now = _now_iso()
+    opts = json.dumps(options or [])
+    db.execute(
+        "INSERT INTO decisions (id, question, options, context, source, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (did, question, opts, context, source, now),
+    )
+    db.commit()
+    log_activity("decision_created", f"{did}: {question[:80]}")
+    return {"id": did, "question": question, "options": options or [], "context": context, "source": source, "created_at": now}
+
+
+def answer_decision(decision_id: str, answer: str) -> dict | None:
+    """Answer a pending decision."""
+    db = get_db()
+    now = _now_iso()
+    db.execute(
+        "UPDATE decisions SET answer = ?, answered_at = ? WHERE id = ? AND answered_at IS NULL",
+        (answer, now, decision_id),
+    )
+    db.commit()
+    log_activity("decision_answered", f"{decision_id}: {answer[:80]}")
+    row = db.execute("SELECT * FROM decisions WHERE id = ?", (decision_id,)).fetchone()
+    if row is None:
+        return None
+    d = _row_to_dict(row)
+    d["options"] = json.loads(d.get("options", "[]"))
+    return d
+
+
+def get_pending_decisions() -> list[dict]:
+    """Get all unanswered decisions, newest first."""
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM decisions WHERE answered_at IS NULL ORDER BY created_at DESC"
+    ).fetchall()
+    result = _rows_to_list(rows)
+    for d in result:
+        d["options"] = json.loads(d.get("options", "[]"))
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Activity Log (absorbed from mission-control)
+# ---------------------------------------------------------------------------
+
+
+def log_activity(event: str, detail: str = "") -> None:
+    """Append to activity log. Fire-and-forget."""
+    try:
+        db = get_db()
+        db.execute(
+            "INSERT INTO activity_log (event, detail, ts) VALUES (?, ?, ?)",
+            (event, detail[:500], _now_iso()),
+        )
+        db.commit()
+    except Exception:
+        pass  # Never fail on logging
+
+
+def get_activity_log(limit: int = 50) -> list[dict]:
+    """Get recent activity, newest first."""
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM activity_log ORDER BY ts DESC LIMIT ?", (limit,)
+    ).fetchall()
+    return _rows_to_list(rows)
 
 
 # ---------------------------------------------------------------------------

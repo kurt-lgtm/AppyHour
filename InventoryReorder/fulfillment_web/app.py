@@ -10786,6 +10786,38 @@ def cc_build_brief():
     return jsonify(brief)
 
 
+@app.route("/api/cc/decisions", methods=["GET"])
+def cc_get_decisions():
+    return jsonify(command_center.get_pending_decisions())
+
+
+@app.route("/api/cc/decisions", methods=["POST"])
+def cc_create_decision():
+    body = request.get_json(silent=True) or {}
+    d = command_center.create_decision(
+        question=body.get("question", ""),
+        options=body.get("options"),
+        context=body.get("context", ""),
+        source=body.get("source", "system"),
+    )
+    return jsonify(d)
+
+
+@app.route("/api/cc/decisions/<did>/answer", methods=["POST"])
+def cc_answer_decision(did):
+    body = request.get_json(silent=True) or {}
+    d = command_center.answer_decision(did, body.get("answer", ""))
+    if d is None:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(d)
+
+
+@app.route("/api/cc/activity", methods=["GET"])
+def cc_activity():
+    limit = request.args.get("limit", 50, type=int)
+    return jsonify(command_center.get_activity_log(limit))
+
+
 @app.route("/api/cc/streaks", methods=["GET"])
 def cc_streaks():
     return jsonify(command_center.get_streaks())
