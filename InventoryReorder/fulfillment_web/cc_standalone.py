@@ -144,7 +144,23 @@ def cc_today():
 
 @app.route("/api/cc/brief", methods=["GET"])
 def cc_brief():
-    return jsonify({"status": "no brief today"})
+    brief = command_center.get_morning_brief()
+    if brief is None:
+        return jsonify({"status": "no brief today"})
+    return jsonify(brief)
+
+
+@app.route("/api/cc/brief", methods=["POST"])
+def cc_post_brief():
+    command_center.store_morning_brief(request.json)
+    return jsonify({"status": "stored"})
+
+
+@app.route("/api/cc/build-brief", methods=["POST"])
+def cc_build_brief():
+    external = request.get_json(silent=True) or {}
+    brief = command_center.build_morning_brief(inventory=None, external=external)
+    return jsonify(brief)
 
 
 @app.route("/api/cc/streaks", methods=["GET"])
@@ -152,11 +168,88 @@ def cc_streaks():
     return jsonify(command_center.get_streaks())
 
 
+@app.route("/api/cc/stats", methods=["GET"])
+def cc_stats():
+    return jsonify(command_center.get_daily_stats())
+
+
 @app.route("/api/cc/slack-trawl", methods=["POST"])
 def cc_slack_trawl():
     messages = request.json.get("messages", [])
     created = command_center.process_slack_trawl(messages)
     return jsonify(created)
+
+
+@app.route("/api/cc/decisions", methods=["GET"])
+def cc_get_decisions():
+    return jsonify(command_center.get_pending_decisions())
+
+
+@app.route("/api/cc/decisions", methods=["POST"])
+def cc_create_decision():
+    body = request.get_json(silent=True) or {}
+    d = command_center.create_decision(
+        question=body.get("question", ""),
+        options=body.get("options"),
+        context=body.get("context", ""),
+        source=body.get("source", "system"),
+    )
+    return jsonify(d)
+
+
+@app.route("/api/cc/decisions/<did>/answer", methods=["POST"])
+def cc_answer_decision(did):
+    body = request.get_json(silent=True) or {}
+    d = command_center.answer_decision(did, body.get("answer", ""))
+    if d is None:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(d)
+
+
+@app.route("/api/cc/activity", methods=["GET"])
+def cc_activity():
+    limit = request.args.get("limit", 50, type=int)
+    return jsonify(command_center.get_activity_log(limit))
+
+
+@app.route("/api/cc/search", methods=["GET"])
+def cc_search():
+    q = request.args.get("q", "")
+    return jsonify(command_center.global_search(q))
+
+
+@app.route("/api/cc/recurring-grid", methods=["GET"])
+def cc_recurring_grid():
+    return jsonify(command_center.get_recurring_grid())
+
+
+@app.route("/api/cc/health", methods=["GET"])
+def cc_health():
+    return jsonify(command_center.health_check())
+
+
+@app.route("/api/cc/eod", methods=["GET"])
+def cc_eod():
+    return jsonify(command_center.get_eod_summary())
+
+
+@app.route("/api/cc/weekly-review", methods=["GET"])
+def cc_weekly_review():
+    return jsonify(command_center.get_weekly_review())
+
+
+@app.route("/api/cc/carryovers", methods=["GET"])
+def cc_carryovers():
+    return jsonify(command_center.get_carryover_tasks())
+
+
+@app.route("/api/cc/triage", methods=["POST"])
+def cc_triage():
+    body = request.get_json(silent=True) or {}
+    result = command_center.triage_task(body.get("task_id", ""), body.get("action", "keep"))
+    if result is None:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(result)
 
 
 if __name__ == "__main__":
