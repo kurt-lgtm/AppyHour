@@ -79,19 +79,13 @@ def fetch_orders(base, headers, ship_tag, source_sku):
         time.sleep(0.1)
 
     targets = []
-    skipped = 0
     for o in all_orders:
         tags = [t.strip() for t in o.get("tags", "").split(",")]
         if ship_tag not in tags:
             continue
-        order_skus = [(li.get("sku") or "").upper() for li in o.get("line_items", [])]
-        if any(frag in sku for sku in order_skus for frag in DIETARY_RESTRICTION_FRAGMENTS):
-            skipped += 1
-            continue
         has_source = any(li.get("sku") == source_sku for li in o.get("line_items", []))
         if has_source:
             targets.append(o)
-    print(f"  Skipped {skipped} dietary restriction orders")
     return targets
 
 def swap_one(base, headers, order, old_sku, new_sku, variant_gids):

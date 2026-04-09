@@ -160,6 +160,19 @@ def _section_header(ws: Worksheet, row: int, text: str, bg: str, fg: str, last_c
         ws.cell(row=row, column=ci).fill = fill
 
 
+# ── SKU Aliases ──────────────────────────────────────────────────────
+# Maps retired/duplicate SKUs to their canonical equivalents.
+# Demand from aliased SKUs is folded into the canonical SKU.
+SKU_ALIASES: dict[str, str] = {
+    "CH-RAGPT": "CH-RP",
+}
+
+
+def _normalize_sku(sku: str) -> str:
+    """Return canonical SKU, resolving aliases."""
+    return SKU_ALIASES.get(sku, sku)
+
+
 # ── Data Fetching (copied from v1 with cleanup) ─────────────────────
 
 
@@ -168,10 +181,6 @@ def _fetch_all_data(settings: dict) -> dict:
     sku_translations = settings.get("sku_translations", {})
     recharge_token = settings.get("recharge_api_token", "")
     inv_settings = settings.get("inventory", {})
-
-    def sku_name(sku: str) -> str:
-        data = inv_settings.get(sku, {})
-        return data.get("name", "") if isinstance(data, dict) else ""
 
     # -- Load inventory --
     print("Loading inventory...")
@@ -194,13 +203,42 @@ def _fetch_all_data(settings: dict) -> dict:
                         pass
         print(f"  Loaded {len(inventory)} SKUs from template check (col {avail_col})")
 
-    # -- Load CSV as DictReader for bulk weights --
+    # -- Load CSV as DictReader for bulk weights and SKU names --
     csv_rows: list[dict] = []
+    csv_sku_names: dict[str, str] = {}
     try:
         with open(INV_CSV, encoding="utf-8-sig") as _f:
             csv_rows = list(_csv.DictReader(_f))
+        for row in csv_rows:
+            sku = (row.get("Product SKU") or "").strip()
+            name = (row.get("Ingredient") or "").strip()
+            if sku and name:
+                csv_sku_names[sku] = name
+        print(f"  Loaded {len(csv_sku_names)} SKU names from inventory CSV")
     except Exception as e:
         print(f"  Warning: Could not load CSV as DictReader: {e}")
+
+    # -- Load Shopify SKU database as final fallback --
+    shopify_sku_names: dict[str, str] = {}
+    _sku_db_path = os.path.join(os.path.dirname(BASE), "AppyHourMCP", "data", "sku_database.json")
+    if os.path.exists(_sku_db_path):
+        try:
+            with open(_sku_db_path, encoding="utf-8") as _sdf:
+                shopify_sku_names = json.load(_sdf)
+        except Exception:
+            pass
+
+    def sku_name(sku: str) -> str:
+        # 1. Dropbox inventory CSV (canonical "Cheese Slice, ..." format)
+        if sku in csv_sku_names:
+            return csv_sku_names[sku]
+        # 2. Settings inventory
+        data = inv_settings.get(sku, {})
+        settings_name = data.get("name", "") if isinstance(data, dict) else ""
+        if settings_name:
+            return settings_name
+        # 3. Shopify SKU database (raw Shopify titles)
+        return shopify_sku_names.get(sku, "")
 
     bulk_weights = extract_bulk_weights(csv_rows) if csv_rows else {}
 
@@ -217,6 +255,25 @@ def _fetch_all_data(settings: dict) -> dict:
     all_inv_skus = set(inventory.keys()) | set(sat_dep.keys()) | set(tue_dep.keys())
     for sku in all_inv_skus:
         available[sku] = inventory.get(sku, 0) - sat_dep.get(sku, 0) - tue_dep.get(sku, 0)
+
+    # -- Override with corrected inventory if provided --
+    corrected_inv_path = settings.get("corrected_inventory_path", "")
+    if corrected_inv_path and os.path.exists(corrected_inv_path):
+        try:
+            _ci_wb = openpyxl.load_workbook(corrected_inv_path, read_only=True, data_only=True)
+            _ci_ws = _ci_wb[_ci_wb.sheetnames[0]]
+            _ci_count = 0
+            for _ci_row in _ci_ws.iter_rows(min_row=2, values_only=True):
+                _ci_sku = (_ci_row[0] or "") if _ci_row else ""
+                _ci_qty = _ci_row[6] if len(_ci_row) > 6 else None  # Column G = Corrected Qty
+                if _ci_sku and _ci_qty is not None:
+                    _ci_sku = _normalize_sku(str(_ci_sku).strip())
+                    available[_ci_sku] = int(float(_ci_qty))
+                    _ci_count += 1
+            _ci_wb.close()
+            print(f"  Overrode {_ci_count} SKUs from corrected inventory: {corrected_inv_path}")
+        except Exception as e:
+            print(f"  Warning: Could not load corrected inventory: {e}")
 
     # -- Recharge --
     print("Fetching Recharge charges...")
@@ -238,13 +295,6 @@ def _fetch_all_data(settings: dict) -> dict:
         monthly_by_week_month,
     ) = fetch_recharge_api(recharge_token)
 
-    rc_wk1_total = sum(rc_wk1.values())
-    rc_wk2_total = sum(rc_wk2.values())
-    rc_wk1_curs = sum(rc_wk1_curations.values())
-    rc_wk2_curs = sum(rc_wk2_curations.values())
-    print(f"  Recharge WK1: {rc_wk1_total} pickable SKUs, {rc_wk1_curs} curation charges")
-    print(f"  Recharge WK2: {rc_wk2_total} pickable SKUs, {rc_wk2_curs} curation charges")
-
     # -- Shopify --
     print("Fetching Shopify orders...")
     (
@@ -259,6 +309,27 @@ def _fetch_all_data(settings: dict) -> dict:
         sh_wk1_lge,
         sh_wk2_lge,
     ) = fetch_shopify_orders(settings)
+
+    # -- Normalize aliased SKUs across all demand dicts --
+    if SKU_ALIASES:
+        def _apply_aliases(d: dict) -> dict:
+            merged: dict = {}
+            for k, v in d.items():
+                canonical = _normalize_sku(k)
+                merged[canonical] = merged.get(canonical, 0) + v
+            return merged
+
+        rc_wk1 = _apply_aliases(rc_wk1)
+        rc_wk2 = _apply_aliases(rc_wk2)
+        sh_wk1_addon = _apply_aliases(sh_wk1_addon)
+        sh_wk2_addon = _apply_aliases(sh_wk2_addon)
+
+    rc_wk1_total = sum(rc_wk1.values())
+    rc_wk2_total = sum(rc_wk2.values())
+    rc_wk1_curs = sum(rc_wk1_curations.values())
+    rc_wk2_curs = sum(rc_wk2_curations.values())
+    print(f"  Recharge WK1: {rc_wk1_total} pickable SKUs, {rc_wk1_curs} curation charges")
+    print(f"  Recharge WK2: {rc_wk2_total} pickable SKUs, {rc_wk2_curs} curation charges")
 
     sh_wk1_total = sum(sh_wk1_addon.values())
     sh_wk2_total = sum(sh_wk2_addon.values())
@@ -993,9 +1064,9 @@ def _build_cut_order_tab(
     tight = [r for r in sku_rows if r["urgency"] == "TIGHT"]
     ok = [r for r in sku_rows if r["urgency"] == "OK"]
 
-    # Sort within groups
-    shortages.sort(key=lambda r: (CAT_ORDER.get(r["cat"], 9), r["after1"]))
-    tight.sort(key=lambda r: (CAT_ORDER.get(r["cat"], 9), r["sort_ratio"]))
+    # Sort within groups: category then alphabetical by SKU
+    shortages.sort(key=lambda r: (CAT_ORDER.get(r["cat"], 9), r["sku"]))
+    tight.sort(key=lambda r: (CAT_ORDER.get(r["cat"], 9), r["sku"]))
     ok.sort(key=lambda r: (CAT_ORDER.get(r["cat"], 9), r["sku"]))
 
     # ── Write rows ──

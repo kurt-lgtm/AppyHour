@@ -37,7 +37,7 @@ mcp: FastMCP = FastMCP("appyhour_mcp")
 
 # Import tool modules — each module registers tools on the shared `mcp` instance
 # We pass `mcp` via a module-level setter pattern
-from tools import gelcalc, shopify, inventory, shipping, context, google_sheets, gorgias, gorgias_sheets_sync, ops_summary_builder, order_edit, matrix_qc
+from tools import gelcalc, shopify, inventory, shipping, context, google_sheets, gorgias, gorgias_sheets_sync, ops_summary_builder, order_edit, matrix_qc, product_catalog
 
 gelcalc.register(mcp)
 shopify.register(mcp)
@@ -50,6 +50,7 @@ gorgias_sheets_sync.register(mcp)
 ops_summary_builder.register(mcp)
 order_edit.register(mcp)
 matrix_qc.register(mcp)
+product_catalog.register(mcp)
 
 if __name__ == "__main__":
     try:

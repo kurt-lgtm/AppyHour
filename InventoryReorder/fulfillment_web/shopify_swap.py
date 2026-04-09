@@ -18,19 +18,9 @@ from typing import Callable
 
 import requests
 
-# Dietary restriction box SKU fragments — orders with these are excluded from
-# automatic swaps because their contents are curated for the restriction.
-# If a restricted item appears on such an order, the customer chose it themselves.
+# Dietary restriction box SKU fragments — kept for reference but no longer
+# used to skip swaps. If an item is on a dietary order, it's safe to swap.
 DIETARY_RESTRICTION_FRAGMENTS = ("NNRS", "CORS", "NCRS")
-
-def _has_dietary_restriction(line_items: list[dict]) -> bool:
-    """Check if any line item SKU contains a dietary restriction fragment."""
-    for li in line_items:
-        sku = (li.get("sku") or "").strip().upper()
-        for frag in DIETARY_RESTRICTION_FRAGMENTS:
-            if frag in sku:
-                return True
-    return False
 
 def _gql(store_url: str, token: str, query: str, variables: dict | None = None) -> dict:
     """Execute a Shopify Admin GraphQL query."""
@@ -110,8 +100,6 @@ def find_swap_targets(
             if ship_tag not in tags:
                 continue
             order_line_items = o.get("line_items", [])
-            if _has_dietary_restriction(order_line_items):
-                continue
             for li in order_line_items:
                 sku = (li.get("sku") or "").strip()
                 if sku != old_sku:

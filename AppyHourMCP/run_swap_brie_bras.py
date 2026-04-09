@@ -75,15 +75,10 @@ def fetch_orders(base, headers, ship_tag, source_skus):
         time.sleep(0.1)
 
     targets = []
-    skipped_dietary = 0
     skipped_gift = 0
     for o in all_orders:
         tags = [t.strip() for t in o.get("tags", "").split(",")]
         if ship_tag not in tags:
-            continue
-        order_skus = [(li.get("sku") or "").upper() for li in o.get("line_items", [])]
-        if any(frag in sku for sku in order_skus for frag in DIETARY_RESTRICTION_FRAGMENTS):
-            skipped_dietary += 1
             continue
         if SKIP_TAG in tags:
             skipped_gift += 1
@@ -92,7 +87,6 @@ def fetch_orders(base, headers, ship_tag, source_skus):
                      if li.get("sku") in source_skus}
         if swap_skus:
             targets.append((o, swap_skus))
-    print(f"  Skipped {skipped_dietary} dietary restriction orders")
     print(f"  Skipped {skipped_gift} Gift Redemption orders")
     return targets
 

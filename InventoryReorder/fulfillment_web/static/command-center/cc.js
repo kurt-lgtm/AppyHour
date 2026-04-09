@@ -155,6 +155,16 @@ function ccRender() {
 
     // Count total active work tasks
     const totalWork = (ccData.quick_wins?.length || 0) + (ccData.today?.length || 0) + (ccData.frog ? 1 : 0);
+    const totalAll = totalWork + (ccData.personal?.length || 0) + (ccData.blocked?.length || 0) + (ccData.completed_today?.length || 0);
+
+    // Empty state — no tasks at all
+    if (totalAll === 0) {
+        ccShowEmptyState();
+        return;
+    }
+    // Hide empty state if it was showing
+    const emptyEl = document.getElementById('cc-empty-state');
+    if (emptyEl) emptyEl.style.display = 'none';
 
     // Overwhelm detection (12+ tasks) — show once per session
     if (totalWork >= 12 && !ccOverwhelmDismissed && !ccLightenedDay) {
@@ -285,6 +295,32 @@ function ccRenderCard(task, isFrog, isPersonal) {
 function ccToggleSectionVisibility(sectionId, hasItems) {
     const el = document.getElementById(sectionId);
     if (el) el.style.display = hasItems ? '' : 'none';
+}
+
+function ccShowEmptyState() {
+    let el = document.getElementById('cc-empty-state');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'cc-empty-state';
+        el.style.cssText = 'text-align:center;padding:60px 24px;color:#8a90a0;';
+        el.innerHTML = `
+            <div style="font-size:40px;margin-bottom:16px">&#128203;</div>
+            <div style="font-size:18px;color:#eaeaea;margin-bottom:8px">Command Center is ready</div>
+            <div style="margin-bottom:20px;max-width:400px;margin-left:auto;margin-right:auto">
+                No tasks for today yet. Add recurring tasks or create one to get started.
+            </div>
+            <button class="cc-energy-btn" style="padding:8px 20px;font-size:14px" onclick="ccShowAddTask()">+ Add Task</button>
+            <button class="cc-energy-btn" style="padding:8px 20px;font-size:14px;margin-left:8px" onclick="ccShowRecurring()">Set Up Recurring</button>
+        `;
+        const main = document.querySelector('.cc-main');
+        if (main) main.insertBefore(el, main.querySelector('.cc-section'));
+    }
+    el.style.display = '';
+    // Hide empty sections
+    ['cc-quickwins', 'cc-frog', 'cc-today', 'cc-personal'].forEach(id => {
+        const s = document.getElementById(id);
+        if (s) s.style.display = 'none';
+    });
 }
 
 function ccUpdateProgress() {

@@ -27,26 +27,30 @@ Replace manual spreadsheet tracking with automated weekly reports. Jessa should 
 
 ---
 
-## Current State (Last 14 Days)
+## Current State (Last 14 Days — ~5,400 orders shipped)
 
-| Metric | Number |
-|--------|--------|
-| Operational issues found | 46 |
-| Food safety issues found | 25 |
-| Total real CS tickets | ~71 |
-| Spam/auto-reply tickets | ~51% of raw volume |
-| Cancellation tickets | ~60% of human tickets |
+**Order volume:** ~2,700 orders/week (Sat ~2,300 + Tue ~400) from Shopify + Recharge
+
+| Metric | Count | Rate (per 5,400 orders) |
+|--------|-------|------------------------|
+| Operational issues | 46 | 0.85% |
+| Food safety issues | 25 | 0.46% |
+| Total real CS tickets | ~71 | 1.31% |
+| Spam/auto-reply tickets | ~51% of raw volume | — |
+| Cancellation tickets | ~60% of human tickets | — |
+
+**Context:** 0.46% food safety rate is solid for perishable cold chain. All metrics should be tracked as rates against order volume, not raw counts — raw counts rise with growth even if quality improves.
 
 ### Top Operational Issues (Last 14 Days)
-| Issue Type | Count |
-|------------|-------|
-| Arrived Warm / Heat Sensitive | ~12 |
-| Missing Item (cheese, meat, accompaniment) | ~10 |
-| Substitute Complaint | ~8 |
-| Wrong Order | ~4 |
-| Quality Complaint (cheese) | ~8 |
-| Mold (sealed package) | ~3 |
-| Off smell/odor | ~2 |
+| Issue Type | Count | Rate | Trend |
+|------------|-------|------|-------|
+| Arrived Warm / Heat Sensitive | ~12 | 0.22% | Trending up (summer) |
+| Missing Item (cheese, meat, accompaniment) | ~10 | 0.19% | Stable |
+| Substitute Complaint | ~8 | 0.15% | Stable |
+| Quality Complaint (cheese) | ~8 | 0.15% | Stable |
+| Wrong Order | ~4 | 0.07% | Stable |
+| Mold (sealed package) | ~3 | 0.06% | Monitor |
+| Off smell/odor | ~2 | 0.04% | Low |
 
 ### Resolutions Applied
 | Resolution | Examples |
@@ -108,23 +112,25 @@ TICKET VOLUME
   Real CS tickets: 71 (after spam filter)
   Cancellation requests: 42
 
-OPERATIONAL ISSUES
-  Arrived Warm: 12 (↑ — entering summer)
-  Missing Item: 10 (stable)
-  Substitute Complaint: 8 (stable)
-  Wrong Order: 4 (↓)
+ORDER VOLUME: 2,700 orders shipped this week
+
+OPERATIONAL ISSUES (46 issues = 0.85% of orders)
+  Arrived Warm: 12 / 2,700 = 0.44% (↑ — entering summer)
+  Missing Item: 10 / 2,700 = 0.37% (stable)
+  Substitute Complaint: 8 / 2,700 = 0.30% (stable)
+  Wrong Order: 4 / 2,700 = 0.15% (↓)
   
-FOOD SAFETY
-  Quality Complaints: 8
-  Mold Reports: 3 (all sealed package — investigate RMFG storage)
-  Off Smell: 2
+FOOD SAFETY (25 issues = 0.46% of orders — target: <1%)
+  Quality Complaints: 8 (0.15%)
+  Mold Reports: 3 (0.06% — monitor RMFG storage)
+  Off Smell: 2 (0.04%)
 
 RESOLUTION COST
   Full Reships: 8 × $65 avg = $520
   Partial Reships: 5 × $30 avg = $150
   Refunds: 12 × $18 avg = $216
   Credits: 6 × $15 avg = $90
-  TOTAL CS COST: $976 this week (↓12% vs last week)
+  TOTAL CS COST: $976 / 2,700 orders = $0.36/order (↓12% vs last week)
 
 TOP ACTION ITEMS
   🔴 Arrived Warm trending up — summer gel pack adjustment needed (→ Tommy)

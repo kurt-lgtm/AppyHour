@@ -145,6 +145,8 @@ def register(mcp: object) -> None:
 
             # Extract custom fields (Issue Type, Resolution, Category)
             raw_cf = ticket.get("custom_fields") or []
+            if not isinstance(raw_cf, list):
+                raw_cf = []
             custom_fields = {}
             for cf in raw_cf:
                 field_id = cf.get("field_id") or cf.get("id")
@@ -159,7 +161,11 @@ def register(mcp: object) -> None:
                 "status": ticket.get("status"),
                 "channel": ticket.get("channel"),
                 "created": ticket.get("created_datetime"),
-                "tags": [tag.get("name") for tag in ticket.get("tags", [])],
+                "tags": [
+                    tag.get("name") if isinstance(tag, dict) else str(tag)
+                    for tag in (ticket.get("tags") or [])
+                    if isinstance(tag, (dict, str))
+                ],
                 "custom_fields": custom_fields,
                 "customer": ticket.get("customer", {}),
                 "messages": [{

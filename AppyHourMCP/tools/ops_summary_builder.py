@@ -104,7 +104,7 @@ RESOLUTION_ALIASES = {
     "Full Refund": "Refund Order::Full Amount",
 }
 
-FCS = ["GRIPCA", "RMFG", "COG"]
+FCS = ["GRIPCA", "RMFG", "COG"]  # All 3 for historical data; 2026+ weeks show 0 for retired FCs
 
 
 def _load_settings() -> dict[str, str]:

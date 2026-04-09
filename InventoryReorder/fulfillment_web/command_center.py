@@ -13,6 +13,19 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 from typing import Optional
 
+DAY_NAME_TO_INT = {
+    "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+    "friday": 4, "saturday": 5, "sunday": 6,
+}
+
+
+def _day_int(val) -> int:
+    """Convert day_of_week value (str or int) to Python weekday int."""
+    if isinstance(val, int):
+        return val
+    return DAY_NAME_TO_INT.get(str(val).lower().strip(), 0)
+
+
 # ---------------------------------------------------------------------------
 # Database
 # ---------------------------------------------------------------------------
@@ -1125,7 +1138,7 @@ def get_streaks() -> list[dict]:
         check_date = date.today()
         while weeks < 52:  # Max 1 year lookback
             # Find the most recent occurrence of this day-of-week before check_date
-            days_back = (check_date.weekday() - rec["day_of_week"]) % 7
+            days_back = (check_date.weekday() - _day_int(rec["day_of_week"])) % 7
             if days_back == 0 and check_date == date.today():
                 days_back = 0  # Today counts
             target_date = check_date - timedelta(days=days_back)

@@ -22,8 +22,9 @@ SWAPS = {
     "MT-BRAS": "MT-SBRES",
 }
 
-# Dietary restriction box SKU fragments — orders with these are excluded from
-# automatic swaps because their contents are curated for the restriction.
+# Dietary restriction box SKU fragments — kept for reference but no longer
+# used to skip swaps. If an item is on a dietary order, it's either a
+# standard rotation item or customer-chosen — safe to swap either way.
 DIETARY_RESTRICTION_FRAGMENTS = ("NNRS", "CORS", "NCRS")
 
 def lookup_variant_gids(base, headers, target_skus):
@@ -63,21 +64,14 @@ def fetch_orders(base, headers, ship_tag, source_skus):
         time.sleep(0.1)
 
     targets = []
-    skipped = 0
     for o in all_orders:
         tags = [t.strip() for t in o.get("tags", "").split(",")]
         if ship_tag not in tags:
-            continue
-        # Exclude dietary restriction orders (NNRS/CORS/NCRS)
-        order_skus = [(li.get("sku") or "").upper() for li in o.get("line_items", [])]
-        if any(frag in sku for sku in order_skus for frag in DIETARY_RESTRICTION_FRAGMENTS):
-            skipped += 1
             continue
         swap_skus = {li["sku"] for li in o.get("line_items", [])
                      if li.get("sku") in source_skus}
         if swap_skus:
             targets.append((o, swap_skus))
-    print(f"  Skipped {skipped} dietary restriction orders (NNRS/CORS/NCRS)")
     return targets
 
 def swap_one(base, headers, order, swap_skus, variant_gids, swaps):

@@ -17,19 +17,14 @@ import requests
 
 from utils import get_shopify_auth, shopify_graphql, format_error, to_json, APPYHOUR_ROOT
 
-# Dietary restriction box SKU fragments — orders with these are excluded from
-# automatic swaps because their contents are curated for the restriction.
+# Dietary restriction box SKU fragments — these indicate curated boxes but
+# do NOT prevent swaps. The restriction only means the *default* curation
+# avoids that category. If an item is on the order, the customer chose it
+# or it's a standard rotation item safe to swap within its own category.
+# - NNRS = No Nuts (swap anything except nuts)
+# - NCRS = No Crackers (swap anything except crackers)
+# - CORS = No Meat (swap anything except meat)
 DIETARY_RESTRICTION_FRAGMENTS = ("NNRS", "CORS", "NCRS")
-
-
-def _has_dietary_restriction(line_items: list[dict]) -> bool:
-    """Check if any line item SKU contains a dietary restriction fragment."""
-    for li in line_items:
-        sku = (li.get("sku") or "").strip().upper()
-        for frag in DIETARY_RESTRICTION_FRAGMENTS:
-            if frag in sku:
-                return True
-    return False
 
 
 def _lookup_variant_gids(base: str, headers: dict[str, str], skus: set[str]) -> dict[str, str]:
@@ -209,16 +204,10 @@ def register(mcp: object) -> None:
                 time.sleep(0.1)
 
             # Filter by ship tag + box SKU + swappable SKUs
-            # Exclude dietary restriction orders (NNRS/CORS/NCRS)
             targets = []
-            skipped_dietary = 0
             for o in all_orders:
                 tags = [t.strip() for t in o.get("tags", "").split(",")]
                 if params.ship_tag not in tags:
-                    continue
-                order_line_items = o.get("line_items", [])
-                if _has_dietary_restriction(order_line_items):
-                    skipped_dietary += 1
                     continue
                 has_box = not params.box_sku
                 swap_skus = set()
@@ -244,7 +233,6 @@ def register(mcp: object) -> None:
                     "box_sku": params.box_sku or "(any)",
                     "variant_gids": variant_gids,
                     "orders_to_swap": len(targets),
-                    "skipped_dietary_restriction": skipped_dietary,
                     "preview": preview,
                 })
 
@@ -288,7 +276,7 @@ def register(mcp: object) -> None:
             return to_json({
                 "swapped": len(results),
                 "failed": len(errors_list),
-                "skipped_dietary_restriction": skipped_dietary,
+
                 "csv_path": csv_path,
                 "results": results[:20],
                 "errors": errors_list[:20],

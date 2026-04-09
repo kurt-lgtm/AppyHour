@@ -62,6 +62,89 @@ EXCLUDED_ISSUE_TYPES = (
     "Order::Missing item::Confusion about contents",
 )
 
+# ── Tag → Issue Type inference (fallback when field 13282 is wrong) ───
+# Gorgias agents often set the wrong issue type dropdown but apply
+# accurate tags.  These mappings let the sync recover the real issue.
+
+# Specific reship tags map directly to issue types
+TAG_ISSUE_MAP: dict[str, str] = {
+    "reship - misdelivered": "Shipping::Lost in Transit/Misdelivered",
+    "reship - arrived warm": "Shipping::Damaged in transit::Arrived Warm",
+    "reship - delayed": "Shipping::Delayed in transit",
+    "reship - damaged": "Shipping::Damaged in transit::Other",
+    "reship - missing item": "Order::Missing item",
+    "reship - wrong order": "Order::Wrong Order",
+    "reship - wrong item": "Order::Wrong item",
+}
+
+# Gate tags — at least one must be present to trigger inference
+OPERATIONAL_GATE_TAGS = frozenset({
+    "reship",
+    "order issue",
+    "shipping issue",
+    "not-received",
+})
+
+# Subject/message keyword patterns (checked when tags aren't specific enough)
+KEYWORD_ISSUE_MAP: list[tuple[tuple[str, ...], str]] = [
+    (("arrived warm", "melted gel", "warm delivery"), "Shipping::Damaged in transit::Arrived Warm"),
+    (("gel pack burst", "gel pack leak"), "Shipping::Damaged in transit::Other"),
+    (("misdelivered", "misdelivery", "wrong address delivered"), "Shipping::Lost in Transit/Misdelivered"),
+    (("lost in transit", "never received", "did not receive", "stolen"), "Shipping::Lost in Transit/Misdelivered"),
+    (("delayed in transit", "delayed", "days in transit"), "Shipping::Delayed in transit"),
+    (("cannot be delivered", "unable to deliver", "undeliverable"), "Shipping::cannot be delivered"),
+    (("damaged in transit", "damaged box", "broken"), "Shipping::Damaged in transit::Other"),
+    (("missing item", "missing cheese", "missing meat"), "Order::Missing item"),
+    (("wrong order", "wrong box", "wrong curation"), "Order::Wrong Order"),
+    (("wrong item", "incorrect item", "substitut"), "Order::Substitute complaint"),
+]
+
+
+def _infer_issue_type_from_tags(ticket: dict) -> str:
+    """Infer issue type from ticket tags and subject when field 13282 is wrong.
+
+    Returns a VALID_ISSUE_PREFIXES-compatible string, or "" if no match.
+    """
+    raw_tags = ticket.get("tags", [])
+    if not isinstance(raw_tags, list):
+        return ""
+    tag_names = [
+        (t.get("name", "") if isinstance(t, dict) else str(t)).lower()
+        for t in raw_tags
+    ]
+
+    # Gate: only infer if at least one operational tag is present
+    if not any(gt in tag_names for gt in OPERATIONAL_GATE_TAGS):
+        # Also check for any "reship - *" tag
+        if not any(t.startswith("reship -") or t.startswith("reship-") for t in tag_names):
+            return ""
+
+    # 1) Check specific reship tags first (most reliable)
+    for tag in tag_names:
+        tag_clean = tag.strip()
+        if tag_clean in TAG_ISSUE_MAP:
+            return TAG_ISSUE_MAP[tag_clean]
+        # Handle variations like "reship-misdelivered" (no space)
+        tag_dashed = tag_clean.replace("-", " - ").replace("  ", " ")
+        if tag_dashed in TAG_ISSUE_MAP:
+            return TAG_ISSUE_MAP[tag_dashed]
+
+    # 2) Fall back to subject + tag keyword matching
+    subject = (ticket.get("subject") or "").lower()
+    search_text = subject + " " + " ".join(tag_names)
+
+    for keywords, issue_type in KEYWORD_ISSUE_MAP:
+        if any(kw in search_text for kw in keywords):
+            return issue_type
+
+    # 3) Generic "reship" or "not-received" without specifics
+    if "not-received" in tag_names:
+        return "Shipping::Lost in Transit/Misdelivered"
+
+    # Has operational gate tags but couldn't determine specific type
+    return ""
+
+
 # ── Valid Resolution prefixes (column I) from original sheet ──────────
 VALID_RESOLUTION_PREFIXES = (
     "Full Reship",
@@ -271,12 +354,19 @@ def _extract_gorgias_link(ticket: dict, subdomain: str = "appyhour") -> str:
 
 
 def _matches_valid_prefix(value: str, prefixes: tuple[str, ...]) -> bool:
-    return any(value.startswith(p) for p in prefixes)
+    val_lower = value.lower()
+    return any(val_lower.startswith(p.lower()) for p in prefixes)
 
 
 def _extract_state_from_tags(ticket: dict) -> str:
     """Try to extract destination state from ticket tags or subject."""
-    tags = [t.get("name", "") for t in ticket.get("tags", [])]
+    raw_tags = ticket.get("tags", [])
+    if not isinstance(raw_tags, list):
+        raw_tags = []
+    tags = [
+        t.get("name", "") if isinstance(t, dict) else str(t)
+        for t in raw_tags
+    ]
     for tag in tags:
         for state in US_STATES:
             if state.lower() in tag.lower():
@@ -286,7 +376,13 @@ def _extract_state_from_tags(ticket: dict) -> str:
 
 def _extract_fc_tag(ticket: dict) -> str:
     """Try to extract fulfillment center from ticket tags."""
-    tags = [t.get("name", "").lower() for t in ticket.get("tags", [])]
+    raw_tags = ticket.get("tags", [])
+    if not isinstance(raw_tags, list):
+        raw_tags = []
+    tags = [
+        (t.get("name", "") if isinstance(t, dict) else str(t)).lower()
+        for t in raw_tags
+    ]
     for tag in tags:
         for key, fc in FC_TAG_MAP.items():
             if key in tag:
@@ -413,11 +509,16 @@ def sync_gorgias_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict[str
 
             # Get issue type from field 13282
             issue_type = cf.get(FIELD_ISSUE_TYPE, {}).get("value", "")
+            inferred = False
             if not issue_type or not _matches_valid_prefix(issue_type, VALID_ISSUE_PREFIXES):
-                skipped_tag += 1
-                continue
-            # Skip explicitly excluded issue types
-            if any(issue_type.startswith(ex) for ex in EXCLUDED_ISSUE_TYPES):
+                # Field is empty or set to wrong value — try tag-based inference
+                issue_type = _infer_issue_type_from_tags(t)
+                if not issue_type:
+                    skipped_tag += 1
+                    continue
+                inferred = True
+            # Skip explicitly excluded issue types (only for non-inferred)
+            if not inferred and any(issue_type.lower().startswith(ex.lower()) for ex in EXCLUDED_ISSUE_TYPES):
                 skipped_tag += 1
                 continue
 
@@ -439,9 +540,27 @@ def sync_gorgias_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict[str
                 skipped_dup += 1
                 continue
 
+            # Shopify lookup for Carrier, State, FC Tag (single pass — no enrich needed)
+            import time as _time_sync
+            carrier = ""
+            state = _extract_state_from_tags(t)
+            fc_tag = _extract_fc_tag(t)
+            shopify_order = None
+            if order_num:
+                shopify_order = _shopify_order_by_name(order_num)
+                _time_sync.sleep(0.3)
+            if shopify_order:
+                carrier = _extract_carrier_from_shopify(shopify_order)
+                if not state:
+                    state = _extract_state_from_shopify(shopify_order)
+                if not fc_tag:
+                    fc_tag = _extract_fc_from_shopify_tags(shopify_order)
+            # Default FC to RMFG — sole active FC since Feb 2026
+            if not fc_tag:
+                fc_tag = "RMFG"
+
             # Format date as Month-DD (based on first customer message, not ticket creation)
             first_msg_dt = _get_first_customer_message_date(t, auth=auth, base_url=base_url)
-            import time as _time_sync
 
             _time_sync.sleep(0.3)  # rate limit after message fetch
             try:
@@ -459,9 +578,9 @@ def sync_gorgias_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict[str
                 contact_reason,
                 order_num,
                 gorgias_link,
-                "",  # Carrier — not reliably in Gorgias
-                _extract_state_from_tags(t),
-                _extract_fc_tag(t),
+                carrier,
+                state,
+                fc_tag,
                 issue_type,
                 resolution,
                 "",  # Comment
