@@ -29,6 +29,9 @@ function ccLoad() {
     ccFetchToday();
     ccFetchStreaks();
     ccFetchActivity();
+    ccFetchRecurringGrid();
+    ccCheckHealth();
+    ccInjectSearchBar();
     ccUpdateGreeting();
 
     // Auto-refresh every 5 minutes (re-check energy, re-fetch tasks)
@@ -1407,6 +1410,134 @@ function ccRenderActivity(events) {
             </div>`;
         }).join('')}
     `;
+}
+
+// ── Global Search ────────────────────────────────────────────────────
+
+function ccInjectSearchBar() {
+    const header = document.querySelector('.cc-header');
+    if (!header || document.getElementById('cc-search-bar')) return;
+    const bar = document.createElement('div');
+    bar.id = 'cc-search-bar';
+    bar.style.cssText = 'margin-bottom:16px;';
+    bar.innerHTML = `<input type="text" id="cc-search-input" placeholder="Search tasks, activity, decisions..."
+        style="width:100%;padding:10px 14px;min-height:40px;background:var(--cc-surface);border:1px solid var(--cc-border);
+        border-radius:var(--cc-radius);color:var(--cc-text-1);font-family:'DM Sans',sans-serif;font-size:13px;outline:none;
+        transition:border-color 200ms;"
+        onfocus="this.style.borderColor='var(--cc-accent)'"
+        onblur="this.style.borderColor='var(--cc-border)'"
+    ><div id="cc-search-results" style="display:none;margin-top:8px;"></div>`;
+    header.after(bar);
+    let _searchTimeout;
+    document.getElementById('cc-search-input').addEventListener('input', (e) => {
+        clearTimeout(_searchTimeout);
+        const q = e.target.value.trim();
+        if (q.length < 2) { document.getElementById('cc-search-results').style.display = 'none'; return; }
+        _searchTimeout = setTimeout(() => ccDoSearch(q), 300);
+    });
+}
+
+async function ccDoSearch(q) {
+    const container = document.getElementById('cc-search-results');
+    if (!container) return;
+    try {
+        const resp = await fetch(`/api/cc/search?q=${encodeURIComponent(q)}`);
+        const data = await resp.json();
+        if (data.total === 0) {
+            container.style.display = 'block';
+            container.innerHTML = `<div style="color:var(--cc-text-3);font-size:12px;padding:8px;">No results for "${ccEsc(q)}"</div>`;
+            return;
+        }
+        let html = '';
+        if (data.tasks.length) {
+            html += `<div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--cc-accent);text-transform:uppercase;letter-spacing:1.5px;margin:8px 0 4px;">TASKS (${data.tasks.length})</div>`;
+            html += data.tasks.slice(0, 5).map(t =>
+                `<div class="cc-task-card" style="padding:8px 12px;margin-bottom:4px;cursor:pointer;" onclick="ccSelectTask('${t.id}')">
+                    <div class="cc-task-title" style="font-size:13px;">${ccEsc(t.title)}</div>
+                    <div style="font-size:11px;color:var(--cc-text-3);">${t.status} · ${t.type}</div>
+                </div>`
+            ).join('');
+        }
+        if (data.activity.length) {
+            html += `<div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--cc-accent);text-transform:uppercase;letter-spacing:1.5px;margin:8px 0 4px;">ACTIVITY (${data.activity.length})</div>`;
+            html += data.activity.slice(0, 5).map(a =>
+                `<div style="font-size:12px;color:var(--cc-text-2);padding:4px 0;">${ccEsc(a.event)}: ${ccEsc(a.detail || '')}</div>`
+            ).join('');
+        }
+        if (data.decisions.length) {
+            html += `<div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--cc-indigo);text-transform:uppercase;letter-spacing:1.5px;margin:8px 0 4px;">DECISIONS (${data.decisions.length})</div>`;
+            html += data.decisions.slice(0, 3).map(d =>
+                `<div style="font-size:12px;color:var(--cc-text-2);padding:4px 0;">${ccEsc(d.question)}</div>`
+            ).join('');
+        }
+        container.style.display = 'block';
+        container.innerHTML = html;
+    } catch (e) { container.style.display = 'none'; }
+}
+
+// ── Recurring Weekly Grid ────────────────────────────────────────────
+
+async function ccFetchRecurringGrid() {
+    try {
+        const resp = await fetch('/api/cc/recurring-grid');
+        const data = await resp.json();
+        ccRenderRecurringGrid(data);
+    } catch (e) { /* silent */ }
+}
+
+function ccRenderRecurringGrid(data) {
+    let container = document.getElementById('cc-recurring-grid');
+    if (!container) {
+        const sidebar = document.querySelector('.cc-sidebar');
+        if (!sidebar) return;
+        container = document.createElement('div');
+        container.id = 'cc-recurring-grid';
+        container.style.cssText = 'margin-top:16px;';
+        sidebar.appendChild(container);
+    }
+    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    const today = days[new Date().getDay() === 0 ? 6 : new Date().getDay() - 1];
+
+    container.innerHTML = `
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--cc-text-3);text-transform:uppercase;letter-spacing:2px;margin-bottom:8px;">WEEKLY RHYTHM</div>
+        <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px;">
+            ${days.map(d => {
+                const isToday = d === today;
+                const tasks = data.grid[d] || [];
+                const bg = isToday ? 'var(--cc-accent-dim)' : 'var(--cc-surface)';
+                const border = isToday ? '1px solid var(--cc-accent)' : '1px solid var(--cc-border)';
+                return `<div style="background:${bg};border:${border};border-radius:4px;padding:4px;min-height:48px;font-size:9px;">
+                    <div style="font-family:'Space Mono',monospace;color:${isToday ? 'var(--cc-accent)' : 'var(--cc-text-3)'};font-weight:600;margin-bottom:2px;">${d.slice(0,3)}</div>
+                    ${tasks.map(t => `<div style="color:var(--cc-text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${ccEsc(t.title)}">${ccEsc(t.title)}</div>`).join('')}
+                    ${!tasks.length ? `<div style="color:var(--cc-text-3);">—</div>` : ''}
+                </div>`;
+            }).join('')}
+        </div>
+    `;
+}
+
+// ── Health Dot ───────────────────────────────────────────────────────
+
+async function ccCheckHealth() {
+    try {
+        const resp = await fetch('/api/cc/health');
+        const data = await resp.json();
+        let dot = document.getElementById('cc-health-dot');
+        if (!dot) {
+            dot = document.createElement('span');
+            dot.id = 'cc-health-dot';
+            dot.style.cssText = 'width:8px;height:8px;border-radius:50%;display:inline-block;margin-left:8px;transition:background 200ms;';
+            const greeting = document.querySelector('.cc-greeting');
+            if (greeting) greeting.appendChild(dot);
+        }
+        dot.style.background = data.status === 'ok' ? 'var(--cc-accent)' : 'var(--cc-amber)';
+        dot.title = data.status === 'ok'
+            ? `CC OK · ${data.active_tasks} active · ${data.recurring} recurring · ${data.pending_decisions} decisions`
+            : `CC Error: ${data.error || 'unknown'}`;
+    } catch (e) {
+        const dot = document.getElementById('cc-health-dot');
+        if (dot) { dot.style.background = '#ff3b5c'; dot.title = 'CC unreachable'; }
+    }
 }
 
 /* ── Auto-load on first view ── */

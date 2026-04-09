@@ -1746,3 +1746,103 @@ def triage_task(task_id: str, action: str) -> dict | None:
     elif action == "done":
         return update_task(task_id, status="done")
     return get_task(task_id)
+
+
+# ---------------------------------------------------------------------------
+# Global Search (absorbed from OpenClaw Mission Control video)
+# ---------------------------------------------------------------------------
+
+
+def global_search(query: str, limit: int = 20) -> dict:
+    """Search across tasks, activity log, and decisions. Returns grouped results."""
+    if not query or len(query.strip()) < 2:
+        return {"tasks": [], "activity": [], "decisions": []}
+
+    db = get_db()
+    q = f"%{query.strip()}%"
+
+    task_rows = db.execute(
+        "SELECT * FROM tasks WHERE title LIKE ? OR notes LIKE ? OR tags LIKE ? ORDER BY created_at DESC LIMIT ?",
+        (q, q, q, limit),
+    ).fetchall()
+
+    activity_rows = db.execute(
+        "SELECT * FROM activity_log WHERE event LIKE ? OR detail LIKE ? ORDER BY ts DESC LIMIT ?",
+        (q, q, limit),
+    ).fetchall()
+
+    decision_rows = db.execute(
+        "SELECT * FROM decisions WHERE question LIKE ? OR context LIKE ? ORDER BY created_at DESC LIMIT ?",
+        (q, q, limit),
+    ).fetchall()
+
+    tasks = _rows_to_list(task_rows)
+    decisions = _rows_to_list(decision_rows)
+    for d in decisions:
+        d["options"] = json.loads(d.get("options", "[]"))
+
+    return {
+        "tasks": tasks,
+        "activity": _rows_to_list(activity_rows),
+        "decisions": decisions,
+        "total": len(tasks) + len(activity_rows) + len(decisions),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Recurring Weekly Grid (absorbed from OpenClaw Mission Control video)
+# ---------------------------------------------------------------------------
+
+
+def get_recurring_grid() -> dict:
+    """Return recurring tasks organized by day-of-week for weekly grid view."""
+    recurring = list_recurring()
+    grid = {i: [] for i in range(7)}  # 0=Mon ... 6=Sun
+    for rec in recurring:
+        if not rec.get("active"):
+            continue
+        dow = _day_int(rec.get("day_of_week", 0))
+        grid[dow].append({
+            "id": rec["id"],
+            "title": rec["title"],
+            "time": rec.get("time", "09:00"),
+            "energy": rec.get("energy", "medium"),
+            "estimated_minutes": rec.get("estimated_minutes"),
+            "priority": rec.get("priority", "medium"),
+        })
+    for dow in grid:
+        grid[dow].sort(key=lambda r: r.get("time", "09:00"))
+
+    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    return {
+        "grid": {day_names[i]: grid[i] for i in range(7)},
+        "total_recurring": sum(len(v) for v in grid.values()),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Health Check (absorbed from OpenClaw Mission Control video)
+# ---------------------------------------------------------------------------
+
+
+def health_check() -> dict:
+    """Check CC system health: database, tables, task counts."""
+    try:
+        db = get_db()
+        task_count = db.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+        active_count = db.execute("SELECT COUNT(*) FROM tasks WHERE status='active'").fetchone()[0]
+        recurring_count = db.execute("SELECT COUNT(*) FROM recurring_tasks WHERE active=1").fetchone()[0]
+        decision_count = db.execute("SELECT COUNT(*) FROM decisions WHERE answered_at IS NULL").fetchone()[0]
+        brief = get_morning_brief()
+        return {
+            "status": "ok",
+            "db_path": str(DB_PATH),
+            "db_exists": DB_PATH.exists(),
+            "tasks": task_count,
+            "active_tasks": active_count,
+            "recurring": recurring_count,
+            "pending_decisions": decision_count,
+            "brief_today": brief is not None,
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e)}

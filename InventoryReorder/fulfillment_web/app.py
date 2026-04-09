@@ -10828,6 +10828,22 @@ def cc_stats():
     return jsonify(command_center.get_daily_stats())
 
 
+@app.route("/api/cc/search", methods=["GET"])
+def cc_search():
+    q = request.args.get("q", "")
+    return jsonify(command_center.global_search(q))
+
+
+@app.route("/api/cc/recurring-grid", methods=["GET"])
+def cc_recurring_grid():
+    return jsonify(command_center.get_recurring_grid())
+
+
+@app.route("/api/cc/health", methods=["GET"])
+def cc_health():
+    return jsonify(command_center.health_check())
+
+
 @app.route("/api/cc/chat", methods=["POST"])
 def cc_chat():
     """Non-streaming chat endpoint. Returns full response."""
