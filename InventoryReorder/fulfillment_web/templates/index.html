@@ -256,6 +256,7 @@
                     <button class="tab-btn" onclick="switchTab('w3', this)">Next Sat</button>
                     <button class="tab-btn" onclick="switchTab('w4', this)">Sat +3</button>
                     <button class="tab-btn" onclick="switchTab('w5', this)">Sat +4</button>
+                    <button class="tab-btn" onclick="switchTab('ledger', this)" style="margin-left:auto;border-left:1px solid var(--sep);">📒 Ledger</button>
                 </div>
 
                 <!-- This Saturday tab -->
@@ -293,10 +294,20 @@
 
                 <!-- Week 2-4 tabs -->
                 <div class="tab-content" id="tab-w2">
+                    <div class="filter-bar" style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                        <span id="tue-summary" style="font-family:'Space Mono',monospace;font-size:12px;color:var(--accent);"></span>
+                        <button class="btn-sm" onclick="copyTueSwapList()" title="Copy SHORT SKUs to clipboard">📋 Copy Swaps</button>
+                        <button class="btn-sm" onclick="exportTueCsv()" title="Export Tuesday projection as CSV">⬇ CSV</button>
+                    </div>
                     <div class="net-table-wrap">
-                        <table class="net-table"><thead><tr>
-                            <th>SKU</th><th class="num">Carry</th><th class="num">Demand</th><th class="num">NET</th><th>Status</th>
-                        </tr></thead><tbody id="week-2-body"></tbody></table>
+                        <table class="net-table" id="tue-table"><thead><tr>
+                            <th onclick="sortTueTable('status')" style="cursor:pointer">Status ▲</th>
+                            <th onclick="sortTueTable('sku')" style="cursor:pointer">SKU</th>
+                            <th onclick="sortTueTable('on_hand')" class="num" style="cursor:pointer">On Hand</th>
+                            <th onclick="sortTueTable('tue_demand')" class="num" style="cursor:pointer">Tue Demand</th>
+                            <th onclick="sortTueTable('remaining')" class="num" style="cursor:pointer">Remaining</th>
+                            <th>Action</th>
+                        </tr></thead><tbody id="tue-body"></tbody></table>
                     </div>
                 </div>
                 <div class="tab-content" id="tab-w3">
@@ -318,6 +329,30 @@
                         <table class="net-table"><thead><tr>
                             <th>SKU</th><th class="num">Carry</th><th class="num">Demand</th><th class="num">NET</th><th>Status</th>
                         </tr></thead><tbody id="week-5-body"></tbody></table>
+                    </div>
+                </div>
+
+                <!-- Inventory Ledger tab -->
+                <div class="tab-content" id="tab-ledger">
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;height:100%;">
+                        <!-- Journal Timeline -->
+                        <div>
+                            <div style="font-family:'Space Mono',monospace;font-size:12px;font-weight:600;color:var(--accent);margin-bottom:8px;">JOURNAL TIMELINE</div>
+                            <div id="ledger-timeline" style="max-height:400px;overflow-y:auto;"></div>
+                        </div>
+                        <!-- Running Inventory -->
+                        <div>
+                            <div style="font-family:'Space Mono',monospace;font-size:12px;font-weight:600;color:var(--accent);margin-bottom:8px;">CALCULATED INVENTORY</div>
+                            <div class="net-table-wrap" style="max-height:400px;overflow-y:auto;">
+                                <table class="net-table">
+                                    <thead><tr>
+                                        <th>SKU</th>
+                                        <th class="num">Available</th>
+                                    </tr></thead>
+                                    <tbody id="ledger-inv-body"></tbody>
+                                </table>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>

@@ -1409,6 +1409,179 @@ function switchTab(tabId, btn) {
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     document.getElementById(`tab-${tabId}`).classList.add('active');
     btn.classList.add('active');
+    if (tabId === 'w2') loadTuesdayProjection();
+    if (tabId === 'ledger') loadInventoryLedger();
+}
+
+// ── Tuesday Projection ────────────────────────────────────────────────
+let _tueData = [];
+let _tueSortCol = 'status';
+let _tueSortAsc = true;
+
+async function loadTuesdayProjection() {
+    const tbody = document.getElementById('tue-body');
+    if (tbody) tbody.innerHTML = '<tr><td colspan="6" style="color:var(--fg2);text-align:center;padding:20px;">Loading projection…</td></tr>';
+    try {
+        const res = await fetch('/api/tuesday_projection');
+        if (!res.ok) { log('Tuesday projection unavailable — run calculate first', 'orange'); return; }
+        const data = await res.json();
+        if (!data.ok) { log(data.error || 'Tuesday projection error', 'red'); return; }
+        _tueData = data.projection || [];
+        renderTuesdayProjection();
+        const sum = document.getElementById('tue-summary');
+        const shortCount = _tueData.filter(r => r.status === 'SHORT').length;
+        const lowCount = _tueData.filter(r => r.status === 'LOW').length;
+        if (sum) sum.textContent = `${shortCount} SHORT · ${lowCount} LOW · ${_tueData.length} SKUs`;
+    } catch (e) {
+        log('Tuesday projection fetch failed: ' + e.message, 'red');
+    }
+}
+
+function renderTuesdayProjection() {
+    const statusOrder = { SHORT: 0, LOW: 1, OK: 2 };
+    const sorted = [..._tueData].sort((a, b) => {
+        if (_tueSortCol === 'status') {
+            const d = (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9);
+            return _tueSortAsc ? d : -d;
+        }
+        if (['on_hand', 'tue_demand', 'remaining'].includes(_tueSortCol)) {
+            return _tueSortAsc ? a[_tueSortCol] - b[_tueSortCol] : b[_tueSortCol] - a[_tueSortCol];
+        }
+        return _tueSortAsc
+            ? String(a[_tueSortCol]).localeCompare(String(b[_tueSortCol]))
+            : String(b[_tueSortCol]).localeCompare(String(a[_tueSortCol]));
+    });
+
+    const tbody = document.getElementById('tue-body');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+    if (!sorted.length) {
+        tbody.innerHTML = '<tr><td colspan="6" style="color:var(--fg2);text-align:center;padding:20px;">No projection data. Run calculate first.</td></tr>';
+        return;
+    }
+    sorted.forEach(r => {
+        const statusColor = { SHORT: 'var(--red)', LOW: 'var(--orange)', OK: 'var(--green)' }[r.status] || 'var(--fg2)';
+        const action = r.status === 'SHORT'
+            ? '<span style="background:var(--red);color:#fff;padding:2px 8px;border-radius:3px;font-size:11px;font-family:\'Space Mono\',monospace;">NEEDS SWAP</span>'
+            : r.status === 'LOW'
+            ? '<span style="background:var(--orange);color:#000;padding:2px 8px;border-radius:3px;font-size:11px;font-family:\'Space Mono\',monospace;">Monitor</span>'
+            : '';
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td><span style="color:${statusColor};font-weight:600;font-family:'Space Mono',monospace;font-size:11px;">${r.status}</span></td>
+            <td style="font-family:'DM Sans',sans-serif;">${r.sku}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif;">${r.on_hand}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif;">${r.tue_demand}</td>
+            <td class="num" style="font-family:'Rajdhani',sans-serif;color:${r.remaining < 0 ? 'var(--red)' : r.remaining < 20 ? 'var(--orange)' : 'var(--green)'};">${r.remaining >= 0 ? '+' : ''}${r.remaining}</td>
+            <td>${action}</td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+function sortTueTable(col) {
+    if (_tueSortCol === col) _tueSortAsc = !_tueSortAsc;
+    else { _tueSortCol = col; _tueSortAsc = true; }
+    renderTuesdayProjection();
+}
+
+function copyTueSwapList() {
+    const shorts = _tueData.filter(r => r.status === 'SHORT');
+    if (!shorts.length) { log('No SHORT items to copy', 'green'); return; }
+    const text = shorts.map(r => `${r.sku}: ${r.remaining} (need ${r.tue_demand}, have ${r.on_hand})`).join('\n');
+    navigator.clipboard.writeText(text).then(() => log(`Copied ${shorts.length} SHORT SKUs`, 'cyan'));
+}
+
+function exportTueCsv() {
+    const rows = ['sku,on_hand,tue_demand,remaining,status',
+        ..._tueData.map(r => `${r.sku},${r.on_hand},${r.tue_demand},${r.remaining},${r.status}`)];
+    const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'tuesday_projection.csv';
+    a.click();
+}
+
+// ── Inventory Ledger ──────────────────────────────────────────────────
+let _ledgerData = { journal: [], inventory: {} };
+
+async function loadInventoryLedger() {
+    const timeline = document.getElementById('ledger-timeline');
+    if (timeline) timeline.innerHTML = '<div style="color:var(--fg2);padding:12px;">Loading ledger…</div>';
+    try {
+        const [journalRes, invRes] = await Promise.all([
+            fetch('/api/journal'),
+            fetch('/api/running_inventory')
+        ]);
+        if (journalRes.ok) {
+            const jd = await journalRes.json();
+            _ledgerData.journal = jd.entries || jd.journal || [];
+        }
+        if (invRes.ok) {
+            const id = await invRes.json();
+            _ledgerData.inventory = id.sliced || id.inventory || {};
+        }
+        renderInventoryLedger();
+    } catch (e) {
+        log('Ledger fetch failed: ' + e.message, 'red');
+    }
+}
+
+function renderInventoryLedger() {
+    const timeline = document.getElementById('ledger-timeline');
+    if (timeline) {
+        timeline.innerHTML = '';
+        const entries = [..._ledgerData.journal].sort((a, b) => new Date(b.ts) - new Date(a.ts));
+        if (!entries.length) {
+            timeline.innerHTML = '<div style="color:var(--fg2);padding:12px;font-family:\'Space Mono\',monospace;font-size:12px;">No journal entries yet. Run a calculation or apply a depletion.</div>';
+        }
+        entries.forEach(e => {
+            const typeColor = {
+                depletion: 'var(--red)', adjustment: 'var(--orange)',
+                snapshot: 'var(--accent)', production: 'var(--green)'
+            }[e.type] || 'var(--fg2)';
+            const deltas = e.sku_deltas || {};
+            const deltaKeys = Object.keys(deltas);
+            const topDeltas = Object.entries(deltas).slice(0, 5).map(([s, q]) =>
+                `<span style="color:${q < 0 ? 'var(--red)' : 'var(--green)'};font-family:'Rajdhani',sans-serif;">${s}: ${q > 0 ? '+' : ''}${q}</span>`
+            ).join(', ');
+            const more = deltaKeys.length > 5 ? ` <span style="color:var(--fg2);">+${deltaKeys.length - 5} more</span>` : '';
+            const dt = new Date(e.ts);
+            const timeStr = dt.toLocaleDateString() + ' ' + dt.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+
+            const div = document.createElement('div');
+            div.style.cssText = 'border-left:3px solid ' + typeColor + ';padding:8px 12px;margin-bottom:8px;background:var(--bg2);border-radius:4px;transition:background 200ms ease-out;';
+            div.onmouseenter = () => div.style.background = 'var(--surface)';
+            div.onmouseleave = () => div.style.background = 'var(--bg2)';
+            div.innerHTML = `
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <span style="color:${typeColor};font-weight:600;text-transform:uppercase;font-size:11px;font-family:'Space Mono',monospace;">${e.type}</span>
+                    <span style="color:var(--fg2);font-size:11px;font-family:'Space Mono',monospace;">${timeStr}</span>
+                </div>
+                <div style="font-size:12px;color:var(--fg);margin-top:3px;font-family:'DM Sans',sans-serif;">${e.label || ''}</div>
+                <div style="font-size:11px;margin-top:4px;">${topDeltas}${more}</div>
+            `;
+            timeline.appendChild(div);
+        });
+    }
+
+    const tbody = document.getElementById('ledger-inv-body');
+    if (tbody) {
+        tbody.innerHTML = '';
+        const skus = Object.entries(_ledgerData.inventory).sort((a, b) => a[0].localeCompare(b[0]));
+        if (!skus.length) {
+            tbody.innerHTML = '<tr><td colspan="2" style="color:var(--fg2);text-align:center;padding:12px;">No calculated inventory.</td></tr>';
+            return;
+        }
+        skus.forEach(([sku, qty]) => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td style="font-family:'DM Sans',sans-serif;">${sku}</td>
+                <td class="num" style="font-family:'Rajdhani',sans-serif;color:${qty <= 0 ? 'var(--red)' : qty < 20 ? 'var(--orange)' : 'var(--green)'};">${qty}</td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }
 }
 
 // ── Import / Export / Auto / Fixes / Wed PO / Variety ────────────────

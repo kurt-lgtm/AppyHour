@@ -63,6 +63,42 @@ from matrix_commander import (
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50MB
 
+FULFILLMENT_APP_URL = "http://127.0.0.1:5187"
+
+
+def _push_depletion_to_fulfillment(
+    orders: list,
+    ship_day: str,
+    source: str = "matrix_commander",
+) -> dict:
+    """Fire-and-forget: push demand totals as depletion to fulfillment inventory journal.
+
+    Only food SKUs (CH-/MT-/AC-) are sent. Never raises — returns status dict.
+    """
+    import requests as _requests
+
+    demand = compute_demand(orders)
+    food_skus = {
+        sku: qty
+        for sku, qty in demand.items()
+        if any(sku.startswith(p) for p in ("CH-", "MT-", "AC-"))
+        and qty > 0
+    }
+
+    if not food_skus:
+        return {"skipped": True, "reason": "no food SKUs in demand"}
+
+    try:
+        resp = _requests.post(
+            f"{FULFILLMENT_APP_URL}/api/import_depletion_from_matrix",
+            json={"ship_day": ship_day, "depletions": food_skus, "source": source},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as exc:
+        return {"skipped": True, "reason": str(exc)}
+
 # Session-scoped state (XLSX path, parsed orders, inventory — not pipeline stage)
 SESSION_STATE = {
     "xlsx_path": None,
@@ -378,6 +414,10 @@ def generate():
         SESSION_STATE["validation_results"] = results
         regular, gift = identify_gift_orders(orders)
 
+        # Auto-push depletion to fulfillment inventory journal
+        depletion_result = _push_depletion_to_fulfillment(orders, ship_day)
+        print(f"  [depletion] {depletion_result}")
+
         return jsonify(
             {
                 "ok": True,
@@ -390,6 +430,7 @@ def generate():
                     for r in results
                 ],
                 "all_passed": all(r.passed for r in results),
+                "depletion_pushed": depletion_result,
             }
         )
     except Exception as e:
