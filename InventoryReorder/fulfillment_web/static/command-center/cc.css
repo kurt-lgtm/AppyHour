@@ -37,8 +37,17 @@
 }
 
 @media (max-width: 1100px) {
-    .cc-layout { grid-template-columns: 1fr; }
-    .cc-sidebar { display: none; }
+    .cc-layout {
+        grid-template-columns: 1fr;
+        grid-template-rows: 1fr auto;
+    }
+    .cc-sidebar {
+        flex-direction: row;
+        gap: 12px;
+        overflow-x: auto;
+        max-height: 180px;
+    }
+    .cc-sidebar > * { min-width: 240px; }
 }
 
 /* ── Main Panel ── */
@@ -93,13 +102,14 @@
 .cc-energy-btn {
     font-family: 'Space Mono', monospace;
     font-size: 10px;
-    padding: 5px 12px;
+    padding: 10px 14px;
+    min-height: 36px;
     border: 1px solid var(--cc-border);
     border-radius: 20px;
     background: transparent;
     color: var(--cc-text-2);
     cursor: pointer;
-    transition: all 0.2s cubic-bezier(0.25, 1, 0.5, 1);
+    transition: all 200ms cubic-bezier(0.25, 1, 0.5, 1);
 }
 
 .cc-energy-btn:hover {
@@ -145,8 +155,17 @@
     color: var(--cc-text-3);
     font-size: 16px;
     cursor: pointer;
-    padding: 0 4px;
-    transition: color 0.15s;
+    padding: 8px 10px;
+    min-width: 36px;
+    min-height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--cc-radius-sm);
+    transition: color 150ms, background 150ms;
+}
+.cc-brief-dismiss:hover {
+    background: rgba(255,255,255,0.06);
 }
 
 .cc-brief-dismiss:hover { color: var(--cc-text-1); }
@@ -200,10 +219,27 @@
 .cc-section-collapsed .cc-section-label {
     cursor: pointer;
     color: var(--cc-text-3);
+    padding: 6px 2px;
+    border-radius: var(--cc-radius-sm);
+    transition: color 150ms, background 150ms;
 }
 
 .cc-section-collapsed .cc-section-label:hover {
     color: var(--cc-text-1);
+    background: rgba(255,255,255,0.03);
+}
+
+.cc-section-collapsed .cc-section-label::before {
+    content: '▸';
+    margin-right: 8px;
+    font-size: 10px;
+    transition: transform 200ms cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+.cc-section:not(.cc-section-collapsed) .cc-section-label[onclick]::before {
+    content: '▾';
+    margin-right: 8px;
+    font-size: 10px;
 }
 
 .cc-badge {
@@ -449,9 +485,10 @@
     border-radius: var(--cc-radius-sm);
     color: white;
     font-size: 18px;
-    width: 40px;
+    width: 44px;
+    min-height: 44px;
     cursor: pointer;
-    transition: all 0.2s cubic-bezier(0.25, 1, 0.5, 1);
+    transition: all 200ms cubic-bezier(0.25, 1, 0.5, 1);
     box-shadow: 0 2px 8px rgba(129, 140, 248, 0.25);
 }
 
