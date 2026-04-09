@@ -1558,6 +1558,66 @@ def get_carryover_tasks() -> list[dict]:
     return tasks
 
 
+def build_morning_brief(
+    inventory: dict | None = None,
+    external: dict | None = None,
+) -> dict:
+    """Build + store morning brief from local data + optional external sources.
+
+    inventory: {sku: qty} from running_inventory (passed by app.py which has access)
+    external: {gorgias_open, gorgias_food_safety, slack_unreads, gmail_unreads,
+               orders_unfulfilled} — from MCP tools, optional
+
+    Returns the stored brief dict.
+    """
+    ext = external or {}
+    stats = get_daily_stats()
+    carryovers = get_carryover_tasks()
+    today_tasks = get_today_tasks()
+
+    # Inventory alerts: SKUs at 0 or negative
+    inv_alerts = []
+    if inventory:
+        for sku, qty in sorted(inventory.items()):
+            if qty <= 0:
+                inv_alerts.append({"sku": sku, "qty": qty, "status": "OUT"})
+            elif qty < 20:
+                inv_alerts.append({"sku": sku, "qty": qty, "status": "LOW"})
+
+    # Day-of-week context
+    dow = date.today().strftime("%A")
+    day_context = {
+        "Monday": "Shipping review, Gorgias triage, plan week",
+        "Tuesday": "Tommy call, demand pull, cut order (7PM EST)",
+        "Wednesday": "React tool prep, inventory review, make PO",
+        "Thursday": "React tool run, swaps, Shopify sync",
+        "Friday": "Ship day, RMFG email, gel packs, weekly review",
+        "Saturday": "Shipping monitoring (light)",
+        "Sunday": "Off",
+    }.get(dow, "")
+
+    brief_data = {
+        "day": dow,
+        "day_context": day_context,
+        "task_count": stats.get("total", 0),
+        "completed_today": stats.get("completed", 0),
+        "carryover_count": len(carryovers),
+        "frog": today_tasks.get("frog", {}).get("title") if today_tasks.get("frog") else None,
+        "quick_win_count": len(today_tasks.get("quick_wins", [])),
+        "blocked_count": len(today_tasks.get("blocked", [])),
+        "inventory_alerts": inv_alerts,
+        "orders_unfulfilled": ext.get("orders_unfulfilled", 0),
+        "gorgias_open": ext.get("gorgias_open", 0),
+        "gorgias_food_safety": ext.get("gorgias_food_safety", 0),
+        "slack_unreads": ext.get("slack_unreads", 0),
+        "gmail_unreads": ext.get("gmail_unreads", 0),
+        "slack_trawl_created": ext.get("slack_trawl_created", 0),
+    }
+
+    store_morning_brief(brief_data)
+    return brief_data
+
+
 def triage_task(task_id: str, action: str) -> dict | None:
     """Triage a carried-forward task.
 

@@ -10769,6 +10769,23 @@ def cc_post_brief():
     return jsonify({"status": "stored"})
 
 
+@app.route("/api/cc/build-brief", methods=["POST"])
+def cc_build_brief():
+    """Build morning brief from local inventory + optional external MCP data.
+
+    POST body (all optional): {orders_unfulfilled, gorgias_open,
+    gorgias_food_safety, slack_unreads, gmail_unreads, slack_trawl_created}
+    """
+    external = request.get_json(silent=True) or {}
+    inv = {}
+    try:
+        inv = compute_running_inventory().get("sliced", {})
+    except Exception:
+        pass
+    brief = command_center.build_morning_brief(inventory=inv, external=external)
+    return jsonify(brief)
+
+
 @app.route("/api/cc/streaks", methods=["GET"])
 def cc_streaks():
     return jsonify(command_center.get_streaks())
