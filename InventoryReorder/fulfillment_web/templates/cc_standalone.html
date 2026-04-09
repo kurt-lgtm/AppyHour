@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Command Center</title>
     <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/command-center/cc.css?v=7">
+    <link rel="stylesheet" href="/static/command-center/cc.css?v=8">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -94,6 +94,40 @@
 
         <!-- Right: Status + Chat -->
         <div class="cc-sidebar">
+            <!-- Mission Control Helper -->
+            <div class="cc-helper">
+                <svg id="cc-mascot" viewBox="0 0 120 130" width="120" height="130">
+                    <defs>
+                        <radialGradient id="hg" cx="0.4" cy="0.3" r="0.65">
+                            <stop offset="0%" stop-color="#5eebc0"/>
+                            <stop offset="100%" stop-color="#2a9d7e"/>
+                        </radialGradient>
+                        <filter id="glow"><feGaussianBlur stdDeviation="2" result="g"/><feMerge><feMergeNode in="g"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+                    </defs>
+                    <!-- Body: rounded satellite/robot -->
+                    <ellipse cx="60" cy="75" rx="38" ry="36" fill="url(#hg)" stroke="#1a6b55" stroke-width="2.5"/>
+                    <!-- Visor/face plate -->
+                    <rect x="32" y="55" width="56" height="32" rx="14" fill="#0a1a15" stroke="#4ecca3" stroke-width="1.5"/>
+                    <!-- Eyes -->
+                    <circle id="cc-eye-l" cx="47" cy="71" r="5" fill="#4ecca3" filter="url(#glow)"/>
+                    <circle id="cc-eye-r" cx="73" cy="71" r="5" fill="#4ecca3" filter="url(#glow)"/>
+                    <!-- Antenna -->
+                    <line x1="60" y1="39" x2="60" y2="22" stroke="#4ecca3" stroke-width="2" stroke-linecap="round"/>
+                    <circle cx="60" cy="18" r="5" fill="#4ecca3" filter="url(#glow)">
+                        <animate attributeName="opacity" values="1;0.4;1" dur="2s" repeatCount="indefinite"/>
+                    </circle>
+                    <!-- Arms -->
+                    <line x1="22" y1="75" x2="8" y2="65" stroke="#2a9d7e" stroke-width="3" stroke-linecap="round"/>
+                    <line x1="98" y1="75" x2="112" y2="65" stroke="#2a9d7e" stroke-width="3" stroke-linecap="round"/>
+                    <!-- Mouth (expression changes) -->
+                    <path id="cc-mouth" d="M45,80 Q60,90 75,80" fill="none" stroke="#4ecca3" stroke-width="2" stroke-linecap="round"/>
+                    <!-- Feet -->
+                    <rect x="38" y="108" width="16" height="8" rx="4" fill="#2a9d7e" stroke="#1a6b55" stroke-width="1.5"/>
+                    <rect x="66" y="108" width="16" height="8" rx="4" fill="#2a9d7e" stroke="#1a6b55" stroke-width="1.5"/>
+                </svg>
+                <div id="cc-helper-speech" class="cc-helper-speech">Ready for duty.</div>
+            </div>
+
             <div class="cc-progress">
                 <div class="cc-progress-label">TODAY</div>
                 <div class="cc-progress-bar">
@@ -130,7 +164,7 @@
 
 <!-- Standalone shim: cc.js expects currentView variable -->
 <script>let currentView = 'commandcenter';</script>
-<script src="/static/command-center/cc.js?v=7"></script>
+<script src="/static/command-center/cc.js?v=8"></script>
 <script>
     document.addEventListener('DOMContentLoaded', () => {
         ccLoad();

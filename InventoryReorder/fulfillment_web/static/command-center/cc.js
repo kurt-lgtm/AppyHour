@@ -242,8 +242,9 @@ function ccRender() {
     const completedCount = document.getElementById('cc-completed-count');
     if (completedCount) completedCount.textContent = ccData.completed_today?.length || 0;
 
-    // Progress
+    // Progress + Mascot
     ccUpdateProgress();
+    ccUpdateMascot();
 }
 
 function ccRenderList(containerId, tasks, isPersonal) {
@@ -1420,6 +1421,58 @@ function ccRenderActivity(events) {
             </div>`;
         }).join('')}
     `;
+}
+
+// ── Mascot Helper ────────────────────────────────────────────────────
+
+function ccUpdateMascot() {
+    const speech = document.getElementById('cc-helper-speech');
+    const mouth = document.getElementById('cc-mouth');
+    const eyeL = document.getElementById('cc-eye-l');
+    const eyeR = document.getElementById('cc-eye-r');
+    if (!speech || !ccData) return;
+
+    const done = ccData.completed_today?.length || 0;
+    const total = (ccData.quick_wins?.length || 0) + (ccData.today?.length || 0) + (ccData.frog ? 1 : 0) + done;
+    const blocked = ccData.blocked?.length || 0;
+    const pct = total > 0 ? done / total : 0;
+
+    // Expression + speech based on state
+    if (pct >= 1 && total > 0) {
+        speech.textContent = "All done! Go enjoy yourself.";
+        if (mouth) mouth.setAttribute('d', 'M42,78 Q60,92 78,78');  // big smile
+        if (eyeL) eyeL.setAttribute('ry', '2');  // happy squint
+        if (eyeR) eyeR.setAttribute('ry', '2');
+    } else if (pct >= 0.7) {
+        speech.textContent = "Almost there. Strong finish.";
+        if (mouth) mouth.setAttribute('d', 'M45,80 Q60,88 75,80');  // smile
+    } else if (blocked > 2) {
+        speech.textContent = `${blocked} tasks blocked. Check back later.`;
+        if (mouth) mouth.setAttribute('d', 'M45,82 L75,82');  // flat
+    } else if (total > 10) {
+        speech.textContent = "Big day. One task at a time.";
+        if (mouth) mouth.setAttribute('d', 'M45,80 Q60,86 75,80');  // mild smile
+    } else if (ccEnergyLevel === 'low') {
+        speech.textContent = "Low energy. Quick wins first.";
+        if (mouth) mouth.setAttribute('d', 'M48,83 Q60,80 72,83');  // slight frown
+    } else if (done === 0) {
+        speech.textContent = "Pick one. Start small.";
+        if (mouth) mouth.setAttribute('d', 'M45,80 Q60,87 75,80');
+    } else {
+        speech.textContent = `${done} done. Keep going.`;
+        if (mouth) mouth.setAttribute('d', 'M45,80 Q60,88 75,80');
+    }
+
+    // Blink animation
+    if (!ccUpdateMascot._blinkInterval) {
+        ccUpdateMascot._blinkInterval = setInterval(() => {
+            const el = document.getElementById('cc-eye-l');
+            const er = document.getElementById('cc-eye-r');
+            if (!el || !er) return;
+            el.setAttribute('ry', '1'); er.setAttribute('ry', '1');
+            setTimeout(() => { el.setAttribute('ry', '5'); er.setAttribute('ry', '5'); }, 150);
+        }, 3000 + Math.random() * 4000);
+    }
 }
 
 // ── Global Search ────────────────────────────────────────────────────
