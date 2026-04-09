@@ -34,6 +34,10 @@ function ccLoad() {
     ccInjectSearchBar();
     ccUpdateGreeting();
 
+    // Hide empty sidebar sections
+    const deadlines = document.getElementById('cc-deadlines');
+    if (deadlines && !deadlines.querySelector('.cc-deadline-item')) deadlines.style.display = 'none';
+
     // Auto-refresh every 5 minutes (re-check energy, re-fetch tasks)
     setInterval(() => {
         if (typeof currentView !== 'undefined' && currentView === 'commandcenter') {
@@ -112,9 +116,10 @@ function ccRenderStreaks(streaks) {
     if (!el) return;
 
     if (!streaks || streaks.length === 0) {
-        el.innerHTML = '<div class="cc-sidebar-label">STREAKS</div><div style="color:#5a6070;font-size:12px;font-family:DM Sans">Complete recurring tasks to build streaks</div>';
+        el.style.display = 'none';
         return;
     }
+    el.style.display = '';
 
     const top = streaks.slice(0, 5);
     el.innerHTML = `
@@ -1498,21 +1503,20 @@ function ccRenderRecurringGrid(data) {
     const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
     const today = days[new Date().getDay() === 0 ? 6 : new Date().getDay() - 1];
 
+    // Show only today + tomorrow in sidebar (vertical, readable)
+    const todayIdx = days.indexOf(today);
+    const showDays = [today, days[(todayIdx + 1) % 7]];
+
     container.innerHTML = `
-        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--cc-text-3);text-transform:uppercase;letter-spacing:2px;margin-bottom:8px;">WEEKLY RHYTHM</div>
-        <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px;">
-            ${days.map(d => {
-                const isToday = d === today;
-                const tasks = data.grid[d] || [];
-                const bg = isToday ? 'var(--cc-accent-dim)' : 'var(--cc-surface)';
-                const border = isToday ? '1px solid var(--cc-accent)' : '1px solid var(--cc-border)';
-                return `<div style="background:${bg};border:${border};border-radius:4px;padding:4px;min-height:48px;font-size:9px;">
-                    <div style="font-family:'Space Mono',monospace;color:${isToday ? 'var(--cc-accent)' : 'var(--cc-text-3)'};font-weight:600;margin-bottom:2px;">${d.slice(0,3)}</div>
-                    ${tasks.map(t => `<div style="color:var(--cc-text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${ccEsc(t.title)}">${ccEsc(t.title)}</div>`).join('')}
-                    ${!tasks.length ? `<div style="color:var(--cc-text-3);">—</div>` : ''}
-                </div>`;
-            }).join('')}
-        </div>
+        <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--cc-text-3);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px;">WEEKLY RHYTHM</div>
+        ${showDays.map(d => {
+            const isToday = d === today;
+            const tasks = data.grid[d] || [];
+            return `<div style="margin-bottom:10px;">
+                <div style="font-family:'Space Mono',monospace;font-size:11px;font-weight:600;color:${isToday ? 'var(--cc-accent)' : 'var(--cc-text-2)'};margin-bottom:4px;">${isToday ? 'TODAY' : 'TOMORROW'} · ${d.slice(0,3)}</div>
+                ${tasks.length ? tasks.map(t => `<div style="font-size:13px;color:var(--cc-text-1);padding:3px 0;font-family:'DM Sans',sans-serif;">${ccEsc(t.title)}${t.estimated_minutes ? ` <span style="color:var(--cc-text-3);font-size:11px;">${t.estimated_minutes}m</span>` : ''}</div>`).join('') : `<div style="font-size:12px;color:var(--cc-text-3);">Nothing scheduled</div>`}
+            </div>`;
+        }).join('')}
     `;
 }
 

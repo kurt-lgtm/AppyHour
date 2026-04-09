@@ -314,28 +314,31 @@
 .cc-task-meta {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
     font-family: 'Space Mono', monospace;
-    font-size: 10px;
-    color: var(--cc-text-3);
+    font-size: 12px;
+    color: var(--cc-text-2);
+    margin-top: 4px;
 }
 
 .cc-task-priority {
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 11px;
 }
 
-.cc-task-priority.high { color: var(--cc-amber); }
-.cc-task-priority.medium { color: var(--cc-text-2); }
-.cc-task-priority.low { color: var(--cc-text-3); }
+.cc-task-priority.high { color: #fff; background: var(--cc-amber); }
+.cc-task-priority.medium { color: var(--cc-text-1); background: var(--cc-elevated); }
+.cc-task-priority.low { color: var(--cc-text-3); background: transparent; }
 
-.cc-task-est { color: var(--cc-text-3); }
+.cc-task-est { color: var(--cc-text-2); }
 
 .cc-task-source {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--cc-text-3);
-    font-style: italic;
 }
 
 .cc-task-actions {
