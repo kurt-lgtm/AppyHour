@@ -28,6 +28,7 @@ function ccLoad() {
 
     ccFetchToday();
     ccFetchStreaks();
+    ccFetchActivity();
     ccUpdateGreeting();
 
     // Auto-refresh every 5 minutes (re-check energy, re-fetch tasks)
@@ -200,6 +201,9 @@ function ccRender() {
         }
     }
 
+    // Decisions queue
+    ccFetchDecisions();
+
     // Quick wins
     ccRenderList('cc-quickwins-list', ccData.quick_wins || []);
     ccToggleSectionVisibility('cc-quickwins', ccData.quick_wins?.length);
@@ -239,6 +243,13 @@ function ccRenderList(containerId, tasks, isPersonal) {
     el.innerHTML = tasks.map(t => ccRenderCard(t, false, isPersonal)).join('');
 }
 
+function _urgencyTier(score) {
+    if (score >= 0.85) return 'critical';
+    if (score >= 0.65) return 'high';
+    if (score >= 0.45) return 'medium';
+    return 'low';
+}
+
 function ccRenderCard(task, isFrog, isPersonal) {
     const classes = ['cc-task-card'];
     if (isFrog) classes.push('cc-task-frog');
@@ -246,6 +257,7 @@ function ccRenderCard(task, isFrog, isPersonal) {
     if (task.status === 'blocked') classes.push('cc-task-blocked');
     if (task.status === 'done') classes.push('cc-task-done');
     if (ccSelectedTaskId === task.id) classes.push('cc-task-focused');
+    if (task.urgency_score != null) classes.push('cc-urgency-' + _urgencyTier(task.urgency_score));
 
     const expanded = ccSelectedTaskId === task.id;
     const checklist = task.checklist || [];
@@ -1307,6 +1319,95 @@ document.addEventListener('keydown', (e) => {
         }
     }
 });
+
+// ── Decisions Queue ──────────────────────────────────────────────────
+
+async function ccFetchDecisions() {
+    try {
+        const resp = await fetch('/api/cc/decisions');
+        const decisions = await resp.json();
+        ccRenderDecisions(decisions);
+    } catch (e) { /* silent */ }
+}
+
+function ccRenderDecisions(decisions) {
+    let container = document.getElementById('cc-decisions');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'cc-decisions';
+        container.className = 'cc-section';
+        const main = document.querySelector('.cc-main');
+        const firstSection = main?.querySelector('.cc-section');
+        if (main && firstSection) main.insertBefore(container, firstSection);
+    }
+    if (!decisions.length) { container.style.display = 'none'; return; }
+    container.style.display = '';
+    container.innerHTML = `
+        <div class="cc-section-label" style="color:var(--cc-indigo);">DECISIONS NEEDED <span class="cc-badge">${decisions.length}</span></div>
+        <div class="cc-task-list">${decisions.map(d => `
+            <div class="cc-task-card cc-decision-card">
+                <div class="cc-task-title" style="color:var(--cc-indigo);">${ccEsc(d.question)}</div>
+                ${d.context ? `<div style="font-size:12px;color:var(--cc-text-3);margin:4px 0;">${ccEsc(d.context)}</div>` : ''}
+                <div class="cc-decision-options">
+                    ${d.options.length > 0
+                        ? d.options.map(opt => `<button class="cc-decision-opt" onclick="ccAnswerDecision('${d.id}','${ccEsc(opt)}')">${ccEsc(opt)}</button>`).join('')
+                        : `<input type="text" class="cc-decision-input" placeholder="Type answer..." onkeydown="if(event.key==='Enter')ccAnswerDecision('${d.id}',this.value)">`
+                    }
+                </div>
+            </div>
+        `).join('')}</div>
+    `;
+}
+
+async function ccAnswerDecision(id, answer) {
+    await fetch(`/api/cc/decisions/${id}/answer`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ answer })
+    });
+    ccFetchDecisions();
+}
+
+// ── Activity Feed (sidebar) ─────────────────────────────────────────
+
+async function ccFetchActivity() {
+    try {
+        const resp = await fetch('/api/cc/activity?limit=20');
+        const events = await resp.json();
+        ccRenderActivity(events);
+    } catch (e) { /* silent */ }
+}
+
+function ccRenderActivity(events) {
+    let container = document.getElementById('cc-activity-feed');
+    if (!container) {
+        const sidebar = document.querySelector('.cc-sidebar');
+        if (!sidebar) return;
+        container = document.createElement('div');
+        container.id = 'cc-activity-feed';
+        container.style.cssText = 'margin-top:16px;';
+        sidebar.appendChild(container);
+    }
+    if (!events.length) { container.innerHTML = ''; return; }
+    const eventIcons = {
+        decision_created: '&#10067;', decision_answered: '&#9989;',
+        task_created: '&#10133;', task_completed: '&#9989;',
+        brief_built: '&#128203;', slack_trawl: '&#128172;',
+        blocker_resolved: '&#128275;'
+    };
+    container.innerHTML = `
+        <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--cc-text-3);text-transform:uppercase;letter-spacing:2px;margin-bottom:8px;">RECENT ACTIVITY</div>
+        ${events.slice(0, 10).map(e => {
+            const icon = eventIcons[e.event] || '&#128900;';
+            const time = new Date(e.ts).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+            return `<div style="display:flex;gap:8px;padding:4px 0;font-size:12px;color:var(--cc-text-2);border-bottom:1px solid var(--cc-border);">
+                <span>${icon}</span>
+                <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${ccEsc(e.detail || e.event)}</span>
+                <span style="color:var(--cc-text-3);font-family:'Space Mono',monospace;font-size:10px;">${time}</span>
+            </div>`;
+        }).join('')}
+    `;
+}
 
 /* ── Auto-load on first view ── */
 if (typeof currentView !== 'undefined' && currentView === 'commandcenter') {
