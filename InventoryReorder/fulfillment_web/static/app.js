@@ -1409,11 +1409,12 @@ function switchTab(tabId, btn) {
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     document.getElementById(`tab-${tabId}`).classList.add('active');
     btn.classList.add('active');
-    if (tabId === 'w2') loadTuesdayProjection();
-    if (tabId === 'ledger') loadInventoryLedger();
+    if (tabId === 'w2' && !_tueLoaded) { loadTuesdayProjection(); _tueLoaded = true; }
+    if (tabId === 'ledger' && !_ledgerLoaded) { loadInventoryLedger(); _ledgerLoaded = true; }
 }
 
 // ── Tuesday Projection ────────────────────────────────────────────────
+let _tueLoaded = false;
 let _tueData = [];
 let _tueSortCol = 'status';
 let _tueSortAsc = true;
@@ -1489,7 +1490,9 @@ function copyTueSwapList() {
     const shorts = _tueData.filter(r => r.status === 'SHORT');
     if (!shorts.length) { log('No SHORT items to copy', 'green'); return; }
     const text = shorts.map(r => `${r.sku}: ${r.remaining} (need ${r.tue_demand}, have ${r.on_hand})`).join('\n');
-    navigator.clipboard.writeText(text).then(() => log(`Copied ${shorts.length} SHORT SKUs`, 'cyan'));
+    navigator.clipboard.writeText(text)
+        .then(() => log(`Copied ${shorts.length} SHORT SKUs`, 'cyan'))
+        .catch(err => log('Copy failed: ' + err.message, 'red'));
 }
 
 function exportTueCsv() {
@@ -1503,6 +1506,7 @@ function exportTueCsv() {
 }
 
 // ── Inventory Ledger ──────────────────────────────────────────────────
+let _ledgerLoaded = false;
 let _ledgerData = { journal: [], inventory: {} };
 
 async function loadInventoryLedger() {
@@ -1553,14 +1557,29 @@ function renderInventoryLedger() {
             div.style.cssText = 'border-left:3px solid ' + typeColor + ';padding:8px 12px;margin-bottom:8px;background:var(--bg2);border-radius:4px;transition:background 200ms ease-out;';
             div.onmouseenter = () => div.style.background = 'var(--surface)';
             div.onmouseleave = () => div.style.background = 'var(--bg2)';
-            div.innerHTML = `
-                <div style="display:flex;justify-content:space-between;align-items:center;">
-                    <span style="color:${typeColor};font-weight:600;text-transform:uppercase;font-size:11px;font-family:'Space Mono',monospace;">${e.type}</span>
-                    <span style="color:var(--fg2);font-size:11px;font-family:'Space Mono',monospace;">${timeStr}</span>
-                </div>
-                <div style="font-size:12px;color:var(--fg);margin-top:3px;font-family:'DM Sans',sans-serif;">${e.label || ''}</div>
-                <div style="font-size:11px;margin-top:4px;">${topDeltas}${more}</div>
-            `;
+            // Build DOM safely — no raw user strings in innerHTML
+            const headerRow = document.createElement('div');
+            headerRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;';
+            const typeSpan = document.createElement('span');
+            typeSpan.style.cssText = `color:${typeColor};font-weight:600;text-transform:uppercase;font-size:11px;font-family:'Space Mono',monospace;`;
+            typeSpan.textContent = e.type;
+            const timeSpan = document.createElement('span');
+            timeSpan.style.cssText = "color:var(--fg2);font-size:11px;font-family:'Space Mono',monospace;";
+            timeSpan.textContent = timeStr;
+            headerRow.appendChild(typeSpan);
+            headerRow.appendChild(timeSpan);
+
+            const labelDiv = document.createElement('div');
+            labelDiv.style.cssText = "font-size:12px;color:var(--fg);margin-top:3px;font-family:'DM Sans',sans-serif;";
+            labelDiv.textContent = e.label || '';
+
+            const deltaDiv = document.createElement('div');
+            deltaDiv.style.cssText = 'font-size:11px;margin-top:4px;';
+            deltaDiv.innerHTML = `${topDeltas}${more}`;
+
+            div.appendChild(headerRow);
+            div.appendChild(labelDiv);
+            div.appendChild(deltaDiv);
             timeline.appendChild(div);
         });
     }

@@ -416,7 +416,6 @@ def generate():
 
         # Auto-push depletion to fulfillment inventory journal
         depletion_result = _push_depletion_to_fulfillment(orders, ship_day)
-        print(f"  [depletion] {depletion_result}")
 
         return jsonify(
             {
