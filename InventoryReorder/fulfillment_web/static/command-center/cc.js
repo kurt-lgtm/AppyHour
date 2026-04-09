@@ -140,8 +140,9 @@ function ccUpdateGreeting() {
     const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     const now = new Date();
-    const greeting = hour < 12 ? 'Good morning.' : hour < 17 ? 'Good afternoon.' : 'Good evening.';
-    el.textContent = `${greeting}  ${dayNames[now.getDay()]}, ${months[now.getMonth()]} ${now.getDate()}`;
+    const greeting = hour < 6 ? 'Early bird.' : hour < 12 ? 'Good morning.' : hour < 17 ? 'Afternoon mode.' : hour < 21 ? 'Evening wind-down.' : 'Night owl mode.';
+    const energy = ccEnergyLevel === 'high' ? ' You got this.' : ccEnergyLevel === 'low' ? ' Take it easy.' : '';
+    el.textContent = `${greeting} ${dayNames[now.getDay()]}, ${months[now.getMonth()]} ${now.getDate()}${energy}`;
 }
 
 async function ccSpawnRecurring() {
@@ -331,10 +332,10 @@ function ccShowEmptyState() {
         el.id = 'cc-empty-state';
         el.style.cssText = 'text-align:center;padding:60px 24px;color:#8a90a0;';
         el.innerHTML = `
-            <div style="font-size:40px;margin-bottom:16px">&#128203;</div>
-            <div style="font-size:18px;color:#eaeaea;margin-bottom:8px">Command Center is ready</div>
-            <div style="margin-bottom:20px;max-width:400px;margin-left:auto;margin-right:auto">
-                No tasks for today yet. Add recurring tasks or create one to get started.
+            <div style="font-size:48px;margin-bottom:16px">&#127775;</div>
+            <div style="font-size:20px;color:var(--cc-accent);margin-bottom:8px;font-family:'Rajdhani',sans-serif;font-weight:600;">All clear. Nice work.</div>
+            <div style="margin-bottom:20px;max-width:400px;margin-left:auto;margin-right:auto;font-size:14px;line-height:1.6;">
+                Nothing on the board. Add a task, set up recurring rhythms, or just enjoy the quiet.
             </div>
             <button class="cc-energy-btn" style="padding:8px 20px;font-size:14px" onclick="ccShowAddTask()">+ Add Task</button>
             <button class="cc-energy-btn" style="padding:8px 20px;font-size:14px;margin-left:8px" onclick="ccShowRecurring()">Set Up Recurring</button>
@@ -358,11 +359,15 @@ function ccUpdateProgress() {
 
     const fill = document.getElementById('cc-progress-fill');
     const text = document.getElementById('cc-progress-text');
-    if (fill) fill.style.width = pct + '%';
+    if (fill) {
+        fill.style.width = pct + '%';
+        // Color shifts: red→amber→green as you complete more
+        fill.style.background = pct < 30 ? 'var(--cc-amber)' : pct < 70 ? 'var(--cc-indigo)' : 'var(--cc-accent)';
+        fill.style.transition = 'width 600ms cubic-bezier(0.25, 1, 0.5, 1), background 400ms';
+    }
     if (text) {
-        let label = `${done} of ${all} tasks`;
-        if (ccLightenedDay) label += ' (lightened)';
-        text.textContent = label;
+        const emoji = pct === 0 ? '&#128064;' : pct < 50 ? '&#9889;' : pct < 100 ? '&#128170;' : '&#127942;';
+        text.innerHTML = `${emoji} ${done} of ${all}${ccLightenedDay ? ' (light day)' : ''}`;
     }
 
     // Update energy mode in greeting

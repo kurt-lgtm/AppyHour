@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Command Center</title>
     <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/command-center/cc.css?v=6">
+    <link rel="stylesheet" href="/static/command-center/cc.css?v=7">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -52,32 +52,32 @@
 
             <!-- Task Sections -->
             <div class="cc-section" id="cc-quickwins">
-                <div class="cc-section-label">QUICK WINS</div>
+                <div class="cc-section-label"><span class="cc-section-icon">&#9889;</span> QUICK WINS</div>
                 <div class="cc-task-list" id="cc-quickwins-list"></div>
             </div>
 
             <div class="cc-section" id="cc-frog">
-                <div class="cc-section-label">YOUR FROG</div>
+                <div class="cc-section-label"><span class="cc-section-icon">&#128056;</span> EAT THE FROG</div>
                 <div class="cc-task-list" id="cc-frog-list"></div>
             </div>
 
             <div class="cc-section" id="cc-today">
-                <div class="cc-section-label">TODAY</div>
+                <div class="cc-section-label"><span class="cc-section-icon">&#128203;</span> TODAY</div>
                 <div class="cc-task-list" id="cc-today-list"></div>
             </div>
 
             <div class="cc-section" id="cc-personal">
-                <div class="cc-section-label">PERSONAL</div>
+                <div class="cc-section-label"><span class="cc-section-icon">&#127968;</span> PERSONAL</div>
                 <div class="cc-task-list" id="cc-personal-list"></div>
             </div>
 
             <div class="cc-section cc-section-collapsed" id="cc-blocked">
-                <div class="cc-section-label" onclick="ccToggleSection('cc-blocked')">WAITING ON <span class="cc-badge" id="cc-blocked-count">0</span></div>
+                <div class="cc-section-label" onclick="ccToggleSection('cc-blocked')"><span class="cc-section-icon">&#9203;</span> WAITING ON <span class="cc-badge" id="cc-blocked-count">0</span></div>
                 <div class="cc-task-list" id="cc-blocked-list"></div>
             </div>
 
             <div class="cc-section cc-section-collapsed" id="cc-completed">
-                <div class="cc-section-label" onclick="ccToggleSection('cc-completed')">COMPLETED TODAY <span class="cc-badge" id="cc-completed-count">0</span></div>
+                <div class="cc-section-label" onclick="ccToggleSection('cc-completed')"><span class="cc-section-icon">&#10004;</span> DONE TODAY <span class="cc-badge" id="cc-completed-count">0</span></div>
                 <div class="cc-task-list" id="cc-completed-list"></div>
             </div>
 
@@ -130,7 +130,7 @@
 
 <!-- Standalone shim: cc.js expects currentView variable -->
 <script>let currentView = 'commandcenter';</script>
-<script src="/static/command-center/cc.js?v=6"></script>
+<script src="/static/command-center/cc.js?v=7"></script>
 <script>
     document.addEventListener('DOMContentLoaded', () => {
         ccLoad();
