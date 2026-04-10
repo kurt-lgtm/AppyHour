@@ -53,6 +53,17 @@ function ccLoad() {
     ccConnectSSE();
     ccUpdateGreeting();
 
+    // Auto-carry forward yesterday's incomplete tasks
+    ccCarryForward();
+
+    // Guided morning ritual (before 11am, first load of day)
+    const hour = new Date().getHours();
+    const ritualKey = 'cc_ritual_' + new Date().toISOString().slice(0, 10);
+    if (hour < 11 && !sessionStorage.getItem(ritualKey)) {
+        sessionStorage.setItem(ritualKey, '1');
+        setTimeout(ccShowMorningRitual, 1500);
+    }
+
     // Hide empty sidebar sections
     const deadlines = document.getElementById('cc-deadlines');
     if (deadlines && !deadlines.querySelector('.cc-deadline-item')) deadlines.style.display = 'none';
@@ -1619,6 +1630,82 @@ async function ccCheckHealth() {
         const dot = document.getElementById('cc-health-dot');
         if (dot) { dot.style.background = '#ff3b5c'; dot.title = 'CC unreachable'; }
     }
+}
+
+// ── Guided Morning Ritual ────────────────────────────────────────────
+
+function ccShowMorningRitual() {
+    const overlay = document.createElement('div');
+    overlay.id = 'cc-ritual-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(8,9,13,0.85);z-index:100;display:flex;align-items:center;justify-content:center;animation:cc-card-in 300ms both;';
+
+    const totalTasks = ccData ? (ccData.quick_wins?.length || 0) + (ccData.today?.length || 0) + (ccData.frog ? 1 : 0) + (ccData.personal?.length || 0) : 0;
+    const carryovers = ccData?.carried_forward || 0;
+    const frogTitle = ccData?.frog ? ccEsc(ccData.frog.title) : 'None set';
+    const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    const dayContext = {
+        1: 'Shipping review, Gorgias triage, plan week',
+        2: 'Tommy call, demand pull, cut order (7PM EST)',
+        3: 'React tool prep, inventory review, make PO',
+        4: 'React tool run, swaps, Shopify sync',
+        5: 'Ship day, RMFG email, gel packs, weekly review',
+        6: 'Shipping monitoring (light)',
+        0: 'Off'
+    }[new Date().getDay()] || '';
+
+    overlay.innerHTML = `
+        <div style="background:var(--cc-surface);border:1px solid var(--cc-accent);border-radius:var(--cc-radius);padding:32px 40px;max-width:480px;width:90%;box-shadow:0 0 40px rgba(78,204,163,0.2);">
+            <div style="font-family:'Rajdhani',sans-serif;font-size:24px;font-weight:600;color:var(--cc-accent);margin-bottom:4px;">Good morning</div>
+            <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--cc-text-3);margin-bottom:20px;">${days[new Date().getDay()]} · ${dayContext}</div>
+
+            <div style="font-family:'DM Sans',sans-serif;font-size:14px;color:var(--cc-text-1);line-height:1.8;margin-bottom:20px;">
+                <div>&#128203; <strong>${totalTasks}</strong> tasks today${carryovers > 0 ? ` (${carryovers} carried forward)` : ''}</div>
+                <div>&#128056; Frog: <strong>${frogTitle}</strong></div>
+            </div>
+
+            <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--cc-text-3);margin-bottom:12px;">HOW'S YOUR ENERGY?</div>
+            <div style="display:flex;gap:8px;margin-bottom:24px;">
+                <button class="cc-energy-btn" onclick="ccRitualEnergy('high')" style="flex:1;padding:12px;">&#9889; High</button>
+                <button class="cc-energy-btn" onclick="ccRitualEnergy('medium')" style="flex:1;padding:12px;">&#9962; Medium</button>
+                <button class="cc-energy-btn" onclick="ccRitualEnergy('low')" style="flex:1;padding:12px;">&#127769; Low</button>
+            </div>
+
+            <button onclick="ccDismissRitual()" style="width:100%;padding:12px;background:var(--cc-accent);color:#0a0a0d;border:none;border-radius:var(--cc-radius-sm);font-family:'Space Mono',monospace;font-size:12px;font-weight:600;cursor:pointer;">LET'S GO</button>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+}
+
+function ccRitualEnergy(level) {
+    ccSetEnergy(level);
+    document.querySelectorAll('#cc-ritual-overlay .cc-energy-btn').forEach(b => b.classList.remove('active'));
+    event.target.classList.add('active');
+}
+
+function ccDismissRitual() {
+    const overlay = document.getElementById('cc-ritual-overlay');
+    if (overlay) {
+        overlay.style.opacity = '0';
+        overlay.style.transition = 'opacity 200ms';
+        setTimeout(() => overlay.remove(), 200);
+    }
+    // Refresh tasks w/ chosen energy
+    ccFetchToday();
+}
+
+// ── Adaptive Rescheduling ────────────────────────────────────────────
+
+async function ccCarryForward() {
+    // Auto-carry yesterday's incomplete tasks → today (called on load)
+    try {
+        const resp = await fetch('/api/cc/carryovers');
+        const tasks = await resp.json();
+        if (tasks.length > 0) {
+            // Update mascot
+            const speech = document.getElementById('cc-helper-speech');
+            if (speech) speech.textContent = `${tasks.length} carried forward from yesterday.`;
+        }
+    } catch (e) { /* silent */ }
 }
 
 /* ── Auto-load on first view ── */

@@ -1188,6 +1188,57 @@ def process_slack_trawl(messages: list[dict]) -> list[dict]:
     return created
 
 
+def enrich_slack_task(task_id: str, shopify_orders: list[dict] | None = None) -> dict | None:
+    """Enrich a slack-trawl task with customer/order data from Shopify.
+
+    Parses customer hints from task notes, fuzzy-matches against shopify_orders,
+    and adds order #, full name, and Slack permalink to task notes.
+
+    shopify_orders: list of {name, customer, city, state, tags} from appyhour_fetch_orders.
+    """
+    task = get_task(task_id)
+    if not task:
+        return None
+
+    notes = task.get("notes", "")
+    title = task.get("title", "")
+
+    # Extract name hints from title/notes
+    # Patterns: "for Sarah M.", "for them", customer names in quotes
+    import re
+    name_hints = re.findall(r"for\s+([A-Z][a-z]+(?:\s+[A-Z]\.?)?)", title + " " + notes)
+
+    enriched_lines = []
+
+    # Build Slack permalink from source_ref
+    source_ref = task.get("source_ref", "")
+    if source_ref.startswith("slack:"):
+        parts = source_ref.split(":")
+        if len(parts) >= 3:
+            channel_id = parts[1]
+            msg_ts = parts[2]
+            permalink = f"https://elevatefoods.slack.com/archives/{channel_id}/p{msg_ts.replace('.', '')}"
+            enriched_lines.append(f"Slack thread: {permalink}")
+
+    # Match customer name against Shopify orders
+    if shopify_orders and name_hints:
+        for hint in name_hints:
+            hint_lower = hint.lower().strip().rstrip(".")
+            for order in shopify_orders:
+                customer = (order.get("customer") or "").lower()
+                if hint_lower in customer or customer.startswith(hint_lower.split()[0]):
+                    enriched_lines.append(
+                        f"Matched: {order.get('customer')} — Order {order.get('name')} — {order.get('city', '')}, {order.get('state', '')}"
+                    )
+                    break
+
+    if not enriched_lines:
+        enriched_lines.append("No customer match found — manual lookup needed")
+
+    new_notes = notes + "\n--- Enriched ---\n" + "\n".join(enriched_lines)
+    return update_task(task_id, notes=new_notes)
+
+
 # ---------------------------------------------------------------------------
 # Morning Brief
 # ---------------------------------------------------------------------------

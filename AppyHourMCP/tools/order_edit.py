@@ -60,7 +60,11 @@ def _lookup_variant_gids(base: str, headers: dict[str, str], skus: set[str]) -> 
 
 
 def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: dict[str, str], variant_gids: dict[str, str]) -> list[str]:
-    """Swap SKUs on a single order. Returns list of swap descriptions."""
+    """Swap SKUs on a single order. Returns list of swap descriptions.
+
+    Safety: snapshots all line items after beginEdit, verifies only target
+    SKUs are modified before commit. Aborts if unexpected changes detected.
+    """
     data = shopify_graphql(base, headers, """
         mutation orderEditBegin($id: ID!) {
             orderEditBegin(id: $id) {
@@ -81,21 +85,28 @@ def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: 
         raise RuntimeError(f"beginEdit failed: {errors}")
     calc_id = calc_order["id"]
 
-    calc_items = {}
+    # Snapshot ALL line items for pre-commit verification
+    all_items_snapshot: dict[str, tuple[str, int]] = {}
+    calc_items: dict[str, tuple[str, int]] = {}
     for edge in calc_order["lineItems"]["edges"]:
         node = edge["node"]
         sku = node.get("sku") or ""
         qty = node.get("quantity", 0)
-        if qty > 0 and sku in swaps:
-            calc_items[sku] = (node["id"], qty)
+        li_id = node["id"]
+        if qty > 0:
+            all_items_snapshot[li_id] = (sku, qty)
+            if sku in swaps:
+                calc_items[sku] = (li_id, qty)
 
     if not calc_items:
         raise RuntimeError("No swappable line items found in calculated order")
 
     swapped = []
+    modified_li_ids: set[str] = set()
     for old_sku, (calc_li_id, qty) in calc_items.items():
         new_sku = swaps[old_sku]
         new_gid = variant_gids[new_sku]
+        modified_li_ids.add(calc_li_id)
 
         shopify_graphql(base, headers, """
             mutation orderEditSetQuantity($id: ID!, $lineItemId: ID!, $quantity: Int!) {
@@ -116,6 +127,36 @@ def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: 
         """, {"id": calc_id, "variantId": new_gid, "quantity": qty, "allowDuplicates": True})
 
         swapped.append(f"{old_sku}->{new_sku}(qty={qty})")
+
+    # Pre-commit verification: re-fetch calculated order, check only target items changed
+    verify_data = shopify_graphql(base, headers, """
+        query($id: ID!) {
+            node(id: $id) {
+                ... on CalculatedOrder {
+                    lineItems(first: 50) {
+                        edges { node { id quantity sku } }
+                    }
+                }
+            }
+        }
+    """, {"id": calc_id})
+
+    post_items: dict[str, tuple[str, int]] = {}
+    for edge in verify_data["node"]["lineItems"]["edges"]:
+        node = edge["node"]
+        post_items[node["id"]] = (node.get("sku") or "", node.get("quantity", 0))
+
+    # Check: any non-target items that changed quantity?
+    unexpected_changes = []
+    for li_id, (sku, orig_qty) in all_items_snapshot.items():
+        if li_id in modified_li_ids:
+            continue  # expected to change
+        post = post_items.get(li_id)
+        if post and post[1] != orig_qty:
+            unexpected_changes.append(f"{sku}: {orig_qty}->{post[1]}")
+
+    if unexpected_changes:
+        raise RuntimeError(f"ABORT: unexpected item changes detected: {unexpected_changes}")
 
     data = shopify_graphql(base, headers, """
         mutation orderEditCommit($id: ID!) {
@@ -213,9 +254,10 @@ def register(mcp: object) -> None:
                 swap_skus = set()
                 for li in o.get("line_items", []):
                     sku = (li.get("sku") or "")
+                    fq = li.get("fulfillable_quantity", 0)
                     if params.box_sku and sku == params.box_sku:
                         has_box = True
-                    if sku in source_skus:
+                    if sku in source_skus and fq > 0:
                         swap_skus.add(sku)
                 if has_box and swap_skus:
                     targets.append((o, swap_skus))

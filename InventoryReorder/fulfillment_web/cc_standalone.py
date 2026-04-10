@@ -201,6 +201,17 @@ def cc_today():
     return jsonify(command_center.get_today_tasks(energy))
 
 
+@app.route("/api/cc/tasks/<task_id>/enrich", methods=["POST"])
+def cc_enrich_task(task_id):
+    body = request.get_json(silent=True) or {}
+    orders = body.get("shopify_orders", [])
+    result = command_center.enrich_slack_task(task_id, shopify_orders=orders)
+    if result is None:
+        return jsonify({"error": "not found"}), 404
+    sse_broadcast("task_updated", {"id": task_id})
+    return jsonify(result)
+
+
 @app.route("/api/cc/brief", methods=["GET"])
 def cc_brief():
     brief = command_center.get_morning_brief()
