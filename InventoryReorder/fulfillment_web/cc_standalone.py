@@ -2,13 +2,63 @@
 
 from __future__ import annotations
 
-from flask import Flask, jsonify, request, send_from_directory
+import json
+import queue
+import threading
+import time
+
+from flask import Flask, jsonify, request, send_from_directory, Response
 from pathlib import Path
 
 import command_center
 
 HERE = Path(__file__).parent
 app = Flask(__name__, static_folder=None)
+
+# ── SSE Broadcast ────────────────────────────────────────────────────────
+_sse_clients: list[queue.Queue] = []
+_sse_lock = threading.Lock()
+
+
+def sse_broadcast(event: str, data: dict | None = None):
+    """Push event to all connected SSE clients."""
+    msg = f"event: {event}\ndata: {json.dumps(data or {})}\n\n"
+    with _sse_lock:
+        dead = []
+        for q in _sse_clients:
+            try:
+                q.put_nowait(msg)
+            except queue.Full:
+                dead.append(q)
+        for q in dead:
+            _sse_clients.remove(q)
+
+
+@app.route("/api/cc/events")
+def cc_sse():
+    """SSE endpoint — browser holds open, server pushes updates."""
+    q: queue.Queue = queue.Queue(maxsize=50)
+    with _sse_lock:
+        _sse_clients.append(q)
+
+    def stream():
+        try:
+            yield "event: connected\ndata: {}\n\n"
+            while True:
+                try:
+                    msg = q.get(timeout=30)
+                    yield msg
+                except queue.Empty:
+                    yield ": keepalive\n\n"  # Prevent timeout
+        finally:
+            with _sse_lock:
+                if q in _sse_clients:
+                    _sse_clients.remove(q)
+
+    return Response(stream(), mimetype="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    })
 
 
 # ── Static files ──────────────────────────────────────────────────────────
@@ -39,7 +89,9 @@ def cc_create_task():
     title = data.pop("title")
     type_ = data.pop("type", "work")
     checklist = data.pop("checklist", None)
-    return jsonify(command_center.create_task(title, type_, checklist=checklist, **data))
+    task = command_center.create_task(title, type_, checklist=checklist, **data)
+    sse_broadcast("task_created", {"id": task["id"], "title": task["title"]})
+    return jsonify(task)
 
 
 @app.route("/api/cc/tasks/<task_id>", methods=["GET"])
@@ -53,6 +105,11 @@ def cc_get_task(task_id):
 @app.route("/api/cc/tasks/<task_id>", methods=["PATCH"])
 def cc_update_task(task_id):
     task = command_center.update_task(task_id, **request.json)
+    status = request.json.get("status")
+    if status == "done":
+        sse_broadcast("task_completed", {"id": task_id, "title": task.get("title", "")})
+    else:
+        sse_broadcast("task_updated", {"id": task_id})
     return jsonify(task)
 
 
@@ -133,7 +190,9 @@ def cc_create_blocker():
 
 @app.route("/api/cc/blockers/<blocker_id>/resolve", methods=["POST"])
 def cc_resolve_blocker(blocker_id):
-    return jsonify(command_center.resolve_blocker(blocker_id))
+    result = command_center.resolve_blocker(blocker_id)
+    sse_broadcast("blocker_resolved", {"id": blocker_id})
+    return jsonify(result)
 
 
 @app.route("/api/cc/today", methods=["GET"])
@@ -203,6 +262,7 @@ def cc_answer_decision(did):
     d = command_center.answer_decision(did, body.get("answer", ""))
     if d is None:
         return jsonify({"error": "not found"}), 404
+    sse_broadcast("decision_answered", {"id": did})
     return jsonify(d)
 
 

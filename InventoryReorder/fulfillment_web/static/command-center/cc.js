@@ -1,5 +1,23 @@
 /* Command Center — cc.js */
 
+// ── SSE Real-Time Updates ────────────────────────────────────────────
+let _ccSSE = null;
+function ccConnectSSE() {
+    if (_ccSSE) return;
+    try {
+        _ccSSE = new EventSource('/api/cc/events');
+        _ccSSE.addEventListener('task_created', () => { ccFetchToday(); ccUpdateMascot(); });
+        _ccSSE.addEventListener('task_completed', () => { ccFetchToday(); ccFetchActivity(); ccUpdateMascot(); });
+        _ccSSE.addEventListener('task_updated', () => ccFetchToday());
+        _ccSSE.addEventListener('blocker_resolved', () => ccFetchToday());
+        _ccSSE.addEventListener('decision_answered', () => ccFetchDecisions());
+        _ccSSE.onerror = () => {
+            _ccSSE.close(); _ccSSE = null;
+            setTimeout(ccConnectSSE, 5000); // Reconnect after 5s
+        };
+    } catch (e) { /* SSE unavailable — polling fallback */ }
+}
+
 let ccData = null;
 let ccEnergyLevel = 'medium';
 let ccActiveTaskId = null;
@@ -32,6 +50,7 @@ function ccLoad() {
     ccFetchRecurringGrid();
     ccCheckHealth();
     ccInjectSearchBar();
+    ccConnectSSE();
     ccUpdateGreeting();
 
     // Hide empty sidebar sections
