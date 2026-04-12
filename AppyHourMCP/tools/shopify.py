@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, ConfigDict
 
 import requests
 
-from utils import get_gelcalc_settings, get_shopify_auth, format_error, to_json
+from utils import get_gelcalc_settings, get_shopify_auth, format_error, to_json, shopify_graphql
 
 
 def _fetch_unfulfilled_orders(base: str, headers: dict[str, str], tag: str | None = None, fields: str = "id,name,tags,shipping_address,line_items,customer,email") -> list[dict]:
@@ -46,20 +46,6 @@ def _fetch_unfulfilled_orders(base: str, headers: dict[str, str], tag: str | Non
                 url = m.group(1)
         time.sleep(0.1)
     return all_orders
-
-
-def _graphql(base: str, headers: dict[str, str], query: str, variables: dict | None = None) -> dict:
-    """Execute a Shopify GraphQL query."""
-    url = f"{base}/graphql.json"
-    body = {"query": query}
-    if variables:
-        body["variables"] = variables
-    resp = requests.post(url, headers=headers, json=body, timeout=30)
-    resp.raise_for_status()
-    data = resp.json()
-    if data.get("errors"):
-        raise RuntimeError(f"GraphQL errors: {data['errors']}")
-    return data["data"]
 
 
 def register(mcp: object) -> None:

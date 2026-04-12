@@ -28,6 +28,15 @@ GELCALC_DIR = APPYHOUR_ROOT / "GelPackCalculator"
 INVENTORY_DIR = APPYHOUR_ROOT / "InventoryReorder"
 SHIPPING_DIR = APPYHOUR_ROOT / "ShippingReports"
 
+# Shared settings path — used by google_sheets, gorgias, gorgias_sheets_sync, ops_summary_builder
+APPDATA_SETTINGS = Path(os.environ.get("APPDATA", "")) / "AppyHour" / "gel_calc_shopify_settings.json"
+
+# Shared Google Sheet IDs
+OPS_SHEET_ID = "190AmXF8hy-M8lmt8q9uhOkyOMi7AmU0jJAd1KOpjWdA"
+
+# Shopify API version — bump here to update all modules
+SHOPIFY_API_VERSION = "2024-01"
+
 def setup_paths():
     """Add sibling project directories to sys.path (idempotent)."""
     for p in [GELCALC_DIR, INVENTORY_DIR, SHIPPING_DIR]:
@@ -123,7 +132,7 @@ def get_shopify_auth() -> tuple:
         raise RuntimeError(
             "Shopify credentials not configured in InventoryReorder settings."
         )
-    base = f"https://{store}.myshopify.com/admin/api/2024-01"
+    base = f"https://{store}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}"
     headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
     return base, headers
 

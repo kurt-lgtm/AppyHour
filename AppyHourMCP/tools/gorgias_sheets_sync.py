@@ -8,22 +8,17 @@ then appends them to the UPDATE_Operational Issues tab.
 
 import json
 import logging
-import os
 import re
-import sys
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import requests
 
+from utils import APPDATA_SETTINGS, OPS_SHEET_ID
+
 logger = logging.getLogger(__name__)
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "GelPackCalculator"))
-
-_APPDATA_SETTINGS = Path(os.environ.get("APPDATA", "")) / "AppyHour" / "gel_calc_shopify_settings.json"
-
 # Target Google Sheet
-SPREADSHEET_ID = "190AmXF8hy-M8lmt8q9uhOkyOMi7AmU0jJAd1KOpjWdA"
+SPREADSHEET_ID = OPS_SHEET_ID
 TAB_NAME = "UPDATE_Operational Issues"
 
 # Gorgias custom field IDs
@@ -181,9 +176,9 @@ FC_TAG_MAP = {
 
 
 def _load_settings() -> dict[str, str]:
-    if not _APPDATA_SETTINGS.exists():
+    if not APPDATA_SETTINGS.exists():
         raise FileNotFoundError("AppyHour settings not found.")
-    with open(_APPDATA_SETTINGS, encoding="utf-8") as f:
+    with open(APPDATA_SETTINGS, encoding="utf-8") as f:
         return json.load(f)
 
 

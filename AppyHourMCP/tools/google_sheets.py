@@ -5,22 +5,17 @@ via the existing GoogleIntegration service account.
 
 import json
 import os
-import sys
 from pathlib import Path
 
-# Add GelPackCalculator to path so we can import GoogleIntegration
-_GPC_DIR = Path(__file__).resolve().parent.parent.parent / "GelPackCalculator"
-sys.path.insert(0, str(_GPC_DIR))
+from utils import APPDATA_SETTINGS, APPYHOUR_ROOT
 
-# Credentials path from the Kori app's runtime settings
-_APPDATA_SETTINGS = Path(os.environ.get("APPDATA", "")) / "AppyHour" / "gel_calc_shopify_settings.json"
-_FALLBACK_CREDS = Path(__file__).resolve().parent.parent.parent / "shipping-perfomance-review-accd39ac4b78.json"
+_FALLBACK_CREDS = APPYHOUR_ROOT / "shipping-perfomance-review-accd39ac4b78.json"
 
 
 def _get_credentials_path() -> str:
     """Resolve Google service account credentials path."""
-    if _APPDATA_SETTINGS.exists():
-        with open(_APPDATA_SETTINGS, encoding="utf-8") as f:
+    if APPDATA_SETTINGS.exists():
+        with open(APPDATA_SETTINGS, encoding="utf-8") as f:
             settings = json.load(f)
         path = settings.get("google_credentials_path", "")
         if path and os.path.exists(path):

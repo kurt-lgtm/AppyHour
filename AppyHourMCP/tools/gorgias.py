@@ -4,20 +4,18 @@ from the Gorgias helpdesk API.
 """
 
 import json
-import os
-from pathlib import Path
 from urllib.parse import urlencode
 
 import requests
 
-_APPDATA_SETTINGS = Path(os.environ.get("APPDATA", "")) / "AppyHour" / "gel_calc_shopify_settings.json"
+from utils import APPDATA_SETTINGS
 
 
 def _load_gorgias_config() -> tuple[tuple[str, str], str]:
     """Return (auth_tuple, base_url) from AppData settings."""
-    if not _APPDATA_SETTINGS.exists():
+    if not APPDATA_SETTINGS.exists():
         raise FileNotFoundError("AppyHour settings not found in AppData.")
-    with open(_APPDATA_SETTINGS, encoding="utf-8") as f:
+    with open(APPDATA_SETTINGS, encoding="utf-8") as f:
         settings = json.load(f)
     subdomain = settings.get("gorgias_subdomain", "")
     token = settings.get("gorgias_api_token", "")

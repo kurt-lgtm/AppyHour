@@ -7,17 +7,13 @@ tab with charts in Google Sheets.
 """
 
 import json
-import os
 import re
-import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "GelPackCalculator"))
+from utils import APPDATA_SETTINGS, OPS_SHEET_ID
 
-_APPDATA_SETTINGS = Path(os.environ.get("APPDATA", "")) / "AppyHour" / "gel_calc_shopify_settings.json"
-SPREADSHEET_ID = "190AmXF8hy-M8lmt8q9uhOkyOMi7AmU0jJAd1KOpjWdA"
+SPREADSHEET_ID = OPS_SHEET_ID
 OPS_TAB = "Ops Summary Report "
 DATA_TAB = "UPDATE_Operational Issues"
 COST_TAB = "Cost of Issues"
@@ -108,7 +104,7 @@ FCS = ["GRIPCA", "RMFG", "COG"]  # All 3 for historical data; 2026+ weeks show 0
 
 
 def _load_settings() -> dict[str, str]:
-    with open(_APPDATA_SETTINGS, encoding="utf-8") as f:
+    with open(APPDATA_SETTINGS, encoding="utf-8") as f:
         return json.load(f)
 
 
