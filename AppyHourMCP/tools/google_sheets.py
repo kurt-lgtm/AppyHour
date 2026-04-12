@@ -7,7 +7,7 @@ import json
 import os
 from pathlib import Path
 
-from utils import APPDATA_SETTINGS, APPYHOUR_ROOT
+from utils import APPDATA_SETTINGS, APPYHOUR_ROOT, format_error
 
 _FALLBACK_CREDS = APPYHOUR_ROOT / "shipping-perfomance-review-accd39ac4b78.json"
 
@@ -61,7 +61,7 @@ def register(mcp: object) -> None:
                 "total_rows": len(rows) - 1,
             }, indent=2)
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            return format_error(e, "sheets")
 
     @mcp.tool()
     def sheets_write(
@@ -89,7 +89,7 @@ def register(mcp: object) -> None:
                 "spreadsheet_id": spreadsheet_id,
             })
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            return format_error(e, "sheets")
 
     @mcp.tool()
     def sheets_append(
@@ -122,7 +122,7 @@ def register(mcp: object) -> None:
                 "message": f"Appended {len(rows)} rows to {sheet_name}",
             })
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            return format_error(e, "sheets")
 
     @mcp.tool()
     def sheets_create(
@@ -142,7 +142,7 @@ def register(mcp: object) -> None:
             url = client.create_spreadsheet(title, folder_id or None)
             return json.dumps({"success": True, "url": url})
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            return format_error(e, "sheets")
 
     @mcp.tool()
     def sheets_add_tab(
@@ -165,7 +165,7 @@ def register(mcp: object) -> None:
                 "message": f"Added tab '{tab_name}'",
             })
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            return format_error(e, "sheets")
 
     @mcp.tool()
     def sheets_list_tabs(
@@ -187,4 +187,4 @@ def register(mcp: object) -> None:
             tabs = [s["properties"]["title"] for s in result.get("sheets", [])]
             return json.dumps({"tabs": tabs})
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            return format_error(e, "sheets")

@@ -6,6 +6,7 @@ from the Gorgias helpdesk API.
 import json
 
 from tools._gorgias_internal import gorgias_get, gorgias_paginate
+from utils import format_error
 
 
 def register(mcp: object) -> None:
@@ -26,7 +27,7 @@ def register(mcp: object) -> None:
                 "plan": data.get("plan", {}).get("name", "unknown"),
             }, indent=2)
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            return format_error(e, "gorgias")
 
     @mcp.tool()
     def gorgias_list_tickets(
@@ -74,7 +75,7 @@ def register(mcp: object) -> None:
                 "tickets": summaries,
             }, indent=2)
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            return format_error(e, "gorgias")
 
     @mcp.tool()
     def gorgias_get_ticket(ticket_id: int) -> str:
@@ -122,7 +123,7 @@ def register(mcp: object) -> None:
                 } for m in messages],
             }, indent=2)
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            return format_error(e, "gorgias")
 
     @mcp.tool()
     def gorgias_ticket_stats(
@@ -168,7 +169,7 @@ def register(mcp: object) -> None:
                 "top_tags": dict(tag_counts.most_common(20)),
             }, indent=2)
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            return format_error(e, "gorgias")
 
     @mcp.tool()
     def gorgias_satisfaction_stats(
@@ -212,4 +213,4 @@ def register(mcp: object) -> None:
                 "by_score": dict(score_counts.most_common()),
             }, indent=2)
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            return format_error(e, "gorgias")
