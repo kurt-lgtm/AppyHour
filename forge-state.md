@@ -11,8 +11,8 @@ Flags: none
 STANDARD: [UNDERSTAND] → [DESIGN] → [PLAN] → [IMPLEMENT] → [VERIFY] → [VALIDATE] → **[DELIVER]**
 
 ## Resume Directive
-NEXT ACTION: None — Phases 1-6 complete + code review fixes applied. Restart MCP server.
-REMAINING: Phase 7 (Integration — future session when cognee stable)
+NEXT ACTION: None — Phases 1-6 complete + weather extraction done. Restart MCP server.
+REMAINING: Shipping MCP decoupling (Phase B-D, see ~/.claude/plans/260412-shipping-mcp-decoupling.md)
 
 ## Completed
 - [x] Phase 1: Dead code cleanup (70145f5 + 853a1a1) — dead scripts deleted, DRY constants, centralized settings
@@ -22,7 +22,9 @@ REMAINING: Phase 7 (Integration — future session when cognee stable)
 - [x] Phase 5: Performance (2742bde) — variant GID cache + weather cache (1hr TTL)
 - [x] Phase 6: New capabilities (0984a3d) — appyhour_search_orders (number/email/name)
 - [x] Verify: Code review (c9e65e0) — 2 critical bugs fixed (missing time import, format_error type), 2 improvements
-- [ ] Phase 7: Integration (future session — codebase-context indexing, cognee ingestion)
+- [x] Phase A: Extract weather.py (5b9db0e) — appyhour/weather.py decoupled from 3200-line monolith
+- [ ] Phase B-D: Shipping MCP decoupling (future — see plan)
+- [ ] Phase 7: Integration (future — codebase-context, cognee)
 
 ## Guard Command
 cd "C:/Users/Work/Claude Projects/AppyHour/AppyHourMCP" && python -c "import server; print('import OK')"
