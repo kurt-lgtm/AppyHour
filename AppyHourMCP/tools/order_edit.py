@@ -23,10 +23,17 @@ from utils import get_shopify_auth, shopify_graphql, format_error, to_json, APPY
 DIETARY_RESTRICTION_FRAGMENTS = ("NNRS", "CORS", "NCRS")
 
 
+# Module-level variant GID cache — same SKUs get looked up every swap run
+_variant_gid_cache: dict[str, str] = {}
+
+
 def _lookup_variant_gids(base: str, headers: dict[str, str], skus: set[str]) -> dict[str, str]:
-    """Look up $0 variant GIDs for a set of SKUs. Prefers cheapest variant."""
+    """Look up $0 variant GIDs for a set of SKUs. Prefers cheapest variant. Cached."""
+    uncached = skus - set(_variant_gid_cache)
+    if not uncached:
+        return {sku: _variant_gid_cache[sku] for sku in skus}
     variant_map: dict[str, tuple[str, float]] = {}
-    sku_list = sorted(skus)
+    sku_list = sorted(uncached)
     batch_size = 10
     for i in range(0, len(sku_list), batch_size):
         batch = sku_list[i:i + batch_size]
@@ -49,10 +56,13 @@ def _lookup_variant_gids(base: str, headers: dict[str, str], skus: set[str]) -> 
                 if price < prev_price:
                     variant_map[sku] = (node["id"], price)
         time.sleep(0.1)
-    missing = skus - set(variant_map.keys())
+    missing = uncached - set(variant_map.keys())
     if missing:
         raise RuntimeError(f"Could not find variants for: {sorted(missing)}")
-    return {sku: gid for sku, (gid, _) in variant_map.items()}
+    # Populate cache with new lookups
+    for sku, (gid, _) in variant_map.items():
+        _variant_gid_cache[sku] = gid
+    return {sku: _variant_gid_cache[sku] for sku in skus}
 
 
 def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: dict[str, str], variant_gids: dict[str, str]) -> list[str]:

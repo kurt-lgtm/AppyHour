@@ -4,9 +4,14 @@ Wraps the same logic as GelPackCalculator/app/routers/gelcalc.py.
 """
 
 import json
+import time
 from pydantic import BaseModel, Field, ConfigDict
 
 from utils import get_gelcalc_settings, format_error, to_json
+
+# Weather cache — 1hr TTL, keyed by zip code
+_weather_cache: dict[str, tuple[float, dict]] = {}  # zip -> (timestamp, result)
+_WEATHER_TTL = 3600  # seconds
 
 
 def register(mcp: object) -> None:
@@ -167,6 +172,11 @@ def register(mcp: object) -> None:
             number of forecast data points.
         """
         try:
+            # Check cache first (1hr TTL)
+            cached = _weather_cache.get(params.zip_code)
+            if cached and (time.time() - cached[0]) < _WEATHER_TTL:
+                return to_json(cached[1])
+
             from gel_pack_shopify import fetch_weather_by_zip
 
             s = get_gelcalc_settings()
@@ -179,7 +189,7 @@ def register(mcp: object) -> None:
                 return f"Error: Could not fetch weather data for zip {params.zip_code}."
 
             temps = [t for _, t in forecasts]
-            return to_json({
+            result = {
                 "zip": params.zip_code,
                 "lat": lat,
                 "lon": lon,
@@ -187,7 +197,9 @@ def register(mcp: object) -> None:
                 "peak_temp_f": round(max(temps), 1) if temps else None,
                 "min_temp_f": round(min(temps), 1) if temps else None,
                 "forecast_points": len(temps),
-            })
+            }
+            _weather_cache[params.zip_code] = (time.time(), result)
+            return to_json(result)
         except Exception as e:
             return format_error(e, "get_weather")
 
