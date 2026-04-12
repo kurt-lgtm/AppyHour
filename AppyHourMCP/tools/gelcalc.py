@@ -177,7 +177,7 @@ def register(mcp: object) -> None:
             if cached and (time.time() - cached[0]) < _WEATHER_TTL:
                 return to_json(cached[1])
 
-            from gel_pack_shopify import fetch_weather_by_zip
+            from appyhour.weather import fetch_weather_by_zip
 
             s = get_gelcalc_settings()
             api_key = s.get("owm_api_key", "")
@@ -228,9 +228,11 @@ def register(mcp: object) -> None:
             and total alert count.
         """
         try:
-            from gel_pack_shopify import fetch_nws_alerts
+            from appyhour.weather import fetch_nws_alerts
 
-            alerts = fetch_nws_alerts(params.lat, params.lon, days_ahead=params.days_ahead)
+            alerts, err = fetch_nws_alerts(params.lat, params.lon, days_ahead=params.days_ahead)
+            if err:
+                return to_json({"alerts": [], "count": 0, "error": err})
             return to_json({"alerts": alerts, "count": len(alerts)})
         except Exception as e:
             return format_error(e, "get_weather_alerts")

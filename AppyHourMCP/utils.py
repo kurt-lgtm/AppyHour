@@ -39,7 +39,7 @@ SHOPIFY_API_VERSION = "2024-01"
 
 def setup_paths():
     """Add sibling project directories to sys.path (idempotent)."""
-    for p in [GELCALC_DIR, INVENTORY_DIR, SHIPPING_DIR]:
+    for p in [APPYHOUR_ROOT, GELCALC_DIR, INVENTORY_DIR, SHIPPING_DIR]:
         s = str(p)
         if s not in sys.path:
             sys.path.insert(0, s)
