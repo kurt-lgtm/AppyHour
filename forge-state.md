@@ -11,8 +11,8 @@ Flags: none
 STANDARD: [UNDERSTAND] → [DESIGN] → [PLAN] → **[IMPLEMENT]** → [VERIFY] → [VALIDATE] → [DELIVER]
 
 ## Resume Directive
-NEXT ACTION: Stage Phase 1 deleted files, then begin Phase 3 (Shipping consolidation 6→2 tools)
-REMAINING: Phase 3 (Shipping) → Phase 4 (DRY) → Phase 5 (Async) → VERIFY → VALIDATE → DELIVER
+NEXT ACTION: Phase 6 (New capabilities) or VERIFY existing changes
+REMAINING: Phase 6 (optional) → VERIFY → VALIDATE → DELIVER
 
 ## Impact Brief
 - Target: AppyHourMCP/ (server.py + tools/)
@@ -31,10 +31,10 @@ REMAINING: Phase 3 (Shipping) → Phase 4 (DRY) → Phase 5 (Async) → VERIFY �
 ## Completed
 - [x] Phase 1: Dead code cleanup (70145f5) — dead scripts deleted, DRY constants, centralized settings
 - [x] Phase 2: Gorgias consolidation (afd08bf + 566bddc) — _gorgias_internal.py extracted, error handling standardized
-- [ ] Phase 3: Shipping consolidation (6→2 tools)
-- [ ] Phase 4: DRY foundation (utils.py centralization)
-- [ ] Phase 5: Async & performance
-- [ ] Phase 6: New capabilities (additive)
+- [x] Phase 3: Shipping consolidation (1fe1e25) — 6→2 tools, -91 LOC
+- [x] Phase 4: DRY foundation (287376e) — shopify_paginate() in utils.py, 5 loops replaced, -61 LOC
+- [x] Phase 5: Performance (2742bde) — variant GID cache + weather cache (1hr TTL)
+- [ ] Phase 6: New capabilities (additive, future session)
 - [ ] Phase 7: Integration (future session)
 
 ## Guard Command
