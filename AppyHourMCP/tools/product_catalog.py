@@ -9,6 +9,8 @@ import logging
 
 from pydantic import BaseModel, ConfigDict, Field
 
+import requests
+
 from utils import get_shopify_auth, format_error, to_json, shopify_paginate
 
 logger = logging.getLogger("appyhour_mcp.product_catalog")

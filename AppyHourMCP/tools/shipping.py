@@ -13,6 +13,8 @@ from datetime import datetime, timedelta
 from pydantic import BaseModel, Field, ConfigDict
 from enum import Enum
 
+import requests
+
 from utils import format_error, to_json, SHIPPING_DIR, GELCALC_DIR, get_inventory_settings, shopify_paginate
 
 
