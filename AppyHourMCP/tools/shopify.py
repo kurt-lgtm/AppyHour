@@ -11,6 +11,8 @@ import logging
 logger = logging.getLogger("appyhour_mcp.shopify")
 from pydantic import BaseModel, Field, ConfigDict
 
+import requests
+
 from utils import get_gelcalc_settings, get_shopify_auth, format_error, to_json, shopify_graphql, shopify_paginate
 
 
@@ -331,3 +333,112 @@ def register(mcp: object) -> None:
             return to_json({"order_id": params.order_id, "tags": new_tags})
         except Exception as e:
             return format_error(e, "update_order_tags")
+
+    # ------------------------------------------------------------------
+    # Order search
+    # ------------------------------------------------------------------
+
+    class SearchOrdersInput(BaseModel):
+        """Input for searching Shopify orders."""
+        model_config = ConfigDict(str_strip_whitespace=True)
+
+        query: str = Field(
+            description="Order number (e.g. '124137' or '#124137'), customer email, or customer name"
+        )
+        status: str = Field("any", description="Order status filter: open, closed, cancelled, any")
+
+    @mcp.tool(
+        name="appyhour_search_orders",
+        annotations={
+            "title": "Search Shopify Orders",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
+    )
+    async def search_orders(params: SearchOrdersInput) -> str:
+        """Search Shopify orders by order number, email, or customer name.
+
+        Accepts:
+        - Order number: '124137' or '#124137' — fetches that specific order
+        - Email: 'user@example.com' — finds orders by customer email
+        - Name: 'John Smith' — searches by customer name
+
+        Returns order details including id, name, tags, line items with SKUs,
+        and customer info.
+        """
+        try:
+            base, headers = get_shopify_auth()
+            query = params.query.strip().lstrip("#")
+
+            # Detect query type
+            if query.isdigit():
+                # Order number lookup
+                resp = requests.get(
+                    f"{base}/orders.json",
+                    headers=headers,
+                    params={
+                        "name": f"%23{query}",
+                        "status": params.status,
+                        "fields": "id,name,tags,line_items,customer,email,created_at,financial_status,fulfillment_status",
+                    },
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                orders = resp.json().get("orders", [])
+            elif "@" in query:
+                # Email lookup
+                orders = shopify_paginate(
+                    f"{base}/orders.json", headers,
+                    params={
+                        "email": query,
+                        "status": params.status,
+                        "limit": 50,
+                        "fields": "id,name,tags,line_items,customer,email,created_at,financial_status,fulfillment_status",
+                    },
+                )
+            else:
+                # Name search — use GraphQL for fuzzy matching
+                try:
+                    data = shopify_graphql(base, headers, """
+                        query($q: String!) {
+                          orders(first: 20, query: $q) {
+                            edges {
+                              node {
+                                legacyResourceId
+                                name
+                                tags
+                                email
+                                displayFinancialStatus
+                                displayFulfillmentStatus
+                                createdAt
+                                customer { firstName lastName email }
+                              }
+                            }
+                          }
+                        }
+                    """, {"q": query})
+                    orders = [
+                        {
+                            "id": int(e["node"]["legacyResourceId"]),
+                            "name": e["node"]["name"],
+                            "tags": ", ".join(e["node"].get("tags", [])),
+                            "email": e["node"].get("email", ""),
+                            "financial_status": e["node"].get("displayFinancialStatus", ""),
+                            "fulfillment_status": e["node"].get("displayFulfillmentStatus", ""),
+                            "created_at": e["node"].get("createdAt", ""),
+                            "customer": e["node"].get("customer"),
+                        }
+                        for e in data["orders"]["edges"]
+                    ]
+                except Exception:
+                    orders = []
+
+            return to_json({
+                "query": params.query,
+                "count": len(orders),
+                "orders": orders[:50],  # cap response size
+            })
+        except Exception as e:
+            return format_error(e, "search_orders")
