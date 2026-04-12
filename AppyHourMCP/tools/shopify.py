@@ -432,7 +432,8 @@ def register(mcp: object) -> None:
                         }
                         for e in data["orders"]["edges"]
                     ]
-                except Exception:
+                except Exception as name_err:
+                    logger.warning("GraphQL name search failed: %s", name_err)
                     orders = []
 
             return to_json({

@@ -175,7 +175,6 @@ def get_shopify_auth() -> tuple:
 
     Returns (base_url, headers) tuple.
     """
-    import requests  # noqa: F811 — deferred to avoid import at module level
     settings = get_inventory_settings()
     store = settings.get("shopify_store_url", "").strip()
     token = settings.get("shopify_access_token", "").strip()

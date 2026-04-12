@@ -199,7 +199,7 @@ def register(mcp: object) -> None:
                 overrides = recommend.build_zip_overrides(force_2day, api_forced, misrouted, chronic)
                 return to_json({"report_type": "overrides", "overrides": overrides, "count": len(overrides)})
 
-            return format_error(f"Unknown report_type: {report}", "shipping_analysis")
+            return to_json({"error": f"Unknown report_type: {report}"})
         except Exception as e:
             return format_error(e, "shipping_analysis")
 
