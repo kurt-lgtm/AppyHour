@@ -119,6 +119,57 @@ def to_json(data: Any, indent: int = 2) -> str:
 # Shopify helpers (shared across shopify, order_edit, matrix_qc, shipping)
 # ---------------------------------------------------------------------------
 
+def shopify_paginate(
+    url: str,
+    headers: dict,
+    params: dict | None = None,
+    key: str = "orders",
+    timeout: int = 30,
+    sleep: float = 0.1,
+) -> list[dict]:
+    """Paginate a Shopify REST endpoint following Link rel=next headers.
+
+    Args:
+        url: Full Shopify REST URL (e.g. https://store.myshopify.com/admin/api/2024-01/orders.json).
+        headers: Auth headers dict.
+        params: Query params (only sent on first page; Shopify cursor URLs include them).
+        key: JSON key to extract results from (e.g. "orders", "products"). Use "" for auto-detect (first key).
+        timeout: Request timeout in seconds.
+        sleep: Delay between pages in seconds.
+
+    Returns:
+        Combined list of all items across all pages.
+    """
+    import re
+    import time
+    import requests as _requests
+
+    all_items: list[dict] = []
+    page = 0
+    while url:
+        page += 1
+        resp = _requests.get(url, headers=headers, params=params if page == 1 else None, timeout=timeout)
+        if resp.status_code != 200:
+            raise RuntimeError(f"Shopify API returned {resp.status_code}: {resp.text[:200]}")
+        data = resp.json()
+        if key:
+            all_items.extend(data.get(key, []))
+        else:
+            # Auto-detect: use first key in response
+            first_key = next(iter(data), None)
+            if first_key and isinstance(data[first_key], list):
+                all_items.extend(data[first_key])
+        url = None
+        link = resp.headers.get("Link", "")
+        if 'rel="next"' in link:
+            m = re.search(r'<([^>]+)>;\s*rel="next"', link)
+            if m:
+                url = m.group(1)
+        if url:
+            time.sleep(sleep)
+    return all_items
+
+
 def get_shopify_auth() -> tuple:
     """Get Shopify REST/GraphQL auth from InventoryReorder settings.
 

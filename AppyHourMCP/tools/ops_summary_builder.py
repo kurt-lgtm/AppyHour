@@ -952,7 +952,6 @@ def build_shipments_from_shopify(
     Returns dict with summary and weekly counts.
     """
     import time as _time
-    import requests as _requests
 
     client = _get_shopify_client()
     gclient = _get_google_client()
@@ -988,31 +987,12 @@ def build_shipments_from_shopify(
             "created_at_min": f"{c_start}T00:00:00Z",
             "created_at_max": f"{c_end}T23:59:59Z",
         }
-        url = client._url("orders.json")
-        page = 0
-        while url:
-            page += 1
-            resp = _requests.get(
-                url, headers=client._headers(),
-                params=params if page == 1 else None,
-                timeout=30,
-            )
-            if resp.status_code != 200:
-                raise Exception(f"Shopify HTTP {resp.status_code}: {resp.text[:200]}")
-            orders = resp.json().get("orders", [])
-            if not orders:
-                break
-            all_orders.extend(orders)
-            # Next page via Link header
-            link = resp.headers.get("Link", "")
-            url = None
-            if 'rel="next"' in link:
-                for part in link.split(","):
-                    if 'rel="next"' in part:
-                        url = part.split("<")[1].split(">")[0]
-                        params = None
-                        break
-            _time.sleep(0.3)
+        from utils import shopify_paginate
+        chunk_orders = shopify_paginate(
+            client._url("orders.json"), client._headers(),
+            params=params, sleep=0.3,
+        )
+        all_orders.extend(chunk_orders)
 
     # Count by week and FC
     week_fc_counts = defaultdict(lambda: {"GRIPCA": 0, "RMFG": 0, "COG": 0})

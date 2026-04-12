@@ -6,37 +6,17 @@ Uses InventoryReorder's static Admin API token for Shopify API access.
 
 import json
 import logging
-import re
-import time
 
 from pydantic import BaseModel, ConfigDict, Field
 
-import requests
-
-from utils import get_shopify_auth, format_error, to_json
+from utils import get_shopify_auth, format_error, to_json, shopify_paginate
 
 logger = logging.getLogger("appyhour_mcp.product_catalog")
 
 
 def _paginated_get(url: str, headers: dict[str, str], params: dict | None = None, limit: int = 250) -> list[dict]:
     """Fetch all pages from a Shopify REST endpoint using Link-header pagination."""
-    all_items: list[dict] = []
-    page = 0
-    while url:
-        page += 1
-        resp = requests.get(url, headers=headers, params=params if page == 1 else None, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        key = next(iter(data))
-        all_items.extend(data[key])
-        link = resp.headers.get("Link", "")
-        url = None
-        if 'rel="next"' in link:
-            m = re.search(r'<([^>]+)>;\s*rel="next"', link)
-            if m:
-                url = m.group(1)
-        time.sleep(0.1)
-    return all_items
+    return shopify_paginate(url, headers, params=params, key="")
 
 
 def register(mcp: object) -> None:

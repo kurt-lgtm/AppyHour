@@ -6,24 +6,18 @@ Consolidates compare_matrix.py and _gen_swap_csv.py into reusable MCP tools.
 """
 
 import json
-import time
 import csv
-import re
 import os
 from collections import Counter
 from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict
 
-import requests
-
-from utils import get_shopify_auth, format_error, to_json, APPYHOUR_ROOT
+from utils import get_shopify_auth, format_error, to_json, APPYHOUR_ROOT, shopify_paginate
 from tools.constants import NAME_TO_SKU, FOOD_PREFIXES
 
 
 def _fetch_orders_by_tag(base: str, headers: dict[str, str], tag: str, fields: str = "id,name,line_items,email") -> list[dict]:
     """Fetch all unfulfilled orders matching a specific tag."""
-    all_orders: list[dict] = []
-    url = f"{base}/orders.json"
     params = {
         "status": "open",
         "fulfillment_status": "unfulfilled",
@@ -31,22 +25,7 @@ def _fetch_orders_by_tag(base: str, headers: dict[str, str], tag: str, fields: s
         "tag": tag,
         "fields": fields,
     }
-    page = 0
-    while url:
-        page += 1
-        resp = requests.get(url, headers=headers,
-                            params=params if page == 1 else None, timeout=30)
-        resp.raise_for_status()
-        orders = resp.json().get("orders", [])
-        all_orders.extend(orders)
-        link = resp.headers.get("Link", "")
-        url = None
-        if 'rel="next"' in link:
-            m = re.search(r'<([^>]+)>;\s*rel="next"', link)
-            if m:
-                url = m.group(1)
-        time.sleep(0.1)
-    return all_orders
+    return shopify_paginate(f"{base}/orders.json", headers, params=params)
 
 
 def _parse_matrix(xlsx_path: str) -> tuple[dict[str, dict[str, int]], dict[str, str], dict[str, str]]:

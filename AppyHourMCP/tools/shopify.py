@@ -7,22 +7,16 @@ Uses InventoryReorder's static Admin API token for all Shopify API access
 
 import json
 import logging
-import re
-import time
 
 logger = logging.getLogger("appyhour_mcp.shopify")
 from pydantic import BaseModel, Field, ConfigDict
 
-import requests
-
-from utils import get_gelcalc_settings, get_shopify_auth, format_error, to_json, shopify_graphql
+from utils import get_gelcalc_settings, get_shopify_auth, format_error, to_json, shopify_graphql, shopify_paginate
 
 
 def _fetch_unfulfilled_orders(base: str, headers: dict[str, str], tag: str | None = None, fields: str = "id,name,tags,shipping_address,line_items,customer,email") -> list[dict]:
     """Fetch all unfulfilled orders with pagination. Optional tag filter."""
-    all_orders: list[dict] = []
-    url = f"{base}/orders.json"
-    params = {
+    params: dict = {
         "status": "open",
         "fulfillment_status": "unfulfilled",
         "limit": 250,
@@ -30,22 +24,7 @@ def _fetch_unfulfilled_orders(base: str, headers: dict[str, str], tag: str | Non
     }
     if tag:
         params["tag"] = tag
-    page = 0
-    while url:
-        page += 1
-        resp = requests.get(url, headers=headers,
-                            params=params if page == 1 else None, timeout=30)
-        resp.raise_for_status()
-        orders = resp.json().get("orders", [])
-        all_orders.extend(orders)
-        link = resp.headers.get("Link", "")
-        url = None
-        if 'rel="next"' in link:
-            m = re.search(r'<([^>]+)>;\s*rel="next"', link)
-            if m:
-                url = m.group(1)
-        time.sleep(0.1)
-    return all_orders
+    return shopify_paginate(f"{base}/orders.json", headers, params=params)
 
 
 def register(mcp: object) -> None:

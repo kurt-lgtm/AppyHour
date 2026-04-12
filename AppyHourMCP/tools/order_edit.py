@@ -6,16 +6,12 @@ Uses InventoryReorder's static Admin API token.
 """
 
 import json
-import re
-import time
 import csv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict
 
-import requests
-
-from utils import get_shopify_auth, shopify_graphql, format_error, to_json, APPYHOUR_ROOT
+from utils import get_shopify_auth, shopify_graphql, format_error, to_json, APPYHOUR_ROOT, shopify_paginate
 
 # Dietary restriction box SKU fragments — these indicate curated boxes but
 # do NOT prevent swaps. The restriction only means the *default* curation
@@ -220,29 +216,15 @@ def register(mcp: object) -> None:
             variant_gids = _lookup_variant_gids(base, headers, target_skus)
 
             # Fetch all unfulfilled orders
-            all_orders = []
-            url = f"{base}/orders.json"
-            req_params = {
-                "status": "open",
-                "fulfillment_status": "unfulfilled",
-                "limit": 250,
-                "fields": "id,name,tags,line_items,customer,email",
-            }
-            page = 0
-            while url:
-                page += 1
-                resp = requests.get(url, headers=headers,
-                                    params=req_params if page == 1 else None, timeout=30)
-                resp.raise_for_status()
-                orders = resp.json().get("orders", [])
-                all_orders.extend(orders)
-                link = resp.headers.get("Link", "")
-                url = None
-                if 'rel="next"' in link:
-                    m = re.search(r'<([^>]+)>;\s*rel="next"', link)
-                    if m:
-                        url = m.group(1)
-                time.sleep(0.1)
+            all_orders = shopify_paginate(
+                f"{base}/orders.json", headers,
+                params={
+                    "status": "open",
+                    "fulfillment_status": "unfulfilled",
+                    "limit": 250,
+                    "fields": "id,name,tags,line_items,customer,email",
+                },
+            )
 
             # Filter by ship tag + box SKU + swappable SKUs
             targets = []

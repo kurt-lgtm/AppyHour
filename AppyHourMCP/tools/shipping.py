@@ -7,16 +7,13 @@ Phase 3 consolidation: 6 tools → 2 (1 parameterized read, 1 write).
 
 import json
 import time
-import re
 import types
 from pathlib import Path
 from datetime import datetime, timedelta
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+from pydantic import BaseModel, Field, ConfigDict
 from enum import Enum
 
-import requests
-
-from utils import format_error, to_json, SHIPPING_DIR, GELCALC_DIR, get_inventory_settings
+from utils import format_error, to_json, SHIPPING_DIR, GELCALC_DIR, get_inventory_settings, shopify_paginate
 
 
 # Lazy-loaded modules
@@ -264,27 +261,15 @@ def register(mcp: object) -> None:
 
             # Fetch unfulfilled orders
             cutoff = (datetime.now() - timedelta(days=21)).isoformat()
-            url = f"{rest_base}/orders.json"
-            params = {
-                "status": "open", "fulfillment_status": "unfulfilled",
-                "limit": 250, "created_at_min": cutoff,
-                "fields": "id,name,tags,shipping_address",
-            }
-            all_orders: list[dict] = []
-            while url:
-                resp = requests.get(url, headers=headers, params=params, timeout=60)
-                if resp.status_code != 200:
-                    return to_json({"error": f"Shopify API returned {resp.status_code}: {resp.text[:200]}"})
-                data = resp.json()
-                all_orders.extend(data.get("orders", []))
-                url = None
-                params = None
-                link = resp.headers.get("Link", "")
-                if 'rel="next"' in link:
-                    m = re.search(r'<([^>]+)>;\s*rel="next"', link)
-                    if m:
-                        url = m.group(1)
-                time.sleep(0.3)
+            all_orders = shopify_paginate(
+                f"{rest_base}/orders.json", headers,
+                params={
+                    "status": "open", "fulfillment_status": "unfulfilled",
+                    "limit": 250, "created_at_min": cutoff,
+                    "fields": "id,name,tags,shipping_address",
+                },
+                timeout=60, sleep=0.3,
+            )
 
             # Find orders needing tags
             targets: list[dict] = []
