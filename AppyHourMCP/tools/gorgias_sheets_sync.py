@@ -8,12 +8,15 @@ then appends them to the UPDATE_Operational Issues tab.
 
 import json
 import logging
+import os
 import re
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import requests
 
-from utils import APPDATA_SETTINGS, OPS_SHEET_ID
+from utils import OPS_SHEET_ID
+from tools._gorgias_internal import get_auth, _load_settings
 
 logger = logging.getLogger(__name__)
 
@@ -175,21 +178,9 @@ FC_TAG_MAP = {
 }
 
 
-def _load_settings() -> dict[str, str]:
-    if not APPDATA_SETTINGS.exists():
-        raise FileNotFoundError("AppyHour settings not found.")
-    with open(APPDATA_SETTINGS, encoding="utf-8") as f:
-        return json.load(f)
-
-
 def _gorgias_auth() -> tuple[tuple[str, str], str]:
-    s = _load_settings()
-    email = s.get("gorgias_email", "")
-    token = s.get("gorgias_api_token", "")
-    if not email or not token:
-        raise ValueError("Gorgias email or API token not configured.")
-    subdomain = s.get("gorgias_subdomain", "appyhour")
-    return (email, token), f"https://{subdomain}.gorgias.com/api"
+    """Delegate to shared cached auth."""
+    return get_auth()
 
 
 def _get_first_customer_message_date(ticket: dict, auth: tuple[str, str] | None = None, base_url: str | None = None) -> str:

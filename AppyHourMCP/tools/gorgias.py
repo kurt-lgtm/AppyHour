@@ -4,60 +4,8 @@ from the Gorgias helpdesk API.
 """
 
 import json
-from urllib.parse import urlencode
 
-import requests
-
-from utils import APPDATA_SETTINGS
-
-
-def _load_gorgias_config() -> tuple[tuple[str, str], str]:
-    """Return (auth_tuple, base_url) from AppData settings."""
-    if not APPDATA_SETTINGS.exists():
-        raise FileNotFoundError("AppyHour settings not found in AppData.")
-    with open(APPDATA_SETTINGS, encoding="utf-8") as f:
-        settings = json.load(f)
-    subdomain = settings.get("gorgias_subdomain", "")
-    token = settings.get("gorgias_api_token", "")
-    email = settings.get("gorgias_email", "")
-    if not subdomain or not token or not email:
-        raise ValueError("Gorgias subdomain, email, or API token not configured in settings.")
-    return (email, token), f"https://{subdomain}.gorgias.com/api"
-
-
-def _gorgias_get(endpoint: str, params: dict[str, str] | None = None) -> dict:
-    """Make an authenticated GET request to the Gorgias API."""
-    auth, base_url = _load_gorgias_config()
-    url = f"{base_url}/{endpoint}"
-    resp = requests.get(url, auth=auth, params=params, timeout=30)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def _gorgias_paginate(endpoint: str, params: dict[str, str] | None = None, limit: int = 100) -> list[dict]:
-    """Paginate through Gorgias API results using cursor pagination."""
-    auth, base_url = _load_gorgias_config()
-    results: list[dict] = []
-    params = dict(params or {})
-    params.setdefault("limit", min(limit, 100))
-    cursor = None
-
-    while len(results) < limit:
-        if cursor:
-            params["cursor"] = cursor
-        url = f"{base_url}/{endpoint}"
-        resp = requests.get(url, auth=auth, params=params, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        items = data.get("data", [])
-        if not items:
-            break
-        results.extend(items)
-        cursor = data.get("meta", {}).get("next_cursor")
-        if not cursor:
-            break
-
-    return results[:limit]
+from tools._gorgias_internal import gorgias_get, gorgias_paginate
 
 
 def register(mcp: object) -> None:
@@ -70,7 +18,7 @@ def register(mcp: object) -> None:
         Returns account info if successful.
         """
         try:
-            data = _gorgias_get("account")
+            data = gorgias_get("account")
             return json.dumps({
                 "success": True,
                 "domain": data.get("domain"),
@@ -106,7 +54,7 @@ def register(mcp: object) -> None:
             if created_before:
                 params["created_datetime__lte"] = created_before
 
-            tickets = _gorgias_paginate("tickets", params, min(limit, 500))
+            tickets = gorgias_paginate("tickets", params, min(limit, 500))
             summaries = []
             for t in tickets:
                 summaries.append({
@@ -138,8 +86,8 @@ def register(mcp: object) -> None:
         Returns full ticket data with messages.
         """
         try:
-            ticket = _gorgias_get(f"tickets/{ticket_id}")
-            messages = _gorgias_paginate(f"tickets/{ticket_id}/messages", limit=50)
+            ticket = gorgias_get(f"tickets/{ticket_id}")
+            messages = gorgias_paginate(f"tickets/{ticket_id}/messages", limit=50)
 
             # Extract custom fields (Issue Type, Resolution, Category)
             raw_cf = ticket.get("custom_fields") or []
@@ -200,7 +148,7 @@ def register(mcp: object) -> None:
             if created_before:
                 params["created_datetime__lte"] = created_before
 
-            tickets = _gorgias_paginate("tickets", params, limit=500)
+            tickets = gorgias_paginate("tickets", params, limit=500)
 
             status_counts = Counter()
             channel_counts = Counter()
@@ -246,7 +194,7 @@ def register(mcp: object) -> None:
             if created_before:
                 params["created_datetime__lte"] = created_before
 
-            surveys = _gorgias_paginate("satisfaction-surveys", params, limit=500)
+            surveys = gorgias_paginate("satisfaction-surveys", params, limit=500)
 
             score_counts = Counter()
             for s in surveys:
