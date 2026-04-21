@@ -23,6 +23,11 @@ let ccEnergyLevel = 'medium';
 let ccActiveTaskId = null;
 let ccTimerInterval = null;
 let ccTimerSeconds = 0;
+let ccTimerSessionId = null;
+let ccTimerStartedAt = null;
+let ccTimerDurationSec = 25 * 60;
+let ccTimerOverrun = false;
+let ccTimerNotified = false;
 let ccBriefDismissed = false;
 let ccSelectedTaskId = null;
 let ccLightenedDay = false;
@@ -48,6 +53,7 @@ function ccLoad() {
     ccFetchStreaks();
     ccFetchActivity();
     ccFetchRecurringGrid();
+    ccRestoreTimer();
     ccCheckHealth();
     ccInjectSearchBar();
     ccConnectSSE();
@@ -327,25 +333,49 @@ function ccRenderCard(task, isFrog, isPersonal) {
     const checklistPreview = !expanded && checklist.length > 0
         ? `<span>${doneCount}/${checklist.length}</span>` : '';
 
+    const urgencyTier = task.urgency_score != null ? _urgencyTier(task.urgency_score) : null;
+    const resurfaced = task.blocker && task.blocker.auto_resurfaced_at && !task.blocker.resolved_at;
+    if (resurfaced) classes.push('cc-task-resurfaced');
+    const ariaParts = [ccEsc(task.title)];
+    ariaParts.push(`priority ${task.priority || 'medium'}`);
+    if (task.energy) ariaParts.push(`energy ${task.energy}`);
+    if (urgencyTier) ariaParts.push(`urgency ${urgencyTier}`);
+    if (task.status === 'blocked') ariaParts.push('blocked');
+    if (resurfaced) ariaParts.push('check-back due');
+    if (estStr) ariaParts.push(`estimated ${estStr}`);
+    const ariaLabel = ariaParts.join(', ');
+
+    const priorityIcon = task.priority === 'high' ? '\u25b2 ' : (task.priority === 'low' ? '\u25be ' : '');
+
     return `
-        <div class="${classes.join(' ')}" role="article" aria-label="${ccEsc(task.title)}" onclick="ccSelectTask('${task.id}')">
+        <div class="${classes.join(' ')}" role="article" aria-label="${ariaLabel}" tabindex="0" onclick="ccSelectTask('${task.id}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();ccSelectTask('${task.id}')}">
             <div class="cc-task-title">${ccEsc(task.title)}</div>
             <div class="cc-task-meta">
-                <span class="cc-task-priority ${task.priority || 'medium'}">${(task.priority || 'med').toUpperCase()}</span>
+                <span class="cc-task-priority ${task.priority || 'medium'}" aria-label="priority ${task.priority || 'medium'}">${priorityIcon}${(task.priority || 'med').toUpperCase()}</span>
                 ${estStr ? `<span class="cc-task-est">${estStr}</span>` : ''}
                 ${checklistPreview}
                 ${sourceStr ? `<span class="cc-task-source">${sourceStr}</span>` : ''}
             </div>
             ${checklistHtml}
             ${task.status === 'blocked' && task.blocker ? `
-                <div class="cc-blocker-info">
-                    <span>${task.blocker.type === 'person' ? 'Waiting on ' + ccEsc(task.blocker.who || '?') : ccEsc(task.blocker.note || 'Blocked')}${task.blocker.check_back_at ? ' &middot; check back ' + ccFormatDate(task.blocker.check_back_at) : ''}</span>
-                    <button class="cc-blocker-resolve-btn" onclick="event.stopPropagation(); ccResolveBlocker('${task.blocker.id}')">Resolved</button>
+                <div class="cc-blocker-info" role="status" aria-live="polite">
+                    <span>\u25b2 ${task.blocker.type === 'person' ? 'Waiting on ' + ccEsc(task.blocker.who || '?') : ccEsc(task.blocker.note || 'Blocked')}${task.blocker.check_back_at ? ' &middot; check back ' + ccFormatDate(task.blocker.check_back_at) : ''}</span>
+                    <button class="cc-blocker-resolve-btn" onclick="event.stopPropagation(); ccResolveBlocker('${task.blocker.id}')" aria-label="Mark blocker resolved">Resolved</button>
+                </div>
+            ` : ''}
+            ${resurfaced ? `
+                <div class="cc-resurfaced-info" role="status" aria-live="polite">
+                    <span>\u21ba Check-back due &middot; was waiting on ${ccEsc(task.blocker.who || task.blocker.note || 'unknown')}</span>
+                    <div class="cc-resurfaced-actions">
+                        <button class="cc-blocker-resolve-btn" onclick="event.stopPropagation(); ccResolveBlocker('${task.blocker.id}')" aria-label="Unblocked, resume task">Unblocked</button>
+                        <button class="cc-task-action-btn" onclick="event.stopPropagation(); ccSnoozeBlocker('${task.blocker.id}', 1)" aria-label="Snooze one day">+1d</button>
+                        <button class="cc-task-action-btn" onclick="event.stopPropagation(); ccSnoozeBlocker('${task.blocker.id}', 3)" aria-label="Snooze three days">+3d</button>
+                    </div>
                 </div>
             ` : ''}
             <div class="cc-task-actions">
-                ${task.status === 'active' ? `<button class="cc-task-action-btn cc-start-btn" onclick="event.stopPropagation(); ccStartTask('${task.id}')">Start</button>` : ''}
-                ${task.status === 'active' ? `<button class="cc-task-action-btn" onclick="event.stopPropagation(); ccDoneTask('${task.id}')">Done</button>` : ''}
+                ${task.status === 'active' ? `<button class="cc-task-action-btn cc-start-btn" onclick="event.stopPropagation(); ccStartTask('${task.id}')" aria-label="Start timer for ${ccEsc(task.title)}">Start</button>` : ''}
+                ${task.status === 'active' ? `<button class="cc-task-action-btn" onclick="event.stopPropagation(); ccDoneTask('${task.id}')" aria-label="Mark ${ccEsc(task.title)} done">Done</button>` : ''}
             </div>
         </div>
     `;
@@ -524,15 +554,35 @@ async function ccToggleCheck(itemId) {
     ccFetchToday();
 }
 
-/* ── Timer ── */
+/* ── Timer (Pomodoro, backend-persisted) ── */
 
-function ccStartTask(taskId) {
-    if (ccActiveTaskId) ccStopTimer();
+async function ccStartTask(taskId, opts = {}) {
+    if (ccActiveTaskId) await ccStopTimer('cancelled');
     ccActiveTaskId = taskId;
     ccTimerSeconds = 0;
+    ccTimerOverrun = false;
+    ccTimerNotified = false;
 
     const task = ccFindTask(taskId);
     if (!task) return;
+
+    const duration = opts.duration || task.estimated_minutes || 25;
+    ccTimerDurationSec = duration * 60;
+
+    try {
+        const res = await fetch(`/api/cc/tasks/${taskId}/timer/start`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({duration_minutes: duration})
+        });
+        const session = await res.json();
+        ccTimerSessionId = session.id;
+        ccTimerStartedAt = new Date(session.started_at).getTime();
+    } catch (e) {
+        console.error('Timer start failed, running offline:', e);
+        ccTimerSessionId = null;
+        ccTimerStartedAt = Date.now();
+    }
 
     const activeEl = document.getElementById('cc-active-task');
     if (!activeEl) return;
@@ -544,9 +594,9 @@ function ccStartTask(taskId) {
 
     activeEl.innerHTML = `
         <div class="cc-active-title">${ccEsc(task.title)}</div>
-        <div class="cc-timer">
-            <div class="cc-timer-display" id="cc-timer-display">00:00</div>
-            <div class="cc-timer-bar">
+        <div class="cc-timer" role="timer" aria-live="off">
+            <div class="cc-timer-display" id="cc-timer-display" aria-live="polite" aria-atomic="true">00:00</div>
+            <div class="cc-timer-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
                 <div class="cc-timer-fill" id="cc-timer-fill" style="width:0%"></div>
             </div>
         </div>
@@ -573,39 +623,86 @@ function ccStartTask(taskId) {
     `;
     activeEl.style.display = '';
 
-    ccTimerInterval = setInterval(() => {
-        ccTimerSeconds++;
-        const min = Math.floor(ccTimerSeconds / 60);
-        const sec = ccTimerSeconds % 60;
-        const display = document.getElementById('cc-timer-display');
-        if (display) display.textContent = `${String(min).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+    ccTimerInterval = setInterval(ccTimerTick, 1000);
+    ccTimerTick();
+}
 
-        const estMin = task.estimated_minutes || 25;
-        const pct = Math.min(100, Math.round((ccTimerSeconds / (estMin * 60)) * 100));
-        const fill = document.getElementById('cc-timer-fill');
+function ccTimerTick() {
+    if (!ccTimerStartedAt) return;
+    ccTimerSeconds = Math.floor((Date.now() - ccTimerStartedAt) / 1000);
+    const remaining = ccTimerDurationSec - ccTimerSeconds;
+    const display = document.getElementById('cc-timer-display');
+    const fill = document.getElementById('cc-timer-fill');
+
+    const abs = Math.abs(remaining);
+    const mm = Math.floor(abs / 60);
+    const ss = abs % 60;
+    const text = `${String(mm).padStart(2,'0')}:${String(ss).padStart(2,'0')}`;
+
+    // Screen-reader announcements throttled to every 60s (avoids per-second spam)
+    if (display && ccTimerSeconds % 60 === 0) {
+        const announce = remaining >= 0
+            ? `${mm} minutes ${ss} seconds remaining`
+            : `${mm} minutes ${ss} seconds over`;
+        display.setAttribute('aria-label', announce);
+    }
+
+    if (remaining >= 0) {
+        if (display) { display.textContent = text; display.classList.remove('cc-timer-overrun'); }
+        const pct = Math.min(100, Math.round((ccTimerSeconds / ccTimerDurationSec) * 100));
         if (fill) {
             fill.style.width = pct + '%';
             fill.style.background = pct > 80 ? '#f5a623' : '#4ecca3';
+            const bar = fill.parentElement;
+            if (bar) bar.setAttribute('aria-valuenow', pct);
         }
-    }, 1000);
+    } else {
+        if (!ccTimerOverrun) {
+            ccTimerOverrun = true;
+            ccNotifyTimerDone();
+        }
+        if (display) { display.textContent = '+' + text; display.classList.add('cc-timer-overrun'); }
+        if (fill) { fill.style.width = '100%'; fill.style.background = '#f5a623'; }
+    }
 }
 
-function ccStopTimer() {
+function ccNotifyTimerDone() {
+    if (ccTimerNotified) return;
+    ccTimerNotified = true;
+    try {
+        if ('Notification' in window && Notification.permission === 'granted') {
+            const task = ccFindTask(ccActiveTaskId);
+            new Notification('Timer done', { body: task ? task.title : 'Task complete', silent: false });
+        } else if ('Notification' in window && Notification.permission !== 'denied') {
+            Notification.requestPermission();
+        }
+    } catch (e) { /* ignore */ }
+}
+
+async function ccStopTimer(outcome = 'completed') {
     if (ccTimerInterval) {
         clearInterval(ccTimerInterval);
         ccTimerInterval = null;
     }
 
-    if (ccActiveTaskId && ccTimerSeconds > 0) {
-        fetch(`/api/cc/tasks/${ccActiveTaskId}`, {
-            method: 'PATCH',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({actual_minutes: Math.ceil(ccTimerSeconds / 60)})
-        });
+    if (ccTimerSessionId) {
+        try {
+            await fetch(`/api/cc/timer/${ccTimerSessionId}/stop`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({outcome})
+            });
+        } catch (e) {
+            console.error('Timer stop persist failed:', e);
+        }
     }
 
     ccActiveTaskId = null;
+    ccTimerSessionId = null;
+    ccTimerStartedAt = null;
     ccTimerSeconds = 0;
+    ccTimerOverrun = false;
+    ccTimerNotified = false;
     const activeEl = document.getElementById('cc-active-task');
     if (activeEl) activeEl.style.display = 'none';
 }
@@ -767,13 +864,22 @@ async function ccResolveBlocker(blockerId) {
     ccFetchToday();
 }
 
+async function ccSnoozeBlocker(blockerId, days) {
+    await fetch(`/api/cc/blockers/${blockerId}/snooze`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({days})
+    });
+    ccFetchToday();
+}
+
 async function ccSkipTask(taskId) {
-    ccStopTimer();
+    await ccStopTimer('cancelled');
     try {
-        await fetch(`/api/cc/tasks/${taskId}`, {
-            method: 'PATCH',
+        await fetch(`/api/cc/tasks/${taskId}/skip`, {
+            method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({notes: 'Skipped — deferred to later'})
+            body: JSON.stringify({reason: 'deferred'})
         });
     } catch (e) {
         console.error('Skip failed:', e);
@@ -782,20 +888,76 @@ async function ccSkipTask(taskId) {
 }
 
 async function ccExtendTimer(minutes) {
-    const task = ccFindTask(ccActiveTaskId);
-    if (task) {
-        const newEstimate = (task.estimated_minutes || 25) + minutes;
-        task.estimated_minutes = newEstimate;
+    ccTimerDurationSec += minutes * 60;
+    ccTimerOverrun = false;
+    ccTimerNotified = false;
+    if (ccTimerSessionId) {
         try {
-            await fetch(`/api/cc/tasks/${ccActiveTaskId}`, {
-                method: 'PATCH',
+            await fetch(`/api/cc/timer/${ccTimerSessionId}/extend`, {
+                method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({estimated_minutes: newEstimate})
+                body: JSON.stringify({extra_minutes: minutes})
             });
         } catch (e) {
             console.error('Extend timer persist failed:', e);
         }
     }
+    ccTimerTick();
+}
+
+async function ccRestoreTimer() {
+    try {
+        const res = await fetch('/api/cc/timer/active');
+        const session = await res.json();
+        if (!session || !session.id) return;
+        ccTimerSessionId = session.id;
+        ccActiveTaskId = session.task_id;
+        ccTimerStartedAt = new Date(session.started_at).getTime();
+        ccTimerDurationSec = (session.duration_minutes + session.extended_minutes) * 60;
+        const task = session.task || ccFindTask(session.task_id);
+        if (!task) return;
+        ccRenderActiveTaskUI(task);
+        ccTimerInterval = setInterval(ccTimerTick, 1000);
+        ccTimerTick();
+    } catch (e) { /* no active session */ }
+}
+
+function ccRenderActiveTaskUI(task) {
+    const activeEl = document.getElementById('cc-active-task');
+    if (!activeEl) return;
+    const checklist = task.checklist || [];
+    const doneCount = checklist.filter(c => c.done).length;
+    const checkPct = checklist.length > 0 ? Math.round((doneCount / checklist.length) * 100) : 0;
+    activeEl.innerHTML = `
+        <div class="cc-active-title">${ccEsc(task.title)}</div>
+        <div class="cc-timer" role="timer" aria-live="off">
+            <div class="cc-timer-display" id="cc-timer-display" aria-live="polite" aria-atomic="true">00:00</div>
+            <div class="cc-timer-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div class="cc-timer-fill" id="cc-timer-fill" style="width:0%"></div>
+            </div>
+        </div>
+        ${checklist.length > 0 ? `
+            <div class="cc-checklist" id="cc-active-checklist">
+                ${checklist.map(c => `
+                    <div class="cc-checklist-item ${c.done ? 'done' : ''}" data-id="${c.id}" onclick="ccToggleActiveCheck('${c.id}')">
+                        <div class="cc-checklist-check">${c.done ? '&#10003;' : ''}</div>
+                        <span>${ccEsc(c.title)}</span>
+                    </div>
+                `).join('')}
+                <div class="cc-checklist-progress">
+                    <div class="cc-checklist-progress-fill" style="width:${checkPct}%"></div>
+                </div>
+            </div>
+        ` : ''}
+        <div class="cc-active-actions">
+            <button class="cc-done-btn" onclick="ccDoneTask('${task.id}')">Done</button>
+            <button class="cc-blocked-btn" onclick="ccBlockTask('${task.id}')">Blocked</button>
+            <button onclick="ccStopTimer('cancelled')">Stop</button>
+            <button onclick="ccExtendTimer(10)">+10 min</button>
+            <button onclick="ccSkipTask('${task.id}')">Skip</button>
+        </div>
+    `;
+    activeEl.style.display = '';
 }
 
 /* ── Auto-Pause on Window Unfocus ── */
@@ -824,24 +986,11 @@ document.addEventListener('visibilitychange', () => {
             ccUnfocusTimeout = null;
         }
         if (ccTimerPaused && ccActiveTaskId) {
-            // Resume timer
             ccTimerPaused = false;
             const display = document.getElementById('cc-timer-display');
             if (display) display.style.opacity = '1';
-            const task = ccFindTask(ccActiveTaskId);
-            ccTimerInterval = setInterval(() => {
-                ccTimerSeconds++;
-                const min = Math.floor(ccTimerSeconds / 60);
-                const sec = ccTimerSeconds % 60;
-                if (display) display.textContent = `${String(min).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
-                const estMin = (task?.estimated_minutes) || 25;
-                const pct = Math.min(100, Math.round((ccTimerSeconds / (estMin * 60)) * 100));
-                const fill = document.getElementById('cc-timer-fill');
-                if (fill) {
-                    fill.style.width = pct + '%';
-                    fill.style.background = pct > 80 ? '#f5a623' : '#4ecca3';
-                }
-            }, 1000);
+            ccTimerInterval = setInterval(ccTimerTick, 1000);
+            ccTimerTick();
         }
     }
 });
@@ -904,13 +1053,15 @@ async function ccSendChat() {
     input.value = '';
     ccChatLoading = true;
 
-    // Show typing indicator
-    const typingId = 'cc-typing-' + Date.now();
-    messages.innerHTML += `<div class="cc-chat-assistant" id="${typingId}" style="color:#5a6070">Thinking...</div>`;
+    const respId = 'cc-resp-' + Date.now();
+    messages.innerHTML += `<div class="cc-chat-assistant" id="${respId}"><span class="cc-chat-body"></span><div class="cc-chat-meta" style="font-size:10px;color:#5a6070;margin-top:6px;font-family:'Space Mono',monospace"></div></div>`;
     messages.scrollTop = messages.scrollHeight;
+    const bodyEl = document.querySelector(`#${respId} .cc-chat-body`);
+    const metaEl = document.querySelector(`#${respId} .cc-chat-meta`);
+    let fullText = '';
 
     try {
-        const resp = await fetch('/api/cc/chat', {
+        const resp = await fetch('/api/cc/chat/stream', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
@@ -919,28 +1070,58 @@ async function ccSendChat() {
                 energy_level: ccEnergyLevel
             })
         });
-        const data = await resp.json();
 
-        // Remove typing indicator
-        const typingEl = document.getElementById(typingId);
-        if (typingEl) typingEl.remove();
+        if (!resp.ok || !resp.body) {
+            // Fallback to non-streaming
+            const fallback = await fetch('/api/cc/chat', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({message: msg, model: ccChatModel, energy_level: ccEnergyLevel})
+            });
+            const data = await fallback.json();
+            fullText = data.response || 'No response';
+            bodyEl.innerHTML = ccFormatChatResponse(fullText);
+            if (data.tokens) metaEl.textContent = `${(data.model || ccChatModel).split('-').pop()} · ${data.tokens.input + data.tokens.output} tokens`;
+        } else {
+            const reader = resp.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let finalPayload = null;
 
-        // Show response
-        const responseHtml = ccFormatChatResponse(data.response || 'No response');
-        const modelLabel = (data.model || ccChatModel).split('-').pop();
-        const budgetInfo = data.budget ? ` · $${(data.budget.spent_cents/100).toFixed(2)}/$${(data.budget.limit_cents/100).toFixed(2)}` : '';
+            while (true) {
+                const {done, value} = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, {stream: true});
+                // Parse SSE frames separated by "\n\n"
+                let idx;
+                while ((idx = buffer.indexOf('\n\n')) !== -1) {
+                    const frame = buffer.slice(0, idx).trim();
+                    buffer = buffer.slice(idx + 2);
+                    if (!frame.startsWith('data:')) continue;
+                    let payload;
+                    try { payload = JSON.parse(frame.slice(5).trim()); } catch { continue; }
+                    if (payload.delta) {
+                        fullText += payload.delta;
+                        bodyEl.innerHTML = ccFormatChatResponse(fullText);
+                        messages.scrollTop = messages.scrollHeight;
+                    } else if (payload.error) {
+                        bodyEl.textContent = payload.error;
+                    } else if (payload.done) {
+                        finalPayload = payload;
+                    }
+                }
+            }
 
-        messages.innerHTML += `
-            <div class="cc-chat-assistant">
-                ${responseHtml}
-                <div style="font-size:10px;color:#5a6070;margin-top:6px;font-family:'Space Mono',monospace">
-                    ${modelLabel}${data.tokens ? ` · ${data.tokens.input + data.tokens.output} tokens` : ''}${budgetInfo}
-                </div>
-            </div>
-        `;
+            if (finalPayload) {
+                const tokens = finalPayload.tokens;
+                const budget = finalPayload.budget;
+                const modelLabel = (finalPayload.model || ccChatModel).split('-').pop();
+                const budgetInfo = budget ? ` · $${(budget.spent_cents/100).toFixed(2)}/$${(budget.limit_cents/100).toFixed(2)}` : '';
+                metaEl.textContent = `${modelLabel}${tokens ? ` · ${tokens.input + tokens.output} tokens` : ''}${budgetInfo}`;
+            }
+        }
 
-        // Action buttons for certain responses
-        if (data.response && (data.response.includes('Subject:') || data.response.includes('Hi ') || data.response.includes('Dear '))) {
+        if (fullText && (fullText.includes('Subject:') || fullText.includes('Hi ') || fullText.includes('Dear '))) {
             messages.innerHTML += `
                 <div style="display:flex;gap:6px;padding:4px 0">
                     <button onclick="ccChatAction('copy')" style="font-size:10px;padding:3px 8px;border:1px solid #2a2a4a;border-radius:4px;background:transparent;color:#8892a0;cursor:pointer;font-family:'Space Mono',monospace">Copy</button>
@@ -949,8 +1130,7 @@ async function ccSendChat() {
             `;
         }
     } catch (e) {
-        const typingEl = document.getElementById(typingId);
-        if (typingEl) typingEl.textContent = 'Connection error. Check if API key is configured.';
+        bodyEl.textContent = 'Connection error. Check if API key is configured.';
     }
 
     ccChatLoading = false;

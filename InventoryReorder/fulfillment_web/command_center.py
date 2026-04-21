@@ -144,7 +144,45 @@ def init_db() -> None:
             detail TEXT DEFAULT '',
             ts TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS timer_sessions (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            duration_minutes INTEGER NOT NULL DEFAULT 25,
+            extended_minutes INTEGER NOT NULL DEFAULT 0,
+            completed_at TEXT,
+            actual_minutes INTEGER,
+            outcome TEXT,
+            FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_timer_task ON timer_sessions(task_id);
+        CREATE INDEX IF NOT EXISTS idx_timer_active ON timer_sessions(completed_at);
+
+        CREATE TABLE IF NOT EXISTS skip_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id TEXT NOT NULL,
+            recurring_id TEXT,
+            reason TEXT DEFAULT '',
+            ts TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_skip_recurring ON skip_events(recurring_id);
+        CREATE INDEX IF NOT EXISTS idx_skip_ts ON skip_events(ts);
+
+        CREATE TABLE IF NOT EXISTS learning_calibrations (
+            recurring_id TEXT PRIMARY KEY,
+            sample_count INTEGER NOT NULL DEFAULT 0,
+            p50_actual_minutes REAL,
+            last_calibrated_at TEXT
+        );
     """)
+    # Idempotent migrations for columns added after initial release
+    try:
+        db.execute("ALTER TABLE blockers ADD COLUMN auto_resurfaced_at TEXT")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
     db.commit()
 
 
@@ -592,6 +630,91 @@ def resolve_blocker(blocker_id: str) -> dict:
     return _row_to_dict(db.execute("SELECT * FROM blockers WHERE id = ?", (blocker_id,)).fetchone())
 
 
+def snooze_blocker(blocker_id: str, days: int = 1) -> dict | None:
+    """Push check_back_at out by N days and clear auto_resurfaced_at so monitor re-runs."""
+    db = get_db()
+    new_checkback = (datetime.now(_TZ) + timedelta(days=days)).isoformat()
+    db.execute(
+        "UPDATE blockers SET check_back_at = ?, auto_resurfaced_at = NULL WHERE id = ?",
+        (new_checkback, blocker_id),
+    )
+    # Re-block the task if it was auto-resurfaced
+    row = db.execute("SELECT task_id FROM blockers WHERE id = ?", (blocker_id,)).fetchone()
+    if row:
+        db.execute("UPDATE tasks SET status = 'blocked' WHERE id = ?", (row["task_id"],))
+    db.commit()
+    log_activity("blocker_snoozed", f"blocker={blocker_id} days={days}")
+    return _row_to_dict(db.execute("SELECT * FROM blockers WHERE id = ?", (blocker_id,)).fetchone())
+
+
+def get_due_checkbacks() -> list[dict]:
+    """Preview: blockers whose check_back_at has passed and haven't been resurfaced yet."""
+    db = get_db()
+    now = _now_iso()
+    rows = db.execute(
+        """SELECT b.*, t.title AS task_title FROM blockers b
+           JOIN tasks t ON t.id = b.task_id
+           WHERE b.check_back_at IS NOT NULL
+             AND b.check_back_at <= ?
+             AND b.resolved_at IS NULL
+             AND b.auto_resurfaced_at IS NULL
+           ORDER BY b.check_back_at""",
+        (now,),
+    ).fetchall()
+    return _rows_to_list(rows)
+
+
+def resurface_due_blockers() -> list[dict]:
+    """Move tasks whose blockers have hit check_back_at back into the active queue.
+
+    Keeps the blocker record intact (sets auto_resurfaced_at). User decides next:
+    resolve (real unblock), snooze (still waiting), or delete task.
+    Returns the list of resurfaced blocker rows.
+    """
+    db = get_db()
+    now = _now_iso()
+    rows = db.execute(
+        """SELECT * FROM blockers
+           WHERE check_back_at IS NOT NULL
+             AND check_back_at <= ?
+             AND resolved_at IS NULL
+             AND auto_resurfaced_at IS NULL""",
+        (now,),
+    ).fetchall()
+
+    resurfaced = []
+    for r in rows:
+        db.execute(
+            "UPDATE blockers SET auto_resurfaced_at = ? WHERE id = ?", (now, r["id"])
+        )
+        db.execute("UPDATE tasks SET status = 'active' WHERE id = ?", (r["task_id"],))
+        resurfaced.append(dict(r))
+        log_activity(
+            "blocker_resurfaced",
+            f"task={r['task_id']} blocker={r['id']} waited_on={r['who'] or r['type']}",
+        )
+
+    if resurfaced:
+        db.commit()
+    return resurfaced
+
+
+def get_recent_resurfaces(hours: int = 24) -> list[dict]:
+    """Blockers auto-resurfaced in the last N hours — for daily brief + highlighting."""
+    db = get_db()
+    cutoff = (datetime.now(_TZ) - timedelta(hours=hours)).isoformat()
+    rows = db.execute(
+        """SELECT b.*, t.title AS task_title FROM blockers b
+           JOIN tasks t ON t.id = b.task_id
+           WHERE b.auto_resurfaced_at IS NOT NULL
+             AND b.auto_resurfaced_at >= ?
+             AND b.resolved_at IS NULL
+           ORDER BY b.auto_resurfaced_at DESC""",
+        (cutoff,),
+    ).fetchall()
+    return _rows_to_list(rows)
+
+
 def get_active_blockers() -> list[dict]:
     """Get all unresolved blockers."""
     db = get_db()
@@ -609,6 +732,313 @@ def _get_active_blocker_for_task(task_id: str) -> dict | None:
         (task_id,),
     ).fetchone()
     return _row_to_dict(row)
+
+
+# ---------------------------------------------------------------------------
+# Timer (Pomodoro)
+# ---------------------------------------------------------------------------
+
+
+def start_timer(task_id: str, duration_minutes: int = 25) -> dict:
+    """Start a timer session for a task. Cancels any existing active session on the task."""
+    db = get_db()
+    task = get_task(task_id)
+    if task is None:
+        raise ValueError(f"Task {task_id} not found")
+
+    # Close any active session for this task (user restarted)
+    db.execute(
+        "UPDATE timer_sessions SET completed_at = ?, outcome = 'cancelled' "
+        "WHERE task_id = ? AND completed_at IS NULL",
+        (_now_iso(), task_id),
+    )
+
+    session_id = _new_id()
+    now = _now_iso()
+    db.execute(
+        """INSERT INTO timer_sessions (id, task_id, started_at, duration_minutes)
+           VALUES (?, ?, ?, ?)""",
+        (session_id, task_id, now, duration_minutes),
+    )
+    db.commit()
+    log_activity("timer_start", f"task={task_id} duration={duration_minutes}m")
+    return get_timer_session(session_id)
+
+
+def extend_timer(session_id: str, extra_minutes: int = 10) -> dict | None:
+    """Add minutes to an active session."""
+    db = get_db()
+    row = db.execute(
+        "SELECT * FROM timer_sessions WHERE id = ? AND completed_at IS NULL",
+        (session_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    db.execute(
+        "UPDATE timer_sessions SET extended_minutes = extended_minutes + ? WHERE id = ?",
+        (extra_minutes, session_id),
+    )
+    db.commit()
+    log_activity("timer_extend", f"session={session_id} extra={extra_minutes}m")
+    return get_timer_session(session_id)
+
+
+def stop_timer(session_id: str, outcome: str = "completed") -> dict | None:
+    """Stop a timer session. Outcome: completed | cancelled | blocked.
+    On 'completed', writes actual_minutes to the session AND rolls up onto the task."""
+    db = get_db()
+    row = db.execute(
+        "SELECT * FROM timer_sessions WHERE id = ?", (session_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    if row["completed_at"]:
+        return _row_to_dict(row)
+
+    started = datetime.fromisoformat(row["started_at"])
+    now_dt = datetime.now(_TZ)
+    actual = max(1, int((now_dt - started).total_seconds() // 60))
+    now_iso = now_dt.isoformat()
+
+    db.execute(
+        "UPDATE timer_sessions SET completed_at = ?, actual_minutes = ?, outcome = ? WHERE id = ?",
+        (now_iso, actual, outcome, session_id),
+    )
+
+    if outcome == "completed":
+        # Accumulate actual_minutes on the task (support multiple sessions per task)
+        task_row = db.execute(
+            "SELECT actual_minutes, recurring_id FROM tasks WHERE id = ?", (row["task_id"],)
+        ).fetchone()
+        prior = (task_row["actual_minutes"] if task_row and task_row["actual_minutes"] else 0)
+        db.execute(
+            "UPDATE tasks SET actual_minutes = ? WHERE id = ?",
+            (prior + actual, row["task_id"]),
+        )
+        db.commit()
+        # Trigger calibration refresh (cheap, stops at <5 samples)
+        if task_row and task_row["recurring_id"]:
+            try:
+                calibrate_duration(task_row["recurring_id"])
+            except Exception as e:  # noqa: BLE001
+                log_activity("calibration_error", f"recurring={task_row['recurring_id']} err={e}")
+
+    db.commit()
+    log_activity("timer_stop", f"session={session_id} outcome={outcome} actual={actual}m")
+    return get_timer_session(session_id)
+
+
+def get_timer_session(session_id: str) -> dict | None:
+    db = get_db()
+    row = db.execute("SELECT * FROM timer_sessions WHERE id = ?", (session_id,)).fetchone()
+    return _row_to_dict(row)
+
+
+def get_active_timer() -> dict | None:
+    """Return the currently-running timer session (at most one), with task info."""
+    db = get_db()
+    row = db.execute(
+        "SELECT * FROM timer_sessions WHERE completed_at IS NULL "
+        "ORDER BY started_at DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return None
+    session = dict(row)
+    task = get_task(session["task_id"])
+    session["task"] = task
+    # Compute remaining seconds (negative = overrun)
+    started = datetime.fromisoformat(session["started_at"])
+    total_minutes = session["duration_minutes"] + session["extended_minutes"]
+    elapsed = (datetime.now(_TZ) - started).total_seconds()
+    session["remaining_seconds"] = int(total_minutes * 60 - elapsed)
+    session["elapsed_seconds"] = int(elapsed)
+    return session
+
+
+def get_task_timer_history(task_id: str) -> list[dict]:
+    """All timer sessions for a task, newest first."""
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM timer_sessions WHERE task_id = ? ORDER BY started_at DESC",
+        (task_id,),
+    ).fetchall()
+    return _rows_to_list(rows)
+
+
+# ---------------------------------------------------------------------------
+# Learning (duration calibration + skip detection)
+# ---------------------------------------------------------------------------
+
+CALIBRATION_MIN_SAMPLES = 5
+CALIBRATION_BUFFER = 1.10  # p50 * 1.10 (10% buffer)
+SKIP_ALERT_THRESHOLD = 3
+SKIP_WINDOW_DAYS = 21
+
+
+def record_skip(task_id: str, reason: str = "") -> dict:
+    """Record a skip event for learning. Returns task and updated skip count."""
+    db = get_db()
+    task_row = db.execute(
+        "SELECT recurring_id FROM tasks WHERE id = ?", (task_id,)
+    ).fetchone()
+    recurring_id = task_row["recurring_id"] if task_row else None
+
+    db.execute(
+        "INSERT INTO skip_events (task_id, recurring_id, reason, ts) VALUES (?, ?, ?, ?)",
+        (task_id, recurring_id, reason, _now_iso()),
+    )
+    db.commit()
+    log_activity("task_skipped", f"task={task_id} reason={reason}")
+
+    skip_count = 0
+    if recurring_id:
+        cutoff = (datetime.now(_TZ) - timedelta(days=SKIP_WINDOW_DAYS)).isoformat()
+        row = db.execute(
+            "SELECT COUNT(*) AS c FROM skip_events WHERE recurring_id = ? AND ts >= ?",
+            (recurring_id, cutoff),
+        ).fetchone()
+        skip_count = row["c"] if row else 0
+
+    return {"task_id": task_id, "recurring_id": recurring_id, "skip_count": skip_count}
+
+
+def _percentile(values: list[float], pct: float) -> float:
+    """Simple percentile (linear interpolation). Assumes values non-empty."""
+    if not values:
+        return 0.0
+    s = sorted(values)
+    if len(s) == 1:
+        return s[0]
+    k = (len(s) - 1) * pct
+    lo = int(k)
+    hi = min(lo + 1, len(s) - 1)
+    frac = k - lo
+    return s[lo] + (s[hi] - s[lo]) * frac
+
+
+def calibrate_duration(recurring_id: str) -> dict | None:
+    """Compute p50*buffer estimate for a recurring task. Writes to learning_calibrations.
+    Returns dict with sample_count, p50, recommended_estimate, or None if insufficient data."""
+    db = get_db()
+    rows = db.execute(
+        """SELECT ts.actual_minutes FROM timer_sessions ts
+           JOIN tasks t ON t.id = ts.task_id
+           WHERE t.recurring_id = ? AND ts.outcome = 'completed' AND ts.actual_minutes IS NOT NULL""",
+        (recurring_id,),
+    ).fetchall()
+    samples = [float(r["actual_minutes"]) for r in rows if r["actual_minutes"]]
+    if len(samples) < CALIBRATION_MIN_SAMPLES:
+        return {
+            "recurring_id": recurring_id,
+            "sample_count": len(samples),
+            "p50_minutes": None,
+            "recommended_estimate": None,
+            "sufficient": False,
+        }
+
+    p50 = _percentile(samples, 0.50)
+    recommended = max(1, int(round(p50 * CALIBRATION_BUFFER)))
+
+    db.execute(
+        """INSERT INTO learning_calibrations (recurring_id, sample_count, p50_actual_minutes, last_calibrated_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(recurring_id) DO UPDATE SET
+             sample_count = excluded.sample_count,
+             p50_actual_minutes = excluded.p50_actual_minutes,
+             last_calibrated_at = excluded.last_calibrated_at""",
+        (recurring_id, len(samples), p50, _now_iso()),
+    )
+    db.commit()
+
+    return {
+        "recurring_id": recurring_id,
+        "sample_count": len(samples),
+        "p50_minutes": round(p50, 1),
+        "recommended_estimate": recommended,
+        "sufficient": True,
+    }
+
+
+def calibrate_all_recurring() -> list[dict]:
+    """Run calibration for every recurring task. Returns list of successful calibrations."""
+    db = get_db()
+    rows = db.execute("SELECT id FROM recurring_tasks WHERE active = 1").fetchall()
+    results = []
+    for r in rows:
+        result = calibrate_duration(r["id"])
+        if result and result.get("sufficient"):
+            results.append(result)
+    return results
+
+
+def apply_calibration(recurring_id: str) -> dict | None:
+    """Apply calibrated estimate to the recurring_tasks template."""
+    db = get_db()
+    cal = db.execute(
+        "SELECT * FROM learning_calibrations WHERE recurring_id = ?", (recurring_id,)
+    ).fetchone()
+    if cal is None or cal["sample_count"] < CALIBRATION_MIN_SAMPLES:
+        return None
+    recommended = max(1, int(round(cal["p50_actual_minutes"] * CALIBRATION_BUFFER)))
+    db.execute(
+        "UPDATE recurring_tasks SET estimated_minutes = ? WHERE id = ?",
+        (recommended, recurring_id),
+    )
+    db.commit()
+    log_activity("calibration_applied", f"recurring={recurring_id} new_estimate={recommended}m")
+    return {"recurring_id": recurring_id, "new_estimate": recommended}
+
+
+def get_learning_insights() -> dict:
+    """Return duration drift + skip alerts for the daily brief."""
+    db = get_db()
+
+    # Duration drift: calibrated estimate differs from current template by ≥20%
+    drift = []
+    rows = db.execute(
+        """SELECT r.id, r.title, r.estimated_minutes, c.p50_actual_minutes, c.sample_count
+           FROM recurring_tasks r
+           JOIN learning_calibrations c ON c.recurring_id = r.id
+           WHERE c.sample_count >= ? AND r.active = 1""",
+        (CALIBRATION_MIN_SAMPLES,),
+    ).fetchall()
+    for r in rows:
+        if not r["estimated_minutes"] or not r["p50_actual_minutes"]:
+            continue
+        recommended = r["p50_actual_minutes"] * CALIBRATION_BUFFER
+        pct_off = abs(recommended - r["estimated_minutes"]) / r["estimated_minutes"]
+        if pct_off >= 0.20:
+            drift.append({
+                "recurring_id": r["id"],
+                "title": r["title"],
+                "current_estimate": r["estimated_minutes"],
+                "recommended_estimate": max(1, int(round(recommended))),
+                "sample_count": r["sample_count"],
+                "direction": "under" if recommended > r["estimated_minutes"] else "over",
+            })
+
+    # Skip alerts: 3+ skips in window
+    cutoff = (datetime.now(_TZ) - timedelta(days=SKIP_WINDOW_DAYS)).isoformat()
+    skip_rows = db.execute(
+        """SELECT s.recurring_id, COUNT(*) AS cnt, r.title
+           FROM skip_events s
+           LEFT JOIN recurring_tasks r ON r.id = s.recurring_id
+           WHERE s.ts >= ? AND s.recurring_id IS NOT NULL
+           GROUP BY s.recurring_id
+           HAVING cnt >= ?""",
+        (cutoff, SKIP_ALERT_THRESHOLD),
+    ).fetchall()
+    skip_alerts = [
+        {
+            "recurring_id": r["recurring_id"],
+            "title": r["title"] or "(unknown)",
+            "skip_count": r["cnt"],
+            "window_days": SKIP_WINDOW_DAYS,
+        }
+        for r in skip_rows
+    ]
+
+    return {"duration_drift": drift, "skip_alerts": skip_alerts}
 
 
 # ---------------------------------------------------------------------------
@@ -772,8 +1202,15 @@ def get_activity_log(limit: int = 50) -> list[dict]:
 def get_today_tasks(energy_level: str = "medium") -> dict:
     """Get today's prioritized task list, separated by category.
 
-    Returns {frog, quick_wins, today, blocked, personal, completed_today}.
+    Returns {frog, quick_wins, today, blocked, personal, completed_today, resurfaced}.
     """
+    # Run blocker auto-monitor before building the view — time-based check-backs
+    # resurface tasks automatically. Cheap (indexed query).
+    try:
+        resurface_due_blockers()
+    except Exception as e:  # noqa: BLE001
+        log_activity("resurface_error", str(e))
+
     db = get_db()
     today_str = date.today().isoformat()
 
@@ -813,6 +1250,8 @@ def get_today_tasks(energy_level: str = "medium") -> dict:
         task["urgency_score"] = compute_urgency(task, energy_level)
     personal_tasks.sort(key=lambda t: t["urgency_score"], reverse=True)
 
+    resurfaced = get_recent_resurfaces(hours=24)
+
     return {
         "frog": frog,
         "quick_wins": quick_wins,
@@ -820,6 +1259,7 @@ def get_today_tasks(energy_level: str = "medium") -> dict:
         "blocked": blocked_tasks,
         "personal": personal_tasks,
         "completed_today": completed,
+        "resurfaced": resurfaced,
         "energy_level": energy_level,
         "date": today_str,
         "day_of_week": datetime.now(_TZ).strftime("%A"),
@@ -1635,6 +2075,27 @@ def clear_chat_history() -> None:
 
 SNAPSHOT_DIR = DB_DIR / "snapshots"
 SNAPSHOT_RETENTION_DAYS = 30
+SCHEMA_VERSION = 2
+
+
+def _build_full_snapshot() -> dict:
+    """Build a complete snapshot dict covering all persisted state."""
+    db = get_db()
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "date": date.today().isoformat(),
+        "created_at": _now_iso(),
+        "tasks": [dict(r) for r in db.execute("SELECT * FROM tasks").fetchall()],
+        "checklist_items": [dict(r) for r in db.execute("SELECT * FROM checklist_items").fetchall()],
+        "recurring_tasks": [dict(r) for r in db.execute("SELECT * FROM recurring_tasks").fetchall()],
+        "blockers": [dict(r) for r in db.execute("SELECT * FROM blockers").fetchall()],
+        "timer_sessions": [dict(r) for r in db.execute("SELECT * FROM timer_sessions").fetchall()],
+        "skip_events": [dict(r) for r in db.execute("SELECT * FROM skip_events").fetchall()],
+        "learning_calibrations": [
+            dict(r) for r in db.execute("SELECT * FROM learning_calibrations").fetchall()
+        ],
+        "decisions": [dict(r) for r in db.execute("SELECT * FROM decisions").fetchall()],
+    }
 
 
 def create_daily_snapshot() -> str | None:
@@ -1646,20 +2107,7 @@ def create_daily_snapshot() -> str | None:
     if path.exists():
         return None  # Already snapshotted today
 
-    db = get_db()
-    tasks = db.execute("SELECT * FROM tasks").fetchall()
-    checklist = db.execute("SELECT * FROM checklist_items").fetchall()
-    recurring = db.execute("SELECT * FROM recurring_tasks").fetchall()
-    blockers = db.execute("SELECT * FROM blockers").fetchall()
-
-    snapshot = {
-        "date": today_str,
-        "created_at": _now_iso(),
-        "tasks": [dict(r) for r in tasks],
-        "checklist_items": [dict(r) for r in checklist],
-        "recurring_tasks": [dict(r) for r in recurring],
-        "blockers": [dict(r) for r in blockers],
-    }
+    snapshot = _build_full_snapshot()
 
     with open(path, "w") as f:
         json.dump(snapshot, f, indent=2)
@@ -1685,6 +2133,116 @@ def _cleanup_old_snapshots() -> int:
         except ValueError:
             pass
     return removed
+
+
+# Drive backup — reuses existing OAuth token (see drive-upload-protocol memory)
+DRIVE_TOKEN_PATH = (
+    Path(__file__).resolve().parent.parent / "dist" / "drive_oauth_token.json"
+)
+DRIVE_BACKUP_FOLDER_ID = "1TgvxK10tFAPJqhkYw-6u1Umnvp9wMJ3I"
+BACKUP_STATE_PATH = DB_DIR / "backup_state.json"
+
+
+def _load_backup_state() -> dict:
+    if not BACKUP_STATE_PATH.exists():
+        return {}
+    try:
+        return json.loads(BACKUP_STATE_PATH.read_text())
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _save_backup_state(state: dict) -> None:
+    BACKUP_STATE_PATH.write_text(json.dumps(state, indent=2))
+
+
+def upload_backup_to_drive(snapshot: dict | None = None) -> dict:
+    """Upload a full snapshot JSON to Google Drive. Returns dict with file_id and web_link.
+
+    Raises RuntimeError if OAuth token missing or Google libs unavailable.
+    """
+    if snapshot is None:
+        snapshot = _build_full_snapshot()
+
+    if not DRIVE_TOKEN_PATH.exists():
+        raise RuntimeError(f"Drive OAuth token not found at {DRIVE_TOKEN_PATH}")
+
+    try:
+        import io  # local import — only needed when uploading
+        from google.auth.transport.requests import Request  # type: ignore
+        from google.oauth2.credentials import Credentials  # type: ignore
+        from googleapiclient.discovery import build  # type: ignore
+        from googleapiclient.http import MediaIoBaseUpload  # type: ignore
+    except ImportError as e:
+        raise RuntimeError(f"Google API libraries not installed: {e}") from e
+
+    td = json.loads(DRIVE_TOKEN_PATH.read_text())
+    creds = Credentials(
+        token=td["token"],
+        refresh_token=td.get("refresh_token"),
+        token_uri=td.get("token_uri"),
+        client_id=td.get("client_id"),
+        client_secret=td.get("client_secret"),
+        scopes=td.get("scopes"),
+    )
+    if creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+        td["token"] = creds.token
+        DRIVE_TOKEN_PATH.write_text(json.dumps(td, indent=2))
+
+    drive = build("drive", "v3", credentials=creds)
+    today = date.today()
+    iso_year, iso_week, _ = today.isocalendar()
+    filename = f"cc-backup-{iso_year}-W{iso_week:02d}.json"
+    body_bytes = json.dumps(snapshot, indent=2).encode("utf-8")
+    media = MediaIoBaseUpload(
+        io.BytesIO(body_bytes), mimetype="application/json", resumable=False
+    )
+    result = drive.files().create(
+        body={"name": filename, "parents": [DRIVE_BACKUP_FOLDER_ID]},
+        media_body=media,
+        fields="id,webViewLink",
+        supportsAllDrives=True,
+    ).execute()
+
+    state = _load_backup_state()
+    state["last_upload_at"] = _now_iso()
+    state["last_upload_filename"] = filename
+    state["last_upload_file_id"] = result.get("id")
+    _save_backup_state(state)
+    log_activity("drive_backup", f"file={filename} id={result.get('id')}")
+
+    return {
+        "file_id": result.get("id"),
+        "web_link": result.get("webViewLink"),
+        "filename": filename,
+    }
+
+
+def maybe_weekly_drive_backup() -> dict | None:
+    """Upload to Drive if ≥6 days since last upload. Returns result dict or None if skipped."""
+    state = _load_backup_state()
+    last = state.get("last_upload_at")
+    if last:
+        try:
+            last_dt = datetime.fromisoformat(last)
+            if (datetime.now(_TZ) - last_dt).days < 6:
+                return None
+        except ValueError:
+            pass
+    return upload_backup_to_drive()
+
+
+def get_backup_status() -> dict:
+    """Return backup state for UI."""
+    state = _load_backup_state()
+    return {
+        "last_local_snapshot": None,
+        "last_drive_upload_at": state.get("last_upload_at"),
+        "last_drive_filename": state.get("last_upload_filename"),
+        "last_drive_file_id": state.get("last_upload_file_id"),
+        "token_configured": DRIVE_TOKEN_PATH.exists(),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1762,6 +2320,9 @@ def build_morning_brief(
         "Sunday": "Off",
     }.get(dow, "")
 
+    insights = get_learning_insights()
+    resurfaced = today_tasks.get("resurfaced", [])
+
     brief_data = {
         "day": dow,
         "day_context": day_context,
@@ -1771,6 +2332,8 @@ def build_morning_brief(
         "frog": today_tasks.get("frog", {}).get("title") if today_tasks.get("frog") else None,
         "quick_win_count": len(today_tasks.get("quick_wins", [])),
         "blocked_count": len(today_tasks.get("blocked", [])),
+        "resurfaced_count": len(resurfaced),
+        "resurfaced": resurfaced,
         "inventory_alerts": inv_alerts,
         "orders_unfulfilled": ext.get("orders_unfulfilled", 0),
         "gorgias_open": ext.get("gorgias_open", 0),
@@ -1778,6 +2341,7 @@ def build_morning_brief(
         "slack_unreads": ext.get("slack_unreads", 0),
         "gmail_unreads": ext.get("gmail_unreads", 0),
         "slack_trawl_created": ext.get("slack_trawl_created", 0),
+        "learning_insights": insights,
     }
 
     store_morning_brief(brief_data)

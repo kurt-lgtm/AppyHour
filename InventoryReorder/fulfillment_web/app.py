@@ -21,7 +21,7 @@ import csv
 import io
 import threading
 from collections import defaultdict
-from flask import Flask, render_template, jsonify, request, send_file
+from flask import Flask, render_template, jsonify, request, send_file, Response, stream_with_context
 
 # Ship date computation (shared with generate_cut_order.py)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -10742,10 +10742,122 @@ def cc_resolve_blocker(blocker_id):
     return jsonify(command_center.resolve_blocker(blocker_id))
 
 
+@app.route("/api/cc/blockers/<blocker_id>/snooze", methods=["POST"])
+def cc_snooze_blocker(blocker_id):
+    days = int((request.json or {}).get("days", 1))
+    result = command_center.snooze_blocker(blocker_id, days)
+    if result is None:
+        return jsonify({"error": "blocker not found"}), 404
+    return jsonify(result)
+
+
+@app.route("/api/cc/blockers/due", methods=["GET"])
+def cc_blockers_due():
+    return jsonify(command_center.get_due_checkbacks())
+
+
+@app.route("/api/cc/blockers/resurface", methods=["POST"])
+def cc_blockers_resurface():
+    resurfaced = command_center.resurface_due_blockers()
+    return jsonify({"resurfaced": len(resurfaced), "blockers": resurfaced})
+
+
 @app.route("/api/cc/today", methods=["GET"])
 def cc_today():
     energy = request.args.get("energy", "medium")
     return jsonify(command_center.get_today_tasks(energy))
+
+
+@app.route("/api/cc/timer/active", methods=["GET"])
+def cc_timer_active():
+    session = command_center.get_active_timer()
+    return jsonify(session or {})
+
+
+@app.route("/api/cc/tasks/<task_id>/timer/start", methods=["POST"])
+def cc_timer_start(task_id):
+    payload = request.json or {}
+    duration = int(payload.get("duration_minutes", 25))
+    try:
+        session = command_center.start_timer(task_id, duration)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    return jsonify(session)
+
+
+@app.route("/api/cc/timer/<session_id>/extend", methods=["POST"])
+def cc_timer_extend(session_id):
+    extra = int((request.json or {}).get("extra_minutes", 10))
+    session = command_center.extend_timer(session_id, extra)
+    if session is None:
+        return jsonify({"error": "session not active"}), 404
+    return jsonify(session)
+
+
+@app.route("/api/cc/timer/<session_id>/stop", methods=["POST"])
+def cc_timer_stop(session_id):
+    outcome = (request.json or {}).get("outcome", "completed")
+    if outcome not in ("completed", "cancelled", "blocked"):
+        return jsonify({"error": "invalid outcome"}), 400
+    session = command_center.stop_timer(session_id, outcome)
+    if session is None:
+        return jsonify({"error": "session not found"}), 404
+    return jsonify(session)
+
+
+@app.route("/api/cc/tasks/<task_id>/timer/history", methods=["GET"])
+def cc_timer_history(task_id):
+    return jsonify(command_center.get_task_timer_history(task_id))
+
+
+@app.route("/api/cc/tasks/<task_id>/skip", methods=["POST"])
+def cc_task_skip(task_id):
+    reason = (request.json or {}).get("reason", "")
+    return jsonify(command_center.record_skip(task_id, reason))
+
+
+@app.route("/api/cc/learning/insights", methods=["GET"])
+def cc_learning_insights():
+    return jsonify(command_center.get_learning_insights())
+
+
+@app.route("/api/cc/learning/calibrate", methods=["POST"])
+def cc_learning_calibrate():
+    results = command_center.calibrate_all_recurring()
+    return jsonify({"calibrated": len(results), "results": results})
+
+
+@app.route("/api/cc/learning/apply/<recurring_id>", methods=["POST"])
+def cc_learning_apply(recurring_id):
+    result = command_center.apply_calibration(recurring_id)
+    if result is None:
+        return jsonify({"error": "insufficient samples or no calibration"}), 400
+    return jsonify(result)
+
+
+@app.route("/api/cc/backup/status", methods=["GET"])
+def cc_backup_status():
+    return jsonify(command_center.get_backup_status())
+
+
+@app.route("/api/cc/backup/drive", methods=["POST"])
+def cc_backup_drive():
+    try:
+        result = command_center.upload_backup_to_drive()
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify(result)
+
+
+@app.route("/api/cc/backup/drive/auto", methods=["POST"])
+def cc_backup_drive_auto():
+    try:
+        result = command_center.maybe_weekly_drive_backup()
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 500
+    if result is None:
+        return jsonify({"skipped": True, "reason": "last upload < 6 days ago"})
+    return jsonify(result)
 
 
 @app.route("/api/cc/slack-trawl", methods=["POST"])
@@ -10920,6 +11032,81 @@ def cc_chat():
         return jsonify({"response": f"Chat error: {str(e)}", "model": model}), 500
 
 
+@app.route("/api/cc/chat/stream", methods=["POST"])
+def cc_chat_stream():
+    """Streaming chat endpoint — Server-Sent Events with deltas."""
+    data = request.json or {}
+    message = data.get("message", "").strip()
+    model = data.get("model", "claude-haiku-4-5-20251001")
+    energy = data.get("energy_level", "medium")
+
+    def sse(payload: dict) -> str:
+        return f"data: {json.dumps(payload)}\n\n"
+
+    if not message:
+        return Response(sse({"error": "empty message"}) + sse({"done": True}),
+                        mimetype="text/event-stream", status=400)
+
+    allowed, spent, limit = command_center.check_chat_budget()
+    if not allowed:
+        def gen_over():
+            msg = (f"Monthly chat budget reached (${spent / 100:.2f} of "
+                   f"${limit / 100:.2f}). Resets next month.")
+            yield sse({"delta": msg})
+            yield sse({"done": True, "budget": {"spent_cents": spent,
+                       "limit_cents": limit, "allowed": False}})
+        return Response(gen_over(), mimetype="text/event-stream")
+
+    api_key = STATE.get("saved", {}).get("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        def gen_nokey():
+            yield sse({"delta": "No API key configured. Add 'anthropic_api_key' in Settings."})
+            yield sse({"done": True})
+        return Response(gen_nokey(), mimetype="text/event-stream")
+
+    command_center.add_chat_message("user", message)
+    system_prompt = command_center.build_system_prompt(energy)
+    history = command_center.get_chat_history()
+
+    @stream_with_context
+    def generate():
+        try:
+            import anthropic
+            client = anthropic.Anthropic(api_key=api_key)
+            collected = []
+            input_tokens = 0
+            output_tokens = 0
+            with client.messages.stream(
+                model=model,
+                max_tokens=512,
+                system=system_prompt,
+                messages=history,
+            ) as stream:
+                for text in stream.text_stream:
+                    collected.append(text)
+                    yield sse({"delta": text})
+                final = stream.get_final_message()
+                input_tokens = final.usage.input_tokens
+                output_tokens = final.usage.output_tokens
+
+            full = "".join(collected)
+            command_center.add_chat_message("assistant", full)
+            command_center.record_chat_cost(input_tokens, output_tokens, model)
+            _, spent_after, limit_after = command_center.check_chat_budget()
+            yield sse({
+                "done": True,
+                "model": model,
+                "tokens": {"input": input_tokens, "output": output_tokens},
+                "budget": {"spent_cents": spent_after, "limit_cents": limit_after, "allowed": True},
+            })
+        except Exception as e:  # noqa: BLE001
+            yield sse({"error": f"Chat error: {e}"})
+            yield sse({"done": True})
+
+    return Response(generate(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 @app.route("/api/cc/chat/history", methods=["GET"])
 def cc_chat_history():
     return jsonify(command_center.get_chat_history())
@@ -10944,7 +11131,15 @@ def cc_eod():
 
 @app.route("/api/cc/weekly-review", methods=["GET"])
 def cc_weekly_review():
-    return jsonify(command_center.get_weekly_review())
+    review = command_center.get_weekly_review()
+    # Opportunistic weekly Drive backup — fire-and-forget, never breaks the review
+    try:
+        backup = command_center.maybe_weekly_drive_backup()
+        if backup:
+            review["drive_backup"] = backup
+    except Exception as e:  # noqa: BLE001
+        review["drive_backup_error"] = str(e)
+    return jsonify(review)
 
 
 @app.route("/api/cc/carryovers", methods=["GET"])
