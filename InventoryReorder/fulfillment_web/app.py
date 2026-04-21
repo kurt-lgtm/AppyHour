@@ -10605,12 +10605,25 @@ def run_webview():
 
 @app.errorhandler(Exception)
 def _cc_error_handler(e):
-    """Catch unhandled exceptions on /api/cc/ routes and return JSON 500."""
+    """Catch unhandled exceptions on /api/cc/ routes and return JSON 500.
+
+    Let HTTPExceptions (404, 405, etc.) pass through with their proper status —
+    swallowing them as 500 masks real routing issues (favicon, missing routes)
+    and confuses browser dev tools.
+    """
+    from werkzeug.exceptions import HTTPException
+    if isinstance(e, HTTPException):
+        return e
     if request.path.startswith("/api/cc/"):
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
     raise e
+
+
+@app.route("/favicon.ico")
+def _favicon():
+    return ("", 204)
 
 
 @app.route("/api/cc/tasks", methods=["GET"])
@@ -10766,6 +10779,16 @@ def cc_blockers_resurface():
 def cc_today():
     energy = request.args.get("energy", "medium")
     return jsonify(command_center.get_today_tasks(energy))
+
+
+@app.route("/api/cc/events", methods=["GET"])
+def cc_events():
+    """Long-poll SSE placeholder. Keeps the client EventSource happy without
+    pushing real events yet — heartbeat only. Render still works via fetches."""
+    def heartbeat():
+        yield ": ready\n\n"
+    return Response(heartbeat(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.route("/api/cc/timer/active", methods=["GET"])

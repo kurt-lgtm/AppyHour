@@ -1,6 +1,39 @@
 /* Command Center — Ground Control Theme */
 /* Design: Deep space ops center. No red. No AI slop. */
 
+/* ── Layout fix: force two-column grid ─────────────────────────────
+   styles.css line 183 sets #app to display:grid with rows but no
+   column spec, so sidebar (height:100vh) consumes the whole first
+   row and main-area collapses to 0 height at y=viewport-bottom.
+   Content renders off-screen. Override to a proper sidebar+main grid. */
+#app {
+    display: grid !important;
+    grid-template-columns: 180px 1fr !important;
+    grid-template-rows: 1fr !important;
+    height: 100vh;
+}
+#sidebar { grid-column: 1; grid-row: 1; }
+#main-area { grid-column: 2; grid-row: 1; min-height: 0; display: flex; flex-direction: column; }
+/* Overlays + floating elements stay in auto-placement; pin them out of the grid flow */
+#mascot, #drag-ghost, #subs-overlay, #picker-overlay, #mascot-speech,
+#cur-editor-overlay, #addon-overlay, #demand-preview-overlay {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    pointer-events: auto;
+}
+/* main-area children need to fill its height */
+#main-area > #commandcenter-view,
+#main-area > #content,
+#main-area > #runway-view,
+#main-area > #calendar-view,
+#main-area > #invoices-view,
+#main-area > #cutorder-view,
+#main-area > #log-view,
+#main-area > #settings-view {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
 /* ── A11y: focus, reduced motion, high contrast ── */
 .cc-task-card:focus-visible,
 .cc-task-action-btn:focus-visible,

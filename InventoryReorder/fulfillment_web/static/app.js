@@ -9,8 +9,12 @@ let dragSku = null;
 let pickerCur = null;
 let pickerSlot = null;
 let rmfgLoaded = false;  // true after RMFG folder is loaded
-let currentView = 'dashboard';
+let currentView = 'commandcenter';
 let demandMode = localStorage.getItem('demandMode') || 'discrete';  // 'discrete' or 'churned'
+
+// Tab dirty-flag cache: skip re-rendering a tab if data hasn't changed since last render.
+let _dataVersion = 0;
+const _viewRenderedAt = {};
 
 // Cached DOM references (set at DOMContentLoaded)
 let mascotEl = null;
@@ -41,8 +45,9 @@ document.addEventListener('DOMContentLoaded', () => {
     log('Fulfillment Planner loaded. Auto-running...', '');
     setMascotExpression('loading', 'Booting up...');
 
-    // Load Command Center on startup (it's the default view)
-    if (typeof ccLoad === 'function') ccLoad();
+    // Command Center is the default home — show it explicitly
+    if (typeof switchView === 'function') switchView('commandcenter');
+    else if (typeof ccLoad === 'function') ccLoad();
 
     // Auto-run full pipeline on startup
     setTimeout(() => runAll(), 300);
@@ -1091,6 +1096,7 @@ function setupDrag(row, sku) {
 async function calculate() {
     setMascot('loading', 'Nom nom... crunching numbers...');
     log('Calculating Saturday NET...', '');
+    _dataVersion++;
 
     const data = await api('/api/calculate', { method: 'POST' });
     results = data.results;
@@ -1825,6 +1831,7 @@ async function doLoadFolder(folder) {
 async function calculateRMFG() {
     setMascot('loading', 'Crunching Saturday NETs...');
     log('Calculating multi-window NET...', '');
+    _dataVersion++;
 
     const data = await api('/api/calculate_rmfg', {
         method: 'POST',
@@ -1962,6 +1969,7 @@ async function syncRecharge(opts = {}) {
         const mins = Math.round((data.cache_age_seconds || 0) / 60);
         log(`Recharge: ${data.total_charges} charges (cached, ${mins}m old)`, 'green');
     } else {
+        _dataVersion++;
         const rcTime = data.api_seconds ? ` (${data.api_seconds}s, ${data.api_pages} pages)` : '';
         log(`Recharge: ${data.total_charges} charges across ${data.months.join(', ')}${rcTime}`, 'green');
     }
@@ -1991,6 +1999,7 @@ async function syncShopify() {
         return false;
     }
 
+    _dataVersion++;
     const shTime = data.api_seconds ? ` (${data.api_seconds}s, ${data.api_pages} pages)` : '';
     log(`Shopify: ${data.orders_analyzed || data.orders} orders, ${data.skus} SKUs${shTime}`, 'green');
     lastShopifySync = Date.now();
@@ -1999,7 +2008,8 @@ async function syncShopify() {
 }
 
 async function runAll() {
-    switchView('dashboard');  // Show log panel during pipeline
+    const _runAllHome = currentView;  // Preserve home view (Command Center) across pipeline
+    if (_runAllHome !== 'commandcenter') switchView('dashboard');  // Old behavior: show log panel
     setMascot('loading', 'Running full pipeline...');
     log('=== RUN ALL ===', 'cyan');
 
@@ -2096,8 +2106,9 @@ async function runAll() {
     // Pre-load cut order data so it's ready when user clicks the tab
     await loadCutOrderInteractive();
 
-    // Auto-switch to runway view and load it
-    switchView('runway');
+    // Stay on Command Center if that's where we started; otherwise surface runway
+    if (_runAllHome === 'commandcenter') switchView('commandcenter');
+    else switchView('runway');
     log('=== RUN ALL COMPLETE ===', 'green');
 }
 
@@ -2370,15 +2381,19 @@ function switchView(view) {
     const target = views[view];
     if (target) target.style.display = '';
 
+    // Dirty-flag cache: skip re-render if this view already rendered at the current data version.
+    const _fresh = (v) => _viewRenderedAt[v] === _dataVersion;
+    const _mark = (v) => { _viewRenderedAt[v] = _dataVersion; };
+
     if (view === 'commandcenter' && typeof ccLoad === 'function') ccLoad();
     else if (view === 'calendar' && !calendarData) loadCalendar();
     else if (view === 'invoices') loadInvoices();
     else if (view === 'settings') loadSettingsView();
-    else if (view === 'cutorder') loadCutOrder();
-    else if (view === 'runway') loadRunway();
+    else if (view === 'cutorder') { if (!_fresh('cutorder')) { loadCutOrder(); _mark('cutorder'); } }
+    else if (view === 'runway') { if (!_fresh('runway')) { loadRunway(); _mark('runway'); } }
     else if (view === 'log') loadActivityLog();
     else if (view === 'swapmanager') loadSwapManager();
-    else if (view === 'curations') loadCurations();
+    else if (view === 'curations') { if (!_fresh('curations')) { loadCurations(); _mark('curations'); } }
 }
 
 // ── Swap Manager ────────────────────────────────────────────────────────
