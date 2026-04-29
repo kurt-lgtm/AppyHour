@@ -30,18 +30,18 @@ from datetime import date
 # -- Paths --
 BASE = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PATH = os.path.join(BASE, "dist", "inventory_reorder_settings.json")
-INV_CSV = r"C:\Users\Work\Claude Projects\Product Inventory_3-31-26_(3-31-26).csv"
+INV_CSV = r"C:\Users\Work\Claude Projects\AppyHour\InventoryReorder\Product Inventory_2026-04-21.csv"
 SHIPMENTS = os.path.join(BASE, "Shipments")
-SAT_DEPLETION = ""  # Inventory CSV is from 3/31 — post-Saturday depletion
+SAT_DEPLETION = ""  # Inventory CSV is from 4/21 — post-depletion
 TUE_DEPLETION = ""
 
 # Ship week boundaries — Recharge uses Sun-Sat (charge dates)
-# WK1: Sun 4/5 – Sat 4/11 (ships week of _SHIP_2026-04-13)
-# WK2: Sun 4/12 – Sat 4/18 (ships week of _SHIP_2026-04-20)
-WK1_START = date(2026, 4, 5)
-WK1_END = date(2026, 4, 11)
-WK2_START = date(2026, 4, 12)
-WK2_END = date(2026, 4, 18)
+# WK1: Sun 4/19 – Sat 4/25 (ships week of _SHIP_2026-04-27)
+# WK2: Sun 4/26 – Sat 5/2 (ships week of _SHIP_2026-05-04)
+WK1_START = date(2026, 4, 19)
+WK1_END = date(2026, 4, 25)
+WK2_START = date(2026, 4, 26)
+WK2_END = date(2026, 5, 2)
 
 PICKABLE_PREFIXES = ("CH-", "MT-", "AC-")
 
@@ -61,7 +61,7 @@ KNOWN_CURATIONS = {
     "GEN",
     "MS",
 }
-_MONTHLY_PATTERNS = {"AHB-MED", "AHB-LGE", "AHB-CMED", "AHB-CUR-MS", "AHB-BVAL", "AHB-MCUST-MS", "AHB-MCUST-NMS"}
+_MONTHLY_PATTERNS = {"AHB-MED", "AHB-LGE", "AHB-CMED"}
 
 
 def resolve_curation(sku):
@@ -183,8 +183,13 @@ def parse_depletion_xlsx(path, sku_translations):
 # -- Step 3: Fetch Recharge via API (v2021-11) --
 
 
-def fetch_recharge_api(api_token):
-    """Fetch queued charges. Returns pickable SKU demand + curation counts per week."""
+def fetch_recharge_api(api_token, out_specialty=None):
+    """Fetch queued charges. Returns pickable SKU demand + curation counts per week.
+
+    If `out_specialty` is provided as a dict like {"WK1": {}, "WK2": {}}, it is
+    populated with totals for any SKU starting with "AHB-X" or "BL-" found in
+    queued charges within the WK1/WK2 windows. Used by the cut order checklist.
+    """
     import requests
 
     session = requests.Session()
@@ -320,9 +325,19 @@ def fetch_recharge_api(api_token):
         # Sum pickable SKU quantities (all charges, including MONTHLY boxes)
         for item in charge.get("line_items", []):
             sku = (item.get("sku") or "").strip()
-            if not sku or not any(sku.startswith(p) for p in PICKABLE_PREFIXES):
+            if not sku:
                 continue
             qty = int(float(item.get("quantity", 1)))
+
+            # Specialty/bundle accumulator (AHB-X*, BL-*) — checklist source
+            if out_specialty is not None:
+                upper = sku.upper()
+                if upper.startswith("AHB-X") or upper.startswith("BL-"):
+                    bucket = out_specialty["WK1"] if is_wk1 else out_specialty["WK2"]
+                    bucket[sku] = bucket.get(sku, 0) + qty
+
+            if not any(sku.startswith(p) for p in PICKABLE_PREFIXES):
+                continue
             if is_wk1:
                 wk1_skus[sku] += qty
             else:
@@ -350,11 +365,11 @@ def fetch_recharge_api(api_token):
 # -- Step 4: Fetch Shopify orders for upcoming ship weeks --
 
 # Ship week tag dates (Monday of each week)
-WK1_SHIP_TAG = "_SHIP_2026-04-13"
-WK2_SHIP_TAG = "_SHIP_2026-04-20"
+WK1_SHIP_TAG = "_SHIP_2026-04-27"
+WK2_SHIP_TAG = "_SHIP_2026-05-04"
 
 
-def fetch_shopify_orders(settings):
+def fetch_shopify_orders(settings, out_specialty=None):
     """Fetch open Shopify orders for WK1/WK2 ship tags.
 
     Returns per-week:
@@ -441,15 +456,39 @@ def fetch_shopify_orders(settings):
         # Extract line items
         line_items = order.get("line_items", [])
         item_skus = {}
-        box_sku = None
+        # Collect all AHB-* SKUs then pick primary box (not addon like AHB-CUR-MS / AHB-BVAL)
+        ahb_skus = []
         for item in line_items:
             sku = (item.get("sku") or "").strip()
             if not sku:
                 continue
             qty = int(float(item.get("quantity", 1)))
             item_skus[sku] = item_skus.get(sku, 0) + qty
-            if sku.upper().startswith("AHB-"):
-                box_sku = sku.upper()
+            upper = sku.upper()
+            if upper.startswith("AHB-"):
+                ahb_skus.append(upper)
+            # Specialty/bundle accumulator (AHB-X*, BL-*) — checklist source
+            if out_specialty is not None and (upper.startswith("AHB-X") or upper.startswith("BL-")):
+                bucket = out_specialty["WK1"] if is_wk1 else out_specialty["WK2"]
+                bucket[sku] = bucket.get(sku, 0) + qty
+        # Primary box priority: plain monthly > MCUST/LCUST curation > anything else
+        # Skip AHB-CUR-* and AHB-BVAL which are addon/bundle SKUs
+        _ADDON_AHB = ("AHB-CUR-", "AHB-BVAL")
+        box_sku = None
+        for s in ahb_skus:
+            if s in ("AHB-MED", "AHB-LGE", "AHB-CMED"):
+                box_sku = s
+                break
+        if not box_sku:
+            for s in ahb_skus:
+                if (s.startswith("AHB-MCUST-") or s.startswith("AHB-LCUST-")) and not s.startswith(_ADDON_AHB):
+                    box_sku = s
+                    break
+        if not box_sku:
+            for s in ahb_skus:
+                if not s.startswith(_ADDON_AHB):
+                    box_sku = s
+                    break
 
         if box_sku:
             # Subscription order — count ALL pickable SKUs as Shopify demand.

@@ -277,6 +277,9 @@ def _fetch_all_data(settings: dict) -> dict:
 
     # -- Recharge --
     print("Fetching Recharge charges...")
+    # Specialty/bundle accumulator (AHB-X*, BL-*) — populated by both fetchers
+    specialty: dict = {"WK1": {}, "WK2": {}}
+
     (
         rc_wk1,
         rc_wk2,
@@ -293,7 +296,7 @@ def _fetch_all_data(settings: dict) -> dict:
         rc_wk1_lge_monthly,
         rc_wk2_lge_monthly,
         monthly_by_week_month,
-    ) = fetch_recharge_api(recharge_token)
+    ) = fetch_recharge_api(recharge_token, out_specialty=specialty)
 
     # -- Shopify --
     print("Fetching Shopify orders...")
@@ -308,7 +311,7 @@ def _fetch_all_data(settings: dict) -> dict:
         sh_wk2_med,
         sh_wk1_lge,
         sh_wk2_lge,
-    ) = fetch_shopify_orders(settings)
+    ) = fetch_shopify_orders(settings, out_specialty=specialty)
 
     # -- Normalize aliased SKUs across all demand dicts --
     if SKU_ALIASES:
@@ -345,14 +348,31 @@ def _fetch_all_data(settings: dict) -> dict:
     if store_url and shop_token:
         if not store_url.startswith("http"):
             store_url = f"https://{store_url}.myshopify.com"
-        _cutoff = (datetime.now() - timedelta(days=3)).isoformat()
+        # Monday mode: window = last completed Sat 00:00 → Sun 23:59, extrapolate 7 days to next ship Monday
+        # Non-Monday: fallback to 3-day rolling window + days-to-Friday projection
+        _is_monday = datetime.now().weekday() == 0
+        if _is_monday:
+            _today = datetime.now().date()
+            _last_sun = _today - timedelta(days=1)
+            _last_sat = _today - timedelta(days=2)
+            _window_start = datetime.combine(_last_sat, datetime.min.time()).isoformat()
+            _window_end = datetime.combine(_last_sun, datetime.max.time()).isoformat()
+            _fo_params = {
+                "status": "any",
+                "limit": 250,
+                "created_at_min": _window_start,
+                "created_at_max": _window_end,
+                "fields": "id,tags,line_items",
+            }
+        else:
+            _cutoff = (datetime.now() - timedelta(days=3)).isoformat()
+            _fo_params = {
+                "status": "any",
+                "limit": 250,
+                "created_at_min": _cutoff,
+                "fields": "id,tags,line_items",
+            }
         _fo_url = f"{store_url}/admin/api/2024-01/orders.json"
-        _fo_params = {
-            "status": "any",
-            "limit": 250,
-            "created_at_min": _cutoff,
-            "fields": "id,tags,line_items",
-        }
         _fo_orders: list[dict] = []
         _fo_page_url: str | None = _fo_url
         while _fo_page_url:
@@ -375,9 +395,13 @@ def _fetch_all_data(settings: dict) -> dict:
             time.sleep(0.3)
 
         fo_count = len(_fo_orders)
-        _daily_rate = fo_count / 3.0 if _fo_orders else 0
-        _days_to_friday = max(0, (5 - datetime.now().weekday()))
-        _projected = int(_daily_rate * _days_to_friday)
+        if _is_monday:
+            _daily_rate = fo_count / 2.0 if _fo_orders else 0
+            _days_to_project = 7  # Mon → next Mon ship week
+        else:
+            _daily_rate = fo_count / 3.0 if _fo_orders else 0
+            _days_to_project = max(0, (5 - datetime.now().weekday()))
+        _projected = int(_daily_rate * _days_to_project)
 
         _mong_fo = [o for o in _fo_orders if any("MONG" in (li.get("sku") or "") for li in o.get("line_items", []))]
         _fo_skus: dict[str, float] = defaultdict(float)
@@ -390,9 +414,10 @@ def _fetch_all_data(settings: dict) -> dict:
 
         _mong_pct = len(_mong_fo) / fo_count if fo_count else 0
         _mong_projected = int(_projected * _mong_pct)
+        _window_label = "last Sat+Sun (2d)" if _is_monday else "rolling 3d"
         print(
-            f"  First-order projection: {fo_count} in 3d, "
-            f"{_daily_rate:.0f}/day, {_projected} projected, "
+            f"  First-order projection: {fo_count} in {_window_label}, "
+            f"{_daily_rate:.1f}/day × {_days_to_project}d = {_projected} projected, "
             f"{_mong_projected} MONG ({_mong_pct:.0%})"
         )
         for _sku, _rate in _fo_skus.items():
@@ -476,6 +501,58 @@ def _fetch_all_data(settings: dict) -> dict:
         )
     )
 
+    # Single-cohort mode: merge WK2 demand into WK1, zero WK2.
+    # Both ship tags collapse into one production batch (e.g. _SHIP_04-27 + _SHIP_05-04).
+
+    # Inject Shopify MONTHLY/CMED/LGE counts into monthly_by_week_month
+    # (otherwise the MONTHLY BOX COUNTS summary shows Recharge only).
+    # Ship tag month = first 7 chars after "_SHIP_" (e.g. "_SHIP_2026-04-27" → "2026-04").
+    from inventory_demand_report import WK1_SHIP_TAG as _W1T, WK2_SHIP_TAG as _W2T
+    _wk1_month = _W1T.replace("_SHIP_", "")[:7]
+    _wk2_month = _W2T.replace("_SHIP_", "")[:7]
+
+    def _add_monthly(week_key: str, month: str, box_type: str, qty: int) -> None:
+        if qty <= 0:
+            return
+        key = (week_key, month)
+        bucket = monthly_by_week_month.setdefault(key, {})
+        bucket[box_type] = bucket.get(box_type, 0) + qty
+
+    _add_monthly("WK1", _wk1_month, "MED", sh_wk1_med.get("MONTHLY", 0))
+    _add_monthly("WK1", _wk1_month, "CMED", sh_wk1_med.get("CMED", 0))
+    _add_monthly("WK1", _wk1_month, "LGE", sh_wk1_lge.get("MONTHLY", 0))
+    _add_monthly("WK2", _wk2_month, "MED", sh_wk2_med.get("MONTHLY", 0))
+    _add_monthly("WK2", _wk2_month, "CMED", sh_wk2_med.get("CMED", 0))
+    _add_monthly("WK2", _wk2_month, "LGE", sh_wk2_lge.get("MONTHLY", 0))
+
+    # Collapse all WK2 entries → WK1 in monthly_by_week_month (single-cohort).
+    _collapsed: dict = {}
+    for (week_key, month), counts in monthly_by_week_month.items():
+        new_key = ("WK1", month)
+        bucket = _collapsed.setdefault(new_key, {})
+        for bt, ct in counts.items():
+            bucket[bt] = bucket.get(bt, 0) + ct
+    monthly_by_week_month = _collapsed
+
+    for sku, qty in rc_wk2.items():
+        rc_wk1[sku] = rc_wk1.get(sku, 0) + qty
+    rc_wk2 = {}
+    for sku, qty in sh_wk2_addon.items():
+        sh_wk1_addon[sku] = sh_wk1_addon.get(sku, 0) + qty
+    sh_wk2_addon = {}
+    for cur, ct in wk2_curations.items():
+        wk1_curations[cur] += ct
+    wk2_curations = defaultdict(int)
+    for cur, ct in wk2_large.items():
+        wk1_large[cur] += ct
+    wk2_large = defaultdict(int)
+    for cur, ct in wk2_med.items():
+        wk1_med[cur] += ct
+    wk2_med = defaultdict(int)
+    for cur, ct in wk2_lge.items():
+        wk1_lge[cur] += ct
+    wk2_lge = defaultdict(int)
+
     return {
         "available": available,
         "rc_wk1": rc_wk1,
@@ -500,6 +577,7 @@ def _fetch_all_data(settings: dict) -> dict:
         "rc_wk2_curs": rc_wk2_curs,
         "sh_wk1_total": sum(sh_wk1_curations.values()),
         "sh_wk2_total": sum(sh_wk2_curations.values()),
+        "specialty": specialty,
     }
 
 
@@ -883,6 +961,60 @@ def _build_raw_materials_tab(wb: openpyxl.Workbook, data: dict, settings: dict) 
     ws.sheet_properties.tabColor = "7C3AED"
 
 
+# ── Tab: Checklist ──────────────────────────────────────────────────
+
+
+def _build_checklist_tab(wb: openpyxl.Workbook, data: dict, settings: dict) -> None:
+    """General pre-cut sanity checks. Section 1: bundles & specialty (AHB-X*, BL-*).
+
+    Add new sections below by following the same _section_header + table pattern.
+    """
+    ws = wb.create_sheet("Checklist")
+    sku_name_fn = data["sku_name"]
+    specialty = data.get("specialty") or {"WK1": {}, "WK2": {}}
+
+    _set_col_widths(ws, {1: 28, 2: 38, 3: 12, 4: 12, 5: 14})
+
+    row = 1
+    _merge_title_bar(ws, row, "PRE-CUT CHECKLIST", 5)
+    row += 1
+    _merge_subtitle(ws, row, "General sanity checks before cutting", 5)
+    row += 2
+
+    # ── Section 1: Bundles & Specialty (AHB-X*, BL-*) ──
+    _section_header(ws, row, "Bundles & Specialty (AHB-X*, BL-*)", "1E293B", "FFFFFF", 5)
+    row += 1
+    _dark_header_row(ws, row, ["SKU", "Name", "WK1 Qty", "WK2 Qty", "Total"])
+    row += 1
+
+    wk1 = specialty.get("WK1", {})
+    wk2 = specialty.get("WK2", {})
+    all_skus = sorted(set(wk1) | set(wk2))
+
+    if not all_skus:
+        ws.cell(row=row, column=1, value="No AHB-X* or BL-* SKUs in queued charges or open orders").font = F_NUM_MUTED
+        row += 1
+    else:
+        for sku in all_skus:
+            q1 = int(wk1.get(sku, 0))
+            q2 = int(wk2.get(sku, 0))
+            ws.cell(row=row, column=1, value=sku).font = F_SKU
+            ws.cell(row=row, column=2, value=sku_name_fn(sku) or "").font = F_NAME
+            c1 = ws.cell(row=row, column=3, value=q1)
+            c1.font = F_NUM
+            c1.alignment = A_RIGHT
+            c2 = ws.cell(row=row, column=4, value=q2)
+            c2.font = F_NUM
+            c2.alignment = A_RIGHT
+            ct = ws.cell(row=row, column=5, value=q1 + q2)
+            ct.font = Font(name="Rajdhani", size=12, bold=True)
+            ct.alignment = A_RIGHT
+            row += 1
+
+    ws.freeze_panes = "A5"
+    ws.sheet_properties.tabColor = "F59E0B"
+
+
 # ── Tab 1: Cut Order (main sheet) ───────────────────────────────────
 
 
@@ -958,21 +1090,21 @@ def _build_cut_order_tab(
         "Wheel Pot.",
         "Total Supply",
         "",  # spacer
-        "RC W1",
-        "SH W1",
-        "+Assign W1",
-        "=Demand W1",
-        "After W1",
-        "Cut W1",
+        "Demand",
+        "",  # (was SH split — combined into Demand)
+        "+Assign",
+        "=Total",
+        "After",
+        "Cut",
         "Good?",
         "",  # spacer
-        "RC W2",
-        "SH W2",
-        "+Assign W2",
-        "=Demand W2",
-        "After W2",
-        "Cut W2",
-        "Good?",
+        "",  # (WK2 unused — single cohort mode)
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
     ]
     _dark_header_row(ws, HDR_ROW, headers)
 
@@ -1059,15 +1191,9 @@ def _build_cut_order_tab(
     # Category sort order
     CAT_ORDER = {"CHEESE": 0, "MEAT": 1, "ACCOMPANIMENTS": 2, "OTHER": 3}
 
-    # Group by urgency
-    shortages = [r for r in sku_rows if r["urgency"] == "SHORTAGE"]
-    tight = [r for r in sku_rows if r["urgency"] == "TIGHT"]
-    ok = [r for r in sku_rows if r["urgency"] == "OK"]
-
-    # Sort within groups: category then alphabetical by SKU
-    shortages.sort(key=lambda r: (CAT_ORDER.get(r["cat"], 9), r["sku"]))
-    tight.sort(key=lambda r: (CAT_ORDER.get(r["cat"], 9), r["sku"]))
-    ok.sort(key=lambda r: (CAT_ORDER.get(r["cat"], 9), r["sku"]))
+    # Single combined list — no urgency grouping. Sort by category then SKU alpha.
+    all_rows = list(sku_rows)
+    all_rows.sort(key=lambda r: (CAT_ORDER.get(r["cat"], 9), r["sku"]))
 
     # ── Write rows ──
     row = HDR_ROW  # will increment before writing
@@ -1094,14 +1220,12 @@ def _build_cut_order_tab(
 
         # F: spacer
 
-        # G: RC W1
-        c_rc1 = ws_.cell(row=row_num, column=7, value=sr["rc1"])
-        c_rc1.font = F_NUM
-        c_rc1.alignment = A_RIGHT
-        # H: SH W1
-        c_sh1 = ws_.cell(row=row_num, column=8, value=sr["sh1"])
-        c_sh1.font = F_NUM
-        c_sh1.alignment = A_RIGHT
+        # G: Demand = RC + SH combined (single column per user spec)
+        c_dem = ws_.cell(row=row_num, column=7, value=sr["rc1"] + sr["sh1"])
+        c_dem.font = F_NUM
+        c_dem.alignment = A_RIGHT
+        # H: spacer (was SH — folded into G)
+        ws_.cell(row=row_num, column=8, value="")
         # I: +Assign W1 = SUMIF(PR-CJAM+MONTHLY) + SUMIF(CEX-EC)
         ws_[f"I{row_num}"] = (
             f"=SUMIF({prcjam_sku_range},A{row_num},{prcjam_w1_range})"
@@ -1219,10 +1343,8 @@ def _build_cut_order_tab(
 
         return r
 
-    # Write sections
-    row = _write_section(ws, row, "SHORTAGES", SHORTAGE_BG, SHORTAGE_FG, shortages)
-    row = _write_section(ws, row, "TIGHT", TIGHT_BG, TIGHT_FG, tight)
-    row = _write_section(ws, row, "HEALTHY", OK_BG, OK_FG, ok)
+    # Single flat section — alphabetical within category, no urgency groups.
+    row = _write_section(ws, row, "SKUs", HEADER_BG, HEADER_FG, all_rows)
 
     last_row = row
 
@@ -1331,6 +1453,9 @@ def main() -> str:
     # Tab 2: Raw Materials
     _build_raw_materials_tab(wb, data, settings)
 
+    # Tab 3: Checklist (pre-cut sanity)
+    _build_checklist_tab(wb, data, settings)
+
     # Tab 1: Cut Order (main) — build the sheet structure first
     ws_cut = wb.active
     ws_cut.title = "Cut Order"
@@ -1349,9 +1474,28 @@ def main() -> str:
     out_path = os.path.join(BASE, f"cut_order_v2_{ship_date}.xlsx")
     wb.save(out_path)
 
+    # Recalc formulas via Excel COM (Windows) so cached values are baked into the file.
+    # openpyxl writes formula strings without evaluating; without recalc, cells appear
+    # blank in Excel until F9. Google Sheets re-evaluates on open, but Excel does not.
+    try:
+        import win32com.client
+        excel = win32com.client.DispatchEx("Excel.Application")
+        excel.Visible = False
+        excel.DisplayAlerts = False
+        try:
+            wb_xl = excel.Workbooks.Open(out_path)
+            excel.CalculateFull()
+            wb_xl.Save()
+            wb_xl.Close(SaveChanges=False)
+            print("  Recalc: Excel COM OK - formulas cached")
+        finally:
+            excel.Quit()
+    except Exception as e:
+        print(f"  Recalc skipped (Excel COM unavailable): {e}")
+
     print(f"\nExcel written to: {out_path}")
     print(f"  {len(data['active_skus'])} active SKUs")
-    print(f"  Tab 1: Cut Order (urgency-grouped, SUMIF-linked, assignments at cols W-AE)")
+    print(f"  Tab 1: Cut Order (alpha by category, single-cohort, assignments at cols W-AE)")
     print(f"  Tab 2: Raw Materials (wheels + bulk accompaniments)")
     print(f"  Blue cells = editable input")
 
