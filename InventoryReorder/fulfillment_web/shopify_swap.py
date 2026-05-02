@@ -68,12 +68,15 @@ def find_swap_targets(
     old_sku: str,
     progress_callback: Callable[[str], None] | None = None,
     bundle_only: bool = True,
+    box_sku_contains: list[str] | None = None,
 ) -> list[dict]:
     """Find unfulfilled orders with ship_tag containing old_sku as a curation item.
 
     Only includes line items with fulfillableQuantity > 0.
     If bundle_only=True (default), restricts to line items with _rc_bundle property
     (skips paid/customer-chosen items). Set bundle_only=False to include paid items.
+    If box_sku_contains is provided, restricts to orders where any line item SKU
+    contains any of the given substrings (e.g. ['TR-', 'XMDT']).
     """
     targets = []
     url = "orders.json"
@@ -103,6 +106,10 @@ def find_swap_targets(
             if ship_tag not in tags:
                 continue
             order_line_items = o.get("line_items", [])
+            if box_sku_contains:
+                order_skus = [(li.get("sku") or "").strip() for li in order_line_items]
+                if not any(any(frag in sku for frag in box_sku_contains) for sku in order_skus):
+                    continue
             for li in order_line_items:
                 sku = (li.get("sku") or "").strip()
                 if sku != old_sku:

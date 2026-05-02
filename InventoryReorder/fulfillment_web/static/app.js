@@ -2413,9 +2413,10 @@ function loadSwapManager() {
 }
 
 async function loadSwapShipTags() {
-    setMascot('loading', 'Loading ship tags...');
+    const tagType = document.querySelector('input[name="swap-tag-type"]:checked')?.value || 'ship';
+    setMascot('loading', `Loading ${tagType} tags...`);
     try {
-        const resp = await fetch('/api/swap/ship-tags');
+        const resp = await fetch(`/api/swap/ship-tags?type=${tagType}`);
         const data = await resp.json();
         const sel = document.getElementById('swap-ship-tag');
         sel.innerHTML = '<option value="">-- Select --</option>';
@@ -2425,10 +2426,10 @@ async function loadSwapShipTags() {
             opt.textContent = t;
             sel.appendChild(opt);
         });
-        setMascot('happy', `${data.tags?.length || 0} ship tags found`);
+        setMascot('happy', `${data.tags?.length || 0} ${tagType} tags found`);
     } catch (e) {
-        setMascot('alert', 'Failed to load ship tags');
-        log('Ship tag load failed: ' + e.message, 'red');
+        setMascot('alert', 'Failed to load tags');
+        log('Tag load failed: ' + e.message, 'red');
     }
 }
 
@@ -2526,13 +2527,15 @@ async function previewSwaps() {
 
     const includePaid = document.getElementById('swap-include-paid')?.checked || false;
     const bundleOnly = !includePaid;
+    const boxSkuRaw = document.getElementById('swap-box-sku-contains')?.value.trim() || '';
+    const boxSkuContains = boxSkuRaw ? boxSkuRaw.split(',').map(s => s.trim()).filter(Boolean) : null;
 
     setMascot('loading', 'Previewing swaps...');
     try {
         const resp = await fetch('/api/swap/multi-preview', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ship_tag: shipTag, swaps: swapPairs, bundle_only: bundleOnly }),
+            body: JSON.stringify({ ship_tag: shipTag, swaps: swapPairs, bundle_only: bundleOnly, box_sku_contains: boxSkuContains }),
         });
         const data = await resp.json();
         if (data.error) { setMascot('alert', data.error); return; }
@@ -2577,6 +2580,8 @@ async function executeSwaps() {
 
     const includePaid = document.getElementById('swap-include-paid')?.checked || false;
     const bundleOnly = !includePaid;
+    const boxSkuRaw = document.getElementById('swap-box-sku-contains')?.value.trim() || '';
+    const boxSkuContains = boxSkuRaw ? boxSkuRaw.split(',').map(s => s.trim()).filter(Boolean) : null;
 
     if (includePaid && swapPreviewData.length > 0) {
         const typed = prompt(
@@ -2602,7 +2607,7 @@ async function executeSwaps() {
         const resp = await fetch('/api/swap/multi-execute', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ship_tag: shipTag, pairs: pairsWithGids, bundle_only: bundleOnly }),
+            body: JSON.stringify({ ship_tag: shipTag, pairs: pairsWithGids, bundle_only: bundleOnly, box_sku_contains: boxSkuContains }),
         });
         const data = await resp.json();
         if (!data.started) { setMascot('alert', data.error || 'Failed to start'); return; }

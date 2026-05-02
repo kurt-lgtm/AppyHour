@@ -4337,6 +4337,7 @@ def swap_preview():
     old_sku = data.get("old_sku", "").strip()
     new_sku = data.get("new_sku", "").strip()
     bundle_only = data.get("bundle_only", True)
+    box_sku_contains = data.get("box_sku_contains") or None
 
     if not old_sku or not new_sku:
         return jsonify({"error": "old_sku and new_sku are required"}), 400
@@ -4359,7 +4360,7 @@ def swap_preview():
         return jsonify({"error": f"Variant not found for {new_sku}"}), 404
 
     # Find targets
-    targets = find_swap_targets(store, token, ship_date, old_sku, bundle_only=bundle_only)
+    targets = find_swap_targets(store, token, ship_date, old_sku, bundle_only=bundle_only, box_sku_contains=box_sku_contains)
 
     # Dry run result
     result = execute_bulk_swap(store, token, targets, old_sku, new_gid, dry_run=True)
@@ -4388,6 +4389,7 @@ def swap_execute():
     ship_tag = data.get("ship_tag", "")
     new_variant_gid = data.get("new_variant_gid", "")
     bundle_only = data.get("bundle_only", True)
+    box_sku_contains = data.get("box_sku_contains") or None
 
     if not all([old_sku, new_sku, ship_tag, new_variant_gid]):
         return jsonify({"error": "Missing required fields"}), 400
@@ -4400,7 +4402,7 @@ def swap_execute():
 
     def _worker():
         try:
-            targets = find_swap_targets(store, token, ship_tag, old_sku, bundle_only=bundle_only)
+            targets = find_swap_targets(store, token, ship_tag, old_sku, bundle_only=bundle_only, box_sku_contains=box_sku_contains)
             note = f"Swap {old_sku} -> {new_sku} (shortage substitution)"
 
             def _progress(msg):
@@ -4460,8 +4462,16 @@ def _load_sku_mappings():
 
 @app.route("/api/swap/ship-tags")
 def swap_ship_tags():
-    """Return distinct _SHIP_* tags from unfulfilled orders."""
+    """Return distinct tags from unfulfilled orders.
+
+    Query param `type`:
+      - ship   (default): only `_SHIP_*` tags
+      - cohort: short uppercase tags (BIX, XMOM, ALP, MAY, ...) — heuristic
+      - all:    everything not starting with `_` or `!`
+    """
     import requests as req
+
+    tag_type = (request.args.get("type") or "ship").lower()
 
     s = _s()
     store = s.get("shopify_store_url", "")
@@ -4488,8 +4498,24 @@ def swap_ship_tags():
         for o in resp.json().get("orders", []):
             for t in (o.get("tags") or "").split(","):
                 t = t.strip()
-                if t.startswith("_SHIP_"):
-                    tags.add(t)
+                if not t:
+                    continue
+                if tag_type == "ship":
+                    if t.startswith("_SHIP_"):
+                        tags.add(t)
+                elif tag_type == "cohort":
+                    if (
+                        not t.startswith("_")
+                        and not t.startswith("!")
+                        and " " not in t
+                        and not re.match(r"^RMFG_\d", t)
+                        and t.isupper()
+                        and 2 <= len(t) <= 20
+                    ):
+                        tags.add(t)
+                elif tag_type == "all":
+                    if not t.startswith("_") and not t.startswith("!"):
+                        tags.add(t)
         link = resp.headers.get("Link", "")
         url = None
         if 'rel="next"' in link:
@@ -4500,7 +4526,11 @@ def swap_ship_tags():
 
         time.sleep(0.1)
 
-    return jsonify({"tags": sorted(tags, reverse=True)})
+    if tag_type == "ship":
+        sorted_tags = sorted(tags, reverse=True)
+    else:
+        sorted_tags = sorted(tags)
+    return jsonify({"tags": sorted_tags, "type": tag_type})
 
 
 @app.route("/api/swap/multi-preview", methods=["POST"])
@@ -4516,6 +4546,7 @@ def swap_multi_preview():
     ship_tag = data.get("ship_tag", "").strip()
     swaps = data.get("swaps", [])
     bundle_only = data.get("bundle_only", True)
+    box_sku_contains = data.get("box_sku_contains") or None
 
     if not ship_tag or not swaps:
         return jsonify({"error": "ship_tag and swaps[] required"}), 400
@@ -4546,7 +4577,7 @@ def swap_multi_preview():
             )
             continue
 
-        targets = find_swap_targets(store, token, ship_tag, old_sku, bundle_only=bundle_only)
+        targets = find_swap_targets(store, token, ship_tag, old_sku, bundle_only=bundle_only, box_sku_contains=box_sku_contains)
         pair_result = {
             "old_sku": old_sku,
             "new_sku": new_sku,
@@ -4595,6 +4626,7 @@ def swap_multi_execute():
     ship_tag = data.get("ship_tag", "")
     pairs = data.get("pairs", [])
     bundle_only = data.get("bundle_only", True)
+    box_sku_contains = data.get("box_sku_contains") or None
 
     if not ship_tag or not pairs:
         return jsonify({"error": "ship_tag and pairs[] required"}), 400
@@ -4623,7 +4655,7 @@ def swap_multi_execute():
 
                 _swap_progress["message"] = f"Pair {i}/{len(pairs)}: {old_sku} → {new_sku} — finding targets..."
 
-                targets = find_swap_targets(store, token, ship_tag, old_sku, bundle_only=bundle_only)
+                targets = find_swap_targets(store, token, ship_tag, old_sku, bundle_only=bundle_only, box_sku_contains=box_sku_contains)
                 note = f"Swap {old_sku} -> {new_sku} (shortage substitution)"
 
                 def _progress(msg, pair_num=i, total=len(pairs)):

@@ -1046,7 +1046,12 @@
     <div id="swapmanager-view" style="display:none;padding:12px">
         <!-- Config bar -->
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap">
-            <label style="font-family:'Space Mono',monospace;font-size:11px;font-weight:600;color:var(--accent)">SHIP TAG</label>
+            <label style="font-family:'Space Mono',monospace;font-size:11px;font-weight:600;color:var(--accent)">TAG</label>
+            <div style="display:flex;gap:8px;font-size:11px;align-items:center">
+                <label style="cursor:pointer"><input type="radio" name="swap-tag-type" value="ship" checked onchange="loadSwapShipTags()"> Ship Date</label>
+                <label style="cursor:pointer"><input type="radio" name="swap-tag-type" value="cohort" onchange="loadSwapShipTags()"> Cohort</label>
+                <label style="cursor:pointer"><input type="radio" name="swap-tag-type" value="all" onchange="loadSwapShipTags()"> All</label>
+            </div>
             <select id="swap-ship-tag" class="settings-input" style="width:220px;font-family:'DM Sans',sans-serif">
                 <option value="">-- Load tags --</option>
             </select>
@@ -1079,6 +1084,11 @@
                         <div id="swap-paid-warning" style="display:none;margin-top:4px;font-size:11px;color:#ff5555;font-style:italic">
                             &#9888; Will modify customer-paid line items
                         </div>
+                    </div>
+                    <div style="padding:8px;border-top:1px solid var(--border,#333)">
+                        <label style="font-size:11px;color:#aaa">Box SKU contains (comma-sep, optional):</label>
+                        <input type="text" id="swap-box-sku-contains" class="settings-input"
+                               placeholder="e.g. TR-, AHB-MCUST" style="width:100%;font-size:12px;margin-top:4px">
                     </div>
                 </div>
 
