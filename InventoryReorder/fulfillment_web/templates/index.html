@@ -1071,6 +1071,15 @@
                         </div>
                         <button class="btn btn-green btn-sm" onclick="addSwapPair()" style="width:100%">+ Add Pair</button>
                     </div>
+                    <div style="padding:8px;border-top:1px solid var(--border,#333)">
+                        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer">
+                            <input type="checkbox" id="swap-include-paid" onchange="onIncludePaidToggle()">
+                            Include paid items (no exceptions)
+                        </label>
+                        <div id="swap-paid-warning" style="display:none;margin-top:4px;font-size:11px;color:#ff5555;font-style:italic">
+                            &#9888; Will modify customer-paid line items
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Matrix mode: upload -->

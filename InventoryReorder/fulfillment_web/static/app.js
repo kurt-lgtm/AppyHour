@@ -2514,17 +2514,25 @@ async function uploadMatrix() {
     }
 }
 
+function onIncludePaidToggle() {
+    const checked = document.getElementById('swap-include-paid').checked;
+    document.getElementById('swap-paid-warning').style.display = checked ? '' : 'none';
+}
+
 async function previewSwaps() {
     const shipTag = document.getElementById('swap-ship-tag').value;
     if (!shipTag) { log('Select a ship tag first', 'orange'); return; }
     if (!swapPairs.length) { log('Add at least one swap pair', 'orange'); return; }
+
+    const includePaid = document.getElementById('swap-include-paid')?.checked || false;
+    const bundleOnly = !includePaid;
 
     setMascot('loading', 'Previewing swaps...');
     try {
         const resp = await fetch('/api/swap/multi-preview', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ship_tag: shipTag, swaps: swapPairs }),
+            body: JSON.stringify({ ship_tag: shipTag, swaps: swapPairs, bundle_only: bundleOnly }),
         });
         const data = await resp.json();
         if (data.error) { setMascot('alert', data.error); return; }
@@ -2567,7 +2575,20 @@ async function executeSwaps() {
     if (!shipTag || !swapPairs.length) return;
     if (!swapPreviewPairs.length) { log('Run Preview first', 'orange'); return; }
 
-    if (!confirm(`Execute ${swapPreviewData.length} swaps on Shopify? This cannot be undone.`)) return;
+    const includePaid = document.getElementById('swap-include-paid')?.checked || false;
+    const bundleOnly = !includePaid;
+
+    if (includePaid && swapPreviewData.length > 0) {
+        const typed = prompt(
+            `⚠ PAID ITEM SWAP\n\n` +
+            `${swapPreviewData.length} customer-paid line items will be modified across orders.\n` +
+            `This is irreversible.\n\n` +
+            `Type SWAP to confirm:`
+        );
+        if (typed !== 'SWAP') { log('Paid swap cancelled', 'orange'); return; }
+    } else {
+        if (!confirm(`Execute ${swapPreviewData.length} swaps on Shopify? This cannot be undone.`)) return;
+    }
 
     setMascot('loading', 'Executing swaps...');
     document.getElementById('swap-execute-btn').disabled = true;
@@ -2581,7 +2602,7 @@ async function executeSwaps() {
         const resp = await fetch('/api/swap/multi-execute', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ship_tag: shipTag, pairs: pairsWithGids }),
+            body: JSON.stringify({ ship_tag: shipTag, pairs: pairsWithGids, bundle_only: bundleOnly }),
         });
         const data = await resp.json();
         if (!data.started) { setMascot('alert', data.error || 'Failed to start'); return; }

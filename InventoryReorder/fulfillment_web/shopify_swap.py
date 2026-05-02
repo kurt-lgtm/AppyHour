@@ -67,10 +67,13 @@ def find_swap_targets(
     ship_tag: str,
     old_sku: str,
     progress_callback: Callable[[str], None] | None = None,
+    bundle_only: bool = True,
 ) -> list[dict]:
     """Find unfulfilled orders with ship_tag containing old_sku as a curation item.
 
-    Only includes line items with fulfillableQuantity > 0 and _rc_bundle property.
+    Only includes line items with fulfillableQuantity > 0.
+    If bundle_only=True (default), restricts to line items with _rc_bundle property
+    (skips paid/customer-chosen items). Set bundle_only=False to include paid items.
     """
     targets = []
     url = "orders.json"
@@ -109,7 +112,7 @@ def find_swap_targets(
                     continue
                 props = li.get("properties", []) or []
                 prop_names = {p.get("name", "") for p in props if isinstance(p, dict)}
-                if "_rc_bundle" not in prop_names:
+                if bundle_only and "_rc_bundle" not in prop_names:
                     continue
                 targets.append({
                     "order_id": o["id"],
