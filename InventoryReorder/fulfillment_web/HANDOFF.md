@@ -63,11 +63,29 @@ Total ~18hr.
 | E4 | `fa6a67f` | failure classification (locked/transient/other) + retry + backfill |
 | E3+E6 | `201682c` | count limiter + wildcard SKU search (`*-HHIGH`, `TR-*`) |
 
+## Plan files (in `.claude/plans/`)
+
+- `2026-05-02-swap-ui-extension-scope.md` — master scope (7 extensions)
+- `2026-05-02-E2-rc-bundle-toggle.md` ✅ shipped
+- `2026-05-02-E1-E7-cohort-tags-and-substring-filter.md` ✅ shipped
+- `2026-05-03-E4-failure-classification.md` ✅ shipped
+- `2026-05-03-E3-E6-count-limit-and-wildcard.md` ✅ shipped
+- E5 — not yet planned
+
 ## Resume directive
 
-**NEXT ACTION:** E5 batch queue (5+ independent swaps stacked, dry-run all → execute all). Plan saved scope only — needs `/forge plan E5`. ~5hr. Lowest priority — every individual session pattern already works via existing UI.
+**NEXT ACTION:** E5 batch queue (5+ independent swaps stacked, dry-run all → execute all). Run `/forge plan E5` first. ~5hr. Lowest priority — every individual session pattern already works via existing UI.
 
 **REMAINING:** E5 only.
+
+## Smoke tests not yet run
+
+UI changes ship in `c97f412 → 201682c` haven't been exercised in browser. Recommended sanity check before next swap day:
+1. Launch `python app.py --browser` from `fulfillment_web/`
+2. Cohort radio → Cohort → expect BIX/XMOM/ALP in dropdown
+3. Add `*-HHIGH` pair, click Resolve → expect 7-SKU expansion
+4. Set Limit=10, execute → expect 10 oldest swapped per pair
+5. After execute: check #swap-buckets shows 🔒/⏱/❌ collapsibles + Retry/Backfill buttons
 
 ## Context for resume
 
