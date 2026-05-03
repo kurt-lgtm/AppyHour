@@ -4533,6 +4533,52 @@ def swap_ship_tags():
     return jsonify({"tags": sorted_tags, "type": tag_type})
 
 
+@app.route("/api/swap/resolve-sku", methods=["POST"])
+def swap_resolve_sku():
+    """Expand wildcard SKU pattern to concrete SKUs with optional per-SKU order counts.
+
+    Body: {pattern, ship_tag?, bundle_only?, box_sku_contains?}
+    Patterns: '*-HHIGH', 'TR-*', '*BIX*'. Exact SKUs return as-is.
+    """
+    from shopify_swap import find_skus_matching, find_swap_targets
+
+    data = request.get_json(force=True)
+    pattern = (data.get("pattern") or "").strip()
+    ship_tag = data.get("ship_tag", "")
+    bundle_only = data.get("bundle_only", True)
+    box_sku_contains = data.get("box_sku_contains") or None
+
+    if not pattern:
+        return jsonify({"error": "pattern required"}), 400
+
+    s = _s()
+    store = s.get("shopify_store_url", "")
+    token = s.get("shopify_access_token", "")
+    if not store or not token:
+        return jsonify({"error": "Shopify credentials not configured"}), 400
+
+    if "*" not in pattern:
+        return jsonify({"pattern": pattern, "skus": [{"sku": pattern, "count": None}], "total": 0, "exact": True})
+
+    skus = find_skus_matching(store, token, pattern)
+    if not skus:
+        return jsonify({"pattern": pattern, "skus": [], "total": 0})
+
+    sku_counts = []
+    if ship_tag:
+        for sku in skus:
+            targets = find_swap_targets(
+                store, token, ship_tag, sku,
+                bundle_only=bundle_only, box_sku_contains=box_sku_contains,
+            )
+            sku_counts.append({"sku": sku, "count": len(targets)})
+    else:
+        sku_counts = [{"sku": sk, "count": None} for sk in skus]
+
+    total = sum((s_.get("count") or 0) for s_ in sku_counts)
+    return jsonify({"pattern": pattern, "skus": sku_counts, "total": total})
+
+
 @app.route("/api/swap/multi-preview", methods=["POST"])
 def swap_multi_preview():
     """Preview N swap pairs at once.
@@ -4590,6 +4636,7 @@ def swap_multi_preview():
             all_targets.append(
                 {
                     "order_name": t["order_name"],
+                    "order_gid": t["order_gid"],
                     "old_sku": old_sku,
                     "new_sku": new_sku,
                     "qty": t["qty"],
@@ -4659,7 +4706,14 @@ def swap_multi_execute():
 
                 _swap_progress["message"] = f"Pair {i}/{len(pairs)}: {old_sku} → {new_sku} — finding targets..."
 
-                targets = find_swap_targets(store, token, ship_tag, old_sku, bundle_only=bundle_only, box_sku_contains=box_sku_contains)
+                override = pair.get("targets_override")
+                if override:
+                    targets = [
+                        {"order_gid": t["order_gid"], "order_name": t["order_name"], "qty": t.get("qty", 1)}
+                        for t in override
+                    ]
+                else:
+                    targets = find_swap_targets(store, token, ship_tag, old_sku, bundle_only=bundle_only, box_sku_contains=box_sku_contains)
                 note = f"Swap {old_sku} -> {new_sku} (shortage substitution)"
 
                 def _progress(msg, pair_num=i, total=len(pairs)):

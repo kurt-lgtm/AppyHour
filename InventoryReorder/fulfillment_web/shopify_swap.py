@@ -52,6 +52,49 @@ def _rest_get(store_url: str, token: str, path: str, params: dict | None = None)
     resp.raise_for_status()
     return resp
 
+def find_skus_matching(store_url: str, token: str, pattern: str, max_results: int = 1000) -> list[str]:
+    """Resolve wildcard SKU pattern to concrete SKU list.
+
+    Patterns: '*-HHIGH' (suffix), 'TR-*' (prefix), '*BIX*' (substring), or exact (no `*`).
+    Uses fnmatch for matching. Paginates productVariants and post-filters.
+    Caps at max_results to prevent runaway scans.
+    """
+    import fnmatch
+    if not pattern:
+        return []
+    if "*" not in pattern:
+        return [pattern]
+
+    # Extract longest non-* token for Shopify text search (cheap pre-filter)
+    parts = [p for p in pattern.split("*") if p]
+    if not parts:
+        return []  # all-* pattern rejected
+    search_term = max(parts, key=len)
+    safe_term = search_term.replace('"', '\\"')
+
+    matches: set[str] = set()
+    cursor: str | None = None
+    while len(matches) < max_results:
+        after = f', after: "{cursor}"' if cursor else ""
+        query = (
+            '{ productVariants(first: 250, query: "sku:' + safe_term + '"' + after + ') { '
+            'pageInfo { hasNextPage endCursor } '
+            'edges { node { sku } } } }'
+        )
+        data = _gql(store_url, token, query)
+        pv = data["productVariants"]
+        for edge in pv["edges"]:
+            sku = (edge["node"].get("sku") or "").strip()
+            if sku and fnmatch.fnmatchcase(sku, pattern):
+                matches.add(sku)
+        if not pv["pageInfo"]["hasNextPage"]:
+            break
+        cursor = pv["pageInfo"]["endCursor"]
+        time.sleep(0.1)
+
+    return sorted(matches)
+
+
 def lookup_variant_gid(store_url: str, token: str, sku: str) -> str | None:
     """Find the $0 variant GID for a SKU. Returns None if not found."""
     # Escape double quotes in SKU to prevent GraphQL injection

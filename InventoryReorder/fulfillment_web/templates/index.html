@@ -1140,6 +1140,11 @@
                     <div id="swap-summary" style="font-family:'Space Mono',monospace;font-size:11px;color:#aaa;flex:1"></div>
                     <button class="btn btn-accent btn-sm" onclick="loadTagSkus()">&#128202; SKUs by Tag</button>
                     <button class="btn btn-blue btn-sm" onclick="previewSwaps()">Preview</button>
+                    <div style="display:flex;align-items:center;gap:4px;font-size:11px;color:#aaa">
+                        <label>Limit:</label>
+                        <input type="number" id="swap-limit" min="0" placeholder="0=all" style="width:60px;font-size:12px;padding:2px 4px">
+                        <span id="swap-limit-hint" style="color:#888"></span>
+                    </div>
                     <button class="btn btn-green btn-sm" onclick="executeSwaps()" id="swap-execute-btn" disabled>Execute Shopify</button>
                     <button class="btn btn-orange btn-sm" onclick="syncRechargeSwaps()" id="swap-rc-btn" disabled>Sync Recharge</button>
                     <button class="btn btn-dim btn-sm" onclick="exportSwapCsv()">Export CSV</button>

@@ -2465,14 +2465,55 @@ function renderSwapPairs() {
         el.innerHTML = '<div style="padding:8px;color:#666;font-size:11px">No swap pairs added</div>';
         return;
     }
-    el.innerHTML = swapPairs.map((p, i) => `
+    el.innerHTML = swapPairs.map((p, i) => {
+        const isWildcard = (p.old_sku || '').includes('*');
+        const resolveBtn = isWildcard
+            ? `<button class="btn btn-blue" style="padding:2px 6px;font-size:10px" onclick="resolveWildcardPair(${i})">Resolve</button>`
+            : '';
+        const wildcardBadge = isWildcard
+            ? `<span style="font-size:9px;color:#ffaa33;background:rgba(255,170,51,0.15);padding:1px 4px;border-radius:3px">★</span>`
+            : '';
+        return `
         <div style="display:flex;align-items:center;gap:6px;padding:4px 8px;border-bottom:1px solid var(--bg2)">
+            ${wildcardBadge}
             <span style="font-family:'DM Sans',sans-serif;font-size:12px;color:#ff5555">${p.old_sku}</span>
             <span style="color:#666">&rarr;</span>
             <span style="font-family:'DM Sans',sans-serif;font-size:12px;color:var(--green)">${p.new_sku}</span>
-            <button class="btn btn-dim" style="margin-left:auto;padding:2px 6px;font-size:10px" onclick="removeSwapPair(${i})">&times;</button>
-        </div>
-    `).join('');
+            <span style="margin-left:auto;display:flex;gap:4px">
+                ${resolveBtn}
+                <button class="btn btn-dim" style="padding:2px 6px;font-size:10px" onclick="removeSwapPair(${i})">&times;</button>
+            </span>
+        </div>`;
+    }).join('');
+}
+
+async function resolveWildcardPair(idx) {
+    const pair = swapPairs[idx];
+    if (!pair || !pair.old_sku.includes('*')) return;
+    const shipTag = document.getElementById('swap-ship-tag').value;
+    const bundleOnly = !(document.getElementById('swap-include-paid')?.checked);
+    const boxSkuRaw = document.getElementById('swap-box-sku-contains')?.value.trim() || '';
+    const boxSkuContains = boxSkuRaw ? boxSkuRaw.split(',').map(s=>s.trim()).filter(Boolean) : null;
+
+    setMascot('loading', `Resolving ${pair.old_sku}...`);
+    try {
+        const resp = await fetch('/api/swap/resolve-sku', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({pattern: pair.old_sku, ship_tag: shipTag, bundle_only: bundleOnly, box_sku_contains: boxSkuContains}),
+        });
+        const data = await resp.json();
+        if (data.error) { setMascot('alert', data.error); return; }
+        if (!data.skus.length) { setMascot('alert', `No SKUs match ${pair.old_sku}`); return; }
+        const summary = data.skus.map(s => `${s.sku}${s.count !== null ? ` (${s.count})` : ''}`).join('\n');
+        if (!confirm(`Pattern ${pair.old_sku} matches ${data.skus.length} SKUs:\n\n${summary}\n\nReplace wildcard pair with ${data.skus.length} concrete pairs?`)) return;
+        swapPairs.splice(idx, 1);
+        data.skus.forEach(s => swapPairs.push({old_sku: s.sku, new_sku: pair.new_sku}));
+        renderSwapPairs();
+        setMascot('happy', `Expanded to ${data.skus.length} pairs`);
+    } catch (e) {
+        setMascot('alert', 'Resolve failed: ' + e.message);
+    }
 }
 
 function handleMatrixFile(input) {
@@ -2571,6 +2612,8 @@ function renderSwapPreview(data) {
     );
     document.getElementById('swap-summary').innerHTML = `${data.total_orders} orders, ${pairs.length} rules | ${summaryParts.join(' | ')}`;
     document.getElementById('swap-preview-count').textContent = `${data.total_orders} orders`;
+    const hintEl = document.getElementById('swap-limit-hint');
+    if (hintEl) hintEl.textContent = `of ${data.total_orders}`;
 }
 
 async function executeSwaps() {
@@ -2603,6 +2646,22 @@ async function executeSwaps() {
         const pairsWithGids = swapPreviewPairs.map(p => ({
             old_sku: p.old_sku, new_sku: p.new_sku, new_variant_gid: p.new_variant_gid,
         }));
+
+        // Apply count limit (per-pair, oldest first)
+        const limitN = parseInt(document.getElementById('swap-limit')?.value || '0', 10);
+        if (limitN > 0) {
+            const targetsByPair = {};
+            (swapPreviewData || []).forEach(t => {
+                (targetsByPair[t.old_sku] = targetsByPair[t.old_sku] || []).push(t);
+            });
+            pairsWithGids.forEach(p => {
+                const list = (targetsByPair[p.old_sku] || []).slice();
+                list.sort((a, b) => parseInt(a.order_name.replace('#','')) - parseInt(b.order_name.replace('#','')));
+                p.targets_override = list.slice(0, limitN).map(t => ({
+                    order_gid: t.order_gid, order_name: t.order_name, qty: t.qty,
+                }));
+            });
+        }
 
         // Stash for retry/backfill
         window._lastSwapShipTag = shipTag;
