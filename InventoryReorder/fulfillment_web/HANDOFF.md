@@ -1,87 +1,84 @@
-# Command Center — Session Handoff
+# HANDOFF — 2026-05-02
 
-**Date:** 2026-04-07
-**Branch:** main
-**Last commit:** `80f3b3e` docs: backfill Command Center planning artifacts
-**Prior commit:** `5292bcb` fix: Command Center audit — timezone, triage, model IDs, error handling
+## What happened (2026-05-01 → 02)
 
-## What Happened This Session
+Massive swap session for `_SHIP_2026-05-04` cohort + scoping work for swap UI extension.
 
-1. **Resumed** from crashed session — Command Center v1.0 MVP was already committed (all 9 phases, `aa28b4f`)
-2. **Full audit** of Python backend (1,567 lines), JS frontend (1,255 lines), CSS (828 lines), and app.py routes
-3. **Fixed 7 bugs** across 4 files (committed `5292bcb`):
-   - Hardcoded UTC-4 → `zoneinfo.ZoneInfo("America/New_York")`
-   - `triage_task('keep')` now resets `created_at` (was broken — task reappeared as carryover)
-   - `morning_briefs` table moved to `init_db()` (was inline CREATE TABLE)
-   - Chat model IDs updated to current (haiku-4-5-20251001, sonnet-4-6-20250610)
-   - `ccSkipTask` now PATCHes API (was no-op)
-   - `ccExtendTimer` now persists `estimated_minutes` (was local-only)
-   - Flask error handler + input validation on create_task/create_blocker/add_checklist
-4. **Backfilled planning artifacts** for Phases 2-9 (committed `80f3b3e`)
+### Swaps executed (all via MCP `appyhour_swap_order_skus` + custom python for count-limited)
 
-## Current State
+| Swap | Cohort/Filter | Mode | Result | CSV |
+|---|---|---|---|---|
+| PK-FCUST → PK-BITESGUIDE | _SHIP_2026-05-04, box has TR- | paid | 7/7 ✅ | swap_results_2026-05-01.csv |
+| PK-FCUST → PK-TCUST | _SHIP_2026-05-04, no TR- | paid | 237/237 ✅ (after 502 retry) | same |
+| MT-CAPO → MT-COPPA | _SHIP_2026-05-04 | bundle | 167/168 ✅ (1 🔒 #134486) | same |
+| MT-CAPO → MT-COPPA | leftover paid | paid | included above | same |
+| CH-RP+AC-RHB → CH-BIX+AC-SRHUB | tag=BIX (multi-source) | paid | 239/239 ✅ | same |
+| CH-FOWC → CH-CCC | _SHIP_2026-05-04 | paid | 9/9 ✅ | same |
+| MT-JAHH → MT-PSS | _SHIP_2026-05-04 | bundle | 35/35 ✅ | same |
+| MT-JAHH → MT-PSS | _SHIP_2026-05-04 leftover | paid | 7/7 ✅ | same |
+| CH-BRIE+CH-EBRIE → CH-RP | _SHIP_2026-05-04 | paid no-exc | 126/130 (4 🔒) | same |
+| CH-EBCC → CH-OGK | _SHIP_2026-05-04 | paid no-exc | 13/13 ✅ | same |
+| CH-LEON → CH-BIX | _SHIP_2026-05-04 | paid no-exc | 10/11 (1 🔒 #134861) | same |
+| CH-TIP → CH-EBRIE | _SHIP_2026-05-04 | paid | 1/1 ✅ | same |
+| MT-BRAS → MT-SBRES | _SHIP_2026-05-04 | paid no-exc | 5/5 ✅ | same |
+| **CH-ALP → CH-WMANG** | tag=ALP, suffix -HHIGH, **70 of 121 bundle** | bundle, count-limited | 70/70 ✅ | alp_chalp_swap_70_results.json |
+| **CH-ALP → CH-SHADOW** | tag=XMOM, **100 of 167** paid | paid, count-limited | 100/100 ✅ (after 502 retry) | (in script output) |
+| **CH-UCONE → CH-UROSE** | _SHIP_2026-05-04, **19 of 24** | paid, count-limited | 19/19 ✅ (1 🔒 #136545 backfilled w/ #136569) | (in script output) |
 
-### Files
-- `command_center.py` — 1,567 lines, SQLite backend, all features implemented
-- `app.py` — ~30 CC routes under `/api/cc/*`
-- `cc.js` — 1,255 lines, full frontend
-- `cc.css` — 828 lines, dark navy theme
-- `index.html` — CC tab at lines 632-739
-- `.planning/` — PROJECT.md, ROADMAP.md, STATE.md, 1-PLAN.md through 9-PLAN.md
+**Locked orders** (manual fix needed): #134486, #134535, #134861, #136418, #136434, #136545, #136784
 
-### What Works
-- Task CRUD + checklists + recurring templates
-- Urgency scoring (4-factor weighted)
-- Timer with pause/extend/persist
-- Blocker handling (4 types)
-- Slack trawl (commitment parsing)
-- Morning brief (passive store)
-- Ask Claude chat (Haiku/Sonnet toggle, $2/mo budget)
-- EOD summary + weekly review
-- Bad Day Protocol triage
-- Daily snapshots (30-day retention)
-- Streaks, keyboard nav, energy auto-degradation, overwhelm detection
+**Custom python flow** (for count-limited): script in main session, used `shopify_swap.py` helpers (`find_swap_targets`, `lookup_variant_gid`, `execute_swap`, `execute_bulk_swap`). Saved selection to `alp_chalp_swap_70.json`.
 
-## Known Gaps (Not Blocking, Future Work)
+### Skill updates
 
-### Missing Features
-| Feature | Spec'd | Status |
-|---------|--------|--------|
-| 3-panel layout | Yes | 2-panel only (no left sidebar) |
-| Deadlines section | Yes | Empty div, never populated |
-| Settings panel | Yes | Not built |
-| MCP aggregation for brief | Yes | Passive store — no auto-pull from Shopify/Recharge/etc |
-| MCP polling for blockers | Yes | `monitor_source` stored but never polled |
-| WIP limit enforcement | Yes (max 3) | Only 1-timer-at-a-time |
-| Idle detection | Yes | Not built |
-| Auto load shedding | Yes | Not built |
-| Onboarding flow | Yes | Not built |
-| Drive upload for snapshots | Yes | Not built |
-| SSE streaming for chat | Yes | Non-streaming POST |
+- **forge-swap** ([SKILL.md](C:/Users/Work/.claude/skills/forge-swap/SKILL.md)) — full rewrite. Removed broken `generate_swap_list` step, opus pre/post-flight agents (over-engineered, unused). Added: rc_bundle_only behavior nuance for direct-items cohorts (PR-CJAM/BIX/XMOM), ship_tag is generic tag filter, count-limited recipe using `shopify_swap.find_swap_targets`+`execute_bulk_swap`, retry idempotency, failure classification (🔒/502/other), backfill-on-locked. API version `2024-01`. Dropped `--recharge` flag (unimplemented).
 
-### Code Quality
-| Issue | Severity | Detail |
-|-------|----------|--------|
-| N+1 queries in `list_tasks()` | MEDIUM | 50 tasks = 101 queries |
-| Chat history in-memory only | LOW | Lost on restart, capped at 20 |
-| `delete_recurring()` orphans tasks | LOW | recurring_id FK dangles |
-| Inline styles on dynamic cards | LOW | EOD/review/triage cards use JS template styles |
-| Background color `#16213e` | LOW | Spec says `#1a1a2e` |
+### Scoping doc saved
 
-## Resume Instructions
+[.claude/plans/2026-05-02-swap-ui-extension-scope.md](.claude/plans/2026-05-02-swap-ui-extension-scope.md)
 
-To continue Command Center work:
-```
-cd "Claude Projects/AppyHour"
-/forge resume
-```
+**Key finding:** swap UI **already exists** at:
+- `app.py:4325-5120` — 13 swap routes
+- `templates/index.html:1046-1132` — `#swapmanager-view` panel
+- `static/app.js:2399-2660` — JS logic
+- `shopify_swap.py` — helpers
 
-Priority order for next session:
-1. Wire up deadlines section (quick win)
-2. N+1 query fix (JOIN instead of per-task subqueries)
-3. Settings panel (timer defaults, WIP limit, notification config)
-4. MCP aggregation for morning brief (connect to appyhour MCP tools)
+**Critical gap:** UI **cannot swap paid items** today. Every route calls `find_swap_targets()` which hardcodes `if "_rc_bundle" not in prop_names: continue` at [shopify_swap.py:112](shopify_swap.py:112).
 
-## Planning State
+### 7 extensions scoped (all needed per user)
 
-`.planning/STATE.md` shows all 9 phases COMPLETE with audit notes documenting 5 spec deviations.
+Phase A — foundation (~5hr): **E2** rc_bundle_only toggle (HIGHEST), **E1** cohort tag dropdown, **E7** box_sku_contains substring filter
+Phase B — selection (~5hr): **E6** suffix/substring SKU search (`*-HHIGH`), **E3** count limiter (N of M, oldest first)
+Phase C — reliability (~3hr): **E4** failure classification + retry-transients + locked-backfill
+Phase D — UX (~5hr): **E5** batch queue (5+ independent swaps)
+
+Total ~18hr.
+
+## Shipped (2026-05-02 → 03)
+
+| Ext | Commit | What |
+|---|---|---|
+| E2 | `c97f412` | rc_bundle_only toggle — paid-item swap now possible |
+| E1+E7 | `e306597` | cohort tag dropdown + box_sku_contains substring filter |
+| E4 | `fa6a67f` | failure classification (locked/transient/other) + retry + backfill |
+| E3+E6 | `201682c` | count limiter + wildcard SKU search (`*-HHIGH`, `TR-*`) |
+
+## Resume directive
+
+**NEXT ACTION:** E5 batch queue (5+ independent swaps stacked, dry-run all → execute all). Plan saved scope only — needs `/forge plan E5`. ~5hr. Lowest priority — every individual session pattern already works via existing UI.
+
+**REMAINING:** E5 only.
+
+## Context for resume
+
+- Run command: `python app.py --browser` from `fulfillment_web/` → http://127.0.0.1:5187 → sidebar "Swaps"
+- Auth: `inventory_reorder_settings.json` (`shopify_store_url`, `shopify_access_token`)
+- Stack: Flask + pywebview, vanilla JS, custom CSS dark theme
+- API: Shopify Admin `2024-01` (REST + GraphQL), bare prefix `504ac4` (helper appends `.myshopify.com`)
+- shop_swap.py exports: `find_swap_targets`, `lookup_variant_gid`, `execute_swap`, `execute_bulk_swap`, `_gql`
+
+## Caveats
+
+- `appyhour_search_products` MCP tool is broken (`'NoneType' object has no attribute 'lower'`) — validate SKUs via swap dry-run instead
+- 7 locked orders need manual editing (gift redemptions per memory)
+- One-time CSV `swap_results_2026-05-01.csv` accumulated all swap results from session
