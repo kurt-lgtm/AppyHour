@@ -2604,6 +2604,12 @@ async function executeSwaps() {
             old_sku: p.old_sku, new_sku: p.new_sku, new_variant_gid: p.new_variant_gid,
         }));
 
+        // Stash for retry/backfill
+        window._lastSwapShipTag = shipTag;
+        window._lastSwapPairs = pairsWithGids;
+        window._lastSwapBundleOnly = bundleOnly;
+        window._lastSwapBoxSkuContains = boxSkuContains;
+
         const resp = await fetch('/api/swap/multi-execute', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2617,6 +2623,86 @@ async function executeSwaps() {
         setMascot('alert', 'Execute failed: ' + e.message);
         document.getElementById('swap-execute-btn').disabled = false;
         document.getElementById('swap-cancel-btn').style.display = 'none';
+    }
+}
+
+function renderSwapBuckets(result) {
+    const el = document.getElementById('swap-buckets');
+    if (!el) return;
+    const buckets = [
+        { key: 'locked',    label: '🔒 Locked',    color: '#ff5555' },
+        { key: 'transient', label: '⏱ Transient', color: '#ffaa33' },
+        { key: 'other',     label: '❌ Other',    color: '#cc6666' },
+    ];
+    const parts = buckets.map(b => {
+        const items = result[b.key] || [];
+        if (!items.length) return '';
+        const list = items.map(x => `<div style="font-size:10px;color:#aaa;font-family:'Space Mono',monospace">${x.order_name} — ${(x.error||'').slice(0,140)}</div>`).join('');
+        return `<details style="margin-top:6px"><summary style="color:${b.color};font-size:12px;cursor:pointer">${b.label}: ${items.length}</summary><div style="margin-top:4px;max-height:180px;overflow-y:auto">${list}</div></details>`;
+    }).join('');
+    const transientCount = (result.transient || []).length;
+    const lockedCount = (result.locked || []).length;
+    const buttons = [];
+    if (transientCount > 0) buttons.push(`<button class="btn btn-blue btn-sm" onclick="retryTransients()">Retry ${transientCount} transients</button>`);
+    if (lockedCount > 0) buttons.push(`<button class="btn btn-dim btn-sm" onclick="backfillLocked()">Backfill ${lockedCount} locked</button>`);
+    el.innerHTML = parts + (buttons.length ? `<div style="margin-top:8px;display:flex;gap:6px">${buttons.join('')}</div>` : '');
+    window._lastSwapResult = result;
+}
+
+async function retryTransients() {
+    const r = window._lastSwapResult;
+    if (!r || !(r.transient || []).length) return;
+    const orders = r.transient.map(x => x.order_name);
+    setMascot('loading', `Retrying ${orders.length} transients...`);
+    document.getElementById('swap-execute-btn').disabled = true;
+    try {
+        const resp = await fetch('/api/swap/retry-transients', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                ship_tag: window._lastSwapShipTag,
+                pairs: window._lastSwapPairs,
+                retry_orders: orders,
+            }),
+        });
+        const data = await resp.json();
+        if (!data.started) { setMascot('alert', data.error || 'Retry failed to start'); return; }
+        pollSwapProgress();
+    } catch (e) {
+        setMascot('alert', 'Retry failed: ' + e.message);
+        document.getElementById('swap-execute-btn').disabled = false;
+    }
+}
+
+async function backfillLocked() {
+    const r = window._lastSwapResult;
+    if (!r || !(r.locked || []).length) return;
+    const lockedNames = r.locked.map(x => x.order_name);
+    const successNames = r.successful_orders || [];
+    const exclude = [...successNames, ...lockedNames];
+    const count = lockedNames.length;
+    if (!confirm(`Backfill ${count} locked with next eligible orders (oldest first)?`)) return;
+    setMascot('loading', `Backfilling ${count}...`);
+    document.getElementById('swap-execute-btn').disabled = true;
+    try {
+        const resp = await fetch('/api/swap/backfill-locked', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                ship_tag: window._lastSwapShipTag,
+                pairs: window._lastSwapPairs,
+                bundle_only: window._lastSwapBundleOnly,
+                box_sku_contains: window._lastSwapBoxSkuContains,
+                exclude_orders: exclude,
+                count: count,
+            }),
+        });
+        const data = await resp.json();
+        if (!data.started) { setMascot('alert', data.error || 'Backfill failed to start'); return; }
+        pollSwapProgress();
+    } catch (e) {
+        setMascot('alert', 'Backfill failed: ' + e.message);
+        document.getElementById('swap-execute-btn').disabled = false;
     }
 }
 
@@ -2640,7 +2726,9 @@ function pollSwapProgress() {
                         const r = data.result;
                         setMascot('celebrate', `${r.total_success} swapped, ${r.total_failed} failed`);
                         log(`Swap complete: ${r.total_success} success, ${r.total_failed} failed`, 'green');
-                        document.getElementById('swap-rc-btn').disabled = false;
+                        const rcBtn = document.getElementById('swap-rc-btn');
+                        if (rcBtn) rcBtn.disabled = false;
+                        renderSwapBuckets(r);
                     }
                 }
                 document.getElementById('swap-execute-btn').disabled = false;

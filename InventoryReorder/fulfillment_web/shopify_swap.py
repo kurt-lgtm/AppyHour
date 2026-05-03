@@ -13,10 +13,18 @@ swap integration on shortage rows.
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Callable
 
 import requests
+
+# Failure classification — see E4 plan
+_LOCKED_RE = re.compile(r"cannot be edited", re.I)
+_TRANSIENT_RE = re.compile(
+    r"\b50[234]\b|Bad Gateway|Gateway Timeout|timeout|ChunkedEncoding|Connection reset|Connection aborted",
+    re.I,
+)
 
 # Dietary restriction box SKU fragments — kept for reference but no longer
 # used to skip swaps. If an item is on a dietary order, it's safe to swap.
@@ -251,7 +259,8 @@ def execute_bulk_swap(
         cancel_flag: Single-element list; if cancel_flag[0] is True, abort.
 
     Returns:
-        {total, success, failed, errors, dry_run}
+        {total, success, failed, errors, dry_run, locked, transient, other,
+         successful_orders}
     """
     total = len(targets)
 
@@ -261,6 +270,10 @@ def execute_bulk_swap(
             "success": 0,
             "failed": 0,
             "errors": [],
+            "locked": [],
+            "transient": [],
+            "other": [],
+            "successful_orders": [],
             "dry_run": True,
             "targets": [
                 {"order_name": t["order_name"], "qty": t["qty"]}
@@ -270,7 +283,11 @@ def execute_bulk_swap(
 
     success = 0
     failed = 0
-    errors = []
+    errors: list[str] = []
+    locked: list[dict] = []
+    transient: list[dict] = []
+    other: list[dict] = []
+    successful_orders: list[str] = []
 
     for i, t in enumerate(targets, 1):
         if cancel_flag and cancel_flag[0]:
@@ -286,9 +303,18 @@ def execute_bulk_swap(
 
         if result["success"]:
             success += 1
+            successful_orders.append(t["order_name"])
         else:
             failed += 1
-            errors.append(f"{t['order_name']}: {result['error']}")
+            err_text = str(result["error"] or "")
+            errors.append(f"{t['order_name']}: {err_text}")
+            item = {"order_name": t["order_name"], "error": err_text}
+            if _LOCKED_RE.search(err_text):
+                locked.append(item)
+            elif _TRANSIENT_RE.search(err_text):
+                transient.append(item)
+            else:
+                other.append(item)
 
         time.sleep(0.1)
 
@@ -297,5 +323,9 @@ def execute_bulk_swap(
         "success": success,
         "failed": failed,
         "errors": errors,
+        "locked": locked,
+        "transient": transient,
+        "other": other,
+        "successful_orders": successful_orders,
         "dry_run": False,
     }

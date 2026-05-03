@@ -4643,6 +4643,10 @@ def swap_multi_execute():
             combined_errors = []
             total_success = 0
             total_failed = 0
+            all_locked = []
+            all_transient = []
+            all_other = []
+            all_successful = []
 
             for i, pair in enumerate(pairs, 1):
                 if _swap_cancel[0]:
@@ -4674,6 +4678,10 @@ def swap_multi_execute():
                 )
                 total_success += result.get("success", 0)
                 total_failed += result.get("failed", 0)
+                all_locked.extend(result.get("locked", []))
+                all_transient.extend(result.get("transient", []))
+                all_other.extend(result.get("other", []))
+                all_successful.extend(result.get("successful_orders", []))
                 combined_results.append(
                     {
                         "old_sku": old_sku,
@@ -4706,6 +4714,246 @@ def swap_multi_execute():
                 "total_failed": total_failed,
                 "pairs": combined_results,
                 "errors": combined_errors[:20],
+                "locked": all_locked,
+                "transient": all_transient,
+                "other": all_other,
+                "successful_orders": all_successful,
+            }
+        except Exception as e:
+            _swap_progress["result"] = {"error": str(e)}
+        finally:
+            _swap_progress["running"] = False
+            _swap_progress["message"] = "Done"
+
+    threading.Thread(target=_worker, daemon=True).start()
+    return jsonify({"started": True})
+
+
+@app.route("/api/swap/retry-transients", methods=["POST"])
+def swap_retry_transients():
+    """Re-execute swap on a given list of orders without re-querying targets.
+
+    Used after transient 502s. Body:
+      {ship_tag, pairs: [{old_sku, new_sku, new_variant_gid}], retry_orders: ["#136545", ...]}
+    """
+    from shopify_swap import execute_swap, _gql
+
+    global _swap_progress, _swap_cancel
+
+    with _swap_lock:
+        if _swap_progress["running"]:
+            return jsonify({"error": "A swap is already in progress"}), 409
+        _swap_progress.update({"running": True, "message": "Retrying transients...", "result": None})
+
+    data = request.get_json(force=True)
+    ship_tag = data.get("ship_tag", "")
+    pairs = data.get("pairs", [])
+    retry_orders = data.get("retry_orders", [])
+
+    if not pairs or not retry_orders:
+        with _swap_lock:
+            _swap_progress["running"] = False
+        return jsonify({"error": "pairs[] and retry_orders[] required"}), 400
+
+    s = _s()
+    store = s.get("shopify_store_url", "")
+    token = s.get("shopify_access_token", "")
+    _swap_cancel[0] = False
+
+    def _worker():
+        try:
+            from shopify_swap import _LOCKED_RE, _TRANSIENT_RE
+
+            success = 0
+            failed = 0
+            errors = []
+            locked = []
+            transient = []
+            other = []
+            successful_orders = []
+
+            total = len(retry_orders) * len(pairs)
+            step = 0
+
+            for order_name in retry_orders:
+                if _swap_cancel[0]:
+                    errors.append("Cancelled by user")
+                    break
+
+                # Resolve order GID by name
+                nh = order_name.lstrip("#")
+                q = '{ orders(first: 1, query: "name:' + nh + '") { edges { node { id } } } }'
+                try:
+                    d = _gql(store, token, q)
+                    edges = d["orders"]["edges"]
+                    if not edges:
+                        failed += 1
+                        msg = f"{order_name}: not found"
+                        errors.append(msg)
+                        other.append({"order_name": order_name, "error": "not found"})
+                        continue
+                    order_gid = edges[0]["node"]["id"]
+                except Exception as e:
+                    failed += 1
+                    err_text = str(e)
+                    errors.append(f"{order_name}: {err_text}")
+                    if _TRANSIENT_RE.search(err_text):
+                        transient.append({"order_name": order_name, "error": err_text})
+                    else:
+                        other.append({"order_name": order_name, "error": err_text})
+                    continue
+
+                for pair in pairs:
+                    if _swap_cancel[0]:
+                        break
+                    step += 1
+                    old_sku = pair["old_sku"]
+                    new_sku = pair["new_sku"]
+                    new_gid = pair["new_variant_gid"]
+                    _swap_progress["message"] = f"Retry {step}/{total}: {order_name} {old_sku}→{new_sku}"
+
+                    note = f"Retry swap {old_sku} -> {new_sku}"
+                    res = execute_swap(store, token, order_gid, old_sku, new_gid, note)
+                    if res["success"]:
+                        success += 1
+                        successful_orders.append(order_name)
+                    else:
+                        failed += 1
+                        err_text = str(res["error"] or "")
+                        errors.append(f"{order_name}: {err_text}")
+                        item = {"order_name": order_name, "error": err_text}
+                        if _LOCKED_RE.search(err_text):
+                            locked.append(item)
+                        elif _TRANSIENT_RE.search(err_text):
+                            transient.append(item)
+                        else:
+                            other.append(item)
+
+            _swap_progress["result"] = {
+                "total_success": success,
+                "total_failed": failed,
+                "errors": errors[:20],
+                "locked": locked,
+                "transient": transient,
+                "other": other,
+                "successful_orders": successful_orders,
+                "retry": True,
+            }
+        except Exception as e:
+            _swap_progress["result"] = {"error": str(e)}
+        finally:
+            _swap_progress["running"] = False
+            _swap_progress["message"] = "Done"
+
+    threading.Thread(target=_worker, daemon=True).start()
+    return jsonify({"started": True})
+
+
+@app.route("/api/swap/backfill-locked", methods=["POST"])
+def swap_backfill_locked():
+    """Re-query targets excluding given orders, take first N, execute.
+
+    Used to fill in for locked orders. Body:
+      {ship_tag, pairs: [{old_sku, new_sku, new_variant_gid}],
+       bundle_only, box_sku_contains, exclude_orders: [...], count: N}
+    """
+    from shopify_swap import find_swap_targets, execute_bulk_swap
+
+    global _swap_progress, _swap_cancel
+
+    with _swap_lock:
+        if _swap_progress["running"]:
+            return jsonify({"error": "A swap is already in progress"}), 409
+        _swap_progress.update({"running": True, "message": "Backfilling...", "result": None})
+
+    data = request.get_json(force=True)
+    ship_tag = data.get("ship_tag", "")
+    pairs = data.get("pairs", [])
+    bundle_only = data.get("bundle_only", True)
+    box_sku_contains = data.get("box_sku_contains") or None
+    exclude_orders = set(data.get("exclude_orders", []))
+    count = int(data.get("count", 0))
+
+    if not ship_tag or not pairs or count <= 0:
+        with _swap_lock:
+            _swap_progress["running"] = False
+        return jsonify({"error": "ship_tag, pairs[], count required"}), 400
+
+    s = _s()
+    store = s.get("shopify_store_url", "")
+    token = s.get("shopify_access_token", "")
+    _swap_cancel[0] = False
+
+    def _worker():
+        try:
+            combined_results = []
+            combined_errors = []
+            total_success = 0
+            total_failed = 0
+            all_locked = []
+            all_transient = []
+            all_other = []
+            all_successful = []
+
+            for i, pair in enumerate(pairs, 1):
+                if _swap_cancel[0]:
+                    combined_errors.append("Cancelled by user")
+                    break
+
+                old_sku = pair["old_sku"]
+                new_sku = pair["new_sku"]
+                new_gid = pair["new_variant_gid"]
+
+                _swap_progress["message"] = f"Backfill {i}/{len(pairs)}: finding eligible {old_sku}..."
+                targets = find_swap_targets(
+                    store, token, ship_tag, old_sku,
+                    bundle_only=bundle_only, box_sku_contains=box_sku_contains,
+                )
+                # Filter excluded + sort oldest first + take N
+                eligible = [t for t in targets if t["order_name"] not in exclude_orders]
+                eligible.sort(key=lambda t: int(t["order_name"].lstrip("#")))
+                picked = eligible[:count]
+
+                if not picked:
+                    combined_results.append({
+                        "old_sku": old_sku, "new_sku": new_sku,
+                        "orders": 0, "failed": 0, "note": "no eligible orders for backfill",
+                    })
+                    continue
+
+                note = f"Backfill swap {old_sku} -> {new_sku}"
+
+                def _progress(msg, pair_num=i, total=len(pairs)):
+                    _swap_progress["message"] = f"Backfill {pair_num}/{total}: {msg}"
+
+                result = execute_bulk_swap(
+                    store, token, picked, old_sku, new_gid,
+                    staff_note=note, dry_run=False,
+                    progress_callback=_progress, cancel_flag=_swap_cancel,
+                )
+                total_success += result.get("success", 0)
+                total_failed += result.get("failed", 0)
+                all_locked.extend(result.get("locked", []))
+                all_transient.extend(result.get("transient", []))
+                all_other.extend(result.get("other", []))
+                all_successful.extend(result.get("successful_orders", []))
+                combined_results.append({
+                    "old_sku": old_sku, "new_sku": new_sku,
+                    "orders": result.get("success", 0),
+                    "failed": result.get("failed", 0),
+                })
+                combined_errors.extend(result.get("errors", []))
+
+            _swap_progress["result"] = {
+                "total_success": total_success,
+                "total_failed": total_failed,
+                "pairs": combined_results,
+                "errors": combined_errors[:20],
+                "locked": all_locked,
+                "transient": all_transient,
+                "other": all_other,
+                "successful_orders": all_successful,
+                "backfill": True,
             }
         except Exception as e:
             _swap_progress["result"] = {"error": str(e)}
