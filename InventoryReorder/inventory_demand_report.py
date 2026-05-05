@@ -36,12 +36,12 @@ SAT_DEPLETION = ""  # Inventory CSV is from 4/21 — post-depletion
 TUE_DEPLETION = ""
 
 # Ship week boundaries — Recharge uses Sun-Sat (charge dates)
-# WK1: Sun 4/19 – Sat 4/25 (ships week of _SHIP_2026-04-27)
-# WK2: Sun 4/26 – Sat 5/2 (ships week of _SHIP_2026-05-04)
-WK1_START = date(2026, 4, 19)
-WK1_END = date(2026, 4, 25)
-WK2_START = date(2026, 4, 26)
-WK2_END = date(2026, 5, 2)
+# WK1: Sun 5/3 – Sat 5/9 (ships week of _SHIP_2026-05-11)
+# WK2: Sun 5/10 – Sat 5/16 (ships week of _SHIP_2026-05-18)
+WK1_START = date(2026, 5, 3)
+WK1_END = date(2026, 5, 9)
+WK2_START = date(2026, 5, 10)
+WK2_END = date(2026, 5, 16)
 
 PICKABLE_PREFIXES = ("CH-", "MT-", "AC-")
 
@@ -365,8 +365,26 @@ def fetch_recharge_api(api_token, out_specialty=None):
 # -- Step 4: Fetch Shopify orders for upcoming ship weeks --
 
 # Ship week tag dates (Monday of each week)
-WK1_SHIP_TAG = "_SHIP_2026-04-27"
-WK2_SHIP_TAG = "_SHIP_2026-05-04"
+WK1_SHIP_TAG = "_SHIP_2026-05-11"
+WK2_SHIP_TAG = "_SHIP_2026-05-18"
+
+# Day-of-week ship-tag selection:
+#   Monday run → WK1 includes BOTH this Mon's ship tag and next Mon's
+#                (this week's cohort still being prepped + next week's queueing).
+#   Tuesday+   → WK1 includes ONLY next Mon's ship tag (this week already cut).
+def _wk1_ship_tags(today=None):
+    from datetime import date as _date, timedelta as _td
+    today = today or _date.today()
+    # Find next Monday (or today if Mon)
+    days_to_mon = (0 - today.weekday()) % 7
+    next_mon = today + _td(days=days_to_mon if days_to_mon != 0 else 7)
+    tags = [f"_SHIP_{next_mon.isoformat()}"]
+    if today.weekday() == 0:  # Monday
+        this_mon = today
+        tags.insert(0, f"_SHIP_{this_mon.isoformat()}")
+    return tags
+
+WK1_SHIP_TAGS = _wk1_ship_tags()
 
 
 def fetch_shopify_orders(settings, out_specialty=None):
@@ -443,7 +461,7 @@ def fetch_shopify_orders(settings, out_specialty=None):
     for order in all_orders:
         tags = order.get("tags", "") or ""
 
-        is_wk1 = WK1_SHIP_TAG in tags
+        is_wk1 = any(t in tags for t in WK1_SHIP_TAGS)
         is_wk2 = WK2_SHIP_TAG in tags
         if not is_wk1 and not is_wk2:
             continue

@@ -72,19 +72,19 @@ SECTION_ACCENT = "0F172A"
 
 # ── Fonts ────────────────────────────────────────────────────────────
 
-F_SKU = Font(name="Space Mono", size=10)
-F_NAME = Font(name="DM Sans", size=10)
-F_NUM = Font(name="Rajdhani", size=12)
-F_NUM_BOLD = Font(name="Rajdhani", size=12, bold=True)
-F_NUM_MUTED = Font(name="Rajdhani", size=12, color=MUTED)
-F_NUM_WHEEL = Font(name="Rajdhani", size=12, color=WHEEL_POT)
-F_HDR = Font(name="Space Mono", size=11, bold=True, color=HEADER_FG)
-F_SECTION = Font(name="Space Mono", size=10, bold=True)
-F_INPUT = Font(name="Rajdhani", size=12, bold=True, color=INPUT_FG)
-F_GOOD = Font(name="Space Mono", size=9, bold=True)
-F_EDIT = Font(name="DM Sans", size=10, bold=True, color=INPUT_FG)
-F_TITLE = Font(name="Space Mono", size=14, bold=True, color=HEADER_FG)
-F_SUBTITLE = Font(name="DM Sans", size=10, color=MUTED)
+F_SKU = Font(name="Calibri", size=10)
+F_NAME = Font(name="Calibri", size=10)
+F_NUM = Font(name="Calibri", size=12)
+F_NUM_BOLD = Font(name="Calibri", size=12, bold=True)
+F_NUM_MUTED = Font(name="Calibri", size=12, color=MUTED)
+F_NUM_WHEEL = Font(name="Calibri", size=12, color=WHEEL_POT)
+F_HDR = Font(name="Calibri", size=11, bold=True, color=HEADER_FG)
+F_SECTION = Font(name="Calibri", size=10, bold=True)
+F_INPUT = Font(name="Calibri", size=12, bold=True, color=INPUT_FG)
+F_GOOD = Font(name="Calibri", size=9, bold=True)
+F_EDIT = Font(name="Calibri", size=10, bold=True, color=INPUT_FG)
+F_TITLE = Font(name="Calibri", size=14, bold=True, color=HEADER_FG)
+F_SUBTITLE = Font(name="Calibri", size=10, color=MUTED)
 
 # ── Fills ────────────────────────────────────────────────────────────
 
@@ -151,7 +151,7 @@ def _merge_subtitle(ws: Worksheet, row: int, text: str, last_col: int) -> None:
 
 def _section_header(ws: Worksheet, row: int, text: str, bg: str, fg: str, last_col: int) -> None:
     fill = PatternFill("solid", fgColor=bg)
-    font = Font(name="Space Mono", size=10, bold=True, color=fg)
+    font = Font(name="Calibri", size=10, bold=True, color=fg)
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=last_col)
     c = ws.cell(row=row, column=1, value=text)
     c.font = font
@@ -420,18 +420,11 @@ def _fetch_all_data(settings: dict) -> dict:
             f"{_daily_rate:.1f}/day × {_days_to_project}d = {_projected} projected, "
             f"{_mong_projected} MONG ({_mong_pct:.0%})"
         )
-        for _sku, _rate in _fo_skus.items():
-            _add = int(_rate * _mong_projected)
-            if _add > 0:
-                sh_wk1_addon[_sku] = sh_wk1_addon.get(_sku, 0) + _add
-
-        if _mong_projected > 0:
-            _sh_mong_lg = sh_wk1_large.get("MONG", 0)
-            _sh_mong_total = sh_wk1_curations.get("MONG", 1)
-            _lg_ratio = _sh_mong_lg / _sh_mong_total if _sh_mong_total > 0 else 0.0
-            _proj_lg = int(_mong_projected * _lg_ratio)
-            sh_wk1_curations["MONG"] = sh_wk1_curations.get("MONG", 0) + _mong_projected
-            sh_wk1_large["MONG"] = sh_wk1_large.get("MONG", 0) + _proj_lg
+        # First-order projection DISABLED — was inflating sh_wk1_addon with
+        # phantom demand for subscribers who hadn't ordered yet. Real demand
+        # comes from already-charged Shopify orders + queued Recharge charges.
+        # Projection log line above kept for visibility only.
+        # (Was: distributed _mong_projected across observed first-order SKUs.)
 
     # -- Merge curation counts --
     wk1_curations: dict[str, int] = defaultdict(int)
@@ -507,7 +500,8 @@ def _fetch_all_data(settings: dict) -> dict:
     # Inject Shopify MONTHLY/CMED/LGE counts into monthly_by_week_month
     # (otherwise the MONTHLY BOX COUNTS summary shows Recharge only).
     # Ship tag month = first 7 chars after "_SHIP_" (e.g. "_SHIP_2026-04-27" → "2026-04").
-    from inventory_demand_report import WK1_SHIP_TAG as _W1T, WK2_SHIP_TAG as _W2T
+    from inventory_demand_report import WK1_SHIP_TAGS as _W1TS, WK2_SHIP_TAG as _W2T
+    _W1T = _W1TS[-1]  # next-week tag (last in list)
     _wk1_month = _W1T.replace("_SHIP_", "")[:7]
     _wk2_month = _W2T.replace("_SHIP_", "")[:7]
 
@@ -525,29 +519,42 @@ def _fetch_all_data(settings: dict) -> dict:
     _add_monthly("WK2", _wk2_month, "CMED", sh_wk2_med.get("CMED", 0))
     _add_monthly("WK2", _wk2_month, "LGE", sh_wk2_lge.get("MONTHLY", 0))
 
-    # Collapse all WK2 entries → WK1 in monthly_by_week_month (single-cohort).
-    _collapsed: dict = {}
-    for (week_key, month), counts in monthly_by_week_month.items():
-        new_key = ("WK1", month)
-        bucket = _collapsed.setdefault(new_key, {})
-        for bt, ct in counts.items():
-            bucket[bt] = bucket.get(bt, 0) + ct
-    monthly_by_week_month = _collapsed
+    # WK2 → WK1 collapse: only on Monday runs (when WK1_SHIP_TAGS already
+    # includes both this-week and next-week tags). On Tue+ runs WK1 = next
+    # week only, so collapsing WK2 (week after that) into WK1 = wrong cohort.
+    from inventory_demand_report import WK1_SHIP_TAGS as _W1TS_chk
+    _do_collapse = datetime.now().weekday() == 0 or len(_W1TS_chk) > 1
 
-    for sku, qty in rc_wk2.items():
-        rc_wk1[sku] = rc_wk1.get(sku, 0) + qty
+    # monthly_by_week_month collapse (gated by same rule)
+    if _do_collapse:
+        _collapsed: dict = {}
+        for (week_key, month), counts in monthly_by_week_month.items():
+            new_key = ("WK1", month)
+            bucket = _collapsed.setdefault(new_key, {})
+            for bt, ct in counts.items():
+                bucket[bt] = bucket.get(bt, 0) + ct
+        monthly_by_week_month = _collapsed
+    else:
+        # Drop WK2 entries entirely (Tue+ run = WK1 cohort only)
+        monthly_by_week_month = {
+            k: v for k, v in monthly_by_week_month.items() if k[0] == "WK1"
+        }
+
+    if _do_collapse:
+        for sku, qty in rc_wk2.items():
+            rc_wk1[sku] = rc_wk1.get(sku, 0) + qty
+        for sku, qty in sh_wk2_addon.items():
+            sh_wk1_addon[sku] = sh_wk1_addon.get(sku, 0) + qty
+        for cur, ct in wk2_curations.items():
+            wk1_curations[cur] += ct
+        for cur, ct in wk2_large.items():
+            wk1_large[cur] += ct
+        for cur, ct in wk2_med.items():
+            wk1_med[cur] += ct
     rc_wk2 = {}
-    for sku, qty in sh_wk2_addon.items():
-        sh_wk1_addon[sku] = sh_wk1_addon.get(sku, 0) + qty
     sh_wk2_addon = {}
-    for cur, ct in wk2_curations.items():
-        wk1_curations[cur] += ct
     wk2_curations = defaultdict(int)
-    for cur, ct in wk2_large.items():
-        wk1_large[cur] += ct
     wk2_large = defaultdict(int)
-    for cur, ct in wk2_med.items():
-        wk1_med[cur] += ct
     wk2_med = defaultdict(int)
     for cur, ct in wk2_lge.items():
         wk1_lge[cur] += ct
@@ -759,7 +766,7 @@ def _write_assignments_on_cut_order(ws: Worksheet, data: dict, settings: dict) -
             end_column=col_start + 3,
         )
         c = ws_.cell(row=start_row, column=col_start, value=f"{label} ({w1_count} W1 / {w2_count} W2)")
-        c.font = Font(name="Space Mono", size=10, bold=True, color=OK_FG)
+        c.font = Font(name="Calibri", size=10, bold=True, color=OK_FG)
         c.fill = PatternFill("solid", fgColor=OK_BG)
         for ci in range(col_start + 1, col_start + 4):
             ws_.cell(row=start_row, column=ci).fill = PatternFill("solid", fgColor=OK_BG)
@@ -854,19 +861,19 @@ def _build_raw_materials_tab(wb: openpyxl.Workbook, data: dict, settings: dict) 
         if potential > 200:
             status = "HIGH"
             status_fill = PatternFill("solid", fgColor=OK_BG)
-            status_font = Font(name="Space Mono", size=9, bold=True, color=OK_FG)
+            status_font = Font(name="Calibri", size=9, bold=True, color=OK_FG)
         elif potential >= 50:
             status = "MED"
             status_fill = PatternFill("solid", fgColor=TIGHT_BG)
-            status_font = Font(name="Space Mono", size=9, bold=True, color=TIGHT_FG)
+            status_font = Font(name="Calibri", size=9, bold=True, color=TIGHT_FG)
         elif potential > 0:
             status = "LOW"
             status_fill = PatternFill("solid", fgColor=SHORTAGE_BG)
-            status_font = Font(name="Space Mono", size=9, bold=True, color=SHORTAGE_FG)
+            status_font = Font(name="Calibri", size=9, bold=True, color=SHORTAGE_FG)
         else:
             status = "EMPTY"
             status_fill = PatternFill("solid", fgColor="F1F5F9")
-            status_font = Font(name="Space Mono", size=9, bold=True, color=MUTED)
+            status_font = Font(name="Calibri", size=9, bold=True, color=MUTED)
 
         ws.cell(row=row, column=1, value=name).font = F_NAME
         ws.cell(row=row, column=2, value=sku).font = F_SKU
@@ -877,7 +884,7 @@ def _build_raw_materials_tab(wb: openpyxl.Workbook, data: dict, settings: dict) 
         c_wt.font = F_NUM
         c_wt.alignment = A_RIGHT
         c_pot = ws.cell(row=row, column=5, value=potential)
-        c_pot.font = Font(name="Rajdhani", size=12, bold=True, color=WHEEL_POT)
+        c_pot.font = Font(name="Calibri", size=12, bold=True, color=WHEEL_POT)
         c_pot.alignment = A_RIGHT
         c_st = ws.cell(row=row, column=6, value=status)
         c_st.font = status_font
@@ -923,19 +930,19 @@ def _build_raw_materials_tab(wb: openpyxl.Workbook, data: dict, settings: dict) 
         if potential_packets > 200:
             status = "HIGH"
             status_fill = PatternFill("solid", fgColor=OK_BG)
-            status_font = Font(name="Space Mono", size=9, bold=True, color=OK_FG)
+            status_font = Font(name="Calibri", size=9, bold=True, color=OK_FG)
         elif potential_packets >= 50:
             status = "MED"
             status_fill = PatternFill("solid", fgColor=TIGHT_BG)
-            status_font = Font(name="Space Mono", size=9, bold=True, color=TIGHT_FG)
+            status_font = Font(name="Calibri", size=9, bold=True, color=TIGHT_FG)
         elif potential_packets > 0:
             status = "LOW"
             status_fill = PatternFill("solid", fgColor=SHORTAGE_BG)
-            status_font = Font(name="Space Mono", size=9, bold=True, color=SHORTAGE_FG)
+            status_font = Font(name="Calibri", size=9, bold=True, color=SHORTAGE_FG)
         else:
             status = "EMPTY"
             status_fill = PatternFill("solid", fgColor="F1F5F9")
-            status_font = Font(name="Space Mono", size=9, bold=True, color=MUTED)
+            status_font = Font(name="Calibri", size=9, bold=True, color=MUTED)
 
         ws.cell(row=row, column=1, value=ingredient_name).font = F_NAME
         ws.cell(row=row, column=2, value=target_sku).font = F_SKU
@@ -946,7 +953,7 @@ def _build_raw_materials_tab(wb: openpyxl.Workbook, data: dict, settings: dict) 
         c_ps.font = F_NUM
         c_ps.alignment = A_RIGHT
         c_pp = ws.cell(row=row, column=5, value=potential_packets)
-        c_pp.font = Font(name="Rajdhani", size=12, bold=True, color=WHEEL_POT)
+        c_pp.font = Font(name="Calibri", size=12, bold=True, color=WHEEL_POT)
         c_pp.alignment = A_RIGHT
         c_st = ws.cell(row=row, column=6, value=status)
         c_st.font = status_font
@@ -1007,7 +1014,7 @@ def _build_checklist_tab(wb: openpyxl.Workbook, data: dict, settings: dict) -> N
             c2.font = F_NUM
             c2.alignment = A_RIGHT
             ct = ws.cell(row=row, column=5, value=q1 + q2)
-            ct.font = Font(name="Rajdhani", size=12, bold=True)
+            ct.font = Font(name="Calibri", size=12, bold=True)
             ct.alignment = A_RIGHT
             row += 1
 
@@ -1147,6 +1154,8 @@ def _build_cut_order_tab(
         rc1 = rc_wk1.get(sku, 0)
         sh1 = sh_wk1_addon.get(sku, 0)
         assign1 = _estimate_assign_demand(sku, wk1_curs, wk1_lg, pr_cjam_cfg, cex_ec_cfg)
+        # Demand = Recharge (queued, not yet charged) + Shopify (already charged).
+        # Recharge charges convert to Shopify orders on charge date — no overlap.
         demand1 = rc1 + sh1 + assign1
 
         rc2 = rc_wk2.get(sku, 0)
@@ -1220,7 +1229,7 @@ def _build_cut_order_tab(
 
         # F: spacer
 
-        # G: Demand = RC + SH combined (single column per user spec)
+        # G: Demand = RC (queued) + SH (already-charged) — no overlap by definition
         c_dem = ws_.cell(row=row_num, column=7, value=sr["rc1"] + sr["sh1"])
         c_dem.font = F_NUM
         c_dem.alignment = A_RIGHT
@@ -1306,7 +1315,7 @@ def _build_cut_order_tab(
                 # Sub-category label row
                 r += 1
                 c_cat = ws_.cell(row=r, column=1, value=cat)
-                c_cat.font = Font(name="Space Mono", size=9, bold=True, color=SECTION_ACCENT)
+                c_cat.font = Font(name="Calibri", size=9, bold=True, color=SECTION_ACCENT)
                 r += 1
                 if cat not in cat_start_rows:
                     cat_start_rows[cat] = []
@@ -1321,7 +1330,7 @@ def _build_cut_order_tab(
                 continue
             r += 1
             ws_.cell(row=r, column=1, value=f"{cat} SUBTOTAL").font = Font(
-                name="Space Mono", size=9, bold=True, color=MUTED
+                name="Calibri", size=9, bold=True, color=MUTED
             )
             # SUM formulas for key columns
             row_refs = ",".join(f"C{dr}" for dr in data_rows)
