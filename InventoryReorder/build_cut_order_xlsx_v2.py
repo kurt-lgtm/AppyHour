@@ -519,38 +519,12 @@ def _fetch_all_data(settings: dict) -> dict:
     _add_monthly("WK2", _wk2_month, "CMED", sh_wk2_med.get("CMED", 0))
     _add_monthly("WK2", _wk2_month, "LGE", sh_wk2_lge.get("MONTHLY", 0))
 
-    # WK2 → WK1 collapse: only on Monday runs (when WK1_SHIP_TAGS already
-    # includes both this-week and next-week tags). On Tue+ runs WK1 = next
-    # week only, so collapsing WK2 (week after that) into WK1 = wrong cohort.
-    from inventory_demand_report import WK1_SHIP_TAGS as _W1TS_chk
-    _do_collapse = datetime.now().weekday() == 0 or len(_W1TS_chk) > 1
-
-    # monthly_by_week_month collapse (gated by same rule)
-    if _do_collapse:
-        _collapsed: dict = {}
-        for (week_key, month), counts in monthly_by_week_month.items():
-            new_key = ("WK1", month)
-            bucket = _collapsed.setdefault(new_key, {})
-            for bt, ct in counts.items():
-                bucket[bt] = bucket.get(bt, 0) + ct
-        monthly_by_week_month = _collapsed
-    else:
-        # Drop WK2 entries entirely (Tue+ run = WK1 cohort only)
-        monthly_by_week_month = {
-            k: v for k, v in monthly_by_week_month.items() if k[0] == "WK1"
-        }
-
-    if _do_collapse:
-        for sku, qty in rc_wk2.items():
-            rc_wk1[sku] = rc_wk1.get(sku, 0) + qty
-        for sku, qty in sh_wk2_addon.items():
-            sh_wk1_addon[sku] = sh_wk1_addon.get(sku, 0) + qty
-        for cur, ct in wk2_curations.items():
-            wk1_curations[cur] += ct
-        for cur, ct in wk2_large.items():
-            wk1_large[cur] += ct
-        for cur, ct in wk2_med.items():
-            wk1_med[cur] += ct
+    # WK2 dropped entirely (per user 2026-05-05 — "drop week 2 for now").
+    # WK1 cohort only. If Monday run, both this-Mon and next-Mon ship tags
+    # are already in WK1_SHIP_TAGS, so they're captured by sh_wk1/rc_wk1.
+    monthly_by_week_month = {
+        k: v for k, v in monthly_by_week_month.items() if k[0] == "WK1"
+    }
     rc_wk2 = {}
     sh_wk2_addon = {}
     wk2_curations = defaultdict(int)
