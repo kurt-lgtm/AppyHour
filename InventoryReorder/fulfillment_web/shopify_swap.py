@@ -32,7 +32,7 @@ DIETARY_RESTRICTION_FRAGMENTS = ("NNRS", "CORS", "NCRS")
 
 def _gql(store_url: str, token: str, query: str, variables: dict | None = None) -> dict:
     """Execute a Shopify Admin GraphQL query."""
-    url = f"https://{store_url}.myshopify.com/admin/api/2024-01/graphql.json"
+    url = f"https://{store_url}.myshopify.com/admin/api/2026-04/graphql.json"
     headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
     payload = {"query": query}
     if variables:
@@ -46,7 +46,7 @@ def _gql(store_url: str, token: str, query: str, variables: dict | None = None) 
 
 def _rest_get(store_url: str, token: str, path: str, params: dict | None = None) -> requests.Response:
     """Execute a Shopify Admin REST GET request."""
-    url = f"https://{store_url}.myshopify.com/admin/api/2024-01/{path}"
+    url = f"https://{store_url}.myshopify.com/admin/api/2026-04/{path}"
     headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
     resp = requests.get(url, headers=headers, params=params, timeout=30)
     resp.raise_for_status()

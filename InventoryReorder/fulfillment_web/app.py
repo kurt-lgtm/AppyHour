@@ -4479,7 +4479,7 @@ def swap_ship_tags():
     if not store or not token:
         return jsonify({"error": "Shopify credentials not configured"}), 400
 
-    base = f"https://{store}.myshopify.com/admin/api/2024-01"
+    base = f"https://{store}.myshopify.com/admin/api/2026-04"
     headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
 
     tags = set()
@@ -5077,37 +5077,44 @@ def swap_matrix_upload():
     s = _s()
     store = s.get("shopify_store_url", "")
     token = s.get("shopify_access_token", "")
-    base = f"https://{store}.myshopify.com/admin/api/2024-01"
+    base = f"https://{store}.myshopify.com/admin/api/2026-04"
     headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
 
     orders = []
-    url = f"{base}/orders.json"
-    params = {
-        "status": "open",
-        "fulfillment_status": "unfulfilled",
-        "limit": 250,
-        "fields": "id,name,line_items",
-    }
-    page = 0
-    while url:
-        page += 1
-        resp = req.get(url, headers=headers, params=params if page == 1 else None, timeout=30)
-        resp.raise_for_status()
-        batch = resp.json().get("orders", [])
-        # Filter to orders with this ship tag
-        for o in batch:
-            tags = [t.strip() for t in (o.get("tags") or "").split(",")]
-            if ship_tag in tags:
-                orders.append(o)
-        link = resp.headers.get("Link", "")
-        url = None
-        if 'rel="next"' in link:
-            m = re.search(r'<([^>]+)>;\s*rel="next"', link)
-            if m:
-                url = m.group(1)
-        import time
+    if _s().get("fulfillment_use_graphql_tag_query", False):
+        from shopify_bulk import gql_orders_by_tag, BulkOpError
+        try:
+            orders = gql_orders_by_tag(store, token, [ship_tag], status="open", fulfillment_status="unfulfilled")
+        except BulkOpError as e:
+            return jsonify({"error": f"Shopify GraphQL failed: {e}"}), 400
+    else:
+        url = f"{base}/orders.json"
+        params = {
+            "status": "open",
+            "fulfillment_status": "unfulfilled",
+            "limit": 250,
+            "fields": "id,name,line_items",
+        }
+        page = 0
+        while url:
+            page += 1
+            resp = req.get(url, headers=headers, params=params if page == 1 else None, timeout=30)
+            resp.raise_for_status()
+            batch = resp.json().get("orders", [])
+            # Filter to orders with this ship tag
+            for o in batch:
+                tags = [t.strip() for t in (o.get("tags") or "").split(",")]
+                if ship_tag in tags:
+                    orders.append(o)
+            link = resp.headers.get("Link", "")
+            url = None
+            if 'rel="next"' in link:
+                m = re.search(r'<([^>]+)>;\s*rel="next"', link)
+                if m:
+                    url = m.group(1)
+            import time
 
-        time.sleep(0.1)
+            time.sleep(0.1)
 
     # Build Shopify SKU map per order
     shopify = {}
@@ -5374,28 +5381,20 @@ def swap_tag_skus():
     if not store or not token:
         return jsonify({"error": "Shopify credentials not configured"}), 400
 
-    base = f"https://{store}.myshopify.com/admin/api/2024-01"
+    base = f"https://{store}.myshopify.com/admin/api/2026-04"
     headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
 
     # Fetch unfulfilled orders, filter by tag
     sku_data = defaultdict(lambda: {"qty": 0, "orders": set()})
-    url = f"{base}/orders.json"
-    params = {
-        "status": "open",
-        "fulfillment_status": "unfulfilled",
-        "limit": 250,
-        "fields": "id,name,tags,line_items",
-    }
-    page = 0
     order_count = 0
-    while url:
-        page += 1
-        resp = req.get(url, headers=headers, params=params if page == 1 else None, timeout=30)
-        resp.raise_for_status()
-        for o in resp.json().get("orders", []):
-            tags = [t.strip() for t in (o.get("tags") or "").split(",")]
-            if ship_tag not in tags:
-                continue
+
+    if _s().get("fulfillment_use_graphql_tag_query", False):
+        from shopify_bulk import gql_orders_by_tag, BulkOpError
+        try:
+            tagged_orders = gql_orders_by_tag(store, token, [ship_tag], status="open", fulfillment_status="unfulfilled")
+        except BulkOpError as e:
+            return jsonify({"error": f"Shopify GraphQL failed: {e}"}), 400
+        for o in tagged_orders:
             order_count += 1
             for li in o.get("line_items", []):
                 sku = (li.get("sku") or "").strip()
@@ -5403,15 +5402,39 @@ def swap_tag_skus():
                 if sku and fq > 0:
                     sku_data[sku]["qty"] += fq
                     sku_data[sku]["orders"].add(o["name"])
-        link = resp.headers.get("Link", "")
-        url = None
-        if 'rel="next"' in link:
-            m = re.search(r'<([^>]+)>;\s*rel="next"', link)
-            if m:
-                url = m.group(1)
-        import time
+    else:
+        url = f"{base}/orders.json"
+        params = {
+            "status": "open",
+            "fulfillment_status": "unfulfilled",
+            "limit": 250,
+            "fields": "id,name,tags,line_items",
+        }
+        page = 0
+        while url:
+            page += 1
+            resp = req.get(url, headers=headers, params=params if page == 1 else None, timeout=30)
+            resp.raise_for_status()
+            for o in resp.json().get("orders", []):
+                tags = [t.strip() for t in (o.get("tags") or "").split(",")]
+                if ship_tag not in tags:
+                    continue
+                order_count += 1
+                for li in o.get("line_items", []):
+                    sku = (li.get("sku") or "").strip()
+                    fq = li.get("fulfillable_quantity", li.get("quantity", 0))
+                    if sku and fq > 0:
+                        sku_data[sku]["qty"] += fq
+                        sku_data[sku]["orders"].add(o["name"])
+            link = resp.headers.get("Link", "")
+            url = None
+            if 'rel="next"' in link:
+                m = re.search(r'<([^>]+)>;\s*rel="next"', link)
+                if m:
+                    url = m.group(1)
+            import time
 
-        time.sleep(0.1)
+            time.sleep(0.1)
 
     # Group by prefix
     target_prefixes = ("TR-", "CH-", "AC-", "MT-", "PK-")
@@ -6849,7 +6872,7 @@ def shopify_sync():
     if not store.startswith("http"):
         store = f"https://{store}.myshopify.com"
 
-    api_version = "2024-01"
+    api_version = "2026-04"
     session = req.Session()
     session.headers.update(
         {
@@ -6863,42 +6886,53 @@ def shopify_sync():
         weeks_back = max(1, min(52, int(_s().get("shopify_weeks_back", 8))))
     except (TypeError, ValueError):
         weeks_back = 8
-    cutoff = (datetime.datetime.now() - datetime.timedelta(days=weeks_back * 7)).isoformat()
-    url = f"{store}/admin/api/{api_version}/orders.json"
-    params = {"status": "any", "fulfillment_status": "shipped", "limit": 250, "created_at_min": cutoff}
 
     import time as _time
 
     t0 = _time.time()
     all_orders = []
     page_count = 0
-    while url:
-        # Retry with backoff on 429 rate limit
-        for attempt in range(3):
-            resp = session.get(url, params=params, timeout=30)
-            if resp.status_code == 429:
-                retry_after = float(resp.headers.get("Retry-After", 2))
-                _time.sleep(retry_after)
-                continue
-            break
-        if resp.status_code != 200:
-            return jsonify({"error": f"Shopify API error {resp.status_code}: {resp.text[:200]}"}), 400
-        data = resp.json()
-        orders = data.get("orders", [])
-        all_orders.extend(orders)
-        page_count += 1
 
-        # Link header pagination (standard for Shopify REST API)
-        url = None
-        params = None
-        link = resp.headers.get("Link", "")
-        if 'rel="next"' in link:
-            import re
+    use_bulk = bool(_s().get("fulfillment_use_graphql_bulk", False))
+    if use_bulk:
+        try:
+            from shopify_bulk import fetch_fulfilled_orders_bulk, BulkOpError
 
-            m = re.search(r'<([^>]+)>;\s*rel="next"', link)
-            if m:
-                url = m.group(1)
-                params = None
+            all_orders = fetch_fulfilled_orders_bulk(store, token, weeks_back=weeks_back)
+            page_count = 1  # single bulk op
+        except BulkOpError as e:
+            return jsonify({"error": f"Shopify bulk op failed: {e}"}), 400
+    else:
+        cutoff = (datetime.datetime.now() - datetime.timedelta(days=weeks_back * 7)).isoformat()
+        url = f"{store}/admin/api/{api_version}/orders.json"
+        params = {"status": "any", "fulfillment_status": "shipped", "limit": 250, "created_at_min": cutoff}
+        while url:
+            # Retry with backoff on 429 rate limit
+            for attempt in range(3):
+                resp = session.get(url, params=params, timeout=30)
+                if resp.status_code == 429:
+                    retry_after = float(resp.headers.get("Retry-After", 2))
+                    _time.sleep(retry_after)
+                    continue
+                break
+            if resp.status_code != 200:
+                return jsonify({"error": f"Shopify API error {resp.status_code}: {resp.text[:200]}"}), 400
+            data = resp.json()
+            orders = data.get("orders", [])
+            all_orders.extend(orders)
+            page_count += 1
+
+            # Link header pagination (standard for Shopify REST API)
+            url = None
+            params = None
+            link = resp.headers.get("Link", "")
+            if 'rel="next"' in link:
+                import re
+
+                m = re.search(r'<([^>]+)>;\s*rel="next"', link)
+                if m:
+                    url = m.group(1)
+                    params = None
 
     # Pull unfulfilled orders filtered by _SHIP_ tag for current + next cycle.
     # NOTE: created_at_min was too restrictive (14 days) — subscription orders
@@ -6910,38 +6944,48 @@ def shopify_sync():
         f"_SHIP_{next_ship_mon.isoformat()}",
     }
 
-    unfulfilled_url = f"{store}/admin/api/{api_version}/orders.json"
-    # No created_at_min — subscription orders are created months before ship date.
-    # The unfulfilled set is naturally bounded (only open orders).
-    uf_params = {"status": "open", "fulfillment_status": "unfulfilled", "limit": 250}
     unfulfilled_orders = []
-    while unfulfilled_url:
-        for attempt in range(3):
-            resp = session.get(unfulfilled_url, params=uf_params, timeout=30)
-            if resp.status_code == 429:
-                retry_after = float(resp.headers.get("Retry-After", 2))
-                _time.sleep(retry_after)
-                continue
-            break
-        if resp.status_code == 200:
-            data = resp.json()
-            uf_orders = data.get("orders", [])
-            # Filter to orders with a matching _SHIP_ tag
-            for o in uf_orders:
-                order_tags = o.get("tags", "") or ""
-                if any(st in order_tags for st in target_ship_tags):
-                    unfulfilled_orders.append(o)
-            unfulfilled_url = None
-            uf_params = None
-            link = resp.headers.get("Link", "")
-            if 'rel="next"' in link:
-                import re
+    if _s().get("fulfillment_use_graphql_tag_query", False):
+        from shopify_bulk import gql_orders_by_tag, BulkOpError
+        try:
+            unfulfilled_orders = gql_orders_by_tag(
+                store, token, list(target_ship_tags),
+                status="open", fulfillment_status="unfulfilled",
+            )
+        except BulkOpError as e:
+            return jsonify({"error": f"Shopify GraphQL failed: {e}"}), 400
+    else:
+        unfulfilled_url = f"{store}/admin/api/{api_version}/orders.json"
+        # No created_at_min — subscription orders are created months before ship date.
+        # The unfulfilled set is naturally bounded (only open orders).
+        uf_params = {"status": "open", "fulfillment_status": "unfulfilled", "limit": 250}
+        while unfulfilled_url:
+            for attempt in range(3):
+                resp = session.get(unfulfilled_url, params=uf_params, timeout=30)
+                if resp.status_code == 429:
+                    retry_after = float(resp.headers.get("Retry-After", 2))
+                    _time.sleep(retry_after)
+                    continue
+                break
+            if resp.status_code == 200:
+                data = resp.json()
+                uf_orders = data.get("orders", [])
+                # Filter to orders with a matching _SHIP_ tag
+                for o in uf_orders:
+                    order_tags = o.get("tags", "") or ""
+                    if any(st in order_tags for st in target_ship_tags):
+                        unfulfilled_orders.append(o)
+                unfulfilled_url = None
+                uf_params = None
+                link = resp.headers.get("Link", "")
+                if 'rel="next"' in link:
+                    import re
 
-                m = re.search(r'<([^>]+)>;\s*rel="next"', link)
-                if m:
-                    unfulfilled_url = m.group(1)
-        else:
-            break
+                    m = re.search(r'<([^>]+)>;\s*rel="next"', link)
+                    if m:
+                        unfulfilled_url = m.group(1)
+            else:
+                break
 
     # Bucket fulfilled orders by week (Saturday boundaries)
     today = datetime.date.today()
