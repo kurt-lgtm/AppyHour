@@ -420,7 +420,7 @@ def fetch_shopify_orders(settings, out_specialty=None):
     # Fetch all open/unfulfilled orders (no date cutoff — ship tag is the filter)
     import re
 
-    url = f"{store}/admin/api/2024-01/orders.json"
+    url = f"{store}/admin/api/2026-04/orders.json"
     params = {"status": "open", "fulfillment_status": "unfulfilled", "limit": 250}
 
     all_orders = []

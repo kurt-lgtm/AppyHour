@@ -372,7 +372,7 @@ def _fetch_all_data(settings: dict) -> dict:
                 "created_at_min": _cutoff,
                 "fields": "id,tags,line_items",
             }
-        _fo_url = f"{store_url}/admin/api/2024-01/orders.json"
+        _fo_url = f"{store_url}/admin/api/2026-04/orders.json"
         _fo_orders: list[dict] = []
         _fo_page_url: str | None = _fo_url
         while _fo_page_url:

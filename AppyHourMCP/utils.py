@@ -130,7 +130,7 @@ def shopify_paginate(
     """Paginate a Shopify REST endpoint following Link rel=next headers.
 
     Args:
-        url: Full Shopify REST URL (e.g. https://store.myshopify.com/admin/api/2024-01/orders.json).
+        url: Full Shopify REST URL (e.g. https://store.myshopify.com/admin/api/2026-04/orders.json).
         headers: Auth headers dict.
         params: Query params (only sent on first page; Shopify cursor URLs include them).
         key: JSON key to extract results from (e.g. "orders", "products"). Use "" for auto-detect (first key).

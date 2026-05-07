@@ -29,7 +29,7 @@ with open(SETTINGS) as f:
 
 STORE = settings["shopify_store_url"]
 TOKEN = settings["shopify_access_token"]
-REST = f"https://{STORE}.myshopify.com/admin/api/2024-01"
+REST = f"https://{STORE}.myshopify.com/admin/api/2026-04"
 HEADERS = {"X-Shopify-Access-Token": TOKEN, "Content-Type": "application/json"}
 
 HOT_STATES = {"FL", "TX", "AZ", "GA", "SC", "NC", "AL", "MS", "LA", "CA", "NV", "NM", "OK", "AR"}

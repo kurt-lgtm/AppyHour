@@ -186,7 +186,7 @@ def register(mcp: object) -> None:
             if report == ReportType.CHRONIC_ZIPS:
                 recommend = _get_recommend()
                 result = recommend.find_chronic_3day_zips(
-                    shipments, min_volume=params.min_volume, pct_threshold=params.pct_threshold
+                    shipments, min_volume=params.min_volume, min_pct_3plus=params.pct_threshold
                 )
                 return to_json({"report_type": "chronic_zips", "chronic_3day_zips": result, "count": len(result)})
 
@@ -241,8 +241,8 @@ def register(mcp: object) -> None:
             if not store or not token:
                 return to_json({"error": "Shopify credentials not configured"})
 
-            gql_url = f"https://{store}.myshopify.com/admin/api/2024-01/graphql.json"
-            rest_base = f"https://{store}.myshopify.com/admin/api/2024-01"
+            gql_url = f"https://{store}.myshopify.com/admin/api/2026-04/graphql.json"
+            rest_base = f"https://{store}.myshopify.com/admin/api/2026-04"
             headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
 
             # Load zip overrides from GelPack settings

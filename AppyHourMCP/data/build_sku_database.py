@@ -44,7 +44,7 @@ def get_shopify_auth() -> tuple[str, dict[str, str]]:
     token = settings.get("shopify_access_token", "").strip()
     if not store or not token:
         raise RuntimeError("Shopify credentials not configured in InventoryReorder settings.")
-    base = f"https://{store}.myshopify.com/admin/api/2024-01"
+    base = f"https://{store}.myshopify.com/admin/api/2026-04"
     headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
     return base, headers
 
