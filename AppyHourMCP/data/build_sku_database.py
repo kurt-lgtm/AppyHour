@@ -37,16 +37,13 @@ def load_inventory_settings() -> dict:
     )
 
 
-def get_shopify_auth() -> tuple[str, dict[str, str]]:
-    """Get Shopify REST auth from InventoryReorder settings."""
-    settings = load_inventory_settings()
-    store = settings.get("shopify_store_url", "").strip()
-    token = settings.get("shopify_access_token", "").strip()
-    if not store or not token:
-        raise RuntimeError("Shopify credentials not configured in InventoryReorder settings.")
-    base = f"https://{store}.myshopify.com/admin/api/2026-04"
-    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
-    return base, headers
+# Re-exported from appyhour.credentials (single source of truth).
+import sys as _sys
+from pathlib import Path as _Path
+_REPO_ROOT = _Path(__file__).resolve().parent.parent.parent
+if str(_REPO_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_REPO_ROOT))
+from appyhour.credentials import get_shopify_auth  # noqa: E402,F401
 
 
 # ---------------------------------------------------------------------------

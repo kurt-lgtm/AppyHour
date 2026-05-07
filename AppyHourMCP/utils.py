@@ -170,21 +170,14 @@ def shopify_paginate(
     return all_items
 
 
-def get_shopify_auth() -> tuple:
-    """Get Shopify REST/GraphQL auth from InventoryReorder settings.
-
-    Returns (base_url, headers) tuple.
-    """
-    settings = get_inventory_settings()
-    store = settings.get("shopify_store_url", "").strip()
-    token = settings.get("shopify_access_token", "").strip()
-    if not store or not token:
-        raise RuntimeError(
-            "Shopify credentials not configured in InventoryReorder settings."
-        )
-    base = f"https://{store}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}"
-    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
-    return base, headers
+# Re-exported from appyhour.credentials (single source of truth).
+# Env vars > InventoryReorder settings.
+import sys as _sys
+from pathlib import Path as _Path
+_REPO_ROOT = _Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_REPO_ROOT))
+from appyhour.credentials import get_shopify_auth  # noqa: E402,F401
 
 def active_line_items(order: dict) -> list:
     """Return line items with net quantity > 0, excluding refunded/removed items.
