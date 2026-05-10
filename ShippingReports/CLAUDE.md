@@ -1,5 +1,25 @@
 # ShippingReports
 
+Analytics pipeline for subscription box shipping. Ingests carrier invoices (OnTrac, UPS, FedEx, Veho), Gorgias issues, Parcel Panel tracking → routing recommendations, cost analysis, performance reports.
+
+## Task Routing
+
+| Task | Read | Skip | Notes |
+|------|------|------|-------|
+| Weekly report | `reports/weekly.py`, `~/.knowledge/ops/Crossdock*` | parsers | `python -m reports.weekly` |
+| Routing recommendation | `reports/recommend.py` → outputs `routing_config.json` | parsers | Consumed by GelPackCalculator |
+| Ingest new invoice | `ingest.py`, `parsers/<carrier>` | reports | OnTrac CSV / UPS CSV / FedEx XLSX / Veho via sync_all_carriers |
+| Veho-specific | `~/.knowledge/shipping_db_path.md`, sync_all_carriers patched 2026-05-06 | non-Veho | shipments.db = canonical (with Veho); Kori-shipping.db has no Veho |
+| Cohort attribution | `cohort_attribution.py`, `~/.knowledge/cohort_attribution_rules.md` | rest | Veho=tender+Mon; FedEx/OT/UPS=pickup→Mon; acct -113/-911 by bill-to |
+| Failure analysis | `kori_snapshots/kori_snapshot_orders` (added 2026-05-07) | rest | appyhour-shipping MCP data source |
+
+## Critical
+
+- **HQ Woburn decommissioned** Feb 2026 — pre-Feb HQ_IGNORE = real customers; post-Feb = anomaly. `is_internal != HQ_IGNORE`.
+- **TNT calc HARD RULE** — final-mile pickup→delivery only; never carrier API `transit_time`. Veho: PP `pickup_date`, not `Tendered`.
+- **FedEx contract 2389560254** earn-floor $390k = 7%; 160/day min currently 91/57% = BREACH RISK. No Express service.
+- **2-day mandatory** all shipments. Tue = Dallas-only hub. Zone5+ from Dallas needs 2DayExpress.
+
 ## Overview
 Analytics pipeline for subscription box shipping optimization. Ingests carrier invoices (OnTrac, UPS, FedEx), customer issue data (Gorgias), and tracking events (Parcel Panel) to generate routing recommendations, cost analysis, and performance reports.
 
