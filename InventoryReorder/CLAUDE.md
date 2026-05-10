@@ -1,4 +1,27 @@
-# Inventory Reorder System — Development Guide
+# InventoryReorder
+
+Demand forecasting + cut order generation + fulfillment web dashboard. Single-file tkinter app + Flask/pywebview side panel.
+
+## Task Routing
+
+| Task | Read | Skip | Notes |
+|------|------|------|-------|
+| Generate cut order | `build_cut_order_xlsx_v2.py`, `~/.knowledge/ops/Cut Order*`, `cut_order_rules.md` AAAK | rest | Trigger="generate cut order" → run v2 no questions, Calibri font, hidden source cols |
+| Cut order demand model | `cut_order_generator.py` (resolve_curation_from_box_sku), `cut_order_demand_model.md` AAAK | gel/shipping | Demand = RC-queued + SH-orders, NO overlap by definition |
+| AHB monthly split | `feedback_ahb_monthly_split.md` AAAK | rest | If ship-week crosses month → ASK MED/LGE/CMED items per month, charge-month not ship-date |
+| Day-of-week ship tags | `feedback_cut_order_day_of_week.md` AAAK | rest | Mon=2 ship-tags WK1; Tue+=only nextWk |
+| Demand audit | `_outputs/demand_audit_<WK1_END>.json` (last 8) | rest | Per-SKU RC/SH/Aliased breakdown |
+| Fulfillment web | `fulfillment_web/` (Flask + Wedge mascot SVG) | tkinter app | Shopify READ-only, indexed in codebase-context MCP |
+| LTF / weeks-of-cover viz | `feedback_ltf_weeks_of_cover_viz.md` AAAK | rest | Want per-week cell coloring on BY-INGREDIENT table (not just bottom ALERTS) |
+| XLSX recalc | `feedback_xlsx_recalc_pattern.md` AAAK | rest | win32com Excel COM (Windows); NEVER recalc.py (Linux-only); no emoji prints |
+
+## Critical
+
+- **CH-MAFT never assigned** (ASSIGNMENT_EXCLUDE)
+- **PR-CJAM-GEN only** — curation-specific variants made by Shopify post-charge
+- **PAR=30** for all items in v2 cut order
+- **Avail = corrected_inventory_path** — update BEFORE running cut order
+- **Calibri everywhere** in `build_cut_order_xlsx_v2.py` output
 
 ## Architecture
 
