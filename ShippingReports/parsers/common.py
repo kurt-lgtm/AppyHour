@@ -58,7 +58,15 @@ def parse_date_flexible(val) -> Optional[date]:
     s = str(val).strip()
     if not s:
         return None
-    for fmt in ('%Y%m%d', '%m/%d/%Y', '%m/%d/%Y %H:%M', '%Y-%m-%d'):
+    for fmt in (
+        '%Y%m%d',
+        '%m/%d/%Y',
+        '%m/%d/%Y %H:%M',
+        '%Y-%m-%d',
+        '%B %d, %Y, %I:%M %p',  # "April 10, 2026, 8:01 PM" (Veho fixed-format invoices)
+        '%B %d, %Y',             # "April 10, 2026"
+        '%b %d, %Y',             # "Apr 10, 2026"
+    ):
         try:
             return datetime.strptime(s, fmt).date()
         except ValueError:
