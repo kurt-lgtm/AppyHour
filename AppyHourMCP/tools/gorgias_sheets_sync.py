@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -18,7 +19,142 @@ import requests
 from utils import OPS_SHEET_ID
 from tools._gorgias_internal import get_auth, _load_settings
 
+
+# ── Universal-DB tee: mirror Gorgias rows into shipping.db feedback ─────
+def _tee_to_shipping_db(rows: list[list[str]]) -> int:
+    """Mirror new Gorgias rows into the canonical shipping.db `feedback` table.
+
+    Universal-DB principle: every row that goes to Sheets ALSO writes to
+    the SQLite source of truth so Kori's postmortem/analytics see fresh
+    data without depending on a Sheets round-trip.
+
+    Row layout (matches sync_gorgias_to_sheet output):
+      [date, contact_reason, order_num, gorgias_link, carrier,
+       state, fc_tag, issue_type, resolution, comment]
+
+    Idempotency: additive UNIQUE index on (order_number, issue_type,
+    date_reported, gorgias_link) — INSERT OR IGNORE skips dupes.
+
+    Fails silently with a log warning — Sheets is primary, SQLite tee
+    is supplementary.
+    """
+    if not rows:
+        return 0
+    try:
+        import sqlite3
+        import sys as _sys
+        _AH = r"C:/Users/Work/Claude Projects/AppyHour"
+        if _AH not in _sys.path:
+            _sys.path.insert(0, _AH)
+        from appyhour_lib.paths import db_path
+        con = sqlite3.connect(str(db_path()), timeout=10)
+        try:
+            # Additive: extend schema if needed. The feedback table predates
+            # the tee — add gorgias_link col + unique idx if missing.
+            cols = {r[1] for r in con.execute("PRAGMA table_info(feedback)").fetchall()}
+            if "gorgias_link" not in cols:
+                con.execute("ALTER TABLE feedback ADD COLUMN gorgias_link TEXT")
+            con.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_dedup "
+                "ON feedback(order_number, issue_type, date_reported, gorgias_link)"
+            )
+            now = datetime.utcnow().isoformat(timespec="seconds")
+            written = 0
+            for r in rows:
+                # Guard against short rows (defensive)
+                while len(r) < 10:
+                    r = r + [""]
+                date_str, contact_reason, order_num, link, carrier, state, fc_tag, issue_type, resolution, comment = r[:10]
+                cur = con.execute(
+                    """
+                    INSERT OR IGNORE INTO feedback(
+                      order_number, issue_type, date_reported, notes,
+                      carrier, state, resolution, fulfillment_center,
+                      synced_at, gorgias_link
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        (order_num or "").strip() or None,
+                        issue_type or None,
+                        date_str or None,
+                        (contact_reason or comment or None),
+                        carrier or None,
+                        state or None,
+                        resolution or None,
+                        fc_tag or None,
+                        now,
+                        link or None,
+                    ),
+                )
+                if cur.rowcount:
+                    written += 1
+            con.commit()
+            return written
+        finally:
+            con.close()
+    except Exception as e:
+        logger.warning("SQLite feedback tee failed: %s", e)
+        return 0
+
 logger = logging.getLogger(__name__)
+
+
+# ── Rate-limit-aware Gorgias GET helper ───────────────────────────────
+# Gorgias caps at ~2 req/s per token. Retries on 429 + 5xx with
+# exponential backoff, honors Retry-After header, and paces calls to
+# stay under the bucket.
+_GORGIAS_MIN_INTERVAL = 1.2  # seconds between calls (~0.83 req/s, conservative for cursor paging)
+_gorgias_last_call: list[float] = [0.0]
+
+
+def _gorgias_get(
+    url: str,
+    *,
+    auth: tuple[str, str],
+    params: dict | None = None,
+    timeout: int = 30,
+    max_retries: int = 10,
+) -> requests.Response:
+    """GET a Gorgias endpoint with pacing + 429/5xx retry."""
+    # Global pacing — ensure at least _GORGIAS_MIN_INTERVAL between calls
+    gap = time.monotonic() - _gorgias_last_call[0]
+    if gap < _GORGIAS_MIN_INTERVAL:
+        time.sleep(_GORGIAS_MIN_INTERVAL - gap)
+
+    delay = 2.0
+    for attempt in range(1, max_retries + 1):
+        _gorgias_last_call[0] = time.monotonic()
+        try:
+            resp = requests.get(url, auth=auth, params=params, timeout=timeout)
+        except (requests.exceptions.ConnectionError, requests.exceptions.SSLError, requests.exceptions.Timeout) as e:
+            if attempt == max_retries:
+                raise
+            logger.warning(
+                "Gorgias connection error on %s (attempt %d/%d): %s — retry in %.1fs",
+                url.rsplit("/", 1)[-1], attempt, max_retries, type(e).__name__, delay,
+            )
+            time.sleep(delay)
+            delay = min(delay * 2, 120.0)
+            continue
+        if resp.status_code == 429:
+            retry_after = resp.headers.get("Retry-After")
+            sleep_for = float(retry_after) if retry_after else delay
+            logger.warning(
+                "Gorgias 429 on %s (attempt %d/%d) — sleeping %.1fs",
+                url.rsplit("/", 1)[-1], attempt, max_retries, sleep_for,
+            )
+            if attempt == max_retries:
+                resp.raise_for_status()
+            time.sleep(sleep_for)
+            delay = min(delay * 2, 120.0)
+            continue
+        if 500 <= resp.status_code < 600 and attempt < max_retries:
+            logger.warning("Gorgias %d on %s — retry in %.1fs", resp.status_code, url, delay)
+            time.sleep(delay)
+            delay = min(delay * 2, 120.0)
+            continue
+        return resp
+    return resp  # pragma: no cover — loop always returns/raises
 
 # Target Google Sheet
 SPREADSHEET_ID = OPS_SHEET_ID
@@ -75,12 +211,41 @@ TAG_ISSUE_MAP: dict[str, str] = {
     "reship - wrong item": "Order::Wrong item",
 }
 
-# Gate tags — at least one must be present to trigger inference
+# Gate tags — at least one must be present to trigger inference.
+# Includes meta-tags (reship/order issue/shipping issue/not-received) plus
+# issue-specific tags so a ticket tagged only "Arrived Warm" (without a
+# meta-tag) still passes. Prevents the common CS miss where staff apply
+# the specific tag but forget the umbrella tag.
 OPERATIONAL_GATE_TAGS = frozenset({
+    # Meta-tags
     "reship",
     "order issue",
     "shipping issue",
     "not-received",
+    # Issue-specific tags (independent gates)
+    "arrived warm",
+    "warm delivery",
+    "melted",
+    "melted gel",
+    "delayed",
+    "delayed in transit",
+    "misdelivered",
+    "misdelivery",
+    "lost",
+    "lost in transit",
+    "damaged",
+    "damaged in transit",
+    "gel pack leaked",
+    "gel pack burst",
+    "missing item",
+    "missing items",
+    "missing cheese",
+    "missing meat",
+    "missing jam",
+    "wrong item",
+    "wrong order",
+    "substitute complaint",
+    "substitution complaint",
 })
 
 # Subject/message keyword patterns (checked when tags aren't specific enough)
@@ -192,11 +357,10 @@ def _get_first_customer_message_date(ticket: dict, auth: tuple[str, str] | None 
     customer_email = (ticket.get("customer", {}).get("email", "") or "").lower()
     if auth and base_url:
         try:
-            resp = requests.get(
+            resp = _gorgias_get(
                 f"{base_url}/tickets/{ticket['id']}/messages",
                 auth=auth,
                 params={"limit": 10, "order_by": "created_datetime:asc"},
-                timeout=30,
             )
             if resp.status_code == 200:
                 for m in resp.json().get("data", []):
@@ -230,6 +394,8 @@ def _extract_order_from_text(text: str) -> str:
     Only matches Shopify-style order numbers (#NNNNN or #NNNNNN).
     Avoids false positives from phone numbers, zip codes, etc.
     """
+    if not text:
+        return ""
     # Look for explicit order references first
     match = re.search(r"[Oo]rder\s*#?\s*(\d{4,6})\b", text)
     if match:
@@ -239,6 +405,34 @@ def _extract_order_from_text(text: str) -> str:
     if match:
         return f"#{match.group(1)}"
     return ""
+
+
+def _resolve_original_order(order_num: str) -> str:
+    """If order_num is a reship, return the customer's original damaged order.
+
+    The sheet must track the ORIGINAL order for carrier attribution —
+    writing the reship number misattributes the failure to the replacement
+    carrier instead of the one that actually caused the incident.
+
+    Returns order_num unchanged if it's not a reship or if the original
+    can't be located. Looks up Shopify by name, checks for "reship" tag,
+    then fetches the customer's most recent non-reship fulfilled order.
+    """
+    if not order_num:
+        return order_num
+    shopify = _shopify_order_by_name(order_num)
+    if not shopify:
+        return order_num
+    tags = (shopify.get("tags", "") or "").lower()
+    if "reship" not in tags:
+        return order_num
+    email = shopify.get("email", "") or (shopify.get("customer") or {}).get("email", "")
+    if not email:
+        return order_num
+    original = _shopify_order_by_email(email)
+    if original and original.get("name"):
+        return original["name"]
+    return order_num
 
 
 def _extract_order_number(ticket: dict, gorgias_auth: tuple[str, str] | None = None, gorgias_base: str | None = None) -> str:
@@ -257,11 +451,10 @@ def _extract_order_number(ticket: dict, gorgias_auth: tuple[str, str] | None = N
     # 2. Message bodies (requires API call)
     if gorgias_auth and gorgias_base:
         try:
-            resp = requests.get(
+            resp = _gorgias_get(
                 f"{gorgias_base}/tickets/{ticket['id']}/messages",
                 auth=gorgias_auth,
                 params={"limit": 5},
-                timeout=30,
             )
             if resp.status_code == 200:
                 for m in resp.json().get("data", []):
@@ -430,11 +623,14 @@ US_STATES = [
 ]
 
 
-def sync_gorgias_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict[str, object]:
+def sync_gorgias_to_sheet(days_back: int = 14, dry_run: bool = False) -> dict[str, object]:
     """Pull shipping/fulfillment tickets from Gorgias and append to Google Sheet.
 
     Args:
-        days_back: How many days back to pull tickets (default 7).
+        days_back: How many days back to pull tickets (default 14).
+            Captures late-arriving complaints: ~90% of issues land by T+5,
+            99% by T+13. 14-day lookback covers the long tail without
+            sluggish performance.
         dry_run: If True, return rows without writing to sheet.
 
     Returns dict with summary and rows.
@@ -464,7 +660,7 @@ def sync_gorgias_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict[str
     skipped_tag = 0
     done = False
 
-    for _ in range(40):  # up to 2000 tickets
+    for _ in range(400):  # up to 20000 tickets — pagination stops at date cutoff
         params = {
             "limit": 50,
             "order_by": "created_datetime:desc",
@@ -472,7 +668,7 @@ def sync_gorgias_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict[str
         if cursor:
             params["cursor"] = cursor
 
-        resp = requests.get(f"{base_url}/tickets", auth=auth, params=params, timeout=30)
+        resp = _gorgias_get(f"{base_url}/tickets", auth=auth, params=params)
         resp.raise_for_status()
         data = resp.json()
         items = data.get("data", [])
@@ -518,6 +714,14 @@ def sync_gorgias_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict[str
 
             # Extract order number (subject → messages → Shopify)
             order_num = _extract_order_number(t, gorgias_auth=auth, gorgias_base=base_url)
+
+            # If the extracted order is a reship, swap to the original
+            # damaged order. Carrier attribution must anchor on the order
+            # that actually failed, not its replacement.
+            if order_num:
+                original = _resolve_original_order(order_num)
+                if original and original != order_num:
+                    order_num = original
 
             # Skip duplicates (by Gorgias link — unique per ticket)
             # Order numbers are NOT unique: same order can have multiple tickets
@@ -610,6 +814,10 @@ def sync_gorgias_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict[str
                 f"API reported {updated_rows}. Range: {updated_range}"
             )
 
+    # Universal-DB tee: mirror to shipping.db.feedback so Kori postmortem
+    # sees fresh data without a Sheets round-trip.
+    tee_written = _tee_to_shipping_db(new_rows) if new_rows else 0
+
     return {
         "checked": checked,
         "new_rows": len(new_rows),
@@ -618,6 +826,7 @@ def sync_gorgias_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict[str
         "dry_run": dry_run,
         "rows": new_rows,
         "append_range": append_result.get("updates", {}).get("updatedRange", "") if append_result else None,
+        "sqlite_tee_written": tee_written,
     }
 
 
@@ -643,17 +852,16 @@ def _search_gorgias_by_order(
     # Strategy 1: Search by customer email (most reliable)
     if customer_email:
         try:
-            resp = requests.get(
+            resp = _gorgias_get(
                 f"{base_url}/customers",
                 auth=auth,
                 params={"email": customer_email, "limit": 1},
-                timeout=30,
             )
             if resp.status_code == 200:
                 customers = resp.json().get("data", [])
                 if customers:
                     cust_id = customers[0]["id"]
-                    resp2 = requests.get(
+                    resp2 = _gorgias_get(
                         f"{base_url}/tickets",
                         auth=auth,
                         params={
@@ -661,7 +869,6 @@ def _search_gorgias_by_order(
                             "limit": 5,
                             "order_by": "created_datetime:desc",
                         },
-                        timeout=30,
                     )
                     if resp2.status_code == 200:
                         tickets = resp2.json().get("data", [])
@@ -680,7 +887,7 @@ def _search_gorgias_by_order(
     # Strategy 2: Text search by order number
     if search_term:
         try:
-            resp = requests.get(
+            resp = _gorgias_get(
                 f"{base_url}/tickets",
                 auth=auth,
                 params={
@@ -688,7 +895,6 @@ def _search_gorgias_by_order(
                     "limit": 10,
                     "order_by": "created_datetime:desc",
                 },
-                timeout=30,
             )
             if resp.status_code == 200:
                 for t in resp.json().get("data", []):
@@ -954,10 +1160,9 @@ def enrich_incomplete_rows(dry_run: bool = False) -> dict[str, object]:
             tid_match = re.search(r"/(\d+)(?:[?#]|\s*$)", gorgias_link.strip())
             if tid_match:
                 try:
-                    resp = requests.get(
+                    resp = _gorgias_get(
                         f"{base_url}/tickets/{tid_match.group(1)}",
                         auth=auth,
-                        timeout=30,
                     )
                     if resp.status_code == 200:
                         ticket = resp.json()
@@ -1110,11 +1315,10 @@ def _fetch_first_customer_message_body(ticket: dict, auth: tuple[str, str], base
     or empty string on failure.
     """
     try:
-        resp = requests.get(
+        resp = _gorgias_get(
             f"{base_url}/tickets/{ticket['id']}/messages",
             auth=auth,
             params={"limit": 5, "order_by": "created_datetime:asc"},
-            timeout=30,
         )
         if resp.status_code == 200:
             for m in resp.json().get("data", []):
@@ -1241,13 +1445,13 @@ def _extract_product_from_concern(concern: str) -> str:
     return ""
 
 
-def sync_food_safety_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict[str, object]:
+def sync_food_safety_to_sheet(days_back: int = 14, dry_run: bool = False) -> dict[str, object]:
     """Pull food safety tickets from Gorgias and append to UPDATE_Food Safety tab.
 
     Filters on Order::Spoiled Item and Order::Quality Complaint issue types.
 
     Args:
-        days_back: How many days back to pull tickets (default 7).
+        days_back: How many days back to pull tickets (default 14).
         dry_run: If True, return rows without writing to sheet.
 
     Returns dict with summary and rows.
@@ -1299,7 +1503,7 @@ def sync_food_safety_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict
         if cursor:
             params["cursor"] = cursor
 
-        resp = requests.get(f"{base_url}/tickets", auth=auth, params=params, timeout=30)
+        resp = _gorgias_get(f"{base_url}/tickets", auth=auth, params=params)
         resp.raise_for_status()
         data = resp.json()
         items = data.get("data", [])
@@ -1327,6 +1531,10 @@ def sync_food_safety_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict
 
             # Extract order number
             order_num = _extract_order_number(t, gorgias_auth=auth, gorgias_base=base_url)
+            if order_num:
+                original = _resolve_original_order(order_num)
+                if original and original != order_num:
+                    order_num = original
 
             # Skip duplicates
             gorgias_link = _extract_gorgias_link(t)
@@ -1433,6 +1641,9 @@ def sync_food_safety_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict
                 f"API reported {updated_rows}. Range: {updated_range}"
             )
 
+    # Universal-DB tee: mirror to shipping.db.feedback (same as sister fn above).
+    tee_written = _tee_to_shipping_db(new_rows) if new_rows else 0
+
     return {
         "checked": checked,
         "new_rows": len(new_rows),
@@ -1441,58 +1652,35 @@ def sync_food_safety_to_sheet(days_back: int = 7, dry_run: bool = False) -> dict
         "dry_run": dry_run,
         "rows": new_rows,
         "append_range": append_result.get("updates", {}).get("updatedRange", "") if append_result else None,
+        "sqlite_tee_written": tee_written,
     }
 
 
 def register(mcp: object) -> None:
-    """Register Gorgias-to-Sheets sync tools on the MCP server."""
+    """Register Gorgias-to-Sheets sync tools on the MCP server.
 
-    @mcp.tool()
-    def gorgias_sync_operational_issues(
-        days_back: int = 7,
-        dry_run: bool = False,
-    ) -> str:
-        """Sync shipping/fulfillment tickets from Gorgias to the Google Sheet.
-
-        Pulls tickets from the last N days, filters to valid shipping/order
-        issue types, deduplicates against existing rows, and appends new ones
-        to the UPDATE_Operational Issues tab.
-
-        Args:
-            days_back: How many days back to pull (default 7).
-            dry_run: If True, preview rows without writing (default False).
-
-        Returns JSON summary with counts and new rows.
-        """
-        try:
-            result = sync_gorgias_to_sheet(days_back=days_back, dry_run=dry_run)
-            # Truncate rows in output for readability
-            summary = {
-                "checked": result["checked"],
-                "new_rows_appended": result["new_rows"],
-                "skipped_duplicate": result["skipped_duplicate"],
-                "skipped_invalid_tag": result["skipped_invalid_tag"],
-                "dry_run": result["dry_run"],
-                "sample_rows": result["rows"][:10],
-            }
-            return json.dumps(summary, indent=2)
-        except Exception as e:
-            return json.dumps({"error": str(e)})
+    Public MCP surface is intentionally narrow: `update_operational_issues`
+    is the single entry point for operators (sync + enrich in one pass).
+    `gorgias_sync_operational_issues` and `enrich_operational_issues` are
+    kept as Python-callable helpers but no longer registered as MCP tools.
+    """
 
     @mcp.tool()
     def update_operational_issues(
-        days_back: int = 7,
+        days_back: int = 14,
         dry_run: bool = False,
     ) -> str:
         """One-command update: sync new Gorgias tickets + enrich all incomplete rows.
 
-        Pulls tickets from the last N days, appends new ones to the sheet,
-        then enriches all rows with missing order numbers, carriers, states,
-        and FC tags from Shopify and Gorgias APIs. Detects reship orders
-        and replaces with originals.
+        Pulls tickets from the last N days, appends new ones to the sheet
+        (with original-damaged-order resolution — reships are swapped to
+        the original order number), then enriches all rows with missing
+        order numbers, carriers, states, and FC tags from Shopify.
 
         Args:
-            days_back: How many days back to pull (default 7).
+            days_back: How many days back to pull (default 14).
+                14 covers the long tail — ~90% of complaints land by T+5,
+                99% by T+13. Safe to run daily; dedup is by Gorgias link.
             dry_run: If True, preview without writing (default False).
 
         Returns JSON summary of sync + enrichment results.
@@ -1506,6 +1694,7 @@ def register(mcp: object) -> None:
                 "skipped_duplicate": sync_result["skipped_duplicate"],
                 "skipped_invalid_tag": sync_result["skipped_invalid_tag"],
                 "append_range": sync_result.get("append_range"),
+                "sample_rows": sync_result["rows"][:25],
             }
 
             # Step 2: Enrich incomplete rows
@@ -1529,31 +1718,8 @@ def register(mcp: object) -> None:
             return json.dumps({"error": str(e), "trace": traceback.format_exc()})
 
     @mcp.tool()
-    def enrich_operational_issues(
-        dry_run: bool = False,
-    ) -> str:
-        """Enrich incomplete rows in UPDATE_Operational Issues.
-
-        Finds rows with order numbers but missing fields (Gorgias Link,
-        Carrier, State, FC Tag, Issue Type, Resolution), looks up the data
-        from Gorgias and Shopify APIs, and updates the sheet in-place.
-
-        Args:
-            dry_run: If True, preview enrichments without writing (default False).
-
-        Returns JSON summary with enrichment counts and details.
-        """
-        try:
-            result = enrich_incomplete_rows(dry_run=dry_run)
-            return json.dumps(result, indent=2)
-        except Exception as e:
-            import traceback
-
-            return json.dumps({"error": str(e), "trace": traceback.format_exc()})
-
-    @mcp.tool()
     def gorgias_sync_food_safety(
-        days_back: int = 7,
+        days_back: int = 14,
         dry_run: bool = False,
     ) -> str:
         """Sync food safety tickets from Gorgias to the UPDATE_Food Safety tab.
@@ -1563,7 +1729,7 @@ def register(mcp: object) -> None:
         against existing rows, and appends new ones.
 
         Args:
-            days_back: How many days back to pull (default 7).
+            days_back: How many days back to pull (default 14).
             dry_run: If True, preview rows without writing (default False).
 
         Returns JSON summary with counts and new rows.
