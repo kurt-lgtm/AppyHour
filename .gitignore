@@ -41,3 +41,7 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# Internal-staff recipient names — never commit (PII)
+internal_recipients.json
+**/internal_recipients.json

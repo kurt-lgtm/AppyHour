@@ -41,12 +41,35 @@ INTERNAL_CITIES_FALLBACK: frozenset[str] = frozenset({
     "GARLAND", "NASHVILLE", "ANAHEIM", "INDIANAPOLIS", "WOBURN",
 })
 
-# Sentinel staff/test names seen in FedEx Recipient Name field — extend as observed.
+# Company-name patterns are safe to ship in source — generic, no individual PII.
 INTERNAL_RECIPIENT_NAMES: frozenset[str] = frozenset({
-    "PAM",         # observed in FedEx Priority Overnight to GARLAND
     "APPYHOUR",
     "ELEVATE FOODS",
 })
+
+# Staff/individual names live in a gitignored config file (not source) so we
+# don't commit individual PII to git history. The file is plain JSON; one
+# uppercase name per array entry. Falls back to empty set if file missing.
+#
+# Location: %APPDATA%\AppyHour\internal_recipients.json
+#   {"names": ["FIRST", "LAST", ...]}
+#
+# Edit that file to extend the staff list. Never put names in this module.
+def _load_staff_names() -> frozenset[str]:
+    import json
+    import os
+    from pathlib import Path
+    path = Path(os.environ.get("APPDATA", str(Path.home()))) / "AppyHour" / "internal_recipients.json"
+    if not path.exists():
+        return frozenset()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return frozenset(str(n).strip().upper() for n in data.get("names", []) if n)
+    except Exception:
+        return frozenset()
+
+
+_STAFF_NAMES: frozenset[str] = _load_staff_names()
 
 
 def is_internal(*,
@@ -73,10 +96,16 @@ def is_internal(*,
     if rc == "WOBURN" and rs == "MA":
         return True
 
-    # Rule 2: recipient name match (staff/AppyHour-as-receiver)
+    # Rule 2a: recipient name = company/brand pattern (safe to ship)
     if rn:
         for pat in INTERNAL_RECIPIENT_NAMES:
             if pat in rn:
+                return True
+
+    # Rule 2b: recipient name = known staff member from gitignored config
+    if rn and _STAFF_NAMES:
+        for staff in _STAFF_NAMES:
+            if staff in rn:
                 return True
 
     # Rule 3: round-trip — same zip out and back (only if both present)
