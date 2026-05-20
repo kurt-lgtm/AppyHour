@@ -333,14 +333,9 @@ EXCLUDED_RESOLUTIONS = (
 )
 
 # ── Fulfillment center tag mapping (from Shopify routing tags) ────────
-FC_TAG_MAP = {
-    "dallas": "RMFG",
-    "nashville": "COG",
-    "los angeles": "GRIPCA",
-    "la": "GRIPCA",
-    "california": "GRIPCA",
-    "indiana": "COG",
-}
+FC_TAG_MAP: dict[str, str] = {}
+# GRIPCA + COG decommissioned Feb 2026. RMFG is the sole active FC.
+# Ticket-tag based FC inference is disabled — caller falls back to RMFG default.
 
 
 def _gorgias_auth() -> tuple[tuple[str, str], str]:
@@ -980,24 +975,8 @@ def _extract_carrier_from_shopify(order: dict) -> str:
 
 
 def _extract_fc_from_shopify_tags(order: dict) -> str:
-    """Extract FC tag from Shopify order tags (RMFG_*, COG_*, GRIPCA_*)."""
-    tags_str = order.get("tags", "")
-    for tag in tags_str.split(","):
-        tag = tag.strip()
-        tag_upper = tag.upper()
-        if tag_upper.startswith("RMFG_") or tag_upper.startswith("RMFG-"):
-            return "RMFG"
-        if tag_upper.startswith("COG_") or tag_upper.startswith("COG-"):
-            return "COG"
-        if tag_upper.startswith("GRIPCA_") or tag_upper.startswith("GRIPCA-"):
-            return "GRIPCA"
-    # Fallback: check FC_TAG_MAP keywords in tags (whole-word match)
-    for tag in tags_str.split(","):
-        tag_lower = tag.strip().lower()
-        for key, fc in FC_TAG_MAP.items():
-            if re.search(r"\b" + re.escape(key) + r"\b", tag_lower):
-                return fc
-    return ""
+    """FC tag is always RMFG (per user 2026-05-15). GRIPCA/COG decommissioned."""
+    return "RMFG"
 
 
 STATE_CODE_TO_NAME = {
