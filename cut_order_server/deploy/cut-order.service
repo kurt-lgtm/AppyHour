@@ -1,0 +1,28 @@
+[Unit]
+Description=Cut Order Server (Flask + gunicorn)
+After=network.target
+
+[Service]
+Type=simple
+User=cutorder
+Group=cutorder
+WorkingDirectory=/opt/cut-order-server/cut_order_server
+EnvironmentFile=/etc/cut-order.env
+ExecStart=/opt/cut-order-server/.venv/bin/gunicorn -c gunicorn_conf.py wsgi:application
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=30
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/tmp
+
+[Install]
+WantedBy=multi-user.target

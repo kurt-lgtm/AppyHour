@@ -4,7 +4,10 @@ App Platform sets $PORT (default 8080). Bind to 0.0.0.0 so the platform proxy ca
 """
 import os
 
-bind = f"0.0.0.0:{os.environ.get('PORT', '8080')}"
+# App Platform sets PORT=8080 and needs 0.0.0.0 bind.
+# Droplet behind nginx uses PORT=8000 and 127.0.0.1 bind (set HOST=127.0.0.1 in env).
+_HOST = os.environ.get("GUNICORN_HOST", "0.0.0.0")
+bind = f"{_HOST}:{os.environ.get('PORT', '8080')}"
 workers = int(os.environ.get("GUNICORN_WORKERS", "2"))
 worker_class = "sync"
 timeout = 180  # LTF reads + Shopify pull can run long
