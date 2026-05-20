@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Cut Order — Run{% endblock %}
+{% block content %}
+<section class="run">
+  <h2>Generate cut order</h2>
+
+  <div class="meta">
+    <div><strong>Ship week:</strong> {{ wk1_start }} → {{ wk1_end }}</div>
+    <div><strong>Ship tags:</strong> {{ ship_tags | join(', ') }}</div>
+  </div>
+
+  <form id="runForm">
+    <fieldset>
+      <legend>Multiplier knob</legend>
+      <label>
+        Knob (default 1.0)
+        <input id="knob" type="number" step="0.05" min="0" value="1.0">
+        <button type="button" class="lock" data-key="knob" data-target="knob">🔒</button>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>AHB-X specialty boxes (manual forecast)</legend>
+      <div class="grid">
+        {% for sku in ahb_x_skus %}
+        <div class="row">
+          <label>{{ sku }}</label>
+          <input type="number" min="0" step="1" name="override" data-sku="{{ sku }}" placeholder="0">
+          <button type="button" class="lock" data-key="ahb-{{ sku }}" data-target="ahb-{{ sku }}" data-input="ahb-{{ sku }}">🔒</button>
+        </div>
+        {% endfor %}
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>BL-* addons (manual forecast)</legend>
+      <div class="grid">
+        {% for sku in bl_skus %}
+        <div class="row">
+          <label>{{ sku }}</label>
+          <input type="number" min="0" step="1" name="override" data-sku="{{ sku }}" placeholder="0">
+          <button type="button" class="lock" data-key="bl-{{ sku }}" data-target="bl-{{ sku }}">🔒</button>
+        </div>
+        {% endfor %}
+        <div class="row add-custom">
+          <input type="text" id="customSku" placeholder="Add SKU (e.g. BL-NEW)" style="flex:2">
+          <button type="button" id="addCustomBtn">+ Add</button>
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Empirical first-order multiplier</legend>
+      <button type="button" id="fetchRatios">Compute ratios from trailing 90d</button>
+      <span id="ratiosStatus" class="muted"></span>
+    </fieldset>
+
+    <div class="actions">
+      <button type="submit" id="runBtn">Generate cut order</button>
+      <span id="runStatus" class="muted"></span>
+    </div>
+  </form>
+
+  <section id="result" class="result" hidden>
+    <h3>Result</h3>
+    <a id="downloadLink" href="#" target="_blank" rel="noopener">Download xlsx</a>
+    <pre id="resultMeta"></pre>
+  </section>
+</section>
+<script src="{{ url_for('static', filename='app.js') }}" defer></script>
+{% endblock %}
