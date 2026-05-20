@@ -54,15 +54,16 @@ def _tee_to_shipping_db(rows: list[list[str]]) -> int:
             cols = {r[1] for r in con.execute("PRAGMA table_info(feedback)").fetchall()}
             if "gorgias_link" not in cols:
                 con.execute("ALTER TABLE feedback ADD COLUMN gorgias_link TEXT")
-            # Link-only unique index. The earlier composite key
-            # (order_number, issue_type, date_reported, gorgias_link) let a
-            # ticket dupe when date_reported drifted between sync passes
-            # (first-customer-message timestamp can move). gorgias_link
-            # uniquely identifies the ticket itself.
+            # Unique by (gorgias_link, issue_type). One ticket can carry
+            # multiple distinct issues (e.g. Missing Item + Damage); we
+            # want a row per issue. The earlier composite that also
+            # included date_reported allowed full ticket dupes when the
+            # first-customer-message timestamp drifted between sync passes.
             con.execute("DROP INDEX IF EXISTS idx_feedback_dedup")
+            con.execute("DROP INDEX IF EXISTS idx_feedback_dedup_link")
             con.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_dedup_link "
-                "ON feedback(gorgias_link) "
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_dedup_link_issue "
+                "ON feedback(gorgias_link, issue_type) "
                 "WHERE gorgias_link IS NOT NULL AND gorgias_link<>''"
             )
             now = datetime.utcnow().isoformat(timespec="seconds")
@@ -652,10 +653,12 @@ def sync_gorgias_to_sheet(days_back: int = 14, dry_run: bool = False) -> dict[st
     # Read FULL rows (A:J) so we can upsert in place when a ticket already
     # exists. Splitting sync (append) and enrich (update) used to create
     # duplicates whenever a row's link cell was blank at read-time.
+    # Key by (gorgias_link, issue_type) — one ticket can carry multiple
+    # distinct issues, so each (link, issue) pair is its own row.
     existing_full = gclient.read_sheet(SPREADSHEET_ID, f"'{TAB_NAME}'!A:J")
     existing_orders: set[str] = set()
-    # link → (1-based sheet row index, padded 10-col row values)
-    link_to_row: dict[str, tuple[int, list[str]]] = {}
+    # (link, issue_type) → (1-based sheet row index, padded 10-col row values)
+    link_to_row: dict[tuple[str, str], tuple[int, list[str]]] = {}
     for idx, raw in enumerate(existing_full):
         if idx == 0:
             continue  # header
@@ -664,8 +667,8 @@ def sync_gorgias_to_sheet(days_back: int = 14, dry_run: bool = False) -> dict[st
         if padded[2].strip():
             existing_orders.add(padded[2].strip())
         if padded[3].strip():
-            link_to_row[padded[3].strip()] = (idx + 1, padded)  # +1 for 1-based
-    existing_links: set[str] = set(link_to_row)
+            link_to_row[(padded[3].strip(), padded[7].strip())] = (idx + 1, padded)
+    existing_links: set[str] = {k[0] for k in link_to_row}
 
     # Paginate Gorgias tickets (filter by date client-side)
     since_dt = datetime.now() - timedelta(days=days_back)
@@ -741,10 +744,13 @@ def sync_gorgias_to_sheet(days_back: int = 14, dry_run: bool = False) -> dict[st
                 if original and original != order_num:
                     order_num = original
 
-            # Upsert by Gorgias link (unique per ticket). Order numbers are
-            # NOT unique: same order can have multiple tickets.
+            # Upsert by (gorgias_link, issue_type). A ticket can produce
+            # multiple rows when it carries multiple distinct issue types.
+            # Order numbers are NOT unique: same order → multiple tickets.
             gorgias_link = _extract_gorgias_link(t)
-            existing_match = link_to_row.get(gorgias_link) if gorgias_link else None
+            existing_match = (
+                link_to_row.get((gorgias_link, issue_type)) if gorgias_link else None
+            )
 
             # Shopify lookup for Carrier, State, FC Tag (single pass — no enrich needed)
             import time as _time_sync
@@ -817,7 +823,7 @@ def sync_gorgias_to_sheet(days_back: int = 14, dry_run: bool = False) -> dict[st
                         }
                     )
                     upserted += 1
-                    link_to_row[gorgias_link] = (sheet_row_num, patched)
+                    link_to_row[(gorgias_link, issue_type)] = (sheet_row_num, patched)
                 else:
                     skipped_dup += 1
                 continue
@@ -827,9 +833,10 @@ def sync_gorgias_to_sheet(days_back: int = 14, dry_run: bool = False) -> dict[st
                 existing_orders.add(order_num)
             if gorgias_link:
                 existing_links.add(gorgias_link)
-                # Future tickets in this same run can't re-append it either.
-                # row_num is unknown until append finishes; mark with sentinel.
-                link_to_row[gorgias_link] = (-1, row)
+                # Future iterations in this same run can't re-append this
+                # (link, issue_type). row_num is unknown until append
+                # finishes; mark with sentinel.
+                link_to_row[(gorgias_link, issue_type)] = (-1, row)
 
         if done:
             break
