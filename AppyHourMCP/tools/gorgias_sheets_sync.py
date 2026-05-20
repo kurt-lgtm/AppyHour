@@ -54,9 +54,16 @@ def _tee_to_shipping_db(rows: list[list[str]]) -> int:
             cols = {r[1] for r in con.execute("PRAGMA table_info(feedback)").fetchall()}
             if "gorgias_link" not in cols:
                 con.execute("ALTER TABLE feedback ADD COLUMN gorgias_link TEXT")
+            # Link-only unique index. The earlier composite key
+            # (order_number, issue_type, date_reported, gorgias_link) let a
+            # ticket dupe when date_reported drifted between sync passes
+            # (first-customer-message timestamp can move). gorgias_link
+            # uniquely identifies the ticket itself.
+            con.execute("DROP INDEX IF EXISTS idx_feedback_dedup")
             con.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_dedup "
-                "ON feedback(order_number, issue_type, date_reported, gorgias_link)"
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_dedup_link "
+                "ON feedback(gorgias_link) "
+                "WHERE gorgias_link IS NOT NULL AND gorgias_link<>''"
             )
             now = datetime.utcnow().isoformat(timespec="seconds")
             written = 0
