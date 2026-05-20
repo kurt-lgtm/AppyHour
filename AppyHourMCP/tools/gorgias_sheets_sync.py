@@ -642,14 +642,30 @@ def sync_gorgias_to_sheet(days_back: int = 14, dry_run: bool = False) -> dict[st
         creds_path = str(Path(__file__).resolve().parent.parent.parent / "shipping-perfomance-review-accd39ac4b78.json")
     gclient = GoogleIntegration(creds_path)
 
-    existing_rows = gclient.read_sheet(SPREADSHEET_ID, f"'{TAB_NAME}'!C:D")
-    existing_orders = {row[0].strip() for row in existing_rows if row and row[0].strip()}
-    existing_links = {row[1].strip() for row in existing_rows if len(row) > 1 and row[1].strip()}
+    # Read FULL rows (A:J) so we can upsert in place when a ticket already
+    # exists. Splitting sync (append) and enrich (update) used to create
+    # duplicates whenever a row's link cell was blank at read-time.
+    existing_full = gclient.read_sheet(SPREADSHEET_ID, f"'{TAB_NAME}'!A:J")
+    existing_orders: set[str] = set()
+    # link → (1-based sheet row index, padded 10-col row values)
+    link_to_row: dict[str, tuple[int, list[str]]] = {}
+    for idx, raw in enumerate(existing_full):
+        if idx == 0:
+            continue  # header
+        padded = list(raw) + [""] * (10 - len(raw))
+        padded = padded[:10]
+        if padded[2].strip():
+            existing_orders.add(padded[2].strip())
+        if padded[3].strip():
+            link_to_row[padded[3].strip()] = (idx + 1, padded)  # +1 for 1-based
+    existing_links: set[str] = set(link_to_row)
 
     # Paginate Gorgias tickets (filter by date client-side)
     since_dt = datetime.now() - timedelta(days=days_back)
     cursor = None
     new_rows = []
+    upsert_updates: list[dict] = []  # batchUpdate cell-level patches
+    upserted = 0
     checked = 0
     skipped_dup = 0
     skipped_tag = 0
@@ -718,12 +734,10 @@ def sync_gorgias_to_sheet(days_back: int = 14, dry_run: bool = False) -> dict[st
                 if original and original != order_num:
                     order_num = original
 
-            # Skip duplicates (by Gorgias link — unique per ticket)
-            # Order numbers are NOT unique: same order can have multiple tickets
+            # Upsert by Gorgias link (unique per ticket). Order numbers are
+            # NOT unique: same order can have multiple tickets.
             gorgias_link = _extract_gorgias_link(t)
-            if gorgias_link and gorgias_link in existing_links:
-                skipped_dup += 1
-                continue
+            existing_match = link_to_row.get(gorgias_link) if gorgias_link else None
 
             # Shopify lookup for Carrier, State, FC Tag (single pass — no enrich needed)
             import time as _time_sync
@@ -770,17 +784,65 @@ def sync_gorgias_to_sheet(days_back: int = 14, dry_run: bool = False) -> dict[st
                 resolution,
                 "",  # Comment
             ]
+
+            if existing_match is not None:
+                sheet_row_num, existing_padded = existing_match
+                if sheet_row_num < 0:
+                    # Same ticket appeared twice in this run's pagination —
+                    # ignore the second hit; the first will be appended.
+                    skipped_dup += 1
+                    continue
+                # Row already in sheet — fill any blank field with fresh data.
+                # Never overwrite an existing non-blank value (preserves the
+                # Comment column + manual edits).
+                patched = list(existing_padded)
+                changed_cols: list[int] = []
+                for col_idx in range(10):
+                    if not patched[col_idx].strip() and row[col_idx].strip():
+                        patched[col_idx] = row[col_idx]
+                        changed_cols.append(col_idx)
+                if changed_cols:
+                    # One update per contiguous range — cheaper than per-cell.
+                    upsert_updates.append(
+                        {
+                            "range": f"'{TAB_NAME}'!A{sheet_row_num}:J{sheet_row_num}",
+                            "values": [patched],
+                        }
+                    )
+                    upserted += 1
+                    link_to_row[gorgias_link] = (sheet_row_num, patched)
+                else:
+                    skipped_dup += 1
+                continue
+
             new_rows.append(row)
             if order_num:
                 existing_orders.add(order_num)
             if gorgias_link:
                 existing_links.add(gorgias_link)
+                # Future tickets in this same run can't re-append it either.
+                # row_num is unknown until append finishes; mark with sentinel.
+                link_to_row[gorgias_link] = (-1, row)
 
         if done:
             break
         cursor = data.get("meta", {}).get("next_cursor")
         if not cursor:
             break
+
+    # Apply in-place upsert patches BEFORE appending so appended rows can't
+    # collide with patched ranges.
+    if upsert_updates and not dry_run:
+        gclient._sheets.spreadsheets().values().batchUpdate(
+            spreadsheetId=SPREADSHEET_ID,
+            body={
+                "valueInputOption": "USER_ENTERED",
+                "data": [
+                    {"range": u["range"], "values": u["values"]}
+                    for u in upsert_updates
+                ],
+            },
+        ).execute()
 
     # Write to sheet (reverse so oldest-first, since Gorgias paginates newest-first)
     new_rows.reverse()
@@ -816,6 +878,7 @@ def sync_gorgias_to_sheet(days_back: int = 14, dry_run: bool = False) -> dict[st
     return {
         "checked": checked,
         "new_rows": len(new_rows),
+        "upserted_in_place": upserted,
         "skipped_duplicate": skipped_dup,
         "skipped_invalid_tag": skipped_tag,
         "dry_run": dry_run,
