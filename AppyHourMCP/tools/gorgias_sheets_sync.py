@@ -73,29 +73,34 @@ def _tee_to_shipping_db(rows: list[list[str]]) -> int:
                 while len(r) < 10:
                     r = r + [""]
                 date_str, contact_reason, order_num, link, carrier, state, fc_tag, issue_type, resolution, comment = r[:10]
-                cur = con.execute(
-                    """
-                    INSERT OR IGNORE INTO feedback(
-                      order_number, issue_type, date_reported, notes,
-                      carrier, state, resolution, fulfillment_center,
-                      synced_at, gorgias_link
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?)
-                    """,
-                    (
-                        (order_num or "").strip() or None,
-                        issue_type or None,
-                        date_str or None,
-                        (contact_reason or comment or None),
-                        carrier or None,
-                        state or None,
-                        resolution or None,
-                        fc_tag or None,
-                        now,
-                        link or None,
-                    ),
-                )
-                if cur.rowcount:
-                    written += 1
+                # Sheet may store multiple issue_types comma-joined in col
+                # H ("Missing Item, Damaged in transit"). DB is normalized
+                # — one row per (link, single_issue_type) — so split here.
+                issue_types = [s.strip() for s in (issue_type or "").split(",") if s.strip()] or [None]
+                for it in issue_types:
+                    cur = con.execute(
+                        """
+                        INSERT OR IGNORE INTO feedback(
+                          order_number, issue_type, date_reported, notes,
+                          carrier, state, resolution, fulfillment_center,
+                          synced_at, gorgias_link
+                        ) VALUES (?,?,?,?,?,?,?,?,?,?)
+                        """,
+                        (
+                            (order_num or "").strip() or None,
+                            it,
+                            date_str or None,
+                            (contact_reason or comment or None),
+                            carrier or None,
+                            state or None,
+                            resolution or None,
+                            fc_tag or None,
+                            now,
+                            link or None,
+                        ),
+                    )
+                    if cur.rowcount:
+                        written += 1
             con.commit()
             return written
         finally:
@@ -1314,13 +1319,18 @@ def enrich_incomplete_rows(dry_run: bool = False) -> dict[str, object]:
                 new_values[6] = "RMFG"
                 fields_filled.append("fc_tag")
 
-        # Issue Type (col H, index 7) — from Gorgias
-        if not new_values[7].strip() and ticket:
+        # Issue Type (col H, index 7) — from Gorgias. Merges, does not
+        # overwrite: one ticket can carry multiple distinct issue_types
+        # and column H accumulates them comma-joined.
+        if ticket:
             cf = ticket.get("custom_fields", {})
             it = cf.get(FIELD_ISSUE_TYPE, {}).get("value", "")
             if it and _matches_valid_prefix(it, VALID_ISSUE_PREFIXES):
-                new_values[7] = it
-                fields_filled.append("issue_type")
+                existing_types = [s.strip() for s in new_values[7].split(",") if s.strip()]
+                if it not in existing_types:
+                    existing_types.append(it)
+                    new_values[7] = ", ".join(existing_types)
+                    fields_filled.append("issue_type")
 
         # Resolution (col I, index 8) — from Gorgias
         if not new_values[8].strip() and ticket:
