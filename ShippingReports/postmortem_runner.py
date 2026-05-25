@@ -305,6 +305,65 @@ def section_gel_margin(db: sqlite3.Connection, snapshot_id: str) -> str:
     return "".join(out)
 
 
+def section_service_mismatch(db: sqlite3.Connection, snapshot_id: str) -> str:
+    """#6 — surface orders where Kori predicted 2-Day/1-Day but carrier delivered
+    via Ground / Home Delivery (i.e. silent service downgrade)."""
+    rows = db.execute(
+        """
+        SELECT kso.order_number, kso.state, kso.transit_type AS predicted,
+               ds.service AS actual_service, ds.transit_days, ds.carrier
+        FROM kori_snapshot_orders kso
+        LEFT JOIN fulfillments f ON f.order_number = kso.order_number
+        LEFT JOIN delivery_status ds ON ds.tracking_number = f.tracking_number
+        WHERE kso.snapshot_id = ?
+          AND kso.transit_type IS NOT NULL
+          AND ds.service IS NOT NULL
+        """,
+        (snapshot_id,),
+    ).fetchall()
+    if not rows:
+        return (
+            "## Service mismatch (#6 silent downgrade detector)\n\n"
+            "_No delivery_status.service data yet for this cohort (ParcelPanel "
+            "sync hasn't populated, or pre-2026-05-25 schema)._\n\n"
+        )
+    mismatches: list[dict] = []
+    for r in rows:
+        pred = (r["predicted"] or "").lower()
+        actual = (r["actual_service"] or "").lower()
+        if not pred or not actual:
+            continue
+        is_ground = ("ground" in actual or "home delivery" in actual or "smartpost" in actual)
+        is_priority = ("2day" in actual or "overnight" in actual or "priority" in actual or "express" in actual)
+        downgrade = (pred in ("1-day", "2-day")) and is_ground and not is_priority
+        if downgrade:
+            mismatches.append(
+                {
+                    "order": r["order_number"],
+                    "state": r["state"],
+                    "predicted": r["predicted"],
+                    "actual": r["actual_service"],
+                    "transit": r["transit_days"],
+                    "carrier": r["carrier"],
+                }
+            )
+    out = [
+        "## Service mismatch (#6 silent downgrade detector)\n\n",
+        f"_{len(mismatches)} orders quoted 1-Day/2-Day but delivered as Ground._\n\n",
+    ]
+    if not mismatches:
+        out.append("✅ No silent downgrades detected.\n\n")
+        return "".join(out)
+    out.append("| Order | State | Predicted | Actual service | Transit | Carrier |\n|---|---|---|---|---|---|\n")
+    for m in mismatches[:20]:
+        out.append(
+            f"| {m['order']} | {m['state']} | {m['predicted']} | {m['actual']} | "
+            f"{m['transit']} | {m['carrier']} |\n"
+        )
+    out.append("\n")
+    return "".join(out)
+
+
 def section_transit_anomalies(db: sqlite3.Connection, ship_tag: str) -> str:
     """Shipments that exceeded TNT expectation — silent service downgrades."""
     cur = db.execute(
@@ -345,6 +404,7 @@ def build_postmortem(db: sqlite3.Connection, ship_week: str) -> str | None:
         section_warm_by_state(db, snap["ship_tag"]),
         section_predicted_vs_actual(db, snap["snapshot_id"]),
         section_gel_margin(db, snap["snapshot_id"]),
+        section_service_mismatch(db, snap["snapshot_id"]),
         section_transit_anomalies(db, snap["ship_tag"]),
         "---\n_Auto-generated. Edit notes manually below._\n\n## Notes\n\n",
     ]
