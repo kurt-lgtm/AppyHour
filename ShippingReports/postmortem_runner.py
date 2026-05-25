@@ -191,6 +191,120 @@ def section_predicted_vs_actual(db: sqlite3.Connection, snapshot_id: str) -> str
     return out + "\n"
 
 
+def section_gel_margin(db: sqlite3.Connection, snapshot_id: str) -> str:
+    """Per-cohort BTU margin distribution + cost rollup.
+
+    Reads thermal fields (total_q_safe / effective_btu / margin_btu / transit_type)
+    captured at Lock & Ship time. Snapshots before 2026-05-25 won't have these
+    fields — section reports "data not captured" for those cohorts.
+    """
+    rows = db.execute(
+        """
+        SELECT predicted_config, predicted_risk, predicted_cost, state,
+               total_q_safe, effective_btu, margin_btu, transit_type
+        FROM kori_snapshot_orders
+        WHERE snapshot_id = ?
+        """,
+        (snapshot_id,),
+    ).fetchall()
+    has_thermal = any(r["margin_btu"] is not None for r in rows)
+    if not has_thermal:
+        return (
+            "## Gel margin (BTU supply vs demand)\n\n"
+            "_Thermal fields not captured for this cohort "
+            "(snapshot pre-dates 2026-05-25 schema)._\n\n"
+        )
+
+    # Bucket by margin band + tier + risk
+    def band(m_pct: float) -> str:
+        if m_pct < 0:
+            return "neg (under-packed)"
+        if m_pct < 25:
+            return "0-25%"
+        if m_pct < 50:
+            return "25-50%"
+        if m_pct < 75:
+            return "50-75%"
+        return "75%+ (over-packed)"
+
+    by_band: dict[str, int] = {}
+    by_tier: dict[str, int] = {}
+    by_state_band: dict[tuple[str, str], int] = {}
+    over_packed: list[dict] = []
+    under_packed: list[dict] = []
+    total_cost = 0.0
+    n_analyzed = 0
+    for r in rows:
+        if r["margin_btu"] is None or r["effective_btu"] is None or r["effective_btu"] <= 0:
+            continue
+        pct = r["margin_btu"] / r["effective_btu"] * 100
+        b = band(pct)
+        by_band[b] = by_band.get(b, 0) + 1
+        by_tier[r["predicted_config"] or "?"] = by_tier.get(r["predicted_config"] or "?", 0) + 1
+        key = (r["state"] or "?", b)
+        by_state_band[key] = by_state_band.get(key, 0) + 1
+        total_cost += float(r["predicted_cost"] or 0)
+        n_analyzed += 1
+        if pct >= 75 and (r["predicted_risk"] or "") == "LOW":
+            over_packed.append(
+                {
+                    "state": r["state"],
+                    "config": r["predicted_config"],
+                    "margin_pct": round(pct, 1),
+                    "demand": round(r["total_q_safe"] or 0, 1),
+                    "supply": round(r["effective_btu"] or 0, 1),
+                    "cost": r["predicted_cost"],
+                    "transit": r["transit_type"],
+                }
+            )
+        elif pct < 0:
+            under_packed.append(
+                {
+                    "state": r["state"],
+                    "config": r["predicted_config"],
+                    "margin_pct": round(pct, 1),
+                    "demand": round(r["total_q_safe"] or 0, 1),
+                    "supply": round(r["effective_btu"] or 0, 1),
+                    "risk": r["predicted_risk"],
+                    "transit": r["transit_type"],
+                }
+            )
+
+    out = [
+        f"## Gel margin (BTU supply vs demand)\n\n",
+        f"_Analyzed {n_analyzed} of {len(rows)} orders. Total gel cost: **${total_cost:.2f}**._\n\n",
+        "### By margin band\n\n| Band | Count |\n|---|---|\n",
+    ]
+    for k in ("neg (under-packed)", "0-25%", "25-50%", "50-75%", "75%+ (over-packed)"):
+        out.append(f"| {k} | {by_band.get(k, 0)} |\n")
+    out.append("\n### By assigned tier\n\n| Tier | Count |\n|---|---|\n")
+    for tier, n in sorted(by_tier.items(), key=lambda x: -x[1]):
+        out.append(f"| {tier} | {n} |\n")
+    out.append("\n### Top over-packed candidates (LOW risk + margin ≥ 75%)\n\n")
+    if not over_packed:
+        out.append("_(none — no LOW-risk orders with 75%+ margin)_\n\n")
+    else:
+        out.append("| State | Config | Transit | Margin % | Demand | Supply | Cost |\n|---|---|---|---|---|---|---|\n")
+        for o in sorted(over_packed, key=lambda x: -x["margin_pct"])[:15]:
+            out.append(
+                f"| {o['state']} | {o['config']} | {o['transit']} | {o['margin_pct']} | "
+                f"{o['demand']} | {o['supply']} | ${o['cost']} |\n"
+            )
+        out.append("\n")
+    out.append("### Under-packed (margin < 0)\n\n")
+    if not under_packed:
+        out.append("_(none — all orders predicted to have supply ≥ demand)_\n\n")
+    else:
+        out.append("| State | Config | Transit | Margin % | Demand | Supply | Risk |\n|---|---|---|---|---|---|---|\n")
+        for o in sorted(under_packed, key=lambda x: x["margin_pct"])[:15]:
+            out.append(
+                f"| {o['state']} | {o['config']} | {o['transit']} | {o['margin_pct']} | "
+                f"{o['demand']} | {o['supply']} | {o['risk']} |\n"
+            )
+        out.append("\n")
+    return "".join(out)
+
+
 def section_transit_anomalies(db: sqlite3.Connection, ship_tag: str) -> str:
     """Shipments that exceeded TNT expectation — silent service downgrades."""
     cur = db.execute(
@@ -230,6 +344,7 @@ def build_postmortem(db: sqlite3.Connection, ship_week: str) -> str | None:
         section_failures_by_bucket(db, snap["ship_tag"]),
         section_warm_by_state(db, snap["ship_tag"]),
         section_predicted_vs_actual(db, snap["snapshot_id"]),
+        section_gel_margin(db, snap["snapshot_id"]),
         section_transit_anomalies(db, snap["ship_tag"]),
         "---\n_Auto-generated. Edit notes manually below._\n\n## Notes\n\n",
     ]
