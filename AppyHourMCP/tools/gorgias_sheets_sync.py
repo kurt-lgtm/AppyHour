@@ -443,20 +443,65 @@ def _resolve_original_order(order_num: str) -> str:
     return order_num
 
 
+def _extract_order_from_gorgias_integrations(ticket: dict) -> str:
+    """Extract order# from Gorgias customer.integrations Shopify panel.
+
+    Most reliable source — Gorgias surfaces customer's full Shopify order
+    history in the side panel even when the order# isn't mentioned in the
+    ticket text. Picks the most-recent non-reship order created BEFORE the
+    ticket itself (so if customer placed a new order after complaining,
+    we still attribute to the affected order, not the replacement).
+    """
+    customer = ticket.get("customer") or {}
+    integrations = customer.get("integrations") or {}
+    if not isinstance(integrations, dict):
+        return ""
+    ticket_created = ticket.get("created_datetime", "") or ""
+    candidates: list[tuple[str, str]] = []
+    for _int_id, int_data in integrations.items():
+        if not isinstance(int_data, dict):
+            continue
+        orders = int_data.get("orders") or []
+        for o in orders:
+            if not isinstance(o, dict):
+                continue
+            name = o.get("name") or ""
+            if not name:
+                continue
+            tags = (o.get("tags", "") or "").lower()
+            if "reship" in tags:
+                continue
+            created = o.get("created_at", "") or ""
+            # Filter: order must pre-date the ticket (or accept if no ticket date)
+            if ticket_created and created and created >= ticket_created:
+                continue
+            candidates.append((created, name))
+    if not candidates:
+        return ""
+    candidates.sort(reverse=True)  # most recent that pre-dates ticket
+    return candidates[0][1]
+
+
 def _extract_order_number(ticket: dict, gorgias_auth: tuple[str, str] | None = None, gorgias_base: str | None = None) -> str:
-    """Extract order number from ticket subject, messages, or Shopify lookup.
+    """Extract order number from Gorgias integrations, subject, messages, or Shopify lookup.
 
     Tries in order:
-    1. Subject line
-    2. First few message bodies
-    3. Shopify order lookup by customer email
+    1. Gorgias customer.integrations Shopify orders (most reliable — uses ticket creation date as upper bound)
+    2. Subject line
+    3. First few message bodies
+    4. Shopify order lookup by customer email (legacy fallback)
     """
-    # 1. Subject
+    # 1. Gorgias customer.integrations (Shopify panel data)
+    order = _extract_order_from_gorgias_integrations(ticket)
+    if order:
+        return order
+
+    # 2. Subject
     order = _extract_order_from_text(ticket.get("subject", ""))
     if order:
         return order
 
-    # 2. Message bodies (requires API call)
+    # 3. Message bodies (requires API call)
     if gorgias_auth and gorgias_base:
         try:
             resp = _gorgias_get(
@@ -473,7 +518,7 @@ def _extract_order_number(ticket: dict, gorgias_auth: tuple[str, str] | None = N
         except Exception:
             logger.debug("Failed to fetch messages for ticket %s", ticket.get("id"), exc_info=True)
 
-    # 3. Shopify lookup by customer email
+    # 4. Shopify lookup by customer email (legacy fallback)
     customer_email = ticket.get("customer", {}).get("email", "")
     if customer_email:
         order = _shopify_latest_order(customer_email)
@@ -713,6 +758,9 @@ def sync_gorgias_to_sheet(days_back: int = 14, dry_run: bool = False) -> dict[st
             if ticket_dt < since_dt:
                 done = True
                 break
+            # Skip soft-deleted tickets (Gorgias retains them in API responses)
+            if t.get("deleted_datetime"):
+                continue
             checked += 1
             cf = t.get("custom_fields", {})
 
