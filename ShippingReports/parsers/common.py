@@ -23,6 +23,13 @@ class Shipment:
     ship_dow: str = ""         # Monday, Tuesday, etc.
     invoice_id: str = ""       # invoice number for traceability
     source_file: str = ""      # original file path
+    # Weight + dimensional fields (Optional — not all carriers/invoice formats expose them)
+    weight: Optional[float] = None         # billed/chargeable weight (lb) — primary for cost analysis
+    actual_weight: Optional[float] = None  # scale weight if reported separately
+    dim_l: Optional[float] = None          # outer length (in)
+    dim_w: Optional[float] = None          # outer width (in)
+    dim_h: Optional[float] = None          # outer height (in)
+    dim_factor: Optional[float] = None     # carrier dim divisor (e.g. OnTrac 225, FedEx 139/194, UPS 139)
 
     def __post_init__(self):
         if self.ship_date and self.delivery_date and self.transit_days is None:
