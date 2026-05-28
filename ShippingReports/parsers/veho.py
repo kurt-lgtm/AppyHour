@@ -171,6 +171,22 @@ def parse_veho_xlsx(filepath: str, zip3_map: Optional[Dict[str, str]] = None) ->
 
         service = str(g('Charge Name 1') or g('Charge Code 1') or '').strip()
 
+        def _fnum(key):
+            v = g(key)
+            if v in (None, '', 0):
+                return None
+            try:
+                f = float(v)
+                return f if f > 0 else None
+            except (TypeError, ValueError):
+                return None
+
+        actual_wt = _fnum('Actual Weight')
+        billed_wt = _fnum('Billable Weight')
+        dim_l = _fnum('Length')
+        dim_w = _fnum('Width')
+        dim_h = _fnum('Height')
+
         shipments.append(Shipment(
             tracking=str(tracking),
             carrier='Veho',
@@ -185,6 +201,9 @@ def parse_veho_xlsx(filepath: str, zip3_map: Optional[Dict[str, str]] = None) ->
             delivery_date=None,       # Veho invoices lack POD date
             invoice_id=invoice_id,
             source_file=filepath,
+            weight=billed_wt or actual_wt,
+            actual_weight=actual_wt,
+            dim_l=dim_l, dim_w=dim_w, dim_h=dim_h,
         ))
 
     wb.close()

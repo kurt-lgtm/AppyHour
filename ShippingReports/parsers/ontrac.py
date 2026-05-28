@@ -29,6 +29,23 @@ def parse_ontrac_csv(filepath: str) -> List[Shipment]:
             except ValueError:
                 cost = 0.0
 
+            def _fnum(key):
+                v = row.get(key)
+                if v in (None, '', '0'):
+                    return None
+                try:
+                    f = float(v)
+                    return f if f > 0 else None
+                except (TypeError, ValueError):
+                    return None
+
+            actual_wt = _fnum('Weight(lbs)')
+            billed_wt = _fnum('Billed Weight (lbs)')
+            dim_l = _fnum('Length(in)')
+            dim_w = _fnum('Width(in)')
+            dim_h = _fnum('Height(in)')
+            dim_factor = _fnum('DIM Factor')
+
             shipments.append(Shipment(
                 tracking=row.get('Tracking Number', '').strip(),
                 carrier='OnTrac',
@@ -43,6 +60,10 @@ def parse_ontrac_csv(filepath: str) -> List[Shipment]:
                 delivery_date=pod_date,
                 invoice_id=invoice_id,
                 source_file=filepath,
+                weight=billed_wt or actual_wt,
+                actual_weight=actual_wt,
+                dim_l=dim_l, dim_w=dim_w, dim_h=dim_h,
+                dim_factor=dim_factor,
             ))
 
     return shipments

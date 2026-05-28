@@ -73,29 +73,34 @@ def _tee_to_shipping_db(rows: list[list[str]]) -> int:
                 while len(r) < 10:
                     r = r + [""]
                 date_str, contact_reason, order_num, link, carrier, state, fc_tag, issue_type, resolution, comment = r[:10]
-                cur = con.execute(
-                    """
-                    INSERT OR IGNORE INTO feedback(
-                      order_number, issue_type, date_reported, notes,
-                      carrier, state, resolution, fulfillment_center,
-                      synced_at, gorgias_link
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?)
-                    """,
-                    (
-                        (order_num or "").strip() or None,
-                        issue_type or None,
-                        date_str or None,
-                        (contact_reason or comment or None),
-                        carrier or None,
-                        state or None,
-                        resolution or None,
-                        fc_tag or None,
-                        now,
-                        link or None,
-                    ),
-                )
-                if cur.rowcount:
-                    written += 1
+                # Sheet may store multiple issue_types comma-joined in col
+                # H ("Missing Item, Damaged in transit"). DB is normalized
+                # — one row per (link, single_issue_type) — so split here.
+                issue_types = [s.strip() for s in (issue_type or "").split(",") if s.strip()] or [None]
+                for it in issue_types:
+                    cur = con.execute(
+                        """
+                        INSERT OR IGNORE INTO feedback(
+                          order_number, issue_type, date_reported, notes,
+                          carrier, state, resolution, fulfillment_center,
+                          synced_at, gorgias_link
+                        ) VALUES (?,?,?,?,?,?,?,?,?,?)
+                        """,
+                        (
+                            (order_num or "").strip() or None,
+                            it,
+                            date_str or None,
+                            (contact_reason or comment or None),
+                            carrier or None,
+                            state or None,
+                            resolution or None,
+                            fc_tag or None,
+                            now,
+                            link or None,
+                        ),
+                    )
+                    if cur.rowcount:
+                        written += 1
             con.commit()
             return written
         finally:
@@ -438,20 +443,65 @@ def _resolve_original_order(order_num: str) -> str:
     return order_num
 
 
+def _extract_order_from_gorgias_integrations(ticket: dict) -> str:
+    """Extract order# from Gorgias customer.integrations Shopify panel.
+
+    Most reliable source — Gorgias surfaces customer's full Shopify order
+    history in the side panel even when the order# isn't mentioned in the
+    ticket text. Picks the most-recent non-reship order created BEFORE the
+    ticket itself (so if customer placed a new order after complaining,
+    we still attribute to the affected order, not the replacement).
+    """
+    customer = ticket.get("customer") or {}
+    integrations = customer.get("integrations") or {}
+    if not isinstance(integrations, dict):
+        return ""
+    ticket_created = ticket.get("created_datetime", "") or ""
+    candidates: list[tuple[str, str]] = []
+    for _int_id, int_data in integrations.items():
+        if not isinstance(int_data, dict):
+            continue
+        orders = int_data.get("orders") or []
+        for o in orders:
+            if not isinstance(o, dict):
+                continue
+            name = o.get("name") or ""
+            if not name:
+                continue
+            tags = (o.get("tags", "") or "").lower()
+            if "reship" in tags:
+                continue
+            created = o.get("created_at", "") or ""
+            # Filter: order must pre-date the ticket (or accept if no ticket date)
+            if ticket_created and created and created >= ticket_created:
+                continue
+            candidates.append((created, name))
+    if not candidates:
+        return ""
+    candidates.sort(reverse=True)  # most recent that pre-dates ticket
+    return candidates[0][1]
+
+
 def _extract_order_number(ticket: dict, gorgias_auth: tuple[str, str] | None = None, gorgias_base: str | None = None) -> str:
-    """Extract order number from ticket subject, messages, or Shopify lookup.
+    """Extract order number from Gorgias integrations, subject, messages, or Shopify lookup.
 
     Tries in order:
-    1. Subject line
-    2. First few message bodies
-    3. Shopify order lookup by customer email
+    1. Gorgias customer.integrations Shopify orders (most reliable — uses ticket creation date as upper bound)
+    2. Subject line
+    3. First few message bodies
+    4. Shopify order lookup by customer email (legacy fallback)
     """
-    # 1. Subject
+    # 1. Gorgias customer.integrations (Shopify panel data)
+    order = _extract_order_from_gorgias_integrations(ticket)
+    if order:
+        return order
+
+    # 2. Subject
     order = _extract_order_from_text(ticket.get("subject", ""))
     if order:
         return order
 
-    # 2. Message bodies (requires API call)
+    # 3. Message bodies (requires API call)
     if gorgias_auth and gorgias_base:
         try:
             resp = _gorgias_get(
@@ -468,7 +518,7 @@ def _extract_order_number(ticket: dict, gorgias_auth: tuple[str, str] | None = N
         except Exception:
             logger.debug("Failed to fetch messages for ticket %s", ticket.get("id"), exc_info=True)
 
-    # 3. Shopify lookup by customer email
+    # 4. Shopify lookup by customer email (legacy fallback)
     customer_email = ticket.get("customer", {}).get("email", "")
     if customer_email:
         order = _shopify_latest_order(customer_email)
@@ -651,14 +701,15 @@ def sync_gorgias_to_sheet(days_back: int = 14, dry_run: bool = False) -> dict[st
     gclient = GoogleIntegration(creds_path)
 
     # Read FULL rows (A:J) so we can upsert in place when a ticket already
-    # exists. Splitting sync (append) and enrich (update) used to create
-    # duplicates whenever a row's link cell was blank at read-time.
-    # Key by (gorgias_link, issue_type) — one ticket can carry multiple
-    # distinct issues, so each (link, issue) pair is its own row.
+    # exists. Sheet model: one row per ticket (key = gorgias_link). When a
+    # ticket carries multiple distinct issue_types, column H accumulates
+    # them as a comma-joined list — we never create a second row for the
+    # same ticket. The SQLite `feedback` mirror stays normalized (one row
+    # per (link, issue_type)) for analytics.
     existing_full = gclient.read_sheet(SPREADSHEET_ID, f"'{TAB_NAME}'!A:J")
     existing_orders: set[str] = set()
-    # (link, issue_type) → (1-based sheet row index, padded 10-col row values)
-    link_to_row: dict[tuple[str, str], tuple[int, list[str]]] = {}
+    # link → (1-based sheet row index, padded 10-col row values)
+    link_to_row: dict[str, tuple[int, list[str]]] = {}
     for idx, raw in enumerate(existing_full):
         if idx == 0:
             continue  # header
@@ -667,8 +718,8 @@ def sync_gorgias_to_sheet(days_back: int = 14, dry_run: bool = False) -> dict[st
         if padded[2].strip():
             existing_orders.add(padded[2].strip())
         if padded[3].strip():
-            link_to_row[(padded[3].strip(), padded[7].strip())] = (idx + 1, padded)
-    existing_links: set[str] = {k[0] for k in link_to_row}
+            link_to_row[padded[3].strip()] = (idx + 1, padded)
+    existing_links: set[str] = set(link_to_row)
 
     # Paginate Gorgias tickets (filter by date client-side)
     since_dt = datetime.now() - timedelta(days=days_back)
@@ -707,6 +758,9 @@ def sync_gorgias_to_sheet(days_back: int = 14, dry_run: bool = False) -> dict[st
             if ticket_dt < since_dt:
                 done = True
                 break
+            # Skip soft-deleted tickets (Gorgias retains them in API responses)
+            if t.get("deleted_datetime"):
+                continue
             checked += 1
             cf = t.get("custom_fields", {})
 
@@ -744,13 +798,12 @@ def sync_gorgias_to_sheet(days_back: int = 14, dry_run: bool = False) -> dict[st
                 if original and original != order_num:
                     order_num = original
 
-            # Upsert by (gorgias_link, issue_type). A ticket can produce
-            # multiple rows when it carries multiple distinct issue types.
+            # Upsert by gorgias_link only. One ticket = one row; column H
+            # (issue_type) accumulates multiple values comma-joined when
+            # the same ticket reports more than one distinct issue.
             # Order numbers are NOT unique: same order → multiple tickets.
             gorgias_link = _extract_gorgias_link(t)
-            existing_match = (
-                link_to_row.get((gorgias_link, issue_type)) if gorgias_link else None
-            )
+            existing_match = link_to_row.get(gorgias_link) if gorgias_link else None
 
             # Shopify lookup for Carrier, State, FC Tag (single pass — no enrich needed)
             import time as _time_sync
@@ -807,10 +860,23 @@ def sync_gorgias_to_sheet(days_back: int = 14, dry_run: bool = False) -> dict[st
                     continue
                 # Row already in sheet — fill any blank field with fresh data.
                 # Never overwrite an existing non-blank value (preserves the
-                # Comment column + manual edits).
+                # Comment column + manual edits). Exception: column H
+                # (Issue Type) accumulates — if the ticket now reports a
+                # new issue_type not already listed, append it comma-joined.
                 patched = list(existing_padded)
                 changed_cols: list[int] = []
                 for col_idx in range(10):
+                    if col_idx == 7:
+                        # Issue Type — merge instead of skip-if-not-blank
+                        existing_types = [
+                            s.strip() for s in patched[7].split(",") if s.strip()
+                        ]
+                        new_type = (row[7] or "").strip()
+                        if new_type and new_type not in existing_types:
+                            existing_types.append(new_type)
+                            patched[7] = ", ".join(existing_types)
+                            changed_cols.append(7)
+                        continue
                     if not patched[col_idx].strip() and row[col_idx].strip():
                         patched[col_idx] = row[col_idx]
                         changed_cols.append(col_idx)
@@ -823,7 +889,7 @@ def sync_gorgias_to_sheet(days_back: int = 14, dry_run: bool = False) -> dict[st
                         }
                     )
                     upserted += 1
-                    link_to_row[(gorgias_link, issue_type)] = (sheet_row_num, patched)
+                    link_to_row[gorgias_link] = (sheet_row_num, patched)
                 else:
                     skipped_dup += 1
                 continue
@@ -834,9 +900,12 @@ def sync_gorgias_to_sheet(days_back: int = 14, dry_run: bool = False) -> dict[st
             if gorgias_link:
                 existing_links.add(gorgias_link)
                 # Future iterations in this same run can't re-append this
-                # (link, issue_type). row_num is unknown until append
-                # finishes; mark with sentinel.
-                link_to_row[(gorgias_link, issue_type)] = (-1, row)
+                # ticket. row_num is unknown until append finishes; mark
+                # with sentinel. If a later iteration sees this link with
+                # a new issue_type, the sentinel path will skip it (the
+                # appended row already carries the first issue_type — H
+                # merging across two new tickets in one run is rare).
+                link_to_row[gorgias_link] = (-1, row)
 
         if done:
             break
@@ -1298,13 +1367,18 @@ def enrich_incomplete_rows(dry_run: bool = False) -> dict[str, object]:
                 new_values[6] = "RMFG"
                 fields_filled.append("fc_tag")
 
-        # Issue Type (col H, index 7) — from Gorgias
-        if not new_values[7].strip() and ticket:
+        # Issue Type (col H, index 7) — from Gorgias. Merges, does not
+        # overwrite: one ticket can carry multiple distinct issue_types
+        # and column H accumulates them comma-joined.
+        if ticket:
             cf = ticket.get("custom_fields", {})
             it = cf.get(FIELD_ISSUE_TYPE, {}).get("value", "")
             if it and _matches_valid_prefix(it, VALID_ISSUE_PREFIXES):
-                new_values[7] = it
-                fields_filled.append("issue_type")
+                existing_types = [s.strip() for s in new_values[7].split(",") if s.strip()]
+                if it not in existing_types:
+                    existing_types.append(it)
+                    new_values[7] = ", ".join(existing_types)
+                    fields_filled.append("issue_type")
 
         # Resolution (col I, index 8) — from Gorgias
         if not new_values[8].strip() and ticket:
