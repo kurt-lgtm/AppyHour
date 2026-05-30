@@ -34,6 +34,7 @@ AppyHourMCP/
 | Gorgias sync | `tools/gorgias*.py`, `~/.knowledge/ops/gorgias*` | rest | — |
 | Sheets reporting | `tools/google_sheets.py` | rest | — |
 | Cache tuning / stale data | `tools/cache.py` (TTL tiers, bust contract) | rest | `APPYHOUR_NO_CACHE=1` to bypass |
+| Bulk order export (>1000) | `tools/shopify_bulk.py` (`appyhour_bulk_query`) | Matrixify for WRITES | shopify-api skill |
 
 ## Conventions
 
