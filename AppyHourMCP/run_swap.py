@@ -28,18 +28,36 @@ SWAPS = {
 DIETARY_RESTRICTION_FRAGMENTS = ("NNRS", "CORS", "NCRS")
 
 def lookup_variant_gids(base, headers, target_skus):
+    """Resolve target SKUs to their $0 variant GID via GraphQL.
+
+    NOTE: The REST GET /variants.json?sku=X filter is BROKEN — Shopify
+    ignores the sku param and returns a generic variant list with empty
+    sku fields, so the $0 id comes back identical across different SKUs
+    (confirmed 2026-05-29: CH-CONI and CH-PBRIE both -> 46751555715352).
+    Use GraphQL productVariants(query: "sku:X") with an EXACT sku match.
+    See ~/.knowledge/codebase/Shopify variants.json sku filter broken.md
+    """
     gids = {}
     for sku in target_skus:
-        resp = requests.get(f"{base}/variants.json", headers=headers,
-                            params={"sku": sku, "limit": 1}, timeout=30)
-        resp.raise_for_status()
-        variants = resp.json().get("variants", [])
-        for v in variants:
-            if v.get("price") == "0.00":
-                gids[sku] = f"gid://shopify/ProductVariant/{v['id']}"
-                break
-        if sku not in gids and variants:
-            gids[sku] = f"gid://shopify/ProductVariant/{variants[0]['id']}"
+        safe_sku = sku.replace('"', '\\"')
+        data = shopify_graphql(base, headers, """
+            query($q: String!) {
+                productVariants(first: 25, query: $q) {
+                    edges { node { id sku price } }
+                }
+            }
+        """, {"q": f"sku:{safe_sku}"})
+        # Exact-match the sku; GraphQL search is fuzzy/prefix.
+        matches = [
+            e["node"] for e in data["productVariants"]["edges"]
+            if (e["node"].get("sku") or "").strip() == sku
+        ]
+        if not matches:
+            raise RuntimeError(f"No variant found for SKU {sku!r}")
+        # Prefer the $0 variant (curation swap line); else lowest price.
+        zero = [m for m in matches if m.get("price") == "0.00"]
+        chosen = zero[0] if zero else min(matches, key=lambda m: float(m.get("price") or 1e9))
+        gids[sku] = chosen["id"]
     return gids
 
 def fetch_orders(base, headers, ship_tag, source_skus):
