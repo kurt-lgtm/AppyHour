@@ -330,6 +330,13 @@ def register(mcp: object) -> None:
             )
             resp.raise_for_status()
 
+            # Order tags mutated — invalidate cached order reads.
+            try:
+                from tools.cache import get_store
+                get_store().bust("orders")
+            except Exception:  # noqa: BLE001 — best-effort, never block the response
+                logger.warning("cache bust('orders') failed after tag update (non-fatal)", exc_info=True)
+
             return to_json({"order_id": params.order_id, "tags": new_tags})
         except Exception as e:
             return format_error(e, "update_order_tags")
@@ -379,7 +386,7 @@ def register(mcp: object) -> None:
                     f"{base}/orders.json",
                     headers=headers,
                     params={
-                        "name": f"%23{query}",
+                        "name": f"#{query}",
                         "status": params.status,
                         "fields": "id,name,tags,line_items,customer,email,created_at,financial_status,fulfillment_status",
                     },

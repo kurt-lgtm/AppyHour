@@ -7,6 +7,7 @@ Uses InventoryReorder's static Admin API token.
 
 import json
 import csv
+import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -66,11 +67,14 @@ def _lookup_variant_gids(base: str, headers: dict[str, str], skus: set[str]) -> 
     return {sku: _variant_gid_cache[sku] for sku in skus}
 
 
-def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: dict[str, str], variant_gids: dict[str, str]) -> list[str]:
+def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: dict[str, str], variant_gids: dict[str, str], rc_bundle_only: bool = True) -> list[str]:
     """Swap SKUs on a single order. Returns list of swap descriptions.
 
     Safety: snapshots all line items after beginEdit, verifies only target
     SKUs are modified before commit. Aborts if unexpected changes detected.
+
+    When rc_bundle_only=True (default), only line items with the `_rc_bundle`
+    custom attribute are eligible — paid add-ons (no props) are never swapped.
     """
     data = shopify_graphql(base, headers, """
         mutation orderEditBegin($id: ID!) {
@@ -78,7 +82,7 @@ def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: 
                 calculatedOrder {
                     id
                     lineItems(first: 50) {
-                        edges { node { id quantity sku } }
+                        edges { node { id quantity sku customAttributes { key value } } }
                     }
                 }
                 userErrors { field message }
@@ -100,9 +104,13 @@ def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: 
         sku = node.get("sku") or ""
         qty = node.get("quantity", 0)
         li_id = node["id"]
+        attrs = {a.get("key"): a.get("value") for a in (node.get("customAttributes") or [])}
+        is_rc_bundle = "_rc_bundle" in attrs
         if qty > 0:
             all_items_snapshot[li_id] = (sku, qty)
             if sku in swaps:
+                if rc_bundle_only and not is_rc_bundle:
+                    continue  # skip paid / non-bundle line items
                 calc_items[sku] = (li_id, qty)
 
     if not calc_items:
@@ -178,6 +186,16 @@ def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: 
     if errors:
         raise RuntimeError(f"commitEdit failed: {errors}")
 
+    # Order mutated — invalidate cached order reads so subsequent fetches
+    # see the edit (per cache.py bust contract).
+    try:
+        from tools.cache import get_store
+        get_store().bust("orders")
+    except Exception:  # noqa: BLE001 — cache bust is best-effort, never block a commit
+        logging.getLogger("appyhour_mcp.order_edit").warning(
+            "cache bust('orders') failed after commit (non-fatal)", exc_info=True
+        )
+
     return swapped
 
 
@@ -189,9 +207,11 @@ def register(mcp: object) -> None:
         model_config = ConfigDict(str_strip_whitespace=True)
 
         ship_tag: str = Field(..., description="Ship date tag to filter orders (e.g. '_SHIP_2026-03-23')")
-        swaps: dict[str, str] = Field(..., description="Map of old_sku -> new_sku (e.g. {'CH-LEON': 'CH-LOU'})")
+        swaps: dict[str, object] = Field(..., description="Map of old_sku -> new_sku (str) OR list[str] to alternate per-order (e.g. {'AC-RBOL': ['AC-PFLAT', 'AC-TCRISP']})")
         box_sku: str = Field("", description="Optional: only process orders containing this box SKU (e.g. 'AHB-MCUST-SPN')")
+        box_sku_contains: list[str] = Field(default_factory=list, description="Optional: only process orders containing a box SKU whose name includes ANY of these substrings (e.g. ['-MDT', 'XMDT']). Applied in addition to box_sku.")
         dry_run: bool = Field(True, description="If true (default), preview without modifying orders")
+        rc_bundle_only: bool = Field(True, description="If true (default), only swap line items with _rc_bundle property; skip paid/chosen items")
 
     @mcp.tool(
         name="appyhour_swap_order_skus",
@@ -221,7 +241,13 @@ def register(mcp: object) -> None:
         try:
             base, headers = get_shopify_auth()
             source_skus = set(params.swaps.keys())
-            target_skus = set(params.swaps.values())
+            # Flatten target SKUs (value may be str or list[str])
+            target_skus: set[str] = set()
+            for v in params.swaps.values():
+                if isinstance(v, list):
+                    target_skus.update(v)
+                else:
+                    target_skus.add(str(v))
 
             # Look up $0 variant GIDs for replacement SKUs
             variant_gids = _lookup_variant_gids(base, headers, target_skus)
@@ -244,30 +270,58 @@ def register(mcp: object) -> None:
                 if params.ship_tag not in tags:
                     continue
                 has_box = not params.box_sku
+                has_contains = not params.box_sku_contains
                 swap_skus = set()
                 for li in o.get("line_items", []):
                     sku = (li.get("sku") or "")
                     fq = li.get("fulfillable_quantity", 0)
                     if params.box_sku and sku == params.box_sku:
                         has_box = True
+                    if params.box_sku_contains and any(frag in sku for frag in params.box_sku_contains):
+                        has_contains = True
                     if sku in source_skus and fq > 0:
+                        if params.rc_bundle_only:
+                            props = li.get("properties") or []
+                            has_rc = any((p.get("name") == "_rc_bundle") for p in props)
+                            if not has_rc:
+                                continue
                         swap_skus.add(sku)
-                if has_box and swap_skus:
+                if has_box and has_contains and swap_skus:
                     targets.append((o, swap_skus))
+
+            # Deterministic order for alternating targets: sort by order name
+            targets.sort(key=lambda t: t[0].get("name", ""))
+
+            def _resolve_swap_map(order_idx: int, swap_skus: set[str]) -> dict[str, str]:
+                """Resolve per-order target SKU (str value as-is, list value round-robin by order_idx)."""
+                out: dict[str, str] = {}
+                for s in swap_skus:
+                    v = params.swaps[s]
+                    if isinstance(v, list):
+                        out[s] = v[order_idx % len(v)]
+                    else:
+                        out[s] = str(v)
+                return out
 
             if params.dry_run:
                 preview = []
-                for o, swap_skus in targets:
+                target_counts: dict[str, int] = {}
+                for idx, (o, swap_skus) in enumerate(targets):
+                    swap_map = _resolve_swap_map(idx, swap_skus)
+                    for v in swap_map.values():
+                        target_counts[v] = target_counts.get(v, 0) + 1
                     preview.append({
                         "order": o.get("name", ""),
-                        "swaps": {s: params.swaps[s] for s in sorted(swap_skus)},
+                        "swaps": swap_map,
                     })
                 return to_json({
                     "dry_run": True,
                     "ship_tag": params.ship_tag,
                     "box_sku": params.box_sku or "(any)",
+                    "rc_bundle_only": params.rc_bundle_only,
                     "variant_gids": variant_gids,
                     "orders_to_swap": len(targets),
+                    "target_counts": target_counts,
                     "preview": preview,
                 })
 
@@ -275,7 +329,7 @@ def register(mcp: object) -> None:
             results = []
             errors_list = []
 
-            def _do_swap(order, swap_skus):
+            def _do_swap(order, swap_skus, idx):
                 oid = order["id"]
                 name = order.get("name", "")
                 order_gid = f"gid://shopify/Order/{oid}"
@@ -285,13 +339,13 @@ def register(mcp: object) -> None:
                     email = cust.get("email", "") or ""
                 if not email:
                     email = order.get("email", "") or ""
-                swap_map = {s: params.swaps[s] for s in swap_skus}
-                swapped = _swap_order_skus(base, headers, order_gid, swap_map, variant_gids)
+                swap_map = _resolve_swap_map(idx, swap_skus)
+                swapped = _swap_order_skus(base, headers, order_gid, swap_map, variant_gids, params.rc_bundle_only)
                 return {"order": name, "email": email, "swaps": swapped}
 
             with ThreadPoolExecutor(max_workers=8) as pool:
-                futures = {pool.submit(_do_swap, order, swap_skus): order.get("name", "")
-                           for order, swap_skus in targets}
+                futures = {pool.submit(_do_swap, order, swap_skus, idx): order.get("name", "")
+                           for idx, (order, swap_skus) in enumerate(targets)}
                 for future in as_completed(futures):
                     name = futures[future]
                     try:
@@ -301,7 +355,7 @@ def register(mcp: object) -> None:
 
             # Write CSV
             today = datetime.now().strftime("%Y-%m-%d")
-            csv_path = str(APPYHOUR_ROOT / "GelPackCalculator" / f"swap_results_{today}.csv")
+            csv_path = str(APPYHOUR_ROOT / "InventoryReorder" / "fulfillment_web" / f"swap_results_{today}.csv")
             with open(csv_path, "w", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=["order", "email", "swaps"])
                 writer.writeheader()

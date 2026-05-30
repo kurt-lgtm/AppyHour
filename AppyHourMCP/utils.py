@@ -34,9 +34,6 @@ APPDATA_SETTINGS = Path(os.environ.get("APPDATA", "")) / "AppyHour" / "gel_calc_
 # Shared Google Sheet IDs
 OPS_SHEET_ID = "190AmXF8hy-M8lmt8q9uhOkyOMi7AmU0jJAd1KOpjWdA"
 
-# Shopify API version — bump here to update all modules
-SHOPIFY_API_VERSION = "2024-01"
-
 def setup_paths():
     """Add sibling project directories to sys.path (idempotent)."""
     for p in [APPYHOUR_ROOT, GELCALC_DIR, INVENTORY_DIR, SHIPPING_DIR]:
@@ -126,6 +123,7 @@ def shopify_paginate(
     key: str = "orders",
     timeout: int = 30,
     sleep: float = 0.1,
+    resource: str = "",
 ) -> list[dict]:
     """Paginate a Shopify REST endpoint following Link rel=next headers.
 
@@ -136,6 +134,9 @@ def shopify_paginate(
         key: JSON key to extract results from (e.g. "orders", "products"). Use "" for auto-detect (first key).
         timeout: Request timeout in seconds.
         sleep: Delay between pages in seconds.
+        resource: Cache tier (see tools/cache.py CACHE_TTL). Defaults to ``key``
+            when omitted. Pass "orders-live" or any name absent from the tier
+            map to bypass caching for write-adjacent reads.
 
     Returns:
         Combined list of all items across all pages.
@@ -143,6 +144,20 @@ def shopify_paginate(
     import re
     import time
     import requests as _requests
+
+    # Cache full paginated result keyed on (url, params). Resource tier
+    # defaults to ``key`` (e.g. "orders" -> 10m, "products" -> 1h).
+    cache_resource = resource or key or "default"
+    _store = None
+    _ckey = None
+    if cache_resource:
+        from tools.cache import cache_key, get_store
+
+        _store = get_store()
+        _ckey = cache_key(cache_resource, url=url, params=params or {}, key=key)
+        _cached = _store.get(_ckey)
+        if _cached is not None:
+            return _cached
 
     all_items: list[dict] = []
     page = 0
@@ -167,17 +182,19 @@ def shopify_paginate(
                 url = m.group(1)
         if url:
             time.sleep(sleep)
+    if _store is not None and _ckey is not None:
+        _store.put(_ckey, all_items, cache_resource)
     return all_items
 
 
-# Re-exported from appyhour.credentials (single source of truth).
+# Re-exported from appyhour_lib.credentials (single source of truth).
 # Env vars > InventoryReorder settings.
 import sys as _sys
 from pathlib import Path as _Path
 _REPO_ROOT = _Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in _sys.path:
     _sys.path.insert(0, str(_REPO_ROOT))
-from appyhour.credentials import get_shopify_auth  # noqa: E402,F401
+from appyhour_lib.credentials import get_shopify_auth  # noqa: E402,F401
 
 def active_line_items(order: dict) -> list:
     """Return line items with net quantity > 0, excluding refunded/removed items.
@@ -201,9 +218,39 @@ def active_line_items(order: dict) -> list:
         if li.get("quantity", 0) - refunded.get(li["id"], 0) > 0
     ]
 
-def shopify_graphql(base: str, headers: dict, query: str, variables: Optional[dict] = None) -> dict:
-    """Execute a Shopify GraphQL query. Returns the 'data' key."""
+def shopify_graphql(
+    base: str,
+    headers: dict,
+    query: str,
+    variables: Optional[dict] = None,
+    resource: str = "default",
+) -> dict:
+    """Execute a Shopify GraphQL query. Returns the 'data' key.
+
+    When ``resource`` maps to a TTL tier (see tools/cache.py CACHE_TTL), the
+    response is cached per-resource. Pass ``resource="orders-live"`` (or any
+    name absent from the tier map) to bypass the cache for write-adjacent
+    reads. Mutations must NOT be cached — callers running mutations should
+    leave resource at default AND the mutation tool must bust the affected
+    resource afterward.
+    """
     import requests
+
+    # Never cache mutations — they're writes, and a cached mutation response
+    # could be served to a later identical call. Detect by leading keyword.
+    is_mutation = query.lstrip().lower().startswith("mutation")
+
+    store = None
+    key = None
+    if not is_mutation:
+        from tools.cache import cache_key, get_store
+
+        store = get_store()
+        key = cache_key(resource, base=base, query=query, variables=variables or {})
+        cached = store.get(key)
+        if cached is not None:
+            return cached
+
     url = f"{base}/graphql.json"
     body = {"query": query}
     if variables:
@@ -213,4 +260,7 @@ def shopify_graphql(base: str, headers: dict, query: str, variables: Optional[di
     data = resp.json()
     if data.get("errors"):
         raise RuntimeError(f"GraphQL errors: {data['errors']}")
-    return data["data"]
+    result = data["data"]
+    if store is not None and key is not None:
+        store.put(key, result, resource)
+    return result

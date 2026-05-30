@@ -33,8 +33,11 @@ AppyHourMCP/
 | Cut-order tool | `tools/inventory.py`, `InventoryReorder/cut_order_generator.py` | shipping/, gelcalc/ | — |
 | Gorgias sync | `tools/gorgias*.py`, `~/.knowledge/ops/gorgias*` | rest | — |
 | Sheets reporting | `tools/google_sheets.py` | rest | — |
+| Cache tuning / stale data | `tools/cache.py` (TTL tiers, bust contract) | rest | `APPYHOUR_NO_CACHE=1` to bypass |
 
 ## Conventions
+
+- **Response caching:** `tools/cache.py` caches Shopify/Recharge/Gorgias reads by per-resource TTL (orders=10m, products/customers=1h). `shopify_graphql(resource=...)` + `shopify_paginate(resource=...)` opt in. Mutations auto-bypass (query starts with `mutation`). Write-adjacent reads pass `resource="orders-live"` to bypass. **Any mutation tool MUST `get_store().bust("<resource>")` after committing** — order_edit + update_tags already do.
 
 - Each tool exports `register(mcp)` (FastMCP-compatible)
 - Pydantic models for input validation: `class XxxInput(BaseModel)`
