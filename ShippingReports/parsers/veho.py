@@ -138,6 +138,15 @@ def parse_veho_xlsx(filepath: str, zip3_map: Optional[Dict[str, str]] = None) ->
         if not tracking:
             continue
 
+        # Multi-client invoice guard: RMFG's Veho export bundles ALL their
+        # clients (e.g. "LAN AppyHour", "LAN Gardencup", "LAN Robbins MFG")
+        # into one file keyed by 'Client Name'. Keep ONLY AppyHour rows —
+        # other clients' packages have no AppyHour order# and otherwise
+        # pollute shipments (inv 00332 = 1,468 Gardencup + 40 Robbins rows).
+        client = str(g('Client Name') or '')
+        if client and 'appyhour' not in client.lower():
+            continue
+
         origin_zip = str(g('Origin Zip') or '').strip()
         injection = str(g('Injection Market') or '').strip()
         hub = _derive_hub(origin_zip, injection)
