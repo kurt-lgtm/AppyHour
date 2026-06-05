@@ -5,10 +5,11 @@ Scans unfulfilled Shopify orders for error classes before Tuesday cut order.
 Auto-filters known false positives and categorizes results into
 AUTO-FIX, REVIEW, and IGNORE buckets.
 
-Error Classes:
+Error Classes (canonical: ~/.knowledge/ops/Error Classes.md):
   AUTO-FIX: Class 2/3 (blank SKU), 4B (duplicate food)
-  REVIEW:   Class 6 (curation mismatch), ROT (rotation bug)
-  IGNORE:   Class 7 (gift redemption), 11 (structural), 12 (info only)
+  REVIEW:   Class 6 (curation mismatch), ROT (rotation bug), 11 (bare CEX-EC no suffix),
+            13 (membership box got curation), 14 (dup PR-CJAM), 15 (stale Matrixify/CEX-EC)
+  IGNORE:   Class 7 (gift redemption), 12 (info only)
 
 False Positive Exclusions:
   - bundle_selections present (customer customized)
@@ -46,8 +47,10 @@ from claude_agent_sdk import (
 
 # Error class categorization
 AUTO_FIX_CLASSES = frozenset({"2", "3", "2/3", "4B"})
-REVIEW_CLASSES = frozenset({"6", "ROT", "13", "14"})
-IGNORE_CLASSES = frozenset({"7", "11", "12"})
+# Class 11 = bare CEX-EC without a live suffix = a real error (REVIEW), not structural noise.
+# Class 15 = stale Matrixify/CEX-EC carried from prior month (REVIEW). See ~/.knowledge/ops/Error Classes.md
+REVIEW_CLASSES = frozenset({"6", "ROT", "11", "13", "14", "15"})
+IGNORE_CLASSES = frozenset({"7", "12"})
 
 # False positive markers
 FALSE_POSITIVE_TAGS = frozenset({"reship", "replacement", "comp"})
@@ -172,8 +175,10 @@ async def run_error_scan(ship_tag: str) -> dict[str, Any]:
         "3. Class 6: Curation mismatch (>20% better overlap with different curation)\n"
         "4. Class ROT: Wrong month curation (_SHIP != ship tag, <60% recipe overlap, "
         "no bundle_selections, not BYO)\n"
-        "5. Class 13: Stale Matrixify/CEX-EC from prior months\n"
-        "6. Class 14: Duplicate PR-CJAM (NMS orders: PR-CJAM-GEN + PR-CJAM-NMS)\n\n"
+        "5. Class 11: Bare CEX-EC (fq>0) with no live CEX-EC-{suffix} (fq>0) on a large box\n"
+        "6. Class 13: Membership box (blank SKU) that had curation items written to it\n"
+        "7. Class 14: Duplicate PR-CJAM (NMS orders: PR-CJAM-GEN + PR-CJAM-NMS)\n"
+        "8. Class 15: Stale Matrixify/CEX-EC carried from prior months\n\n"
         "EXCLUDE from results:\n"
         "- Orders with bundle_selections property (customer customized)\n"
         "- Orders tagged 'reship', 'replacement', or 'comp'\n"
