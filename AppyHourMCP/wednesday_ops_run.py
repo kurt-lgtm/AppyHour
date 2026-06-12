@@ -462,6 +462,13 @@ def run_routing_postmortem(tue: date) -> dict:
         "escalate": escalate,
     }
     if escalate:
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+            from appyhour_lib.notify import notify
+
+            notify(f"Routing postmortem escalation: {json.dumps(summary)}", level="error")
+        except Exception:
+            pass
         # WARNING goes to stdout -> captured by the .bat log; exception-only
         # surfacing: a clean week prints one line, a breach prints loudly.
         print(f"WARNING: POSTMORTEM ESCALATION -> {json.dumps(summary)}", flush=True)
