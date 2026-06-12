@@ -30,7 +30,12 @@ def fetch_order_by_name(base, headers, order_num):
     return resp.json().get("orders", [])
 
 def fetch_orders_by_tag(base, headers, tag, limit=250):
-    """Fetch unfulfilled orders by tag."""
+    """Fetch ALL open+unfulfilled orders (cursor-paginated), filter by tag client-side.
+
+    Shopify REST orders.json has no `tag` filter param, so we must page through
+    every open+unfulfilled order and match the tag locally. Without full
+    pagination this silently caps at the first page and misses cohort members.
+    """
     all_orders = []
     url = f"{base}/orders.json"
     params = {
@@ -39,12 +44,26 @@ def fetch_orders_by_tag(base, headers, tag, limit=250):
         "limit": limit,
         "fields": "id,name,tags,line_items",
     }
-    resp = requests.get(url, headers=headers, params=params, timeout=30)
-    if resp.status_code != 200:
-        return []
-    for o in resp.json().get("orders", []):
-        if tag in (o.get("tags") or ""):
-            all_orders.append(o)
+    page = 0
+    while url:
+        resp = requests.get(url, headers=headers, params=params, timeout=30)
+        if resp.status_code != 200:
+            break
+        for o in resp.json().get("orders", []):
+            if tag in (o.get("tags") or ""):
+                all_orders.append(o)
+        page += 1
+        # Follow cursor: Link header rel="next". page_info is mutually exclusive
+        # with other filters, so subsequent calls carry only limit + page_info.
+        next_url = None
+        link = resp.headers.get("Link", "")
+        for part in link.split(","):
+            if 'rel="next"' in part:
+                next_url = part[part.find("<") + 1:part.find(">")]
+        url = next_url
+        params = None
+        if page % 10 == 0:
+            time.sleep(0.5)
     return all_orders
 
 def check_orders_for_skus(orders, target_skus):

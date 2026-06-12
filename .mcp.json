@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "appyhour": {
+      "type": "stdio",
+      "command": "C:/Users/Work/anaconda3/python.exe",
+      "args": [
+        "C:/Users/Work/Claude Projects/AppyHour/AppyHourMCP/server.py"
+      ],
+      "env": {}
+    },
+    "shopify-dev": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "C:/Users/Work/AppData/Roaming/npm/node_modules/@shopify/dev-mcp/dist/index.js"
+      ],
+      "env": {}
+    }
+  }
+}

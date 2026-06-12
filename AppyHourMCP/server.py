@@ -37,12 +37,16 @@ mcp: FastMCP = FastMCP("appyhour_mcp")
 
 # Import tool modules — each module registers tools on the shared `mcp` instance
 # We pass `mcp` via a module-level setter pattern
-from tools import gelcalc, shopify, inventory, shipping, context, google_sheets, gorgias, gorgias_sheets_sync, ops_summary_builder, order_edit, matrix_qc, product_catalog, shopify_bulk
+# NOTE: `shipping` (appyhour_shipping_analysis, appyhour_apply_zip_routing_tags)
+# intentionally NOT registered here as of 2026-06-01 — those tools are duplicated
+# in AppyHourShippingMCP (the load-on-demand shipping server) and were removed from
+# this always-on server to keep its tool surface lean. The tools/shipping.py module
+# is retained but unwired; re-add it to the import + register() list to restore.
+from tools import gelcalc, shopify, inventory, context, google_sheets, gorgias, gorgias_sheets_sync, ops_summary_builder, order_edit, matrix_qc, product_catalog, shopify_bulk
 
 gelcalc.register(mcp)
 shopify.register(mcp)
 inventory.register(mcp)
-shipping.register(mcp)
 context.register(mcp)
 google_sheets.register(mcp)
 gorgias.register(mcp)

@@ -149,7 +149,7 @@ def main():
         if not store_url.startswith("http"):
             store_url = f"https://{store_url}.myshopify.com"
         _cutoff = (datetime.now() - timedelta(days=3)).isoformat()
-        _fo_url = f"{store_url}/admin/api/2024-01/orders.json"
+        _fo_url = f"{store_url}/admin/api/2026-04/orders.json"
         _fo_params = {"status": "any", "limit": 250, "created_at_min": _cutoff, "fields": "id,tags,line_items"}
         _fo_orders = []
         _fo_page_url = _fo_url
@@ -193,12 +193,13 @@ def main():
                         _fo_skus[_sku] += (_li.get("quantity", 1)) / len(_mong_fo)
 
         # Add projected demand to WK1 Shopify addon counts
+        # Attribute ALL projected first orders to MONG (default curation for new subs)
         _mong_pct = len(_mong_fo) / len(_fo_orders) if _fo_orders else 0
-        _mong_projected = int(_projected * _mong_pct)
+        _mong_projected = _projected
         print(
             f"  First-order projection: {len(_fo_orders)} in 3d, "
             f"{_daily_rate:.0f}/day, {_projected} projected, "
-            f"{_mong_projected} MONG ({_mong_pct:.0%})"
+            f"{_mong_projected} MONG (actual MONG share {_mong_pct:.0%}, using 100%)"
         )
         for _sku, _rate in _fo_skus.items():
             _add = int(_rate * _mong_projected)
@@ -418,6 +419,7 @@ def main():
 
     # Build per-(month) counts aggregated from (week, month) keys
     # Each month gets a slot table with separate WK1 and WK2 columns
+    from inventory_demand_report import WK1_SHIP_TAG, WK2_SHIP_TAG
     month_counts = {}  # {month: {box_type: {wk1: N, wk2: N}}}
     for (week, month), counts in monthly_by_week_month.items():
         if month not in month_counts:
@@ -429,6 +431,24 @@ def main():
         wk_key = "wk1" if week == "WK1" else "wk2"
         for box_type in ("MED", "CMED", "LGE"):
             month_counts[month][box_type][wk_key] += counts.get(box_type, 0)
+
+    # Merge Shopify plain-monthly counts (bucketed by ship-tag month)
+    # WK1_SHIP_TAG format: "_SHIP_YYYY-MM-DD"
+    wk1_month = WK1_SHIP_TAG.replace("_SHIP_", "")[:7]
+    wk2_month = WK2_SHIP_TAG.replace("_SHIP_", "")[:7]
+    for wk_key, ship_month, sh_med, sh_lge in (
+        ("wk1", wk1_month, sh_wk1_med, sh_wk1_lge),
+        ("wk2", wk2_month, sh_wk2_med, sh_wk2_lge),
+    ):
+        if ship_month not in month_counts:
+            month_counts[ship_month] = {
+                "MED": {"wk1": 0, "wk2": 0},
+                "CMED": {"wk1": 0, "wk2": 0},
+                "LGE": {"wk1": 0, "wk2": 0},
+            }
+        month_counts[ship_month]["MED"][wk_key] += sh_med.get("MONTHLY", 0)
+        month_counts[ship_month]["CMED"][wk_key] += sh_med.get("CMED", 0)
+        month_counts[ship_month]["LGE"][wk_key] += sh_lge.get("MONTHLY", 0)
 
     # Write separate slot tables per month for each box type
     for month in sorted(month_counts.keys()):
@@ -599,7 +619,7 @@ def main():
     ws.conditional_formatting.add(f"L2:L{last_row}", FormulaRule(formula=[f'LEFT(L2,4)="NEED"'], fill=short_fill))
 
     # -- Save --
-    ship_date = WK1_END.isoformat()
+    ship_date = "2026-04-27"
     out_path = os.path.join(BASE, f"cut_order_{ship_date}.xlsx")
     wb.save(out_path)
     print(f"\nExcel written to: {out_path}")

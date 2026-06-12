@@ -35,13 +35,13 @@ SHIPMENTS = os.path.join(BASE, "Shipments")
 SAT_DEPLETION = ""  # Inventory CSV is from 4/21 — post-depletion
 TUE_DEPLETION = ""
 
-# Ship week boundaries — Recharge uses Sun-Sat (charge dates)
-# WK1: Sun 5/3 – Sat 5/9 (ships week of _SHIP_2026-05-11)
-# WK2: Sun 5/10 – Sat 5/16 (ships week of _SHIP_2026-05-18)
-WK1_START = date(2026, 5, 3)
-WK1_END = date(2026, 5, 9)
-WK2_START = date(2026, 5, 10)
-WK2_END = date(2026, 5, 16)
+# Ship week boundaries — Tue rule: WK1 = next Mon ship only
+# WK1: Sun 6/7 – Fri 6/12 (ships _SHIP_2026-06-15)
+# WK2: Sat 6/13 – Fri 6/19 (ships _SHIP_2026-06-22)
+WK1_START = date(2026, 6, 7)
+WK1_END = date(2026, 6, 12)
+WK2_START = date(2026, 6, 13)
+WK2_END = date(2026, 6, 19)
 
 PICKABLE_PREFIXES = ("CH-", "MT-", "AC-")
 
@@ -70,12 +70,14 @@ def resolve_curation(sku):
     sku = sku.strip().upper()
     if sku in _MONTHLY_PATTERNS:
         return "MONTHLY"
-    if "MCUST-NMS" in sku:
+    if "-MCUST-NMS" in sku:
         return "NMS"
-    if "MCUST-MS" in sku or "CUR-MS" in sku or "BVAL" in sku:
+    if "-MCUST-MS" in sku or "-CUR-MS" in sku:
         return "MS"
-    for cur in KNOWN_CURATIONS:
-        if cur in sku:
+    # Hyphen-anchored match — prevents substring false-positives (e.g. MS in NMS, SS in HHIGH).
+    # Iterate by length desc so longer curations win when nested.
+    for cur in sorted(KNOWN_CURATIONS, key=len, reverse=True):
+        if sku.endswith("-" + cur) or ("-" + cur + "-") in sku:
             return cur
     return None
 
@@ -183,62 +185,106 @@ def parse_depletion_xlsx(path, sku_translations):
 # -- Step 3: Fetch Recharge via API (v2021-11) --
 
 
+def _load_recharge_csv(path):
+    """Load queued-charges CSV export into API-shape charge dicts.
+
+    Expected CSV header: charge_id,customer_id,scheduled_at,email,line_item_title,
+                          line_item_quantity,line_item_sku
+    """
+    import csv as _csv
+    from datetime import datetime as _dt
+    charges_by_id = {}
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        r = _csv.reader(f)
+        next(r)
+        for row in r:
+            if not row or not (row[0] or "").strip().isdigit():
+                continue
+            cid = row[0].strip()
+            sched_raw = (row[2] or "").strip() if len(row) > 2 else ""
+            sku = (row[6] or "").strip() if len(row) > 6 else ""
+            try:
+                qty = int(float(row[5])) if len(row) > 5 and row[5] else 1
+            except ValueError:
+                qty = 1
+            # parse "5/20/2026 0:00" -> ISO
+            sched_iso = ""
+            try:
+                sched_iso = _dt.strptime(sched_raw.split(" ")[0], "%m/%d/%Y").date().isoformat()
+            except Exception:
+                try:
+                    sched_iso = _dt.fromisoformat(sched_raw[:10]).date().isoformat()
+                except Exception:
+                    sched_iso = sched_raw[:10]
+            ch = charges_by_id.setdefault(cid, {"id": cid, "scheduled_at": sched_iso, "line_items": []})
+            ch["line_items"].append({"sku": sku, "quantity": qty})
+    return list(charges_by_id.values())
+
+
 def fetch_recharge_api(api_token, out_specialty=None):
     """Fetch queued charges. Returns pickable SKU demand + curation counts per week.
 
     If `out_specialty` is provided as a dict like {"WK1": {}, "WK2": {}}, it is
     populated with totals for any SKU starting with "AHB-X" or "BL-" found in
     queued charges within the WK1/WK2 windows. Used by the cut order checklist.
+
+    If env var RECHARGE_CSV_PATH is set, load charges from CSV export instead of API
+    (admin export is authoritative; API has been observed to truncate).
     """
     import requests
 
-    session = requests.Session()
-    session.headers.update(
-        {
-            "X-Recharge-Access-Token": api_token,
-            "Accept": "application/json",
-            "X-Recharge-Version": "2021-11",
+    csv_path = os.environ.get("RECHARGE_CSV_PATH", "").strip()
+    if csv_path and os.path.exists(csv_path):
+        all_charges = _load_recharge_csv(csv_path)
+        print(f"  Loaded {len(all_charges)} charges from CSV: {csv_path}")
+    else:
+        session = requests.Session()
+        session.headers.update(
+            {
+                "X-Recharge-Access-Token": api_token,
+                "Accept": "application/json",
+                "X-Recharge-Version": "2021-11",
+            }
+        )
+
+        all_charges = []
+        params = {
+            "status": "queued",
+            "limit": 250,
+            "sort_by": "id-asc",
+            "scheduled_at_min": WK1_START.isoformat(),
+            "scheduled_at_max": WK2_END.isoformat(),
         }
-    )
+        page = 0
 
-    all_charges = []
-    params = {
-        "status": "queued",
-        "limit": 250,
-        "sort_by": "id-asc",
-        "scheduled_at_min": WK1_START.isoformat(),
-        "scheduled_at_max": WK2_END.isoformat(),
-    }
-    page = 0
-
-    while True:
-        page += 1
-        for attempt in range(3):
-            try:
-                resp = session.get("https://api.rechargeapps.com/charges", params=params, timeout=60)
-                resp.raise_for_status()
+        while True:
+            page += 1
+            for attempt in range(3):
+                try:
+                    resp = session.get("https://api.rechargeapps.com/charges", params=params, timeout=60)
+                    resp.raise_for_status()
+                    break
+                except Exception:
+                    if attempt < 2:
+                        time.sleep(2)
+                    else:
+                        raise
+            data = resp.json()
+            charges = data.get("charges", [])
+            if not charges:
                 break
-            except Exception:
-                if attempt < 2:
-                    time.sleep(2)
-                else:
-                    raise
-        data = resp.json()
-        charges = data.get("charges", [])
-        if not charges:
-            break
-        all_charges.extend(charges)
-        sys.stdout.write(f"\r  Fetched {len(all_charges)} charges (page {page})...")
-        sys.stdout.flush()
+            all_charges.extend(charges)
+            sys.stdout.write(f"\r  Fetched {len(all_charges)} charges (page {page})...")
+            sys.stdout.flush()
 
-        next_cursor = data.get("next_cursor")
-        if not next_cursor:
-            break
-        # Cursor requests: ONLY cursor + limit
-        params = {"cursor": next_cursor, "limit": 250}
-        time.sleep(0.5)
+            next_cursor = data.get("next_cursor")
+            if not next_cursor:
+                break
+            # Cursor requests: ONLY cursor + limit
+            params = {"cursor": next_cursor, "limit": 250}
+            time.sleep(0.5)
 
-    print(f"\r  Fetched {len(all_charges)} total queued charges.     ")
+        print(f"\r  Fetched {len(all_charges)} total queued charges.     ")
 
     # Per-week: pickable SKU demand + curation counts
     wk1_skus = defaultdict(int)
@@ -257,6 +303,8 @@ def fetch_recharge_api(api_token, out_specialty=None):
     # Key: (week, charge_month) e.g. ("WK1", "2026-04"), ("WK2", "2026-05")
     monthly_by_week_month = defaultdict(lambda: {"MED": 0, "CMED": 0, "LGE": 0})
     charges_per_date = defaultdict(int)
+    wk1_custom_total = 0  # AHB- charges where curation unresolved (custom boxes)
+    wk2_custom_total = 0
 
     for charge in all_charges:
         sched = (charge.get("scheduled_at") or "")[:10]
@@ -322,6 +370,13 @@ def fetch_recharge_api(api_token, out_specialty=None):
                     if is_lg:
                         wk2_large[cur] += 1
 
+            # Custom boxes (AHB-MCUST-TRAY / AHB-LCUST-TRAY) — no curation/MONTHLY match
+            if cur is None:
+                if is_wk1:
+                    wk1_custom_total += 1
+                else:
+                    wk2_custom_total += 1
+
         # Sum pickable SKU quantities (all charges, including MONTHLY boxes)
         for item in charge.get("line_items", []):
             sku = (item.get("sku") or "").strip()
@@ -359,14 +414,16 @@ def fetch_recharge_api(api_token, out_specialty=None):
         wk1_lge_total,
         wk2_lge_total,
         dict(monthly_by_week_month),
+        wk1_custom_total,
+        wk2_custom_total,
     )
 
 
 # -- Step 4: Fetch Shopify orders for upcoming ship weeks --
 
 # Ship week tag dates (Monday of each week)
-WK1_SHIP_TAG = "_SHIP_2026-05-11"
-WK2_SHIP_TAG = "_SHIP_2026-05-18"
+WK1_SHIP_TAG = "_SHIP_2026-05-18"
+WK2_SHIP_TAG = "_SHIP_2026-06-22"
 
 # Day-of-week ship-tag selection:
 #   Monday run → WK1 includes BOTH this Mon's ship tag and next Mon's

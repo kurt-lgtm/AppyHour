@@ -1,0 +1,24 @@
+[Wed 05/20/2026  9:00:01.27] Starting gorgias_update 
+[sync] pulling Gorgias tickets, last 7 days...
+{
+  "checked": 1362,
+  "new_rows": 34,
+  "skipped_duplicate": 25,
+  "skipped_invalid_tag": 1303
+}
+[enrich] pass 1 — filling incomplete rows...
+{
+  "pass": 1,
+  "total_rows": 1843,
+  "rows_enriched": 39
+}
+[enrich] pass 2 — filling incomplete rows...
+Gorgias connection error on tickets (attempt 1/10): ReadTimeout — retry in 2.0s
+{
+  "pass": 2,
+  "total_rows": 1843,
+  "rows_enriched": 0
+}
+
+[done]
+[Wed 05/20/2026  9:18:29.29] Exit code: 0 

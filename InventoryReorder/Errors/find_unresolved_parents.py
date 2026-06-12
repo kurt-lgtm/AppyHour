@@ -129,10 +129,23 @@ def check_order(order):
 
     issues = []
 
+    # Trays have no curation → no valid CEX-EC-{suffix} exists. A bare CEX-EC on a
+    # tray is a different problem (Recharge bundle misconfig, fixed at the collection
+    # level, not per-order). Flag it as its own issue, never as "missing suffix".
+    is_tray = bool(box_sku) and "TRAY" in box_sku
+
     # ── Check CEX-EC ────────────────────────────────────────────
     for sku in list(all_skus):
         if sku == "CEX-EC":
-            # Bare CEX-EC — should have been resolved to CEX-EC-{suffix}
+            if is_tray:
+                # Trays should never carry CEX-EC (see product-rules SKILL.md).
+                issues.append({
+                    "parent_sku": "CEX-EC",
+                    "expected_child": "EX-EC (tray cheese slot)",
+                    "issue": "Tray box carries CEX-EC — should be EX-EC (fix Recharge 'Artisan Cheese Wedges' collection)",
+                })
+                continue
+            # Bare CEX-EC on a curation box — should have a CEX-EC-{suffix} line
             has_suffixed = any(s.startswith("CEX-EC-") and s != "CEX-EC" for s in all_skus)
             if not has_suffixed:
                 issues.append({

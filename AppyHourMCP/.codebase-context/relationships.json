@@ -1,0 +1,20 @@
+{
+  "header": {
+    "buildId": "83e2d123-8f24-48c6-9ce5-91d617f54dde",
+    "formatVersion": 1
+  },
+  "generatedAt": "2026-04-12T18:51:47.198Z",
+  "graph": {
+    "imports": {},
+    "importedBy": {},
+    "exports": {}
+  },
+  "symbols": {
+    "exportedBy": {}
+  },
+  "stats": {
+    "files": 0,
+    "edges": 0,
+    "avgDependencies": 0
+  }
+}

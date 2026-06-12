@@ -89,6 +89,7 @@ def find_force_2day_zips(shipments: List[dict],
 
     These subscribers need FedEx 2Day every cycle.
     """
+    shipments = [s for s in shipments if s.get('transit_days') is not None]
     by_zip = defaultdict(list)
     for s in shipments:
         if s['state'] not in STATE_LEVEL_HANDLED:
@@ -291,6 +292,7 @@ def find_chronic_3day_zips(shipments: List[dict],
     These zips will fail thermally in warm months. Not force_2day (they usually
     arrive), but need extra ice or monitoring.
     """
+    shipments = [s for s in shipments if s.get('transit_days') is not None]
     by_zip = defaultdict(list)
     for s in shipments:
         if s['state'] not in STATE_LEVEL_HANDLED:

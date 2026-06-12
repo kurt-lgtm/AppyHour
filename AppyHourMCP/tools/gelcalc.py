@@ -1,17 +1,15 @@
 """
-Gel Pack Calculator MCP tools — thermal analysis, weather, and alerts.
+Gel Pack Calculator MCP tools — single-shipment thermal analysis.
+
+Weather + NWS-alert tools (appyhour_get_weather, appyhour_get_weather_alerts)
+were moved out 2026-06-01 — they now live ONLY in AppyHourShippingMCP, the
+load-on-demand shipping server, to keep this always-on server lean.
 Wraps the same logic as GelPackCalculator/app/routers/gelcalc.py.
 """
 
-import json
-import time
 from pydantic import BaseModel, Field, ConfigDict
 
 from utils import get_gelcalc_settings, format_error, to_json
-
-# Weather cache — 1hr TTL, keyed by zip code
-_weather_cache: dict[str, tuple[float, dict]] = {}  # zip -> (timestamp, result)
-_WEATHER_TTL = 3600  # seconds
 
 
 def register(mcp: object) -> None:
@@ -33,20 +31,6 @@ def register(mcp: object) -> None:
         box_l: float | None = Field(None, description="Box length in inches (uses default if omitted)")
         box_w: float | None = Field(None, description="Box width in inches")
         box_h: float | None = Field(None, description="Box height in inches")
-
-    class WeatherInput(BaseModel):
-        """Input for weather forecast lookup."""
-        model_config = ConfigDict(str_strip_whitespace=True)
-
-        zip_code: str = Field(..., description="5-digit US zip code (e.g. '75042', '90210')", min_length=5, max_length=5)
-
-    class AlertsInput(BaseModel):
-        """Input for NWS weather alerts lookup."""
-        model_config = ConfigDict(str_strip_whitespace=True)
-
-        lat: float = Field(..., description="Latitude of the location")
-        lon: float = Field(..., description="Longitude of the location")
-        days_ahead: int = Field(4, description="Number of days ahead to check for alerts", ge=1, le=7)
 
     # -----------------------------------------------------------------------
     # Tools
@@ -147,92 +131,3 @@ def register(mcp: object) -> None:
             })
         except Exception as e:
             return format_error(e, "analyze_shipment")
-
-    @mcp.tool(
-        name="appyhour_get_weather",
-        annotations={
-            "title": "Get Weather Forecast for Zip Code",
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": True,
-        },
-    )
-    async def get_weather(params: WeatherInput) -> str:
-        """Fetch weather forecast for a US zip code using OpenWeatherMap.
-
-        Returns average, peak, and minimum temperatures over the forecast window,
-        plus lat/lon coordinates (useful for subsequent NWS alert lookups).
-
-        Args:
-            params: Contains the 5-digit zip code to look up.
-
-        Returns:
-            JSON with avg_temp_f, peak_temp_f, min_temp_f, lat, lon, and
-            number of forecast data points.
-        """
-        try:
-            # Check cache first (1hr TTL)
-            cached = _weather_cache.get(params.zip_code)
-            if cached and (time.time() - cached[0]) < _WEATHER_TTL:
-                return to_json(cached[1])
-
-            from appyhour.weather import fetch_weather_by_zip
-
-            s = get_gelcalc_settings()
-            api_key = s.get("owm_api_key", "")
-            if not api_key:
-                return "Error: OpenWeatherMap API key not configured in GelPackCalculator settings."
-
-            forecasts, lat, lon = fetch_weather_by_zip(api_key, params.zip_code)
-            if forecasts is None:
-                return f"Error: Could not fetch weather data for zip {params.zip_code}."
-
-            temps = [t for _, t in forecasts]
-            result = {
-                "zip": params.zip_code,
-                "lat": lat,
-                "lon": lon,
-                "avg_temp_f": round(sum(temps) / len(temps), 1) if temps else None,
-                "peak_temp_f": round(max(temps), 1) if temps else None,
-                "min_temp_f": round(min(temps), 1) if temps else None,
-                "forecast_points": len(temps),
-            }
-            _weather_cache[params.zip_code] = (time.time(), result)
-            return to_json(result)
-        except Exception as e:
-            return format_error(e, "get_weather")
-
-    @mcp.tool(
-        name="appyhour_get_weather_alerts",
-        annotations={
-            "title": "Get NWS Weather Alerts",
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": True,
-        },
-    )
-    async def get_weather_alerts(params: AlertsInput) -> str:
-        """Fetch active NWS weather alerts for a location.
-
-        Checks the National Weather Service API for severe weather alerts
-        (heat advisories, winter storms, etc.) that may affect shipments.
-        Use the lat/lon from appyhour_get_weather to look up alerts for a zip code.
-
-        Args:
-            params: Latitude, longitude, and optional days_ahead (default 4).
-
-        Returns:
-            JSON with list of active alerts (event type, severity, headline, description)
-            and total alert count.
-        """
-        try:
-            from appyhour.weather import fetch_nws_alerts
-
-            alerts, err = fetch_nws_alerts(params.lat, params.lon, days_ahead=params.days_ahead)
-            if err:
-                return to_json({"alerts": [], "count": 0, "error": err})
-            return to_json({"alerts": alerts, "count": len(alerts)})
-        except Exception as e:
-            return format_error(e, "get_weather_alerts")

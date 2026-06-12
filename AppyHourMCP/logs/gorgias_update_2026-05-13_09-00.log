@@ -1,0 +1,122 @@
+[Wed 05/13/2026  9:00:02.82] Starting gorgias_update 
+[sync] pulling Gorgias tickets, last 7 days...
+Gorgias 429 on messages (attempt 1/5) — sleeping 2.0s
+Gorgias 429 on messages (attempt 2/5) — sleeping 1.0s
+Gorgias 429 on messages (attempt 3/5) — sleeping 1.0s
+Gorgias 429 on messages (attempt 4/5) — sleeping 4.0s
+Gorgias 429 on messages (attempt 5/5) — sleeping 1.0s
+Gorgias 429 on messages (attempt 1/5) — sleeping 5.0s
+Gorgias 429 on messages (attempt 2/5) — sleeping 1.0s
+Gorgias 429 on messages (attempt 3/5) — sleeping 3.0s
+Gorgias 429 on messages (attempt 4/5) — sleeping 2.0s
+Gorgias 429 on messages (attempt 5/5) — sleeping 2.0s
+Gorgias 429 on messages (attempt 1/5) — sleeping 2.0s
+Gorgias 429 on messages (attempt 2/5) — sleeping 1.0s
+Gorgias 429 on messages (attempt 3/5) — sleeping 1.0s
+Gorgias 429 on messages (attempt 4/5) — sleeping 2.0s
+Gorgias 429 on messages (attempt 5/5) — sleeping 1.0s
+Gorgias 429 on messages (attempt 1/5) — sleeping 1.0s
+Gorgias 429 on messages (attempt 1/5) — sleeping 1.0s
+Gorgias 429 on messages (attempt 2/5) — sleeping 2.0s
+Gorgias 429 on messages (attempt 3/5) — sleeping 6.0s
+Gorgias 429 on messages (attempt 4/5) — sleeping 3.0s
+Gorgias 429 on messages (attempt 5/5) — sleeping 5.0s
+Gorgias 429 on messages (attempt 1/5) — sleeping 8.0s
+{
+  "checked": 1346,
+  "new_rows": 81,
+  "skipped_duplicate": 6,
+  "skipped_invalid_tag": 1259
+}
+[enrich] pass 1 — filling incomplete rows...
+Gorgias 429 on tickets (attempt 1/5) — sleeping 1.0s
+Gorgias 429 on tickets (attempt 2/5) — sleeping 2.0s
+Gorgias 429 on tickets (attempt 3/5) — sleeping 1.0s
+Gorgias 429 on tickets (attempt 4/5) — sleeping 2.0s
+Gorgias 429 on tickets (attempt 5/5) — sleeping 1.0s
+Gorgias customer lookup failed for chasinaworman@gmail.com
+Traceback (most recent call last):
+  File "C:\Users\Work\Claude Projects\AppyHour\AppyHourMCP\tools\gorgias_sheets_sync.py", line 782, in _search_gorgias_by_order
+    resp2 = _gorgias_get(
+        f"{base_url}/tickets",
+    ...<5 lines>...
+        },
+    )
+  File "C:\Users\Work\Claude Projects\AppyHour\AppyHourMCP\tools\gorgias_sheets_sync.py", line 70, in _gorgias_get
+    resp.raise_for_status()
+    ~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Work\anaconda3\Lib\site-packages\requests\models.py", line 1026, in raise_for_status
+    raise HTTPError(http_error_msg, response=self)
+requests.exceptions.HTTPError: 429 Client Error: Too Many Requests for url: https://appyhour.gorgias.com/api/tickets?customer_id=954109630&limit=5&order_by=created_datetime%3Adesc
+Gorgias 429 on tickets (attempt 1/5) — sleeping 2.0s
+Gorgias 429 on tickets (attempt 2/5) — sleeping 1.0s
+Gorgias 429 on tickets (attempt 3/5) — sleeping 1.0s
+Gorgias 429 on customers (attempt 1/5) — sleeping 3.0s
+Gorgias 429 on customers (attempt 2/5) — sleeping 1.0s
+Gorgias 429 on customers (attempt 3/5) — sleeping 2.0s
+Gorgias 429 on customers (attempt 4/5) — sleeping 1.0s
+Gorgias 429 on customers (attempt 5/5) — sleeping 2.0s
+Gorgias customer lookup failed for kennymjohnston@gmail.com
+Traceback (most recent call last):
+  File "C:\Users\Work\Claude Projects\AppyHour\AppyHourMCP\tools\gorgias_sheets_sync.py", line 773, in _search_gorgias_by_order
+    resp = _gorgias_get(
+        f"{base_url}/customers",
+        auth=auth,
+        params={"email": customer_email, "limit": 1},
+    )
+  File "C:\Users\Work\Claude Projects\AppyHour\AppyHourMCP\tools\gorgias_sheets_sync.py", line 70, in _gorgias_get
+    resp.raise_for_status()
+    ~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Work\anaconda3\Lib\site-packages\requests\models.py", line 1026, in raise_for_status
+    raise HTTPError(http_error_msg, response=self)
+requests.exceptions.HTTPError: 429 Client Error: Too Many Requests for url: https://appyhour.gorgias.com/api/customers?email=kennymjohnston%40gmail.com&limit=1
+Gorgias 429 on tickets (attempt 1/5) — sleeping 2.0s
+Gorgias 429 on tickets (attempt 2/5) — sleeping 2.0s
+Gorgias 429 on tickets (attempt 3/5) — sleeping 1.0s
+Gorgias 429 on tickets (attempt 4/5) — sleeping 1.0s
+Gorgias 429 on 270529532 (attempt 1/5) — sleeping 2.0s
+Gorgias 429 on 270529532 (attempt 2/5) — sleeping 1.0s
+Gorgias 429 on 271447033 (attempt 1/5) — sleeping 1.0s
+Gorgias 429 on 271447033 (attempt 2/5) — sleeping 6.0s
+Gorgias 429 on 271447033 (attempt 3/5) — sleeping 1.0s
+Gorgias 429 on 271447033 (attempt 4/5) — sleeping 6.0s
+Gorgias 429 on 271447033 (attempt 5/5) — sleeping 1.0s
+Gorgias 429 on 271447042 (attempt 1/5) — sleeping 1.0s
+{
+  "pass": 1,
+  "total_rows": 1777,
+  "rows_enriched": 25
+}
+[enrich] pass 2 — filling incomplete rows...
+Gorgias 429 on tickets (attempt 1/5) — sleeping 1.0s
+Gorgias 429 on tickets (attempt 2/5) — sleeping 1.0s
+Gorgias 429 on tickets (attempt 3/5) — sleeping 3.0s
+Gorgias 429 on tickets (attempt 4/5) — sleeping 3.0s
+Gorgias 429 on tickets (attempt 5/5) — sleeping 3.0s
+Gorgias customer lookup failed for tarheel1990@yahoo.com
+Traceback (most recent call last):
+  File "C:\Users\Work\Claude Projects\AppyHour\AppyHourMCP\tools\gorgias_sheets_sync.py", line 782, in _search_gorgias_by_order
+    resp2 = _gorgias_get(
+        f"{base_url}/tickets",
+    ...<5 lines>...
+        },
+    )
+  File "C:\Users\Work\Claude Projects\AppyHour\AppyHourMCP\tools\gorgias_sheets_sync.py", line 70, in _gorgias_get
+    resp.raise_for_status()
+    ~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Work\anaconda3\Lib\site-packages\requests\models.py", line 1026, in raise_for_status
+    raise HTTPError(http_error_msg, response=self)
+requests.exceptions.HTTPError: 429 Client Error: Too Many Requests for url: https://appyhour.gorgias.com/api/tickets?customer_id=731944456&limit=5&order_by=created_datetime%3Adesc
+Gorgias 429 on tickets (attempt 1/5) — sleeping 3.0s
+Gorgias 429 on customers (attempt 1/5) — sleeping 2.0s
+Gorgias 429 on customers (attempt 2/5) — sleeping 3.0s
+Gorgias 429 on customers (attempt 3/5) — sleeping 3.0s
+Gorgias 429 on customers (attempt 4/5) — sleeping 2.0s
+{
+  "pass": 2,
+  "total_rows": 1777,
+  "rows_enriched": 0
+}
+
+[done]
+[Wed 05/13/2026  9:20:54.66] Exit code: 0 

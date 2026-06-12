@@ -37,13 +37,13 @@ def load_inventory_settings() -> dict:
     )
 
 
-# Re-exported from appyhour.credentials (single source of truth).
+# Re-exported from appyhour_lib.credentials (single source of truth).
 import sys as _sys
 from pathlib import Path as _Path
 _REPO_ROOT = _Path(__file__).resolve().parent.parent.parent
 if str(_REPO_ROOT) not in _sys.path:
     _sys.path.insert(0, str(_REPO_ROOT))
-from appyhour.credentials import get_shopify_auth  # noqa: E402,F401
+from appyhour_lib.credentials import get_shopify_auth  # noqa: E402,F401
 
 
 # ---------------------------------------------------------------------------

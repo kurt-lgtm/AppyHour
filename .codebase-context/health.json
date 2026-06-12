@@ -1,0 +1,2615 @@
+{
+  "header": {
+    "buildId": "39f2f559-eb1d-4296-be77-3986bc3b521f",
+    "formatVersion": 1
+  },
+  "generatedAt": "2026-05-23T05:38:55.367Z",
+  "summary": {
+    "files": 288,
+    "highRiskFiles": 0,
+    "mediumRiskFiles": 3,
+    "lowRiskFiles": 285
+  },
+  "files": [
+    {
+      "file": "InventoryReorder/Errors/fix-bundle-selections.js",
+      "level": "medium",
+      "score": 2,
+      "reasons": [
+        "Complex implementation (cyclomatic 23)"
+      ],
+      "signals": {
+        "maxCyclomaticComplexity": 23
+      }
+    },
+    {
+      "file": "InventoryReorder/fulfillment_web/static/app.js",
+      "level": "medium",
+      "score": 2,
+      "reasons": [
+        "Complex implementation (cyclomatic 29)"
+      ],
+      "signals": {
+        "maxCyclomaticComplexity": 29
+      }
+    },
+    {
+      "file": "InventoryReorder/fulfillment_web/static/command-center/cc.js",
+      "level": "medium",
+      "score": 2,
+      "reasons": [
+        "Complex implementation (cyclomatic 31)"
+      ],
+      "signals": {
+        "maxCyclomaticComplexity": 31
+      }
+    },
+    {
+      "file": "cut_order_server/static/app.js",
+      "level": "low",
+      "score": 1,
+      "reasons": [
+        "Moderate code complexity (cyclomatic 14)"
+      ],
+      "signals": {
+        "maxCyclomaticComplexity": 14
+      }
+    },
+    {
+      "file": "agent_sdk_example.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "agents/monday_swap_planner.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "agents/tuesday_cut_order.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "agents/tuesday_error_scanner.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "appyhour_lib/__init__.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "appyhour_lib/box_classify.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "appyhour_lib/credentials.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "appyhour_lib/internal_classify.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "appyhour_lib/paths.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "appyhour_lib/user_data.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "appyhour_lib/weather.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/backfill_reship_originals.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/claude_desktop_config_snippet.json",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/data/build_sku_database.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 2
+      }
+    },
+    {
+      "file": "AppyHourMCP/data/sku_database.json",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/order_lookup.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 2
+      }
+    },
+    {
+      "file": "AppyHourMCP/run_gorgias_update.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/run_shipping_report.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/run_swap_brie_bras.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/run_swap_fowc.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/run_swap.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/server.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/tag_bap.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/tools/__init__.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/tools/_gorgias_internal.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/tools/constants.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/tools/context.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/tools/gelcalc.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/tools/google_sheets.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/tools/gorgias_sheets_sync.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/tools/gorgias.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/tools/inventory.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/tools/matrix_qc.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/tools/ops_summary_builder.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/tools/order_edit.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/tools/product_catalog.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/tools/shipping.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/tools/shopify.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/utils.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/verify_bap.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourMCP/wednesday_ops_run.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 2
+      }
+    },
+    {
+      "file": "AppyHourShippingMCP/pyproject.toml",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourShippingMCP/server.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "AppyHourShippingMCP/utils.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "audit_distvol_drift.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "box_simulation.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "build_ops_summary.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "conftest.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "cut_order_server/app/__init__.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "cut_order_server/app/auth.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "cut_order_server/app/calc.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "cut_order_server/app/config.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 2
+      }
+    },
+    {
+      "file": "cut_order_server/app/creds.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "cut_order_server/app/curation.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "cut_order_server/app/demand.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "cut_order_server/app/ltf.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "cut_order_server/app/multiplier.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "cut_order_server/app/recharge_client.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "cut_order_server/app/routes.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "cut_order_server/app/ship_week.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "cut_order_server/app/shopify_client.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "cut_order_server/app/spaces.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "cut_order_server/app/xlsx_writer.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "cut_order_server/deploy/provision.sh",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 3
+      }
+    },
+    {
+      "file": "cut_order_server/gunicorn_conf.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "cut_order_server/static/styles.css",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "cut_order_server/templates/base.html",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "cut_order_server/templates/index.html",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "cut_order_server/templates/login.html",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "cut_order_server/wsgi.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/build_cut_order_xlsx_v2.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/build_cut_order_xlsx.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/_find_tr_orders.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 2
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/_inspect_charge.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/_template_bulk_refund.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/avg_daily_sku.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/brie_demand.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/check_118751.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/check_fixed_class23.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/check_gateway.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/check_marc_bundle.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/check_marc_curation.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/check_paid_items.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/check_repeat_class_v2.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/check_repeat_class.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/check_repeat_sources.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 2
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/check_repeat_subs_v2.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/check_repeat_subs_v3.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/check_repeat_subs.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/check_rotation_repeats.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/check_tag_conflicts.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/detect_double_refunds_v2.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/detect_double_refunds.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/double_refund_report.json",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/double_sop_check.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/enrich_rc_csv.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/find_3sku_order.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/find_anik_pattern.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/find_dup_chlou.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/find_new_errors.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/find_sop_example.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/find_successive_same_suffix.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/find_unresolved_parents.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/fix_alpha.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/fix_box_contents.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/fix_bras.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/fix_class23.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/fix_class4b_dupes.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/fix_class6_all.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/fix_class6_mismatch.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/fix_double_sop.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/fix_dup_cexec.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/fix_dup_cexec2.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/fix_ebrie_fowc_brz.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/fix_pblini_gaop.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/fix_rc_class23_bundles.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/fix_rc_ids.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 2
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/fix_rc_shortages_v2.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/fix_rc_shortages.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/fowc_by_curation.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/fowc_chosen_example.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/full_repeat_check.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/generate_reports.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/investigate_repeats.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/investigate_timeline.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/lfolive_curation_check.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 2
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/lookup_variants.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/lookup_variants2.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/marc_addon_source.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/marc_ahbx_check.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/marc_all_bundles.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/marc_check_removed_bundles.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/marc_onetime_example.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/marc_paid_no_bundle.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/marc_recharge_check.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/marc_true_onetime.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/rc_class23_4b_v2.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/rc_upcoming_class234b_v2.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/refund_blue_lemo_15.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/refund_lfolive_only.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/refund_paid_marc_mar30.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/refund_remove_lfolive.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/remove_bad_ipac_blr.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/remove_pk_fcust_from_tr.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/remove_pk_from_tr_orders.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/revert_capo_to_sop.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/shopify_class236_4b.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/shortage_check.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/shortage_with_queued.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/show_order.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/sop_breakdown.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/sop_jahh_count.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/sop_only_meats.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/swap_alpha_bras_mar30.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/swap_bad_ipac_blr.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/swap_bras_to_sop.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/swap_brie_to_ebrie.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/swap_curation_skus.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/swap_fowc_ccc_recharge.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 2
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/swap_fowc_owc_to_csgod.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/swap_fowc_owc_to_mcpc.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/swap_fowc_to_brz.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/swap_fresc_lfolive_2emails.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/swap_lfolive_to_ppcm.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/swap_maft_to_alp_shadow_mar30.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/swap_marc_curation_to_smal.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/swap_marc_spr_to_rhaz.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/swap_marc_to_rhaz.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/swap_marc_to_smal_mar30.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/swap_marc_to_smal_xspr_mar30.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/swap_pblini_to_flh.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/swap_ppcm_to_fresc_mdt_mar30.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/swap_sop_to_capo.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/swap_sop_to_tusc_mar30.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/swap_sot_to_pvec_ctgod_mar30.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/tag_fl_gulf_coast.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/tag_zip_overrides.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/ttbrie_source.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/Errors/verify_class4b.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/fulfillment_web/_check_demand.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/fulfillment_web/_demand_snapshot.json",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/fulfillment_web/alp_chalp_swap_70_results.json",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/fulfillment_web/alp_chalp_swap_70.json",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/fulfillment_web/app.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 4
+      }
+    },
+    {
+      "file": "InventoryReorder/fulfillment_web/cc_standalone.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/fulfillment_web/command_center.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/fulfillment_web/constraints.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/fulfillment_web/curation_manager.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/fulfillment_web/curation_routes.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/fulfillment_web/depletion_finder.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/fulfillment_web/invoice_processor.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 2
+      }
+    },
+    {
+      "file": "InventoryReorder/fulfillment_web/settings_io.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/fulfillment_web/shopify_bulk.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/fulfillment_web/shopify_swap.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/fulfillment_web/sku_mappings.json",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/fulfillment_web/static/command-center/cc.css",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/fulfillment_web/static/styles.css",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/fulfillment_web/templates/cc_standalone.html",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 3
+      }
+    },
+    {
+      "file": "InventoryReorder/fulfillment_web/templates/index.html",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 4
+      }
+    },
+    {
+      "file": "InventoryReorder/fulfillment_web/test_shopify_bulk.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/inventory_demand_report.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "InventoryReorder/inventory_reorder.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 2
+      }
+    },
+    {
+      "file": "InventoryReorder/ship_dates.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "matrix_commander_web/app.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "matrix_commander_web/static/app.js",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 8
+      }
+    },
+    {
+      "file": "matrix_commander_web/static/styles.css",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "matrix_commander_web/templates/index.html",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 3
+      }
+    },
+    {
+      "file": "matrix_commander.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 2
+      }
+    },
+    {
+      "file": "pipeline/__init__.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "pipeline/checkpoint_store.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "pipeline/dry_run_guard.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "pipeline/pipeline_state.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "pipeline/rate_limiter.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "pyproject.toml",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "research/build_proposal.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 2
+      }
+    },
+    {
+      "file": "scenario/260405-0050-demand-pipeline-edge-cases/apply_ramp_patch.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scenario/260405-0050-demand-pipeline-edge-cases/build_all_docx.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scenario/260405-0050-demand-pipeline-edge-cases/build_docs.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 2
+      }
+    },
+    {
+      "file": "scenario/260405-0050-demand-pipeline-edge-cases/find_tray_skus.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scripts/archive/_tmp_carrier_stats.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scripts/archive/rebuild_ops_formulas.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scripts/archive/run_enrich_v2.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scripts/archive/test_gorgias_lookup.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scripts/audits/check_item_count_drift.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scripts/audits/check_jahh_example.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scripts/audits/check_jahh_example2.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scripts/audits/check_order.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scripts/audits/compare_matrix.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scripts/audits/export_differing_orders.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scripts/audits/export_overpacked_xlsx.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scripts/audits/verify_box_csv.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scripts/incident-fixes/find_paid_ipac.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scripts/incident-fixes/fix_ops_gaps.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scripts/incident-fixes/fix_paid_ipac.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scripts/incident-fixes/patch_distvol_xlsx.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scripts/incident-fixes/repair_alpha_final.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scripts/incident-fixes/repair_alpha.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 2
+      }
+    },
+    {
+      "file": "scripts/swaps/_gen_swap_csv.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scripts/swaps/check_all_swaps.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scripts/swaps/check_swap_damage.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scripts/swaps/swap_bap_pvec.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scripts/swaps/swap_capo_pss.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scripts/swaps/swap_fontal_6com_mdt.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scripts/swaps/swap_jahh_pss.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scripts/utilities/_list_drives.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "scripts/utilities/cheesemonger_onboarding_doc.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 3
+      }
+    },
+    {
+      "file": "scripts/utilities/test_food_safety_sync.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "ShippingReports/build_db.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "ShippingReports/build_wallet_share.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "ShippingReports/enrich_shipment_orders.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "ShippingReports/enrich_ups_delivery.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "ShippingReports/enrich_veho_delivery.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "ShippingReports/enrich_veho_v2_pickup.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "ShippingReports/enrich_veho_via_parcelpanel.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "ShippingReports/ingest_all.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "ShippingReports/ingest.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "ShippingReports/merge_jsons.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "ShippingReports/parsers/__init__.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "ShippingReports/parsers/common.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "ShippingReports/parsers/fedex_csv.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "ShippingReports/parsers/fedex.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "ShippingReports/parsers/issues.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "ShippingReports/parsers/ontrac.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "ShippingReports/parsers/ups.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "ShippingReports/parsers/veho.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "ShippingReports/reports/__init__.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "ShippingReports/reports/analyze.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "ShippingReports/reports/box_size_report.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "ShippingReports/reports/normalize_transit.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "ShippingReports/reports/recommend.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "test_food_safety_rows.json",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "tests/__init__.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "tests/conftest.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "tests/fixtures/__init__.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "tests/fixtures/weekly_cycle.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "tests/test_cut_order_helpers.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "tests/test_dry_run_guard.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "tests/test_error_detection.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "tests/test_gift_discount.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "tests/test_pipeline_state.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "tests/test_rate_limiter.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "tests/test_routing_tags.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "tests/test_shipping_invoice_db_box_type.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    },
+    {
+      "file": "tests/test_sync.py",
+      "level": "low",
+      "score": 0,
+      "reasons": [],
+      "signals": {
+        "maxCyclomaticComplexity": 1
+      }
+    }
+  ]
+}

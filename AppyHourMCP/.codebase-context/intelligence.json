@@ -1,0 +1,33 @@
+{
+  "header": {
+    "buildId": "83e2d123-8f24-48c6-9ce5-91d617f54dde",
+    "formatVersion": 1
+  },
+  "libraryUsage": {},
+  "patterns": {
+    "stateManagement": {
+      "primary": {
+        "name": "RxJS",
+        "count": 1,
+        "frequency": "100%",
+        "examples": [],
+        "guidance": "USE: RxJS – 100% adoption"
+      }
+    }
+  },
+  "goldenFiles": [],
+  "importGraph": {
+    "usages": {},
+    "topUsed": []
+  },
+  "internalFileGraph": {
+    "imports": {},
+    "exports": {},
+    "stats": {
+      "files": 0,
+      "edges": 0,
+      "avgDependencies": 0
+    }
+  },
+  "generatedAt": "2026-04-12T18:51:47.198Z"
+}

@@ -296,6 +296,8 @@ def _fetch_all_data(settings: dict) -> dict:
         rc_wk1_lge_monthly,
         rc_wk2_lge_monthly,
         monthly_by_week_month,
+        rc_wk1_custom,
+        rc_wk2_custom,
     ) = fetch_recharge_api(recharge_token, out_specialty=specialty)
 
     # -- Shopify --
@@ -331,13 +333,18 @@ def _fetch_all_data(settings: dict) -> dict:
     rc_wk2_total = sum(rc_wk2.values())
     rc_wk1_curs = sum(rc_wk1_curations.values())
     rc_wk2_curs = sum(rc_wk2_curations.values())
-    print(f"  Recharge WK1: {rc_wk1_total} pickable SKUs, {rc_wk1_curs} curation charges")
-    print(f"  Recharge WK2: {rc_wk2_total} pickable SKUs, {rc_wk2_curs} curation charges")
+    rc_wk1_monthly = rc_wk1_med_monthly + rc_wk1_cmed_monthly + rc_wk1_lge_monthly
+    rc_wk2_monthly = rc_wk2_med_monthly + rc_wk2_cmed_monthly + rc_wk2_lge_monthly
+    rc_wk1_orders = rc_wk1_curs + rc_wk1_monthly + rc_wk1_custom
+    rc_wk2_orders = rc_wk2_curs + rc_wk2_monthly + rc_wk2_custom
+    print(f"  Recharge WK1: {rc_wk1_orders} queued orders ({rc_wk1_curs} curation + {rc_wk1_monthly} monthly + {rc_wk1_custom} custom), {rc_wk1_total} pickable SKUs")
+    print(f"  Recharge WK2: {rc_wk2_orders} queued orders ({rc_wk2_curs} curation + {rc_wk2_monthly} monthly + {rc_wk2_custom} custom), {rc_wk2_total} pickable SKUs")
 
     sh_wk1_total = sum(sh_wk1_addon.values())
     sh_wk2_total = sum(sh_wk2_addon.values())
-    print(f"  Shopify WK1: {sh_wk1_total} addon SKUs, {sum(sh_wk1_curations.values())} curations")
-    print(f"  Shopify WK2: {sh_wk2_total} addon SKUs, {sum(sh_wk2_curations.values())} curations")
+    # Orders count already logged by fetch_shopify_orders. This line summarizes addon SKU volume only.
+    print(f"  Shopify WK1 addon SKU volume: {sh_wk1_total}")
+    print(f"  Shopify WK2 addon SKU volume: {sh_wk2_total}")
 
     # -- First-order projection (MONG) --
     import requests as _req
@@ -1028,30 +1035,24 @@ def _build_cut_order_tab(
     _set_col_widths(
         ws,
         {
-            1: 14,
-            2: 30,
-            3: 8,
-            4: 9,
-            5: 10,  # SKU, Name, Avail, Wheel Pot., Total Supply
-            6: 1,  # spacer
-            7: 8,
-            8: 8,
-            9: 8,
-            10: 10,
-            11: 10,
-            12: 9,
-            13: 9,  # W1: RC, SH, +Assign, =Demand, After, Cut, Good?
-            14: 1,  # spacer
-            15: 8,
-            16: 8,
-            17: 8,
-            18: 10,
-            19: 10,
-            20: 9,
-            21: 9,  # W2: RC, SH, +Assign, =Demand, After, Cut, Good?
+            1: 14,  # A SKU
+            2: 30,  # B Name
+            3: 8,   # C Avail
+            4: 9,   # D Wheel Pot.
+            5: 10,  # E Total Supply
+            6: 10,  # F Starting Demand
+            7: 8,   # G +Assign
+            8: 1,   # H spacer
+            9: 10,  # I Final Demand
+            10: 10, # J After
+            11: 9,  # K Cut
+            12: 9,  # L Good?
+            13: 9,  # M Wheel
+            14: 8,  # N Safety (hidden)
         },
     )
-    LAST_COL = 21
+    LAST_COL = 14
+    ws.column_dimensions["N"].hidden = True
 
     # ── Title bar ──
     _merge_title_bar(ws, 1, f"CUT ORDER \u2014 Week of {WK1_END}", LAST_COL)
@@ -1070,22 +1071,15 @@ def _build_cut_order_tab(
         "Avail",
         "Wheel Pot.",
         "Total Supply",
-        "",  # spacer
-        "Demand",
-        "",  # (was SH split — combined into Demand)
+        "Starting Demand",
         "+Assign",
-        "=Total",
+        "",  # spacer
+        "Final Demand",
         "After",
         "Cut",
         "Good?",
-        "",  # spacer
-        "",  # (WK2 unused — single cohort mode)
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
+        "Wheel",
+        "Safety",
     ]
     _dark_header_row(ws, HDR_ROW, headers)
 
@@ -1201,75 +1195,44 @@ def _build_cut_order_tab(
         c_ts.font = F_NUM_BOLD
         c_ts.alignment = A_RIGHT
 
-        # F: spacer
-
-        # G: Demand = RC (queued) + SH (already-charged) — no overlap by definition
-        c_dem = ws_.cell(row=row_num, column=7, value=sr["rc1"] + sr["sh1"])
+        # F: Starting Demand = RC (queued) + SH (already-charged) — no overlap by definition
+        c_dem = ws_.cell(row=row_num, column=6, value=sr["rc1"] + sr["sh1"])
         c_dem.font = F_NUM
         c_dem.alignment = A_RIGHT
-        # H: spacer (was SH — folded into G)
-        ws_.cell(row=row_num, column=8, value="")
-        # I: +Assign W1 = SUMIF(PR-CJAM+MONTHLY) + SUMIF(CEX-EC)
-        ws_[f"I{row_num}"] = (
+        # G: +Assign W1 = SUMIF(PR-CJAM+MONTHLY) + SUMIF(CEX-EC)
+        ws_[f"G{row_num}"] = (
             f"=SUMIF({prcjam_sku_range},A{row_num},{prcjam_w1_range})"
             f"+SUMIF({cexec_sku_range},A{row_num},{cexec_w1_range})"
         )
-        ws_.cell(row=row_num, column=9).font = F_NUM
+        ws_.cell(row=row_num, column=7).font = F_NUM
+        ws_.cell(row=row_num, column=7).alignment = A_RIGHT
+        # H: spacer
+        # I: Final Demand = F + G + Safety (N)
+        ws_[f"I{row_num}"] = f"=F{row_num}+G{row_num}+N{row_num}"
+        ws_.cell(row=row_num, column=9).font = F_NUM_BOLD
         ws_.cell(row=row_num, column=9).alignment = A_RIGHT
-        # J: =Demand W1 = G + H + I
-        ws_[f"J{row_num}"] = f"=G{row_num}+H{row_num}+I{row_num}"
+        # J: After = E - I
+        ws_[f"J{row_num}"] = f"=E{row_num}-I{row_num}"
         ws_.cell(row=row_num, column=10).font = F_NUM_BOLD
         ws_.cell(row=row_num, column=10).alignment = A_RIGHT
-        # K: After W1 = E - J
-        ws_[f"K{row_num}"] = f"=E{row_num}-J{row_num}"
-        ws_.cell(row=row_num, column=11).font = F_NUM_BOLD
+        # K: Cut (input)
+        ws_.cell(row=row_num, column=11).font = F_INPUT
+        ws_.cell(row=row_num, column=11).fill = FILL_INPUT
         ws_.cell(row=row_num, column=11).alignment = A_RIGHT
-        # L: Cut W1 (input)
-        ws_.cell(row=row_num, column=12).font = F_INPUT
-        ws_.cell(row=row_num, column=12).fill = FILL_INPUT
-        ws_.cell(row=row_num, column=12).alignment = A_RIGHT
-        # M: Good? W1
-        ws_[f"M{row_num}"] = (
-            f'=IF(J{row_num}=0,"",IF(K{row_num}+L{row_num}>=0,"OK","NEED "&ABS(K{row_num}+L{row_num})))'
+        # L: Good?
+        ws_[f"L{row_num}"] = (
+            f'=IF(I{row_num}=0,"",IF(J{row_num}+K{row_num}>=0,"OK","NEED "&ABS(J{row_num}+K{row_num})))'
         )
-        ws_.cell(row=row_num, column=13).font = F_GOOD
-        ws_.cell(row=row_num, column=13).alignment = A_CENTER
-
-        # N: spacer
-
-        # O: RC W2
-        c_rc2 = ws_.cell(row=row_num, column=15, value=sr["rc2"])
-        c_rc2.font = F_NUM
-        c_rc2.alignment = A_RIGHT
-        # P: SH W2
-        c_sh2 = ws_.cell(row=row_num, column=16, value=sr["sh2"])
-        c_sh2.font = F_NUM
-        c_sh2.alignment = A_RIGHT
-        # Q: +Assign W2 = SUMIF(PR-CJAM+MONTHLY) + SUMIF(CEX-EC)
-        ws_[f"Q{row_num}"] = (
-            f"=SUMIF({prcjam_sku_range},A{row_num},{prcjam_w2_range})"
-            f"+SUMIF({cexec_sku_range},A{row_num},{cexec_w2_range})"
-        )
-        ws_.cell(row=row_num, column=17).font = F_NUM
-        ws_.cell(row=row_num, column=17).alignment = A_RIGHT
-        # R: =Demand W2 = O + P + Q
-        ws_[f"R{row_num}"] = f"=O{row_num}+P{row_num}+Q{row_num}"
-        ws_.cell(row=row_num, column=18).font = F_NUM_BOLD
-        ws_.cell(row=row_num, column=18).alignment = A_RIGHT
-        # S: After W2 = (K + L) - R
-        ws_[f"S{row_num}"] = f"=(K{row_num}+L{row_num})-R{row_num}"
-        ws_.cell(row=row_num, column=19).font = F_NUM_BOLD
-        ws_.cell(row=row_num, column=19).alignment = A_RIGHT
-        # T: Cut W2 (input)
-        ws_.cell(row=row_num, column=20).font = F_INPUT
-        ws_.cell(row=row_num, column=20).fill = FILL_INPUT
-        ws_.cell(row=row_num, column=20).alignment = A_RIGHT
-        # U: Good? W2
-        ws_[f"U{row_num}"] = (
-            f'=IF(R{row_num}=0,"",IF(S{row_num}+T{row_num}>=0,"OK","NEED "&ABS(S{row_num}+T{row_num})))'
-        )
-        ws_.cell(row=row_num, column=21).font = F_GOOD
-        ws_.cell(row=row_num, column=21).alignment = A_CENTER
+        ws_.cell(row=row_num, column=12).font = F_GOOD
+        ws_.cell(row=row_num, column=12).alignment = A_CENTER
+        # M: Wheel (input)
+        ws_.cell(row=row_num, column=13).font = F_INPUT
+        ws_.cell(row=row_num, column=13).fill = FILL_INPUT
+        ws_.cell(row=row_num, column=13).alignment = A_RIGHT
+        # N: Safety (hidden) — flat 25 if raw demand (F+G) > 25 else 0; avoids circular ref with I
+        ws_[f"N{row_num}"] = f"=IF((F{row_num}+G{row_num})>25,25,0)"
+        ws_.cell(row=row_num, column=14).font = F_NUM
+        ws_.cell(row=row_num, column=14).alignment = A_RIGHT
 
     def _write_section(ws_: Worksheet, start_row: int, label: str, bg: str, fg: str, rows_: list[dict]) -> int:
         """Write a section header + sub-grouped rows. Returns next available row."""
@@ -1316,13 +1279,9 @@ def _build_cut_order_tab(
             ws_.cell(row=r, column=5).font = F_NUM_MUTED
             ws_.cell(row=r, column=5).alignment = A_RIGHT
 
-            ws_[f"J{r}"] = f"=SUM({','.join(f'J{dr}' for dr in data_rows)})"
-            ws_.cell(row=r, column=10).font = F_NUM_MUTED
-            ws_.cell(row=r, column=10).alignment = A_RIGHT
-
-            ws_[f"R{r}"] = f"=SUM({','.join(f'R{dr}' for dr in data_rows)})"
-            ws_.cell(row=r, column=18).font = F_NUM_MUTED
-            ws_.cell(row=r, column=18).alignment = A_RIGHT
+            ws_[f"I{r}"] = f"=SUM({','.join(f'I{dr}' for dr in data_rows)})"
+            ws_.cell(row=r, column=9).font = F_NUM_MUTED
+            ws_.cell(row=r, column=9).alignment = A_RIGHT
 
         return r
 
@@ -1334,9 +1293,9 @@ def _build_cut_order_tab(
     # ── Conditional Formatting ──
     data_start = HDR_ROW + 1
 
-    # After W1 (K): red < 0, amber if tight, green if ok
+    # After (J): red < 0, green if ok
     ws.conditional_formatting.add(
-        f"K{data_start}:K{last_row}",
+        f"J{data_start}:J{last_row}",
         CellIsRule(
             operator="lessThan",
             formula=["0"],
@@ -1345,7 +1304,7 @@ def _build_cut_order_tab(
         ),
     )
     ws.conditional_formatting.add(
-        f"K{data_start}:K{last_row}",
+        f"J{data_start}:J{last_row}",
         CellIsRule(
             operator="greaterThanOrEqual",
             formula=["0"],
@@ -1354,55 +1313,23 @@ def _build_cut_order_tab(
         ),
     )
 
-    # After W2 (S): same pattern
-    ws.conditional_formatting.add(
-        f"S{data_start}:S{last_row}",
-        CellIsRule(
-            operator="lessThan",
-            formula=["0"],
-            fill=PatternFill("solid", fgColor=SHORTAGE_BG),
-            font=Font(color=SHORTAGE_FG),
-        ),
-    )
-    ws.conditional_formatting.add(
-        f"S{data_start}:S{last_row}",
-        CellIsRule(
-            operator="greaterThanOrEqual",
-            formula=["0"],
-            fill=PatternFill("solid", fgColor=OK_BG),
-            font=Font(color=OK_FG),
-        ),
-    )
-
-    # Good? columns
-    ws.conditional_formatting.add(
-        f"M{data_start}:M{last_row}",
-        FormulaRule(formula=[f'M{data_start}="OK"'], fill=PatternFill("solid", fgColor=OK_BG), font=Font(color=OK_FG)),
-    )
-    ws.conditional_formatting.add(
-        f"M{data_start}:M{last_row}",
-        FormulaRule(
-            formula=[f'LEFT(M{data_start},4)="NEED"'],
-            fill=PatternFill("solid", fgColor=SHORTAGE_BG),
-            font=Font(color=SHORTAGE_FG),
-        ),
-    )
-    ws.conditional_formatting.add(
-        f"U{data_start}:U{last_row}",
-        FormulaRule(formula=[f'U{data_start}="OK"'], fill=PatternFill("solid", fgColor=OK_BG), font=Font(color=OK_FG)),
-    )
-    ws.conditional_formatting.add(
-        f"U{data_start}:U{last_row}",
-        FormulaRule(
-            formula=[f'LEFT(U{data_start},4)="NEED"'],
-            fill=PatternFill("solid", fgColor=SHORTAGE_BG),
-            font=Font(color=SHORTAGE_FG),
-        ),
-    )
-
-    # Cut input columns highlight
+    # Good? (L)
     ws.conditional_formatting.add(
         f"L{data_start}:L{last_row}",
+        FormulaRule(formula=[f'L{data_start}="OK"'], fill=PatternFill("solid", fgColor=OK_BG), font=Font(color=OK_FG)),
+    )
+    ws.conditional_formatting.add(
+        f"L{data_start}:L{last_row}",
+        FormulaRule(
+            formula=[f'LEFT(L{data_start},4)="NEED"'],
+            fill=PatternFill("solid", fgColor=SHORTAGE_BG),
+            font=Font(color=SHORTAGE_FG),
+        ),
+    )
+
+    # Cut input column highlight (K)
+    ws.conditional_formatting.add(
+        f"K{data_start}:K{last_row}",
         CellIsRule(
             operator="greaterThan",
             formula=["0"],
@@ -1410,8 +1337,9 @@ def _build_cut_order_tab(
             font=Font(color=INPUT_FG, bold=True),
         ),
     )
+    # Wheel input column highlight (M)
     ws.conditional_formatting.add(
-        f"T{data_start}:T{last_row}",
+        f"M{data_start}:M{last_row}",
         CellIsRule(
             operator="greaterThan",
             formula=["0"],

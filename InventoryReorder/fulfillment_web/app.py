@@ -1328,12 +1328,13 @@ def resolve_curation_from_box_sku(sku):
     sku = sku.strip().upper()
     if sku in _MONTHLY_PATTERNS:
         return "MONTHLY"
-    if "MCUST-NMS" in sku:
+    if "-MCUST-NMS" in sku:
         return "NMS"
-    if "MCUST-MS" in sku or "CUR-MS" in sku or "BVAL" in sku:
+    if "-MCUST-MS" in sku or "-CUR-MS" in sku:
         return "MS"
-    for cur in KNOWN_CURATIONS:
-        if cur in sku:
+    # Hyphen-anchored, len-desc — prevents MS-in-NMS substring collisions
+    for cur in sorted(KNOWN_CURATIONS, key=len, reverse=True):
+        if sku.endswith("-" + cur) or ("-" + cur + "-") in sku:
             return cur
     return None
 

@@ -1,0 +1,15 @@
+[project]
+name = "appyhour-shipping-mcp"
+version = "0.1.0"
+description = "Standalone MCP server for AppyHour shipping analytics + weather tools"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.0.0",
+    "pydantic>=2.0",
+    "requests>=2.32",
+    "pyyaml>=6.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

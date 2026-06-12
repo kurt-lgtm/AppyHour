@@ -333,17 +333,43 @@ def _parse_line_item(row: list, section: str) -> dict | None:
 
     return item if item["product_name"] else None
 
+def _normalize_pdfplumber_line(line: str) -> str:
+    """Fix pdfplumber space-injection artifacts:
+    - '1 ,047' -> '1,047' (space before comma)
+    - '8 ,482' -> '8,482'
+    """
+    return re.sub(r'(\d)\s+,(\d)', r'\1,\2', line)
+
+
 def _parse_from_text(text: str, result: dict) -> dict:
-    """Fallback: parse from raw text using regex."""
+    """Fallback: parse from raw text using regex.
+
+    Handles two PDF layouts:
+    1. Older: each section header (FULL MFG / MEALS / LABEL ONLY) on its own line.
+    2. Newer (2026-04+): all 3 column headers concatenated, each row has
+       FULL MFG + MEALS + per-SKU totals side-by-side. We parse FULL MFG by
+       anchoring on line-start date + name + cases + yield.
+    """
     lines = text.split('\n')
     section = None
     mfg_date_found = None
+    combined_header_seen = False  # newer layout flag
 
-    for line in lines:
+    for raw in lines:
+        line = _normalize_pdfplumber_line(raw)
         stripped = line.strip()
         if not stripped:
             continue
 
+        # Combined header (newer layout) — all 3 sections active per row.
+        # FULL MFG content lives at line start, so we treat section as full_mfg
+        # and parse only the leftmost columns.
+        if ('FULL MFG PRODUCTION LOG' in stripped
+                and 'MEALS PRODUCTION LOG' in stripped
+                and 'LABEL ONLY PRODUCTION LOG' in stripped):
+            combined_header_seen = True
+            section = 'full_mfg'
+            continue
         if 'FULL MFG PRODUCTION LOG' in stripped:
             section = 'full_mfg'
             continue
@@ -358,6 +384,43 @@ def _parse_from_text(text: str, result: dict) -> dict:
             continue
 
         if 'FULL MFG TOTALS' in stripped:
+            # Combined-layout edge case: last cheese row + totals share a line.
+            # Extract the line item (before "FULL MFG TOTALS") first.
+            if combined_header_seen and section == 'full_mfg':
+                pre_totals = stripped.split('FULL MFG TOTALS')[0].strip()
+                if re.match(r'^\d{1,2}/\d{1,2}/\d{2,4}', pre_totals):
+                    # Re-process this prefix as a cheese row by recursion-lite:
+                    # mimic the main full_mfg parsing inline.
+                    chunk = re.sub(r'^\d{1,2}/\d{1,2}/\d{2,4}\s+', '', pre_totals)
+                    if ' - ' in chunk:
+                        chunk = chunk.split(' - ')[0].rstrip()
+                    toks = chunk.split()
+                    end_i = len(toks)
+                    while end_i > 0 and not re.match(r'^[\d,]+$', toks[end_i - 1]):
+                        end_i -= 1
+                    start_i = end_i
+                    while start_i > 0 and re.match(r'^[\d,]+$', toks[start_i - 1]):
+                        start_i -= 1
+                    name_t = toks[:start_i]
+                    num_t = toks[start_i:end_i]
+                    if name_t and num_t:
+                        name = ' '.join(name_t).strip()
+                        if (len(num_t) == 2
+                                and len(num_t[0]) == 1
+                                and len(num_t[1]) <= 2
+                                and ',' not in num_t[0]
+                                and ',' not in num_t[1]):
+                            yld = _parse_int(num_t[0] + num_t[1])
+                        else:
+                            yld = _parse_int(num_t[-1])
+                        if name and 'PRODUCTION LOG' not in name.upper():
+                            result['full_mfg'].append({
+                                "section": 'full_mfg',
+                                "product_name": name,
+                                "case_packouts": 0,
+                                "total_yield": yld,
+                                "mfg_date": mfg_date_found,
+                            })
             result["full_mfg_totals"] = _extract_totals([], stripped)
             section = None
             continue
@@ -373,7 +436,87 @@ def _parse_from_text(text: str, result: dict) -> dict:
             result["total_production_charge"] = _extract_total_charge(stripped)
             continue
 
-        # Try to parse as a line item (date product cases yield)
+        # Newer layout: split line on date markers, take FULL MFG chunk
+        # (before the 2nd date), parse name + 1-or-2 trailing numbers.
+        if combined_header_seen and section == 'full_mfg':
+            # Find date positions on the line.
+            date_positions = [m.start() for m in re.finditer(
+                r'\d{1,2}/\d{1,2}/\d{2,4}', stripped)]
+            if date_positions and date_positions[0] == 0:
+                # FULL MFG chunk = from start to 2nd date (exclusive),
+                # or whole line if only one date.
+                end = date_positions[1] if len(date_positions) > 1 else len(stripped)
+                chunk = stripped[:end].rstrip()
+                # Strip leading date
+                chunk = re.sub(r'^\d{1,2}/\d{1,2}/\d{2,4}\s+', '', chunk)
+                if not chunk:
+                    continue
+                # Skip header line residue
+                if 'PRODUCT PRODUCED' in chunk.upper() or 'CASE PACKOUTS' in chunk.upper():
+                    continue
+                # If chunk still contains right-column totals (" - "),
+                # take only the portion before the first " - "
+                if ' - ' in chunk:
+                    chunk = chunk.split(' - ')[0].rstrip()
+                # Extract trailing numbers. Newer RMFG invoices leave the
+                # Case Packouts column BLANK, and pdfplumber splits a
+                # 3-digit yield after its first digit. So "Comte 4 84"
+                # means yield=484 (cases blank), NOT cases=4 yield=84.
+                # Heuristic: if exactly 2 trailing numeric tokens and both
+                # are short (1 + 2 digits, no comma), concatenate them.
+                # Otherwise treat as single yield.
+                tokens = chunk.split()
+                # Find LAST contiguous run of numeric tokens.
+                # (Handles "The Drunken Goat 5 1 Smokin Goat" where right-col
+                # name leaked in: we want the "5 1" numeric run, not the
+                # final non-numeric "Smokin Goat".)
+                end = len(tokens)
+                while end > 0 and not re.match(r'^[\d,]+$', tokens[end - 1]):
+                    end -= 1
+                start = end
+                while start > 0 and re.match(r'^[\d,]+$', tokens[start - 1]):
+                    start -= 1
+                name_tokens = tokens[:start]
+                num_tokens = tokens[start:end]
+                if not name_tokens or not num_tokens:
+                    continue
+                name = ' '.join(name_tokens).strip()
+
+                cases = 0
+                if len(num_tokens) == 1:
+                    yld = _parse_int(num_tokens[0])
+                elif (len(num_tokens) == 2
+                        and len(num_tokens[0]) == 1
+                        and len(num_tokens[1]) <= 2
+                        and ',' not in num_tokens[0]
+                        and ',' not in num_tokens[1]):
+                    # pdfplumber 3-digit split: "4 84" -> 484
+                    yld = _parse_int(num_tokens[0] + num_tokens[1])
+                else:
+                    # Genuine cases + yield (older layout fallback)
+                    cases = _parse_int(num_tokens[0])
+                    yld = _parse_int(num_tokens[1])
+                dt = _parse_date(stripped[:10]) or _parse_date(stripped.split()[0])
+                if dt and not mfg_date_found:
+                    mfg_date_found = dt
+                if name and 'PRODUCTION LOG' not in name.upper():
+                    result['full_mfg'].append({
+                        "section": 'full_mfg',
+                        "product_name": name,
+                        "case_packouts": cases,
+                        "total_yield": yld,
+                        "mfg_date": dt,
+                    })
+                continue
+
+        # Skip column-header residue from combined layout
+        if combined_header_seen and (
+                'PRODUCT PRODUCED' in stripped.upper()
+                or 'CASE PACKOUTS' in stripped.upper()
+                or 'TOTAL YIELD' in stripped.upper()):
+            continue
+
+        # Older layout: try whole-line match (date product cases yield).
         m = re.match(
             r'(\d{1,2}/\d{1,2}/\d{2,4})?\s*(.+?)\s+(\d[\d,]*)\s+(\d[\d,]*)\s*$',
             stripped

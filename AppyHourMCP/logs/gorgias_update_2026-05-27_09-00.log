@@ -1,0 +1,23 @@
+[Wed 05/27/2026  9:00:00.62] Starting gorgias_update 
+[sync] pulling Gorgias tickets, last 7 days...
+{
+  "checked": 1264,
+  "new_rows": 4,
+  "skipped_duplicate": 56,
+  "skipped_invalid_tag": 1200
+}
+[enrich] pass 1 — filling incomplete rows...
+{
+  "pass": 1,
+  "total_rows": 1787,
+  "rows_enriched": 39
+}
+[enrich] pass 2 — filling incomplete rows...
+{
+  "pass": 2,
+  "total_rows": 1787,
+  "rows_enriched": 0
+}
+
+[done]
+[Wed 05/27/2026  9:15:51.98] Exit code: 0 

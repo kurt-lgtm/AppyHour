@@ -1,0 +1,26 @@
+[Wed 06/10/2026 10:15:46.86] Starting gorgias_update 
+[sync] pulling Gorgias tickets, last 7 days...
+Gorgias connection error on messages (attempt 1/10): ReadTimeout — retry in 2.0s
+{
+  "checked": 1292,
+  "new_rows": 8,
+  "skipped_duplicate": 49,
+  "skipped_invalid_tag": 1234
+}
+[enrich] pass 1 — filling incomplete rows...
+Gorgias 429 on customers (attempt 1/10) — sleeping 1.0s
+Gorgias 429 on customers (attempt 2/10) — sleeping 1.0s
+{
+  "pass": 1,
+  "total_rows": 1919,
+  "rows_enriched": 7
+}
+[enrich] pass 2 — filling incomplete rows...
+{
+  "pass": 2,
+  "total_rows": 1919,
+  "rows_enriched": 0
+}
+
+[done]
+[Wed 06/10/2026 10:31:18.12] Exit code: 0 

@@ -20,6 +20,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 from parsers.ontrac import parse_ontrac_csv
 from parsers.ups import parse_ups_csv
 from parsers.fedex import parse_fedex_xlsx
+from parsers.fedex_csv import parse_fedex_csv
+from parsers.veho import parse_veho_xlsx
 from parsers.common import Shipment
 
 
@@ -28,7 +30,14 @@ def find_invoice_files(invoice_dir: str) -> dict:
     files = {
         'ontrac': sorted(glob.glob(os.path.join(invoice_dir, '*OnTrac*Shipping*Breakdown*.csv'))),
         'ups': sorted(glob.glob(os.path.join(invoice_dir, 'Invoice_*.csv'))),
-        'fedex': sorted(glob.glob(os.path.join(invoice_dir, '*FedEx*Shipping*Breakdown*.XLSX'))),
+        'fedex': sorted(set(
+            glob.glob(os.path.join(invoice_dir, '*FedEx*Shipping*Breakdown*.XLSX')) +
+            glob.glob(os.path.join(invoice_dir, '*FedEx*Shipping*Breakdown*.xlsx')) +
+            glob.glob(os.path.join(invoice_dir, '*AHB FedEx Breakdown*.XLSX')) +
+            glob.glob(os.path.join(invoice_dir, '*AHB FedEx Breakdown*.xlsx'))
+        )),
+        'fedex_csv': sorted(glob.glob(os.path.join(invoice_dir, 'FedEx_invoice_*.CSV'))),
+        'veho': sorted(glob.glob(os.path.join(invoice_dir, '*Veho*Shipping*Breakdown*.xlsx'))),
     }
     return files
 
@@ -70,7 +79,7 @@ def main():
     files = find_invoice_files(invoice_dir)
 
     all_shipments = []
-    stats = {'ontrac': 0, 'ups': 0, 'fedex': 0, 'files': 0}
+    stats = {'ontrac': 0, 'ups': 0, 'fedex': 0, 'veho': 0, 'files': 0}
 
     # OnTrac
     for f in files['ontrac']:
@@ -99,19 +108,68 @@ def main():
         except ImportError as e:
             print(f"  FedEx:  {os.path.basename(f)} -> SKIPPED ({e})")
 
+    # FedEx CSV (AHB-direct billing-portal exports)
+    for f in files['fedex_csv']:
+        shipments = parse_fedex_csv(f)
+        all_shipments.extend(shipments)
+        stats['fedex'] += len(shipments)
+        stats['files'] += 1
+        print(f"  FedExCSV: {os.path.basename(f)} -> {len(shipments)} shipments")
+
+    # Veho
+    for f in files['veho']:
+        try:
+            shipments = parse_veho_xlsx(f)
+            all_shipments.extend(shipments)
+            stats['veho'] += len(shipments)
+            stats['files'] += 1
+            print(f"  Veho:   {os.path.basename(f)} -> {len(shipments)} shipments")
+        except (ImportError, AttributeError) as e:
+            print(f"  Veho:   {os.path.basename(f)} -> SKIPPED ({e})")
+
+    # Dedup by (carrier, tracking). Prefer record with delivery_date, then higher cost.
+    def score(s: Shipment) -> tuple:
+        return (1 if s.delivery_date else 0, s.cost or 0.0)
+
+    dedup: dict[tuple, Shipment] = {}
+    dup_count = 0
+    for s in all_shipments:
+        key = (s.carrier, s.tracking)
+        if key in dedup:
+            dup_count += 1
+            if score(s) > score(dedup[key]):
+                dedup[key] = s
+        else:
+            dedup[key] = s
+    deduped = list(dedup.values())
+
     # Write output
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
     output_data = {
         'generated': datetime.now().isoformat(),
         'stats': stats,
-        'shipments': [shipment_to_dict(s) for s in all_shipments],
+        'dedup': {'before': len(all_shipments), 'after': len(deduped), 'removed': dup_count},
+        'shipments': [shipment_to_dict(s) for s in deduped],
     }
     with open(args.output, 'w') as f:
         json.dump(output_data, f, indent=2)
 
     print(f"\nIngested {len(all_shipments)} shipments from {stats['files']} files")
-    print(f"  OnTrac: {stats['ontrac']}, UPS: {stats['ups']}, FedEx: {stats['fedex']}")
+    print(f"  OnTrac: {stats['ontrac']}, UPS: {stats['ups']}, FedEx: {stats['fedex']}, Veho: {stats['veho']}")
+    print(f"Deduped: {len(all_shipments)} -> {len(deduped)} ({dup_count} duplicates removed)")
     print(f"Output: {args.output}")
+
+    # Rebuild SQLite mirror
+    db_path = os.path.join(os.path.dirname(args.output), 'shipments.db')
+    try:
+        import subprocess
+        subprocess.run(
+            [sys.executable, os.path.join(os.path.dirname(__file__), 'build_db.py'),
+             '--input', args.output, '--output', db_path],
+            check=True,
+        )
+    except Exception as e:
+        print(f"DB build failed: {e}")
 
 
 if __name__ == '__main__':
