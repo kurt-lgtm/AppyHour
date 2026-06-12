@@ -1,5 +1,9 @@
 # SESSION HANDOFF — Cold-Chain Refactor (save point 2026-06-12 ~00:15 EDT)
 
+> 📋 **KURT-TODO.md** (repo root) = the running list of Kurt-only unblockers (scopes, creds,
+> approvals). Maintain it EVERY session: add new asks, strike completed ones. Read it alongside
+> this handoff on resume.
+
 > ⚡ **TOP RESUME ACTION:** Codex gap-fixes batch (G1-G7) DIED on its session limit (resets 2:30am
 > ET) — zero work done. RELAUNCH: spawn `codex:codex-rescue` with the full brief embedded in plan
 > `.claude/plans/2026-06-12-GAP-FIXES-plan.md` (items G1/G2/G3/G4/G6/G7, branch `infra/gap-fixes`,
