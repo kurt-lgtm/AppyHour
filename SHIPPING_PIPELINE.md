@@ -11,6 +11,7 @@
 ## 📋 CHANGE LOG (newest first — add a row every time)
 | Date | What changed | Why | Who |
 |---|---|---|---|
+| 2026-06-11 | REFACTOR BUILD START (Claude orchestrating, Codex ingest track). M3 SHIPPED: Wednesday ops run now also runs routing post-mortem + cohort health (exception-only escalation, on-time floor 93%). M4 risk-label bug VERIFIED already fixed (score_risk parity, weather fallback). M1 in build (Codex, vs DB copy). M6 automation end-state designed (`_outputs/reports/2026-06-11-M6-automation-endstate-design.md`) — goal: Kurt out of the operational loop, digest+approve only. Veho GroundPlusSuite format change documented (new parser required; GP-Zero tier; IN+TN hubs only; never ingest unverified carrier×hub). | Kurt mandate: "automate me out of this loop; take the refactor over." | Kurt + Claude |
 | 2026-06-11 | Created this system-of-record. Documented data map, attribution pointer, two-DB issue, North Star routing, ice/cost rules. | Unify the pipeline; stop re-discovering the same facts. | Kurt + Claude |
 | 2026-06-11 | Rule: Fixed_Route customer locks are sacred — never cost/TNT-override (anecdotal customer reason behind each). | Honor customer carrier preferences. | Kurt |
 | 2026-06-11 | Hardened `weekly_carrier_report.py` — `Order::%` (fulfillment) issue types HARD-EXCLUDED from shipping buckets. Verified Gorgias sync captures all views + tags `Shipping::%` vs `Order::%` correctly (no view-988673 gap). | Stop fulfillment issues counting as shipping. | Kurt |
