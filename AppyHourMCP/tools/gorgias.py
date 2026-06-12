@@ -4,9 +4,88 @@ from the Gorgias helpdesk API.
 """
 
 import json
+from datetime import datetime, time
 
-from tools._gorgias_internal import gorgias_get, gorgias_paginate
+from tools._gorgias_internal import _gorgias_get, get_auth, gorgias_get, gorgias_paginate
 from utils import format_error
+
+
+def _as_dict(value: object) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _parse_created_datetime(value: str, *, end_of_day: bool = False) -> datetime | None:
+    if not value:
+        return None
+    try:
+        if len(value) == 10:
+            parsed_date = datetime.strptime(value, "%Y-%m-%d").date()
+            return datetime.combine(parsed_date, time.max if end_of_day else time.min)
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
+def _ticket_in_created_window(ticket: dict, after_dt: datetime | None, before_dt: datetime | None) -> tuple[bool, bool]:
+    ticket_dt = _parse_created_datetime(ticket.get("created_datetime", ""))
+    if ticket_dt is None:
+        return True, False
+    if before_dt and ticket_dt > before_dt:
+        return False, False
+    if after_dt and ticket_dt < after_dt:
+        return False, True
+    return True, False
+
+
+def _paginate_tickets_client_filtered(
+    *,
+    status: str = "",
+    created_after: str = "",
+    created_before: str = "",
+    limit: int = 100,
+) -> list[dict]:
+    """Fetch newest tickets with cursor pagination and apply date filters locally."""
+    auth, base_url = get_auth()
+    after_dt = _parse_created_datetime(created_after)
+    before_dt = _parse_created_datetime(created_before, end_of_day=True)
+    results: list[dict] = []
+    cursor = None
+    max_results = min(limit, 500)
+
+    for _ in range(400):
+        params = {"limit": 100, "order_by": "created_datetime:desc"}
+        if status:
+            params["status"] = status
+        if cursor:
+            params["cursor"] = cursor
+
+        resp = _gorgias_get(f"{base_url}/tickets", auth=auth, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        items = data.get("data", [])
+        if not items:
+            break
+
+        done = False
+        for ticket in items:
+            if not isinstance(ticket, dict):
+                continue
+            include, past_cutoff = _ticket_in_created_window(ticket, after_dt, before_dt)
+            if past_cutoff:
+                done = True
+                break
+            if include:
+                results.append(ticket)
+                if len(results) >= max_results:
+                    return results
+
+        if done:
+            break
+        cursor = data.get("meta", {}).get("next_cursor")
+        if not cursor:
+            break
+
+    return results
 
 
 def register(mcp: object) -> None:
@@ -47,15 +126,12 @@ def register(mcp: object) -> None:
         Returns JSON array of ticket summaries.
         """
         try:
-            params = {}
-            if status:
-                params["status"] = status
-            if created_after:
-                params["created_datetime__gte"] = created_after
-            if created_before:
-                params["created_datetime__lte"] = created_before
-
-            tickets = gorgias_paginate("tickets", params, min(limit, 500))
+            tickets = _paginate_tickets_client_filtered(
+                status=status,
+                created_after=created_after,
+                created_before=created_before,
+                limit=limit,
+            )
             summaries = []
             for t in tickets:
                 summaries.append({
@@ -65,9 +141,13 @@ def register(mcp: object) -> None:
                     "channel": t.get("channel"),
                     "created": t.get("created_datetime"),
                     "updated": t.get("updated_datetime"),
-                    "tags": [tag.get("name") for tag in t.get("tags", [])],
-                    "assignee": t.get("assignee_user", {}).get("name", "") if t.get("assignee_user") else "",
-                    "customer_email": t.get("customer", {}).get("email", "") if t.get("customer") else "",
+                    "tags": [
+                        tag.get("name") if isinstance(tag, dict) else str(tag)
+                        for tag in (t.get("tags") or [])
+                        if isinstance(tag, (dict, str))
+                    ],
+                    "assignee": _as_dict(t.get("assignee_user")).get("name", ""),
+                    "customer_email": _as_dict(t.get("customer")).get("email", ""),
                     "messages_count": t.get("messages_count", 0),
                 })
             return json.dumps({
@@ -96,6 +176,8 @@ def register(mcp: object) -> None:
                 raw_cf = []
             custom_fields = {}
             for cf in raw_cf:
+                if not isinstance(cf, dict):
+                    continue
                 field_id = cf.get("field_id") or cf.get("id")
                 value = cf.get("value")
                 name = cf.get("name", "")
@@ -114,13 +196,13 @@ def register(mcp: object) -> None:
                     if isinstance(tag, (dict, str))
                 ],
                 "custom_fields": custom_fields,
-                "customer": ticket.get("customer", {}),
+                "customer": _as_dict(ticket.get("customer")),
                 "messages": [{
-                    "sender": m.get("sender", {}).get("email", ""),
+                    "sender": _as_dict(m.get("sender")).get("email", ""),
                     "body_text": m.get("body_text", "")[:500],
                     "created": m.get("created_datetime"),
-                    "source_type": m.get("source", {}).get("type", ""),
-                } for m in messages],
+                    "source_type": _as_dict(m.get("source")).get("type", ""),
+                } for m in messages if isinstance(m, dict)],
             }, indent=2)
         except Exception as e:
             return format_error(e, "gorgias")
@@ -145,11 +227,11 @@ def register(mcp: object) -> None:
             if not created_after:
                 created_after = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
 
-            params = {"created_datetime__gte": created_after}
-            if created_before:
-                params["created_datetime__lte"] = created_before
-
-            tickets = gorgias_paginate("tickets", params, limit=500)
+            tickets = _paginate_tickets_client_filtered(
+                created_after=created_after,
+                created_before=created_before,
+                limit=500,
+            )
 
             status_counts = Counter()
             channel_counts = Counter()
@@ -159,7 +241,7 @@ def register(mcp: object) -> None:
                 status_counts[t.get("status", "unknown")] += 1
                 channel_counts[t.get("channel", "unknown")] += 1
                 for tag in t.get("tags", []):
-                    tag_counts[tag.get("name", "unknown")] += 1
+                    tag_counts[_as_dict(tag).get("name", str(tag) if tag else "unknown")] += 1
 
             return json.dumps({
                 "period": {"from": created_after, "to": created_before or "now"},

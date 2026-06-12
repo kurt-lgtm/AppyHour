@@ -824,14 +824,15 @@ def sync_gorgias_to_sheet(days_back: int = 14, dry_run: bool = False) -> dict[st
             if not fc_tag:
                 fc_tag = "RMFG"
 
-            # Format date as Month-DD (based on first customer message, not ticket creation)
+            # Format as a sheet-native date value (based on first customer message, not ticket creation).
+            # Ops Summary formulas compare column A against date cells; Month-D text will not reliably match.
             first_msg_dt = _get_first_customer_message_date(t, auth=auth, base_url=base_url)
 
             _time_sync.sleep(0.3)  # rate limit after message fetch
             try:
                 dt = datetime.fromisoformat(first_msg_dt.replace("Z", "+00:00"))
                 dt = dt.replace(tzinfo=None)  # strip timezone for strftime
-                date_str = f"{dt.strftime('%B')}-{dt.day}"
+                date_str = dt.strftime("%m/%d/%Y")
             except (ValueError, AttributeError):
                 date_str = first_msg_dt[:10] if first_msg_dt else ""
 

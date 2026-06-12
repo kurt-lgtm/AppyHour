@@ -7,6 +7,7 @@ Config is cached at module level to avoid re-reading settings per request.
 
 import json
 import logging
+import time
 from typing import Optional
 
 import requests
@@ -14,6 +15,9 @@ import requests
 from utils import APPDATA_SETTINGS
 
 logger = logging.getLogger(__name__)
+
+_GORGIAS_MIN_INTERVAL = 0.5  # Gorgias caps at roughly 2 req/s.
+_gorgias_last_call: list[float] = [0.0]
 
 # ---------------------------------------------------------------------------
 # Config cache — loaded once, reused across all Gorgias API calls
@@ -57,11 +61,44 @@ def reload_auth():
 # HTTP helpers
 # ---------------------------------------------------------------------------
 
+def _gorgias_get(
+    url: str,
+    *,
+    auth: tuple[str, str],
+    params: dict | None = None,
+    timeout: int = 30,
+    max_retries: int = 5,
+) -> requests.Response:
+    """GET a Gorgias endpoint with pacing and basic retry handling."""
+    gap = time.monotonic() - _gorgias_last_call[0]
+    if gap < _GORGIAS_MIN_INTERVAL:
+        time.sleep(_GORGIAS_MIN_INTERVAL - gap)
+
+    delay = 1.0
+    for attempt in range(1, max_retries + 1):
+        _gorgias_last_call[0] = time.monotonic()
+        resp = requests.get(url, auth=auth, params=params, timeout=timeout)
+        if resp.status_code == 429 and attempt < max_retries:
+            retry_after = resp.headers.get("Retry-After")
+            sleep_for = float(retry_after) if retry_after else delay
+            logger.warning("Gorgias 429 on %s; retrying in %.1fs", url.rsplit("/", 1)[-1], sleep_for)
+            time.sleep(sleep_for)
+            delay = min(delay * 2, 60.0)
+            continue
+        if 500 <= resp.status_code < 600 and attempt < max_retries:
+            logger.warning("Gorgias %d on %s; retrying in %.1fs", resp.status_code, url, delay)
+            time.sleep(delay)
+            delay = min(delay * 2, 60.0)
+            continue
+        return resp
+    return resp
+
+
 def gorgias_get(endpoint: str, params: dict[str, str] | None = None) -> dict:
     """Make an authenticated GET request to the Gorgias API."""
     auth, base_url = get_auth()
     url = f"{base_url}/{endpoint}"
-    resp = requests.get(url, auth=auth, params=params, timeout=30)
+    resp = _gorgias_get(url, auth=auth, params=params, timeout=30)
     resp.raise_for_status()
     return resp.json()
 
@@ -78,7 +115,7 @@ def gorgias_paginate(endpoint: str, params: dict[str, str] | None = None, limit:
         if cursor:
             params["cursor"] = cursor
         url = f"{base_url}/{endpoint}"
-        resp = requests.get(url, auth=auth, params=params, timeout=30)
+        resp = _gorgias_get(url, auth=auth, params=params, timeout=30)
         resp.raise_for_status()
         data = resp.json()
         items = data.get("data", [])
