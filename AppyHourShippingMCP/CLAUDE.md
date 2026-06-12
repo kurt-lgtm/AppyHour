@@ -36,4 +36,4 @@ $PY AppyHourShippingMCP/server.py  # stdio, launched by Claude Desktop
 
 - **HARD RULE:** transit = final-mile pickup → final-mile delivery only. Never use carrier API `transit_time`.
 - **Veho:** use ParcelPanel `pickup_date`, NOT `Tendered`.
-- **shipments.db** at `ShippingReports/output/shipments.db` is canonical (with Veho). `Kori-shipping.db` is runtime-only, no Veho.
+- **Canonical DB = `%APPDATA%/AppyHour/shipping.db`** (all carriers incl Veho; `appyhour_lib/paths.py::db_path()`). `ShippingReports/output/shipments.db` is a RETIRED build artifact (M1 coldchain refactor 2026-06-11) — do not read or rebuild it.

@@ -16,7 +16,9 @@ from datetime import datetime, timedelta
 
 FEDEX_DIRECT_113 = re.compile(r'AHB_5\d{6,}_|FedEx_invoice_acct113_', re.IGNORECASE)
 
-DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output', 'shipments.db')
+# M1 coldchain refactor (2026-06-11): repointed from the retired output/shipments.db
+# build artifact to the canonical APPDATA DB (column name there is zip_code, not zip).
+DB = os.path.join(os.environ["APPDATA"], "AppyHour", "shipping.db")
 OUT_DEFAULT = r"C:\Users\Work\Claude Projects\_outputs\reports\FedEx-wallet-share-Orlando.docx"
 
 
