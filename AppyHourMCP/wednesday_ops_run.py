@@ -35,6 +35,10 @@ from tools.gorgias_sheets_sync import (  # noqa: E402
 
 SHIPPING_DB = os.path.expandvars(r"%APPDATA%\AppyHour\shipping.db")
 DOWNLOADS = Path(os.path.expandvars(r"%USERPROFILE%\Downloads"))
+SHIPROUTING = Path(r"C:\Users\Work\Claude Projects\ShipRouting")
+REPORTS_DIR = Path(r"C:\Users\Work\Claude Projects\_outputs\reports")
+PYTHON = sys.executable
+ON_TIME_FLOOR_PCT = 93.0  # escalate when cohort on-time (delivered<=2 / FULL cohort) drops below this
 
 
 def target_tuesday(today: date | None = None) -> date:
@@ -391,6 +395,79 @@ def _write_xlsx(
     wb.save(out_path)
 
 
+def run_routing_postmortem(tue: date) -> dict:
+    """M3 (coldchain refactor): run the ShipRouting post-mortem + cohort health
+    as part of the Wednesday ops run, write a md report to _outputs/reports/,
+    and flag for escalation only when on-time breaches ON_TIME_FLOOR_PCT.
+
+    On-time convention (memory feedback_ontime_denominator): delivered<=2 over
+    the FULL cohort, never delivered-only. routing_postmortem.py already
+    implements that (commit 3a85bb9); we just orchestrate + surface it."""
+    import re
+    import subprocess
+
+    # Post-mortem targets the prior MONDAY ship cohort (sub-cohort A, the engine
+    # cohort) for the same week as the Tuesday carrier report.
+    mon = tue - timedelta(days=1)
+    sections: list[tuple[str, str, int]] = []
+    for label, cmd in (
+        (f"routing_postmortem {mon.isoformat()}",
+         [PYTHON, str(SHIPROUTING / "routing_postmortem.py"), mon.isoformat()]),
+        ("cohort_health 4",
+         [PYTHON, str(SHIPROUTING / "cohort_health.py"), "4"]),
+    ):
+        try:
+            p = subprocess.run(
+                cmd, cwd=str(SHIPROUTING), capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=900,
+            )
+            out = (p.stdout or "") + (("\n[stderr]\n" + p.stderr) if p.stderr else "")
+            sections.append((label, out, p.returncode))
+        except Exception as e:  # noqa: BLE001
+            sections.append((label, f"FAILED TO RUN: {e}", -1))
+
+    # Escalation scan — outputs are TABULAR. Authoritative rows:
+    #   routing_postmortem: "TOTAL  <n>  <on-time>  <late>  <pending>  <pct>%"
+    #   cohort_health: "A: Mon-ship  <n>  <pct>%  <late>  <out>  FINAL" (matured A-cohorts only)
+    pct_re = re.compile(r"(\d{1,3}(?:\.\d+)?)\s*%")
+    pcts: list[float] = []
+    for _, out, _ in sections:
+        for line in out.splitlines():
+            authoritative = line.strip().startswith("TOTAL") or (
+                "A: Mon-ship" in line and "FINAL" in line)
+            if authoritative:
+                pcts += [float(m) for m in pct_re.findall(line)]
+    worst = min(pcts) if pcts else None
+    failed = [label for label, _, rc in sections if rc != 0]
+    escalate = bool(failed) or (worst is not None and worst < ON_TIME_FLOOR_PCT)
+
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    report_path = REPORTS_DIR / f"postmortem_{mon:%Y-%m-%d}.md"
+    lines = [
+        f"# Weekly Routing Post-Mortem - cohort _SHIP_{mon.isoformat()}",
+        f"Generated: {datetime.now():%Y-%m-%d %H:%M} by wednesday_ops_run",
+        f"On-time floor: {ON_TIME_FLOOR_PCT}% | worst on-time seen: "
+        f"{worst if worst is not None else 'n/a'}% | ESCALATE: {escalate}",
+        "",
+    ]
+    for label, out, rc in sections:
+        lines += [f"## {label} (exit {rc})", "```", out.strip(), "```", ""]
+    report_path.write_text("\n".join(lines), encoding="utf-8")
+
+    summary = {
+        "cohort_monday": mon.isoformat(),
+        "report": str(report_path),
+        "worst_on_time_pct": worst,
+        "steps_failed": failed,
+        "escalate": escalate,
+    }
+    if escalate:
+        # WARNING goes to stdout -> captured by the .bat log; exception-only
+        # surfacing: a clean week prints one line, a breach prints loudly.
+        print(f"WARNING: POSTMORTEM ESCALATION -> {json.dumps(summary)}", flush=True)
+    return summary
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         prog="wednesday-ops-run",
@@ -400,6 +477,10 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true", help="Preview only, no writes")
     ap.add_argument("--tuesday", help="Override target Tuesday (YYYY-MM-DD)")
     ap.add_argument("--skip-sync", action="store_true", help="Report only, no sync")
+    ap.add_argument("--skip-postmortem", action="store_true",
+                    help="Skip the routing post-mortem step")
+    ap.add_argument("--postmortem-only", action="store_true",
+                    help="Run only the routing post-mortem step")
     args = ap.parse_args()
 
     if args.tuesday:
@@ -410,6 +491,12 @@ def main() -> int:
 
     result: dict = {"target_tuesday": tue.isoformat()}
 
+    if args.postmortem_only:
+        result["postmortem"] = run_routing_postmortem(tue)
+        print(json.dumps(result["postmortem"], indent=2), flush=True)
+        print("\n[done]", flush=True)
+        return 0
+
     if not args.skip_sync:
         print(f"[sync] pulling last {args.days} days...", flush=True)
         result["sync_result"] = run_sync(args.days, args.dry_run)
@@ -419,6 +506,11 @@ def main() -> int:
     print(f"[report] building for {tue}, writing to {out_path}...", flush=True)
     result["report"] = build_cohort_report(tue, out_path)
     print(json.dumps(result["report"], indent=2), flush=True)
+
+    if not args.skip_postmortem:
+        print("[postmortem] running routing post-mortem + cohort health...", flush=True)
+        result["postmortem"] = run_routing_postmortem(tue)
+        print(json.dumps(result["postmortem"], indent=2), flush=True)
 
     print("\n[done]", flush=True)
     return 0
