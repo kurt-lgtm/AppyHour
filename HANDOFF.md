@@ -7,8 +7,14 @@
 > wrapper lies about success.
 > ✅ Since first save point: weather backfill DONE (724→1,633 rows, current to 6/11) + daily 3am
 > task `AppyHour Weather Actuals` REGISTERED · WAL enabled · gap plan written+pushed.
-> ⏳ Still pending from §1: re-run `auto_import.py` (2 missed UPS invoices — lock was held by
-> backfill, now free) · 6/12 10:00 heartbeat check fires · 6/15 cohort by Fri.
+> ✅ UPS invoices INGESTED (auto_import re-run: +2 invoices/+124 rows, shipments 72,903; unknowns
+> 906→188 signal-only, noise 686 separated).
+> ⚠️ **UNREVIEWED CODEX CODE ON MASTER:** before dying, Codex partially built G2/G6/G7 —
+> `GelPackCalculator/{pipeline_run.py, veho_watcher.py, register_pipeline_task.bat, tests/test_veho_watcher.py}`
+> got swept into commit+push. INERT (registrars never run, nothing schedules them) but NOT
+> verified — next session: review/test these BEFORE relaunching the Codex batch (G2/G6/G7 may be
+> partly done; adjust the brief to verify-and-finish rather than rebuild).
+> ⏳ Still pending: 6/12 10:00 heartbeat check fires · 6/15 cohort by Fri · G1/G3/G4 not started.
 
 **Read me FIRST on resume.** Session: Claude took over the coldchain refactor (Kurt mandate:
 "automate me out of this loop"). M1 CUT OVER. Full state below; companion docs in §4.
