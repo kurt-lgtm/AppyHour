@@ -1,7 +1,9 @@
 # MASTER HANDOFF v2 — Cold-Chain Pipeline Refactor (POST-PHASE-0)
 
 **Date:** 2026-06-11 · Owner: Kurt (Head of Ops, AppyHour) · **Supersedes** `2026-06-11-MASTER-HANDOFF-coldchain-refactor.md` (v1).
-**Status:** Phase 0 (parallel audit) COMPLETE · contract ❄️ FROZEN · **build = HELD pending Kurt's review/go.**
+**Status:** BUILD IN PROGRESS (go given 2026-06-11 eve; Kurt mandate: "automate me out of this loop — take the refactor over").
+**Live state:** M3 ✅ SHIPPED (postmortem in Wednesday ops run, commit `8a27218` on `refactor/decision-layer` worktree; tested live, worst on-time 93.0%) · M4 risk-label bug ✅ VERIFIED ALREADY FIXED (score_risk parity + WEATHER_FALLBACK_F — handoff §"WHAT PHASE 0 CHANGED" item 4's bug note is stale; remaining M4 = dup-tag vocab + box-upgrade + lock-gate) · M1 🔨 Codex building on nested-repo branch `refactor/ingest-spine` vs `shipping.refactor.db` copy · M6 automation end-state designed → `_outputs/reports/2026-06-11-M6-automation-endstate-design.md` (Kurt end-state = Wed digest + Thu routing digest + one approval click; trust ladder A→B→C).
+**Key build facts:** `GelPackCalculator/` is its OWN git repo (github kurt-lgtm/GelPackCalculator; parent gitignores it) — commit GelPack work THERE. Codex sandbox needed AppyHour added as trusted project in `~/.codex/config.toml` (done). Decision-layer worktree: `Claude Projects/.claude/worktrees/coldchain-decision` (branch `refactor/decision-layer`).
 **Model:** Claude (Opus, orchestrator + decision layer) ∥ Codex (`gpt-5.5`, ingest spine). Cross-critique model.
 
 **Read order:** this file → the 3 detail docs below → `SHIPPING_PIPELINE.md` (system-of-record) → `ShipRouting/ENGINE_GUIDE.md` (routing brain) → build.

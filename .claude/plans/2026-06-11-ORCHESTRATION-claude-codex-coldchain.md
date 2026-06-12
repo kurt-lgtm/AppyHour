@@ -66,7 +66,8 @@ Full analysis: `_outputs/reports/2026-06-11-veho-groundplussuite-analysis.md`. N
   - New side table `shipment_dims(tracking PRIMARY KEY → shipments.tracking, actual_weight, dim_l, dim_w, dim_h, dim_factor)`. Hot table (`shipments`, scanned per-cohort by `build_carrier_hist`) stays lean; dims joined only when box-cost/distvol analytics need them. Same precedent as `tracking_order_link`.
   - ⚡ Efficiency catch: **3 of the 6 "missing" fields aren't missing** — `order_id/order_name/ship_tag` are already reachable via `tracking_order_link → fulfillments` (`order_number`, `tags` carry the `_SHIP_` tag). Don't duplicate them; only the physical measurements (`actual_weight, dim_*`) are genuinely new → only those go in `shipment_dims`.
   - Contract impact: ADD a table, don't ALTER `shipments` → engine read-columns (§3) untouched, no breaking change.
-- **B1 premise (M5 apply):** does RMFG honor `!NO FedEx/UPS - <hub>` fences, or only OnTrac/Veho? Whole survivor-invariant rests on it.
+- **B1 premise (M5 apply) — ✅ EVIDENCE IN (2026-06-11, cross-critiqued):** history shows **0 fence violations in 9,889** matched `!NO`-tagged orders, with REAL FedEx/UPS samples (FedEx !NO n=2,148, UPS n=3,702, OnTrac n=12,071, Veho n=2,874 — independently verified). Positive-tag compliance FedEx 99.2%. **Confidence cap:** all history predates the 2026-06-10 TNT-removal — old-regime RMFG TNT rules may never have chosen those lanes anyway (confound). Fences-honored-historically = HIGH; transfers-to-cheapest-rate-era = MEDIUM. **Resolution: the supervised 6/15 cohort IS the live B1 test** (post-ship invariant check). Don't block on asking RMFG; monitor instead. Pack: `_outputs/reports/2026-06-11-evidence-packs-b1-dallasveho.md`.
+- **Dallas-Veho lane — ❌ DO NOT WIRE (verdict FLIPPED in cross-critique):** agent said 89.0% ≤2, "wire conditional" — but used a **delivered-only denominator** (feedback_ontime_denominator trap): 103/493 (21%) NULL-transit excluded, of which **58 still "in transit/OFD/pending" on a lane whose last ship was 6/05** → matured still-out = LATE, not pending. Corrected on-time **77.5%–89%** (PP-lag band) vs Indy 98.1% / Nashville 91.0%. Below bar either way. Re-audit after M2 wires 17track ground-truth. Precedence ≠ viability.
 - **Bree MD + Pam FL** Fixed_Route manual decision (M5 apply).
 - Doc-rot: `AppyHourShippingMCP/CLAUDE.md:39` still calls the dead DB canonical → fix in M1.
 
@@ -106,6 +107,9 @@ One orchestrated run (all 6 sources), weather actuals nightly, 17track wired, On
 M4 ice enforcement merge; M5 engine SHADOW→APPLY (single 6/15 cohort, cost guardrail, Bree/Pam manual decision logged).
 
 ---
+
+## Research method — EVIDENCE PACKS (lightweight autoresearch, Kurt 2026-06-11)
+The old autoresearch (`/forge research` → gsd-phase-researcher + .planning state) is too heavy here. This epic uses **evidence packs**: each OPEN DECISION gets a background research agent with (a) a contract-bound brief, (b) internal-data-first sourcing (our DB/shadow history/codegraph before any web), (c) decision-ready output shape: *claim → evidence (queries/cites) → verdict → confidence*, (d) cross-critique before the verdict is trusted, (e) result filed into this doc's decision log — no .planning machinery. Research runs WHILE build continues; it never blocks the critical path. First two packs launched 2026-06-11: **B1 fence-honor pre-test** (history: did RMFG ever pick a !NO-fenced lane?) + **Dallas-Veho viability** (493-shipment eff-TNT audit) → `_outputs/reports/2026-06-11-evidence-packs-b1-dallasveho.md`.
 
 ## Coordination — independent execution + reconvene-and-critique (Kurt's call, 2026-06-11)
 The two agents do **not** hand off blind. Each works its track independently, then they **reconvene and adversarially critique each other's work** at every gate. The split below is the *ownership* default; the critique is mutual.
