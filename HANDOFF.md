@@ -1,4 +1,14 @@
-# SESSION HANDOFF — Cold-Chain Refactor (save point 2026-06-11 ~23:30 EDT)
+# SESSION HANDOFF — Cold-Chain Refactor (save point 2026-06-12 ~00:15 EDT)
+
+> ⚡ **TOP RESUME ACTION:** Codex gap-fixes batch (G1-G7) DIED on its session limit (resets 2:30am
+> ET) — zero work done. RELAUNCH: spawn `codex:codex-rescue` with the full brief embedded in plan
+> `.claude/plans/2026-06-12-GAP-FIXES-plan.md` (items G1/G2/G3/G4/G6/G7, branch `infra/gap-fixes`,
+> per-item commits, never run .bat registrars, never write live DB). Then verify vs git+fs — the
+> wrapper lies about success.
+> ✅ Since first save point: weather backfill DONE (724→1,633 rows, current to 6/11) + daily 3am
+> task `AppyHour Weather Actuals` REGISTERED · WAL enabled · gap plan written+pushed.
+> ⏳ Still pending from §1: re-run `auto_import.py` (2 missed UPS invoices — lock was held by
+> backfill, now free) · 6/12 10:00 heartbeat check fires · 6/15 cohort by Fri.
 
 **Read me FIRST on resume.** Session: Claude took over the coldchain refactor (Kurt mandate:
 "automate me out of this loop"). M1 CUT OVER. Full state below; companion docs in §4.
