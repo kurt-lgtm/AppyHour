@@ -7,10 +7,10 @@ builds with clear specs; Claude = anything touching domain judgment, prod gates,
 | # | Gap | Fix | Owner | Status |
 |---|---|---|---|---|
 | G0 | Weather actuals dead | daily 3am task `AppyHour Weather Actuals` | — | ✅ DONE 6/11 (registered, next run 6/12 03:00) |
-| G1 | Backups single-disk | `scripts/backup_offsite.py`: sqlite-API snapshot → zip docs → `gws drive +upload`; weekly Sun 02:00 task | **Codex** | 🔨 dispatched |
-| G2 | Logon-coupled scheduling | `GelPackCalculator/pipeline_run.py`: one orchestrated entry (downloaders → auto_import → backfill → weather) with per-step status JSON; daily 07:00 time-trigger; sync_logon kept as fallback | **Codex** | 🔨 dispatched |
-| G3 | Alerts go to log files | Slack webhook notifier: tiny `appyhour_lib/notify.py` (env `AH_SLACK_WEBHOOK`, fail-silent) + call from pipeline_run summary, postmortem escalation, heartbeat failures | **Codex** (lib+wiring) / **Kurt** (create webhook, set env) | 🔨 dispatched |
-| G4 | Working tree = prod (logon task executed mid-build code 6/11) | `C:\AppyHourProd\` pinned checkout pattern: `scripts/deploy_prod.py` does git pull --ff-only at fixed tag/branch into prod dir; scheduled tasks repointed there | **Codex** builds; **Claude+Kurt** approve repoint | 🔨 dispatched (build only — NO task repoint without approval) |
+| G1 | Backups single-disk | `scripts/backup_offsite.py` | Codex build + Claude fix/verify | ✅ DONE 6/12 — ran live (snapshot+zip→Drive), gws shim bug fixed, **weekly Sun 02:00 task registered** |
+| G2 | Logon-coupled scheduling | `GelPackCalculator/pipeline_run.py` | Codex + Claude verify | ✅ BUILT (4 tests green, notify wired, AH_DB_OVERRIDE propagation). Daily 07:00 task NOT yet registered — register after first manual supervised run |
+| G3 | Alerts go to log files | `appyhour_lib/notify.py` + wiring (wednesday postmortem escalation, pipeline summary) | Codex + Claude verify | ✅ BUILT, fallback verified. **Live alerts blocked on Kurt: webhook URL (KURT-TODO #4)** |
+| G4 | Working tree = prod | `scripts/deploy_prod.py` → `C:\AppyHourProd\` pinned checkouts | Codex + Claude fix/run | ✅ DEPLOYED (AppyHour@c85d9e5, GelPack@3c6cc20, ShipRouting@97618ce; fixed ShipRouting branch). **Task repoint gated on Kurt (KURT-TODO #7)** |
 | G5 | Portal invoices (the 113-acct lag) | `portal_pull.py` Playwright FedEx Billing + UPS Billing Center → scan folders | **Codex** later | ⏸ BLOCKED: Kurt fills `%APPDATA%/AppyHour/portal_creds.json` |
 | G6 | Veho weekly file manual | `veho_watcher.py`: detect `Veho_GroundPlusSuite_*.xlsx` in Downloads → `veho_coverage.py` parse (GP-Zero, IN+TN) → churn sanity (>20% active-flips = abort+alert) → archive + atomic stable-file update | **Codex** | 🔨 dispatched |
 | G7 | Counter cosmetics + unknown remnants | re-run counters report INSERTED not scanned; surface ignored_noise in heartbeat | **Codex** | 🔨 dispatched |
