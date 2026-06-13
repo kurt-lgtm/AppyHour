@@ -129,7 +129,7 @@ Answers "of the orders tagged `_SHIP_X`, how many have an invoice / what did the
 ---
 
 ## 6. 🧠 THE DECISION COMPONENTS (technical)
-- **ShipRouting `lib/engine.py compute_routing()`** — the cost-aware routing brain (North Star + TNT≤2 survivor rule). Imported by `ShipRouting/build.py` AND Kori. Currently **SHADOW** (writes tags, apply-gated). Guide: `ShipRouting/ENGINE_GUIDE.md`.
+- **ShipRouting `lib/engine.py compute_routing()`** — the cost-aware routing brain (North Star + TNT≤2 survivor rule). It is **THE config now (not "shadow")** — `build.py`, `apply_shadow_ice.py`, AND Kori (`is_pipeline_v2=True`, G14 2026-06-12) all decide routing + ice from it. **Routing is fully unified; ICE has 3 entry points that can differ** (audit 2026-06-12): engine shadow uses DB-avg temp; Kori re-sizes with LIVE forecast temp (upgrade-only); `apply_shadow_ice` adds a summer-worst-case downgrade guard. Convergence tracked as G18. Guide: `ShipRouting/ENGINE_GUIDE.md`.
 - **Kori** (`GelPackCalculator/kori/gel_pack_webview.py`) — assigns ice + routing, records Lock&Ship. Launch: `run_webview.bat`. Reads `%APPDATA%` via `appyhour_lib/paths.py::db_path()`.
 - **Invoice importer (live):** `GelPackCalculator/sync_all_carriers.py` → APPDATA. ⚠️ NOT `ShippingReports/ingest_all.py` (builds a dead duplicate DB).
 
