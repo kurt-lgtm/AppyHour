@@ -31,7 +31,7 @@ with open(SETTINGS, encoding="utf-8") as f:
     settings = json.load(f)
 
 RC_TOKEN_READ = settings["recharge_api_token"]
-RC_TOKEN_WRITE = "sk_2x2_f998f08c853bd9391790b7760b449a60140c37dc0b3da48c4a54f7e0c7e67d10"
+RC_TOKEN_WRITE = settings["recharge_api_token_write"]  # scrubbed 2026-06-14: load from local settings.json (gitignored); rotate in Recharge admin
 
 def _headers(write=False):
     return {
