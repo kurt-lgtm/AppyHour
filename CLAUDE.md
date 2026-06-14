@@ -28,6 +28,7 @@ Original 386-line CLAUDE.md preserved as `_CLAUDE-original-2026-05-10.md` (ledge
 | Swap / RMFG | `scripts/swaps/`, `~/.knowledge/ops/Swap Filtering*` | thermal/gel | appyhour MCP (matrix_qc) |
 | Add MCP tool | `AppyHourMCP/CLAUDE.md`, `AppyHourMCP/server.py` | desktop apps | — |
 | Bug / incident fix | `scripts/incident-fixes/`, MISTAKES.md | apps unless in scope | — |
+| **Write ANY new script** (auth/recharge/swap/sheets/imap/weather/box) | **`TOOL_REGISTRY.md` FIRST** | — | call the canonical (get_shopify_auth, recharge_client, /forge-swap…), never reimplement |
 
 ## Run
 
