@@ -13,7 +13,7 @@ Discovery order when a capability isn't listed: codegraph (`codegraph_search`/`c
 | **Gorgias outbound send** | `AppyHourMCP/tools/` Gorgias REST path | POST `/tickets?should_skip_rules=true` + `from_agent` + `hi@appyhourbox.com`, then PUT `assignee_user:null` | MCP read-only tools (they can't send) |
 | **Google Sheets / GWS** | `AppyHourMCP/tools/google_sheets.py` | the sheets tool / `gws` CLI (authed) | new gspread/google-api glue |
 | **Weather + NWS alerts** | `appyhour_lib/weather.py` | `from appyhour_lib.weather import ...` | new OpenWeatherMap/NWS callers |
-| **SKU swap** | `/forge-swap` skill + appyhour MCP swap tools (`appyhour_swap_order_skus`); count-limited → `fulfillment_web/shopify_swap.py` | per `/forge-swap` SKILL.md | new per-SKU one-shot swap scripts |
+| **SKU swap** | `/swap` skill + appyhour MCP swap tools (`appyhour_swap_order_skus`); count-limited → `fulfillment_web/shopify_swap.py` | per `/swap` SKILL.md | new per-SKU one-shot swap scripts |
 | **Gmail attachment download** | `GelPackCalculator/download_*_imap.py` (per-carrier: fedex/ontrac/veho/shipping_pdfs) | run the carrier's IMAP script | MCP/gws for Gmail *attachments* (rule: dedicated script > IMAP > gws > MCP) |
 | **Box / SKU classification** | `appyhour_lib/box_classify.py`, `internal_classify.py` | import the classifier | inline SKU prefix regex (use `product-rules` taxonomy) |
 | **Paths / app dirs** | `appyhour_lib/paths.py` | `from appyhour_lib.paths import ...` | hardcoded `%APPDATA%`/profile paths |
@@ -41,7 +41,7 @@ Archive snapshot (non-destructive, recoverable): `Claude Projects/_archive/scrip
 | Cut-order xlsx build | `InventoryReorder/build_cut_order_xlsx_v2.py` (4 fix commits) | build_cut_order_xlsx.py | v1 held **two-week (WK2)** logic — low risk, current ops single-cohort |
 | Double-refund detection | `InventoryReorder/Errors/detect_double_refunds_v2.py` | detect_double_refunds.py | v1 had **urllib3 Retry/HTTPAdapter** resilience |
 | RC shortage fix | `InventoryReorder/Errors/fix_rc_shortages_v2.py` | fix_rc_shortages.py | v1 docstring held full **per-SKU action map** — keep as comment |
-| One-shot SKU swaps (`swap_*.py` ×28) | **`/forge-swap` + appyhour MCP swap tools** | 26 of 28 | 2 patterns ported as documented flows into forge-swap SKILL.md (Protected-swap, Conditional-target-swap); callable-fn promotion deferred (live-order test). 3 source files stay archived as reference |
+| One-shot SKU swaps (`swap_*.py` ×28) | **`/swap` + appyhour MCP swap tools** | 26 of 28 | 2 patterns ported as documented flows into swap SKILL.md (Protected-swap, Conditional-target-swap); callable-fn promotion deferred (live-order test). 3 source files stay archived as reference |
 
 🔴 Security receipt: 5 scripts had a hardcoded committed Recharge **write** token → scrubbed to `settings["recharge_api_token_write"]` (gitignored), AppyHour commit `b4cad88`; rotated + tested working 2026-06-14. History-scrub declined (token revoked). See `~/.knowledge/decisions/deprecations.md`.
 
