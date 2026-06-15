@@ -25,10 +25,12 @@ Discovery order when a capability isn't listed: codegraph (`codegraph_search`/`c
 
 ## Known drift (consolidate — deferred full-sweep)
 
-Flagged 2026-06-14 audit; not yet fixed (core-canonicals scope only):
-- **Inline Shopify auth** (should import `get_shopify_auth`): `AppyHourMCP/tools/shipping.py`, `GelPackCalculator/{gel_pack_shopify,revert_losc,swap_spn_leon_srhub,sync_shopify_orders,_lookup_losc}.py`.
-- **Ad-hoc Recharge calls** (should use `recharge_client.py`): several `InventoryReorder/Errors/check_*.py`.
-- When you touch any flagged file for another reason, migrate it to the canonical while you're there (preparatory refactor).
+Flagged 2026-06-14 audit. **Triaged + partially migrated 2026-06-15:**
+- ✅ `AppyHourMCP/tools/shipping.py` — **MIGRATED** to `get_shopify_auth()` (was inline, version-matched 2026-04, live MCP tool; safe swap, compiles).
+- 🅿️ `GelPackCalculator/{revert_losc,swap_spn_leon_srhub,_lookup_losc}.py` — **left as-is**: dead one-shots on API **2024-01**; migrating would jump them to 2026-04 = behavior risk for zero value (they don't re-run). Migrate ONLY if reactivated.
+- 🅿️ `GelPackCalculator/{gel_pack_shopify,sync_shopify_orders}.py` — gel_pack untracked/unknown-version; sync already partially imports the canonical. Leave; migrate opportunistically.
+- **Ad-hoc Recharge calls** (should use `recharge_client.py`): several `InventoryReorder/Errors/check_*.py` — still flagged, opportunistic.
+- Rule: migrate a flagged file when you touch it for another reason AND its API version already matches canonical (else preserve its version).
 
 ## Canon decisions — 2026-06-14 dup-script sweep
 
