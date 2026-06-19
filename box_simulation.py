@@ -140,7 +140,12 @@ query($cursor: String, $q: String!) {
       id name tags
       customer { firstName lastName }
       shippingAddress { city provinceCode zip }
-      lineItems(first: 100) {
+      lineItems(first: 50) {
+        # first:50 not 100 (Kurt 2026-06-19): orders(first:100) x lineItems(first:100) blew Shopify's
+        # query-cost budget, so Shopify SILENTLY DROPPED the heaviest order nodes (multi-line bundle
+        # orders) from each page -> they never entered the cohort / never got routed or ice-sized.
+        # first:50 keeps every order's line items in one page (0 deep-paginations on the current cohort)
+        # AND stays under cost so no order is dropped. >50-line-item orders still deep-paginate below.
         pageInfo { hasNextPage }
         edges { node { sku name quantity currentQuantity } }
       }
