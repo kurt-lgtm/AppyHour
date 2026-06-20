@@ -15,6 +15,8 @@ Discovery order when a capability isn't listed: codegraph (`codegraph_search`/`c
 | **Weather + NWS alerts** | `appyhour_lib/weather.py` | `from appyhour_lib.weather import ...` | new OpenWeatherMap/NWS callers |
 | **SKU swap** | `/swap` skill + appyhour MCP swap tools (`appyhour_swap_order_skus`); count-limited → `fulfillment_web/shopify_swap.py` | per `/swap` SKILL.md | new per-SKU one-shot swap scripts |
 | **Gmail attachment download** | `GelPackCalculator/download_*_imap.py` (per-carrier: fedex/ontrac/veho/shipping_pdfs) | run the carrier's IMAP script | MCP/gws for Gmail *attachments* (rule: dedicated script > IMAP > gws > MCP) |
+| **delivery_status lost-in-transit reconcile** | `GelPackCalculator/reconcile_lost_in_transit.py` | one-time or re-runnable invoice reconcile to recover frozen `lost_in_transit` rows with real delivery dates | ad-hoc SQL updates to `delivery_status` |
+| **delivery_status aged-out sweep** | `GelPackCalculator/daily_shipping_sync.py --aged-out-sweep [--apply]` | dry-run by default; `--apply` retires stale unrecovered rows to terminal `status='aged_out'`; also runs inside daily sync | leaving aged-out rows as live `lost_in_transit` / `in_transit` |
 | **Box / SKU classification** | `appyhour_lib/box_classify.py`, `internal_classify.py` | import the classifier | inline SKU prefix regex (use `product-rules` taxonomy) |
 | **Paths / app dirs** | `appyhour_lib/paths.py` | `from appyhour_lib.paths import ...` | hardcoded `%APPDATA%`/profile paths |
 | **User uploads persistence** | `appyhour_lib/user_data.save_user_file()` | per `feedback_user_data_persistence` | writing to `.claude/` |
