@@ -39,6 +39,7 @@ SHIPROUTING = Path(r"C:\Users\Work\Claude Projects\ShipRouting")
 REPORTS_DIR = Path(r"C:\Users\Work\Claude Projects\_outputs\reports")
 PYTHON = sys.executable
 ON_TIME_FLOOR_PCT = 93.0  # escalate when cohort on-time (delivered<=2 / FULL cohort) drops below this
+DELIVERY_STATUS_FREEZE_WARNING = 200
 
 
 def target_tuesday(today: date | None = None) -> date:
@@ -222,6 +223,87 @@ def build_cohort_report(tue: date, out_path: Path) -> dict:
         "tickets_in_cohort": len(cohort_rows),
         "out_path": str(out_path),
     }
+    return summary
+
+
+def delivery_status_hygiene(con) -> dict:
+    """Read-only health check for delivery_status status aging."""
+    cur = con.cursor()
+    cur.execute(
+        "SELECT COALESCE(status, 'NULL') AS status, COUNT(*) "
+        "FROM delivery_status GROUP BY COALESCE(status, 'NULL') "
+        "ORDER BY COUNT(*) DESC, status"
+    )
+    distribution = {status: count for status, count in cur.fetchall()}
+
+    age_expr = (
+        "julianday('now') - julianday(COALESCE("
+        "ds.fulfilled_at, "
+        "(SELECT COALESCE(f.fulfilled_at, f.order_date) "
+        "FROM fulfillments f "
+        "WHERE f.tracking_number = ds.tracking_number LIMIT 1), "
+        "ds.synced_at))"
+    )
+    stale_where = (
+        "ds.status NOT IN ('delivered', 'aged_out') "
+        "AND ds.delivery_date IS NULL "
+        f"AND {age_expr} "
+    )
+    cur.execute(
+        "SELECT COUNT(*) FROM delivery_status ds "
+        f"WHERE {stale_where} > 45"
+    )
+    freeze_indicator = cur.fetchone()[0]
+
+    cur.execute(
+        "SELECT COUNT(*) FROM delivery_status ds "
+        "WHERE ds.status NOT IN ('delivered', 'aged_out') "
+        f"AND {age_expr} <= 45"
+    )
+    active_in_transit = cur.fetchone()[0]
+
+    return {
+        "distribution": distribution,
+        "freeze_indicator": freeze_indicator,
+        "active_in_transit": active_in_transit,
+    }
+
+
+def run_delivery_status_hygiene() -> dict:
+    con = sqlite3.connect(f"file:{SHIPPING_DB}?mode=ro", uri=True)
+    try:
+        summary = delivery_status_hygiene(con)
+    finally:
+        con.close()
+
+    print(
+        "[delivery-status] distribution: "
+        f"{json.dumps(summary['distribution'], sort_keys=True)}",
+        flush=True,
+    )
+    print(
+        "[delivery-status] active_in_transit: "
+        f"{summary['active_in_transit']} | freeze_indicator: "
+        f"{summary['freeze_indicator']}",
+        flush=True,
+    )
+
+    if summary["freeze_indicator"] > DELIVERY_STATUS_FREEZE_WARNING:
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+            from appyhour_lib.notify import notify
+
+            notify(
+                f"Delivery status hygiene warning: {json.dumps(summary)}",
+                level="warning",
+            )
+        except Exception:
+            pass
+        print(
+            f"WARNING: DELIVERY STATUS HYGIENE -> {json.dumps(summary)}",
+            flush=True,
+        )
+
     return summary
 
 
@@ -513,6 +595,10 @@ def main() -> int:
     print(f"[report] building for {tue}, writing to {out_path}...", flush=True)
     result["report"] = build_cohort_report(tue, out_path)
     print(json.dumps(result["report"], indent=2), flush=True)
+
+    print("[delivery-status] running hygiene check...", flush=True)
+    result["delivery_status_hygiene"] = run_delivery_status_hygiene()
+    print(json.dumps(result["delivery_status_hygiene"], indent=2), flush=True)
 
     if not args.skip_postmortem:
         print("[postmortem] running routing post-mortem + cohort health...", flush=True)
