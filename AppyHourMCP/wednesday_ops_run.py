@@ -557,6 +557,48 @@ def run_routing_postmortem(tue: date) -> dict:
     return summary
 
 
+def run_engine_parity_guard() -> dict:
+    """B4 (Kurt 2026-06-20): single-brain DRIFT ALARM. Kori's `compute_v2_routing` and build.py BOTH
+    route through `lib.engine.compute_routing`. If someone edits the Kori bridge to bypass the engine
+    (or the engine signature drifts from what Kori feeds it), the cohort sheet and the Shipping App would
+    apply DIFFERENT carriers for the same order. The parity test pins they can't -- we run it here so a
+    weekly run trips loudly the first Wednesday after any such drift, NOT mid-cohort.
+
+    Offline + deterministic (mocks the Shopify/data layer, :memory: DB) -> safe every week, no Shopify."""
+    import subprocess
+
+    test = SHIPROUTING / "tests" / "test_kori_engine_parity.py"
+    env = {**os.environ, "AH_DB_OVERRIDE": ":memory:", "FORGE_BASH_OK": "1"}
+    try:
+        p = subprocess.run(
+            [PYTHON, "-m", "pytest", str(test), "-q"],
+            cwd=str(SHIPROUTING), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=300, env=env,
+        )
+        out = (p.stdout or "") + (("\n[stderr]\n" + p.stderr) if p.stderr else "")
+        rc = p.returncode
+    except Exception as e:  # noqa: BLE001
+        out, rc = f"FAILED TO RUN: {e}", -1
+
+    drift = rc != 0
+    summary = {"test": str(test), "exit": rc, "drift": drift}
+    print(
+        f"[engine-parity] build.py<->Kori single-brain: "
+        f"{'DRIFT DETECTED' if drift else 'in sync'} (exit {rc})",
+        flush=True,
+    )
+    if drift:
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+            from appyhour_lib.notify import notify
+
+            notify(f"Engine parity DRIFT (Kori != build.py): {json.dumps(summary)}", level="error")
+        except Exception:
+            pass
+        print(f"WARNING: ENGINE PARITY DRIFT -> {json.dumps(summary)}\n{out.strip()}", flush=True)
+    return summary
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         prog="wednesday-ops-run",
@@ -568,6 +610,8 @@ def main() -> int:
     ap.add_argument("--skip-sync", action="store_true", help="Report only, no sync")
     ap.add_argument("--skip-postmortem", action="store_true",
                     help="Skip the routing post-mortem step")
+    ap.add_argument("--skip-parity", action="store_true",
+                    help="Skip the build.py<->Kori engine parity drift guard")
     ap.add_argument("--postmortem-only", action="store_true",
                     help="Run only the routing post-mortem step")
     args = ap.parse_args()
@@ -604,6 +648,11 @@ def main() -> int:
         print("[postmortem] running routing post-mortem + cohort health...", flush=True)
         result["postmortem"] = run_routing_postmortem(tue)
         print(json.dumps(result["postmortem"], indent=2), flush=True)
+
+    if not args.skip_parity:
+        print("[engine-parity] running build.py<->Kori single-brain drift guard...", flush=True)
+        result["engine_parity"] = run_engine_parity_guard()
+        print(json.dumps(result["engine_parity"], indent=2), flush=True)
 
     print("\n[done]", flush=True)
     return 0
