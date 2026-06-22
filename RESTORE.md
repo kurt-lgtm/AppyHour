@@ -59,11 +59,12 @@ Create `%APPDATA%\AppyHour\` if missing, then:
 Alternatively set env vars instead of the JSON: `SHOPIFY_STORE_URL`, `SHOPIFY_ACCESS_TOKEN`,
 `SHOPIFY_API_VERSION`, `OPENWEATHER_API_KEY` (see `appyhour_lib/credentials.py`).
 
-## 5a. Fix the backup gap (do this once you're back up)
-The weekly job writes `shipping.weekly-*.db` + `coldchain-logic-backup-*.zip` to Drive, but the
-**knowledge/vault backup last ran 2026-06-11**. Re-add `~/.knowledge/` + `~/.claude/skills/` to the
-weekly job (or `backup_offsite.py`) so the next dead-PC event doesn't lose the vault. Per
-`REBUILD-WITH-AI.md` §5, automating this into `pipeline_run.py` was the M2 goal.
+## 5a. Backup gap — FIXED 2026-06-22
+`scripts/backup_offsite.py` now also bundles `~/.knowledge/` + `~/.claude/skills/` into
+`coldchain-knowledge-backup-<date>.zip` and uploads it weekly. So from the next backup run
+onward the vault/skills are covered. **But the newest knowledge zip on Drive *before* that fix
+is still 2026-06-11** — until a fresh weekly run completes, restore from the dead disk's
+`~/.knowledge` if recoverable.
 
 ## 6. Path sweep (ONLY if username/paths differ from `C:\Users\Work\Claude Projects`)
 Files that hardcode the old path — patch each to your new path:

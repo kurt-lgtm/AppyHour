@@ -1,6 +1,7 @@
+import zipfile
 from datetime import date
 
-from scripts.backup_offsite import prune_weekly_snapshots
+from scripts.backup_offsite import prune_weekly_snapshots, zip_knowledge
 
 
 def test_prune_weekly_snapshots_removes_only_older_than_28_days(tmp_path):
@@ -16,3 +17,23 @@ def test_prune_weekly_snapshots_removes_only_older_than_28_days(tmp_path):
     assert keep_boundary.exists()
     assert keep_new.exists()
     assert unrelated.exists()
+
+
+def test_zip_knowledge_bundles_roots_preserving_dir_names(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".knowledge" / "ops").mkdir(parents=True)
+    (home / ".knowledge" / "ops" / "note.md").write_text("vault", encoding="utf-8")
+    (home / ".claude" / "skills" / "s").mkdir(parents=True)
+    (home / ".claude" / "skills" / "s" / "SKILL.md").write_text("skill", encoding="utf-8")
+    (home / ".knowledge" / "__pycache__").mkdir()
+    (home / ".knowledge" / "__pycache__" / "x.pyc").write_text("junk", encoding="utf-8")
+
+    monkeypatch.setattr("pathlib.Path.home", staticmethod(lambda: home))
+
+    dst = tmp_path / "out" / "knowledge.zip"
+    count = zip_knowledge(dst)
+
+    assert count == 2  # __pycache__ excluded
+    names = set(zipfile.ZipFile(dst).namelist())
+    assert ".knowledge/ops/note.md" in names
+    assert ".claude/skills/s/SKILL.md" in names
