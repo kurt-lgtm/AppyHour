@@ -21,7 +21,7 @@ from pathlib import Path
 OLD_PATH_TOKEN = r"C:\Users\Work"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-OK, MISS, WARN = "[ OK ]", "[MISS]", "[WARN]")[:3] if False else ("[ OK ]", "[MISS]", "[WARN]")
+OK, MISS, WARN = "[ OK ]", "[MISS]", "[WARN]"
 
 
 def _appdata() -> Path:
