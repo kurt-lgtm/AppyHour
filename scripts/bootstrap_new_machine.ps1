@@ -62,9 +62,12 @@ $env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';'
             [System.Environment]::GetEnvironmentVariable('Path','User')
 
 # 3. npm global packages ---------------------------------------------------
+# NOTE: Claude Code is NOT installed here — it's a native binary, install it
+# separately and FIRST (it's how you'd run this script via a local agent):
+#     irm https://claude.ai/install.ps1 | iex
+# Node is needed ONLY for the Shopify dev-mcp server below.
 if (-not $SkipNpm) {
-    Write-Host "`n==> npm global packages" -ForegroundColor Cyan
-    npm install -g @anthropic-ai/claude-code   # Claude Code CLI
+    Write-Host "`n==> npm global packages (Shopify dev-mcp)" -ForegroundColor Cyan
     npm install -g @shopify/dev-mcp            # shopify-dev MCP server (.mcp.json)
 }
 

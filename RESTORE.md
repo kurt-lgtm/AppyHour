@@ -44,7 +44,9 @@ and you can skip §6 almost entirely. If not, note your new paths; you'll patch 
 
 - [ ] **Anaconda Python 3.10+** (gives you Python + Tcl/Tk for tkinter)
 - [ ] **.NET Framework** runtime — pywebview MUST use the **netfx** backend, NOT coreclr/.NET 8 (Kori desktop)
-- [ ] **git**, **gh CLI**, **Node.js + npm**, **Claude Code**, **Claude Desktop**
+- [ ] **Claude Code** — native installer, NO Node needed: `irm https://claude.ai/install.ps1 | iex`
+- [ ] **git**, **gh CLI**, **Claude Desktop**
+- [ ] **Node.js + npm** — needed ONLY for the Shopify dev-mcp server, not for Claude Code
 - [ ] `pip install -e ".[dev,fulfillment,shipping,mcp]"` from the AppyHour repo root
 - [ ] `npm i -g @shopify/dev-mcp` (the shopify-dev MCP server in `.mcp.json`)
 
