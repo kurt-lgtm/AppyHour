@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "appyhour"
 version = "1.0.0"
@@ -66,3 +70,9 @@ pythonVersion = "3.10"
 typeCheckingMode = "basic"
 reportMissingImports = "warning"
 reportMissingTypeStubs = false
+
+[tool.setuptools]
+# Restore fix (2026-06-22): modern setuptools (>=61) rejects flat-layout
+# auto-discovery when multiple top-level dirs are present. Scope the package
+# to the importable library; other modules run via sys.path / pytest pythonpath.
+packages = ["appyhour_lib"]

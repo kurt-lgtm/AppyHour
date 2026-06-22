@@ -72,7 +72,9 @@ def build_server_params() -> StdioServerParameters:
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join(str(p) for p in PYTHONPATH_DIRS)
     return StdioServerParameters(
-        command="python",
+        # Use the interpreter running this harness, not a bare "python" (which
+        # hits the Windows Store stub on machines without python on PATH).
+        command=sys.executable,
         args=[str(SERVER)],
         env=env,
     )

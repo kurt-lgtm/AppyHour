@@ -8,16 +8,43 @@
 Swaps a shortage SKU for a substitute across unfulfilled orders
 filtered by ship date tag. Used by the fulfillment web app's
 swap integration on shortage rows.
+
+TWO HARD RULES (Kurt 2026-06; enforced here so callers can't skip them):
+1. AUDIT LOG — every swap appends a revert row (order, old->new, qty, ts, result) to
+   _outputs/logs/swap_audit.jsonl via _audit(). Never run a swap path without it.
+2. COUNT WITH fulfillableQuantity, NEVER quantity — a removed/zeroed line still reports
+   its original `quantity`, so counting `quantity` double-counts items already swapped
+   out. Any demand/inventory count over orders MUST use fulfillableQuantity.
 """
 
 from __future__ import annotations
 
+import datetime
 import json
+import os
 import re
 import time
 from typing import Callable
 
 import requests
+
+# Append-only audit log so EVERY swap is revertible (order, from->to, qty, ts, result).
+# Kurt 2026-06-19: never run a swap without a revert log. Built into the canonical
+# module so /swap, execute_bulk_swap, and any caller log automatically.
+_AUDIT_LOG = os.path.join(
+    os.environ.get("SWAP_AUDIT_DIR", r"C:\Users\Work\Claude Projects\_outputs\logs"),
+    "swap_audit.jsonl",
+)
+
+
+def _audit(row: dict) -> None:
+    try:
+        os.makedirs(os.path.dirname(_AUDIT_LOG), exist_ok=True)
+        row = {"ts": datetime.datetime.now().isoformat(timespec="seconds"), **row}
+        with open(_AUDIT_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+    except Exception:
+        pass  # logging must never break a swap
 
 # Failure classification — see E4 plan
 _LOCKED_RE = re.compile(r"cannot be edited", re.I)
@@ -232,7 +259,13 @@ def execute_swap(
             break
 
     if not li_node:
+        _audit({"order_gid": order_gid, "old_sku": old_sku, "new_variant_gid": new_variant_gid,
+                "result": "skip:not-found"})
         return {"success": False, "error": f"Line item {old_sku} not found or qty=0"}
+
+    # Revert info: to undo, swap new_variant_gid back to old_sku at this qty.
+    _audit({"order_gid": order_gid, "old_sku": old_sku, "new_variant_gid": new_variant_gid,
+            "qty": li_node["quantity"], "result": "intent"})
 
     # Step 2: Set old line item qty to 0
     time.sleep(0.3)
@@ -275,8 +308,13 @@ def execute_swap(
 
     if data["orderEditCommit"]["userErrors"]:
         errors = data["orderEditCommit"]["userErrors"]
+        _audit({"order_gid": order_gid, "old_sku": old_sku, "new_variant_gid": new_variant_gid,
+                "qty": li_node["quantity"], "result": f"FAIL:commit:{errors}"})
         return {"success": False, "error": f"commit: {errors}"}
 
+    order = data["orderEditCommit"].get("order") or {}
+    _audit({"order_gid": order_gid, "order_name": order.get("name"), "old_sku": old_sku,
+            "new_variant_gid": new_variant_gid, "qty": li_node["quantity"], "result": "OK"})
     return {"success": True, "error": None}
 
 def execute_bulk_swap(
@@ -372,3 +410,115 @@ def execute_bulk_swap(
         "successful_orders": successful_orders,
         "dry_run": False,
     }
+
+
+# ---------------------------------------------------------------------------
+# Conditional-target swap (per-parent-box remediation).
+# Promoted from a documented /swap flow 2026-06-15 after a /forge reason debate:
+# verdict = "promote behind a verification gate, decided per-pattern."
+#   - Pattern "protected-swap" (re-add bystander) was NOT built: verified by code
+#     inspection that execute_swap only zeroes the old SKU line, so no bystander
+#     can drop in the canonical flow — it guarded a non-existent bug.
+#   - This (conditional-target) WAS built: its premise is confirmed (per-parent
+#     remediation really happened, e.g. swap_bad_ipac_blr.py). The pure resolver is
+#     unit-tested; the LIVE MUTATION is gated behind dry_run + a required live-order test.
+# ---------------------------------------------------------------------------
+
+def resolve_conditional_adds(parent_sku: str, target_map: dict) -> list[tuple[str, int]]:
+    """Pure (no I/O, unit-testable): given an order's parent box SKU and a
+    {parent_sku: {"cheese": sku, "jams": [(sku, qty), ...]}} map, return the
+    list of (sku, qty) to ADD for that order. Raises KeyError if the parent
+    isn't in the map (fail loud — never silently add nothing)."""
+    t = target_map.get(parent_sku)
+    if t is None:
+        raise KeyError(f"no conditional target for parent box SKU {parent_sku!r}")
+    adds: list[tuple[str, int]] = []
+    if t.get("cheese"):
+        adds.append((t["cheese"], 1))
+    adds.extend((sku, qty) for sku, qty in t.get("jams", []))
+    return adds
+
+
+def execute_conditional_swap(
+    store_url: str,
+    token: str,
+    order_gid: str,
+    removes: list[str],
+    adds: list[tuple[str, int]],
+    staff_note: str = "",
+    dry_run: bool = True,
+) -> dict:
+    """Multi-remove + multi-add on ONE order via Shopify order edit.
+
+    Unlike execute_swap (fixed single old->new), the *correct* additions vary per
+    order — the caller resolves them (resolve_conditional_adds + lookup_variant_gid)
+    and passes the resolved removes/adds here.
+
+    Args:
+        removes: SKUs to zero out on the order (each matched line set to qty 0).
+        adds:    list of (variant_gid, qty) to add.
+        dry_run: True (default, SAFE) returns the resolved plan WITHOUT mutating.
+
+    ⚠️ LIVE IRREVERSIBLE MUTATION when dry_run=False. AppyHour is live-data-only
+    (no staging). Per the 2026-06-15 /forge reason verdict, do NOT call with
+    dry_run=False in production until a supervised live-order test session has
+    passed. Returns {success, order_name?, removed, added, dry_run, error}.
+    """
+    if dry_run:
+        return {"success": True, "dry_run": True, "removes": list(removes),
+                "adds": list(adds), "order_gid": order_gid, "error": None}
+
+    # Step 1: begin edit (snapshot line items)
+    data = _gql(store_url, token, """
+    mutation orderEditBegin($id: ID!) {
+      orderEditBegin(id: $id) {
+        calculatedOrder { id lineItems(first: 50) { edges { node { id sku quantity } } } }
+        userErrors { field message }
+      }
+    }""", {"id": order_gid})
+    if data["orderEditBegin"]["userErrors"]:
+        return {"success": False, "dry_run": False, "error": f"beginEdit: {data['orderEditBegin']['userErrors']}"}
+    calc = data["orderEditBegin"]["calculatedOrder"]
+    calc_id = calc["id"]
+    lines = {(e["node"].get("sku") or "").strip(): e["node"] for e in calc["lineItems"]["edges"]}
+
+    # Step 2: zero out each remove SKU that's present
+    removed = []
+    for sku in removes:
+        node = lines.get(sku)
+        if not node or node["quantity"] <= 0:
+            continue
+        time.sleep(0.3)
+        d = _gql(store_url, token, """
+        mutation setQ($id: ID!, $lineItemId: ID!, $quantity: Int!) {
+          orderEditSetQuantity(id: $id, lineItemId: $lineItemId, quantity: $quantity) {
+            calculatedOrder { id } userErrors { field message } }
+        }""", {"id": calc_id, "lineItemId": node["id"], "quantity": 0})
+        if d["orderEditSetQuantity"]["userErrors"]:
+            return {"success": False, "dry_run": False, "error": f"setQuantity {sku}: {d['orderEditSetQuantity']['userErrors']}"}
+        removed.append(sku)
+
+    # Step 3: add each (variant_gid, qty)
+    added = []
+    for variant_gid, qty in adds:
+        time.sleep(0.3)
+        d = _gql(store_url, token, """
+        mutation addV($id: ID!, $variantId: ID!, $quantity: Int!) {
+          orderEditAddVariant(id: $id, variantId: $variantId, quantity: $quantity, allowDuplicates: true) {
+            calculatedLineItem { id } userErrors { field message } }
+        }""", {"id": calc_id, "variantId": variant_gid, "quantity": qty})
+        if d["orderEditAddVariant"]["userErrors"]:
+            return {"success": False, "dry_run": False, "error": f"addVariant {variant_gid}: {d['orderEditAddVariant']['userErrors']}"}
+        added.append((variant_gid, qty))
+
+    # Step 4: commit
+    time.sleep(0.3)
+    d = _gql(store_url, token, """
+    mutation commit($id: ID!, $staffNote: String) {
+      orderEditCommit(id: $id, notifyCustomer: false, staffNote: $staffNote) {
+        order { id name } userErrors { field message } }
+    }""", {"id": calc_id, "staffNote": staff_note})
+    if d["orderEditCommit"]["userErrors"]:
+        return {"success": False, "dry_run": False, "error": f"commit: {d['orderEditCommit']['userErrors']}"}
+    return {"success": True, "dry_run": False, "order_name": d["orderEditCommit"]["order"]["name"],
+            "removed": removed, "added": added, "error": None}
