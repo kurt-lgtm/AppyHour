@@ -25,23 +25,33 @@ import os
 import sys
 import time
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 
 # -- Paths --
 BASE = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PATH = os.path.join(BASE, "dist", "inventory_reorder_settings.json")
-INV_CSV = r"C:\Users\Work\Claude Projects\AppyHour\InventoryReorder\Product Inventory_2026-04-21.csv"
+INV_CSV = r"C:\Users\Work\Claude Projects\AppyHour\InventoryReorder\Product Inventory_2026-06-22_HAVE.csv"
 SHIPMENTS = os.path.join(BASE, "Shipments")
-SAT_DEPLETION = ""  # Inventory CSV is from 4/21 — post-depletion
+SAT_DEPLETION = ""  # HAVE inventory CSV is current (Kurt 6/22) — post-depletion
 TUE_DEPLETION = ""
 
-# Ship week boundaries — Tue rule: WK1 = next Mon ship only
-# WK1: Sun 6/7 – Fri 6/12 (ships _SHIP_2026-06-15)
-# WK2: Sat 6/13 – Fri 6/19 (ships _SHIP_2026-06-22)
-WK1_START = date(2026, 6, 7)
-WK1_END = date(2026, 6, 12)
-WK2_START = date(2026, 6, 13)
-WK2_END = date(2026, 6, 19)
+# Ship week boundaries — DYNAMIC (no more weekly hand-editing; see Cut Order Rules.md
+# "make everything dynamic"). Single-cohort: the builder drops WK2 and emits only WK1,
+# so the Recharge scheduled_at window must cover the whole cut in WK1:
+#   from today → the UPCOMING SATURDAY (the ship-week billing boundary — Kurt's rule:
+#   "the recharge pull should be up to Saturday, it's always Saturday").
+# This is correct for both Monday (this week's Tue-ship remainder is still queued +
+# next week) and Tuesday runs (this week already processed out of queued). Shopify
+# Mon/Tue tag handling is separate, via _wk1_ship_tags(today).
+# Override by hardcoding these four if a run ever needs a custom window.
+def _coming_saturday(d: date) -> date:
+    return d + timedelta(days=(5 - d.weekday()) % 7)  # 5 = Saturday; today if already Sat
+
+_TODAY = date.today()
+WK1_START = _TODAY - timedelta(days=7)      # lookback; pre-today charges already processed (harmless)
+WK1_END = _coming_saturday(_TODAY)          # ship-week boundary — captures the cohort being cut
+WK2_START = WK1_END + timedelta(days=1)     # WK2 degenerate (builder drops it)
+WK2_END = WK1_END                           # also caps the API scheduled_at_max pull
 
 PICKABLE_PREFIXES = ("CH-", "MT-", "AC-")
 
@@ -421,9 +431,12 @@ def fetch_recharge_api(api_token, out_specialty=None):
 
 # -- Step 4: Fetch Shopify orders for upcoming ship weeks --
 
-# Ship week tag dates (Monday of each week)
-WK1_SHIP_TAG = "_SHIP_2026-05-18"
-WK2_SHIP_TAG = "_SHIP_2026-06-22"
+# Ship week tag dates (Monday of each week) — DYNAMIC (no weekly hand-editing).
+# WK1 = current ship Monday; WK2 = the week beyond WK1_SHIP_TAGS (dropped by single-cohort,
+# kept non-overlapping so it never double-classifies a WK1 order).
+_THIS_MONDAY = _TODAY - timedelta(days=_TODAY.weekday())
+WK1_SHIP_TAG = f"_SHIP_{_THIS_MONDAY.isoformat()}"
+WK2_SHIP_TAG = f"_SHIP_{(_THIS_MONDAY + timedelta(days=14)).isoformat()}"
 
 # Day-of-week ship-tag selection:
 #   Monday run → WK1 includes BOTH this Mon's ship tag and next Mon's
