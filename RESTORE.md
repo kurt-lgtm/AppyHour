@@ -38,6 +38,10 @@ If you can recreate the **same username `Work`**, do it — it makes every hardc
 and you can skip §6 almost entirely. If not, note your new paths; you'll patch them in §6.
 
 ## 1. Install the runtime
+> ⚡ **One-shot:** from the repo root in an **elevated** PowerShell, run
+> `powershell -ExecutionPolicy Bypass -File scripts\bootstrap_new_machine.ps1`.
+> It installs everything below via winget + pip + npm. The manual list is the fallback.
+
 - [ ] **Anaconda Python 3.10+** (gives you Python + Tcl/Tk for tkinter)
 - [ ] **.NET Framework** runtime — pywebview MUST use the **netfx** backend, NOT coreclr/.NET 8 (Kori desktop)
 - [ ] **git**, **gh CLI**, **Node.js + npm**, **Claude Code**, **Claude Desktop**
