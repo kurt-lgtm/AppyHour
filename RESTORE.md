@@ -97,9 +97,22 @@ Files that hardcode the old path — patch each to your new path:
 `python scripts/restore_check.py --grep-paths` lists every file still containing `C:\Users\Work`.
 
 ## 7. Re-register scheduled tasks (Windows Task Scheduler)
-- [ ] `appyhour_sync_on_logon` → `GelPackCalculator/sync_logon.py` (logon trigger)
-- [ ] `AppyHour Wednesday Ops Run` → run `AppyHourMCP/register_wednesday_task.bat` (Wed 14:00)
-- [ ] Weather actuals daily 03:00 → `ShippingReports/weather_sync_cron.bat`
+> 💾 **Authoritative record is on the old SSD:** Windows stores every registered task as XML in
+> `C:\Windows\System32\Tasks\` (look for ones named `AppyHour*` / `appyhour*`). Copy those out and
+> re-import on the new box with `schtasks /Create /XML "task.xml" /TN "<name>"` — that captures the
+> EXACT trigger/args, including any task not listed below. The list here is reconstructed from the
+> repo and may be incomplete.
+
+| Task name | Schedule | Target | Registration script |
+|---|---|---|---|
+| `appyhour_sync_on_logon` | At logon | `GelPackCalculator/sync_logon.py` (orchestrates sync_all_carriers + backfill_sync + auto_import) | none in repo — recreate from SSD XML |
+| `AppyHour Wednesday Ops Run` | Weekly Wed 14:00 | `AppyHourMCP/wednesday_ops_run.bat` (incl. routing post-mortem) | ✅ `AppyHourMCP/register_wednesday_task.bat` |
+| `AppyHour Weekly Offsite Backup` | Weekly Sun 02:00 | `scripts/backup_offsite.py` | ✅ `scripts/register_backup_task.bat` |
+| `AppyHour Weather Actuals` | Daily 03:00 | `ShippingReports/weather_sync_cron.bat` | none — `schtasks /Create` one-liner in `HANDOFF.md` |
+| Postmortem runner (name TBC) | Mondays 09:00 | `ShippingReports/postmortem_runner.py` | none — schedule was a "suggestion"; confirm against SSD XML whether it was ever registered |
+
+- [ ] Recover `C:\Windows\System32\Tasks\AppyHour*` XML from the SSD → re-import (authoritative)
+- [ ] For the two with `register_*.bat`: just run the .bat (after the §6 path sweep)
 
 ## 8. Verify
 - [ ] `pytest` (from repo root) — core logic green
