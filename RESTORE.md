@@ -10,6 +10,24 @@ to see what's still missing.
 
 ---
 
+## 0a. ✅ PREFERRED: you have the old SSD — copy these first
+If the dead machine's SSD is readable (USB-SATA adapter / enclosure), it is a **better source
+than the Drive backups** — it has the creds, the full vault, and the live DB that were never
+backed up. Copy these from the old disk (mounted as e.g. `E:\`) before falling back to Drive:
+
+| From old disk (`Users\Work\...`) | To new machine | Why it matters |
+|---|---|---|
+| `AppData\Roaming\AppyHour\` (whole folder) | `%APPDATA%\AppyHour\` | **Creds + settings + live `shipping.db`** — in NO backup. Skips §3 and §5 entirely. |
+| `.knowledge\` (whole folder) | `~/.knowledge\` | Full vault, **no 06-11 gap** — better than the knowledge zip. Skips §4 vault. |
+| `.claude\skills\` | `~/.claude\skills\` | Skills, current. |
+| `.claude\hooks\` and `.claude\settings.json` | `~/.claude\` | Stop-hook, permissions, MCP prefs. |
+| `AppData\Roaming\Claude\claude_desktop_config.json` | same path | MCP server registration (patch paths per §6). |
+| `Claude Projects\AppyHour`, `ShipRouting`, `GelPackCalculator` | your projects root | **Run `git status` in each** — recover any uncommitted local changes the repos don't have. |
+| Scheduled-task exports / `.bat` files | — | Reference for §7 (Task Scheduler entries live in the registry, not files — recreate via §7). |
+
+After copying, run `python scripts/restore_check.py` — most rows should already be `[ OK ]`.
+Then skip to §1 (runtime) and §6 (path sweep) — §3/§4/§5 are mostly satisfied by the disk copy.
+
 ## 0. Decide your paths first
 Old machine used:
 - Home: `C:\Users\Work\`
