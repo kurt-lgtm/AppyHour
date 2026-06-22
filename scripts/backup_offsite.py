@@ -60,6 +60,29 @@ def zip_logic_docs(dst: Path) -> int:
     return len(docs)
 
 
+def knowledge_roots() -> list[Path]:
+    """Vault + skills dirs to back up. NOT in the logic zip — these are the
+    operator's Obsidian vault and Claude skills, which the weekly job
+    historically skipped (only one snapshot ever made, 2026-06-11)."""
+    home = Path.home()
+    return [p for p in (home / ".knowledge", home / ".claude" / "skills") if p.exists()]
+
+
+def zip_knowledge(dst: Path) -> int:
+    """Zip vault + skills, preserving top-level dir names. Returns file count."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    roots = knowledge_roots()
+    base = Path.home()  # arcname relative to home → ".knowledge/...", ".claude/skills/..."
+    count = 0
+    with zipfile.ZipFile(dst, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for root in roots:
+            for path in root.rglob("*"):
+                if path.is_file() and "__pycache__" not in path.parts:
+                    zf.write(path, path.relative_to(base))
+                    count += 1
+    return count
+
+
 def upload(path: Path) -> None:
     # Windows: bare "gws" is a shim (.cmd/.exe) that bare-list subprocess can't resolve
     # (WinError 2). Resolve the real executable; fall back to shell=True.
@@ -91,16 +114,22 @@ def run(today: date | None = None) -> dict:
     snapshot = backup_dir / f"shipping.weekly-{day:%Y-%m-%d}.db"
     artifacts = REPO_ROOT / "_outputs" / "artifacts"
     docs_zip = artifacts / f"coldchain-logic-backup-{day:%Y-%m-%d}.zip"
+    knowledge_zip = artifacts / f"coldchain-knowledge-backup-{day:%Y-%m-%d}.zip"
 
     snapshot_sqlite(db_path(), snapshot)
     doc_count = zip_logic_docs(docs_zip)
+    knowledge_count = zip_knowledge(knowledge_zip)
     upload(snapshot)
     upload(docs_zip)
+    if knowledge_count:
+        upload(knowledge_zip)
     pruned = prune_weekly_snapshots(backup_dir, today=day)
     return {
         "snapshot": str(snapshot),
         "docs_zip": str(docs_zip),
         "docs": doc_count,
+        "knowledge_zip": str(knowledge_zip) if knowledge_count else "",
+        "knowledge_files": knowledge_count,
         "pruned": pruned,
     }
 
@@ -122,7 +151,8 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "backup_offsite ok "
             f"snapshot={result['snapshot']} docs_zip={result['docs_zip']} "
-            f"docs={result['docs']} pruned={result['pruned']}"
+            f"docs={result['docs']} knowledge_files={result['knowledge_files']} "
+            f"pruned={result['pruned']}"
         )
         return 0
     except Exception as exc:
