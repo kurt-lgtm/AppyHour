@@ -45,3 +45,6 @@ Thumbs.db
 # Internal-staff recipient names — never commit (PII)
 internal_recipients.json
 **/internal_recipients.json
+
+# Generated backup/report artifacts
+_outputs/
