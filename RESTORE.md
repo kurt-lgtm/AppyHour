@@ -28,6 +28,17 @@ backed up. Copy these from the old disk (mounted as e.g. `E:\`) before falling b
 After copying, run `python scripts/restore_check.py` — most rows should already be `[ OK ]`.
 Then skip to §1 (runtime) and §6 (path sweep) — §3/§4/§5 are mostly satisfied by the disk copy.
 
+## 0b. Gaps found in the 2026-06-22 restore (fold into the steps below)
+Hard-won deltas — the original checklist missed these:
+- **CommandCenter repo** — `InventoryReorder/fulfillment_web/app.py` (port 5187) imports `command_center` → `cc.engine` from a SEPARATE repo at `Claude Projects\CommandCenter`. Was SSD-only; now pushed to **`github.com/kurt-lgtm/CommandCenter`** (private) → clone it like the other repos (§2). `cc` state DB: `~/.cc/command_center.db`.
+- **`claude-agent-sdk`** — the cut-order agents import it but it's NOT in `pyproject.toml`, so `pip install -e .[...]` misses it. Run `pip install claude-agent-sdk`. Nested `query()` uses the logged-in `claude` CLI (no `ANTHROPIC_API_KEY` needed).
+- **`E:\AppyHourProd`** — standalone prod copy (its own AppyHour + ShipRouting), NOT under Claude Projects. Copy `E:\AppyHourProd` → `C:\AppyHourProd`.
+- **Box-size lookup xlsx** — `box_simulation.py:20` hardcodes `C:\Users\Work\Desktop\Onboarded Items with DistVol - Updated.xlsx`; `build_lookup()` hard-crashes without it (blocks ALL routing/box runs). Recover from `E:\Users\Work\Desktop\`.
+- **uv Python "dead symlinks"** — uv minor-version links can get POSIX targets (`/c/Users/...`) when uv runs under Git Bash → native uv can't follow them (`Missing expected target directory`). Fix: remove the bad links (patch dirs stay); don't auto-install uv Pythons from a Git-Bash shell.
+- **Gitignored creds were never on GitHub** — `InventoryReorder/dist/{drive_oauth_token.json, inventory_reorder_settings.json}` (holds Shopify token, Recharge token, AND Gmail IMAP `smtp_user`/`smtp_password`), repo-root `shipping-perfomance-review-*.json` (Google SA). SSD-only → §5/§0a.
+- **Scheduled tasks** — `schtasks /Create /XML /RU Work` (no password) PROMPTS + hangs. Use `Register-ScheduledTask -Xml ... -User Work -Force` (no prompt for InteractiveToken).
+- **Sync perf (committed `restore/sync-perf-2026-06`)** — tracking fetch now skips delivered orders (+ index `delivery_status(order_number)`); FedEx IMAP download bounded `newer_than:14d`. Prevents the ~1hr "looks dead" catch-up.
+
 ## 0. Decide your paths first
 Old machine used:
 - Home: `C:\Users\Work\`
