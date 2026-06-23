@@ -30,7 +30,7 @@ from datetime import date, timedelta
 # -- Paths --
 BASE = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PATH = os.path.join(BASE, "dist", "inventory_reorder_settings.json")
-INV_CSV = r"C:\Users\Work\Claude Projects\AppyHour\InventoryReorder\Product Inventory_2026-06-22_HAVE.csv"
+INV_CSV = r"C:\Users\Work\Claude Projects\AppyHour\InventoryReorder\Product Inventory_2026-06-23_HAVE.csv"
 SHIPMENTS = os.path.join(BASE, "Shipments")
 SAT_DEPLETION = ""  # HAVE inventory CSV is current (Kurt 6/22) — post-depletion
 TUE_DEPLETION = ""
