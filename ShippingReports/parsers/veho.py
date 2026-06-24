@@ -97,10 +97,17 @@ def _default_db_path() -> str:
 
 
 def _derive_hub(origin_zip: str, injection_market: str) -> str:
-    inj = (injection_market or '').strip().lower()
-    if inj in _INJECTION_TO_HUB:
-        return _INJECTION_TO_HUB[inj]
-    # Fallback by origin zip (46xxx -> Indianapolis, 37xxx -> Nashville, 75xxx -> Dallas)
+    """AppyHour ORIGIN hub for a Veho shipment.
+
+    `Origin Zip` is AppyHour's TRUE cut/origin location and is authoritative.
+    `Injection Market` is Veho's OWN last-mile sortation DC (e.g. a Dallas DC fed
+    from the Indy origin) — NOT where we cut the box — so it is only a fallback for
+    when Origin Zip is missing/unknown. Trusting Injection Market first mis-hubbed
+    475 Indy/Nashville-origin rows as Dallas (audit 2026-06-24), producing a phantom
+    Veho@Dallas lane Veho never operates. Origin Zip first fixes that at the source.
+    """
+    # Origin Zip = true origin → authoritative (46xxx -> Indianapolis, 37xxx -> Nashville,
+    # 75xxx -> Dallas, 9xxxx -> Anaheim).
     oz = (origin_zip or '').strip()
     if oz.startswith('46'):
         return 'Indianapolis'
@@ -110,6 +117,10 @@ def _derive_hub(origin_zip: str, injection_market: str) -> str:
         return 'Dallas'
     if oz.startswith('9'):
         return 'Anaheim'
+    # Fallback ONLY when Origin Zip is absent: Veho's injection-market DC label.
+    inj = (injection_market or '').strip().lower()
+    if inj in _INJECTION_TO_HUB:
+        return _INJECTION_TO_HUB[inj]
     return 'Unknown'
 
 
