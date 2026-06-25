@@ -138,6 +138,7 @@ query($cursor: String, $q: String!) {
     pageInfo { hasNextPage endCursor }
     edges { node {
       id name tags
+      currentSubtotalPriceSet { shopMoney { amount } }
       customer { firstName lastName }
       shippingAddress { city provinceCode zip }
       lineItems(first: 100) {
@@ -198,6 +199,10 @@ def simulate(orders: list[dict], lookup: dict[str, float]) -> list[dict]:
         cust = o.get("customer") or {}
         customer = f"{cust.get('firstName') or ''} {cust.get('lastName') or ''}".strip()
         addr = o.get("shippingAddress") or {}
+        # V = order subtotal (post-discount, post-refund product value, excl. ship/tax) — drives the
+        # per-order warm_cost in the ShipRouting air/ground decision. None if absent (engine falls back).
+        _sub = ((o.get("currentSubtotalPriceSet") or {}).get("shopMoney") or {}).get("amount")
+        subtotal = float(_sub) if _sub is not None else None
         lis = [e["node"] for e in o["lineItems"]["edges"]]
         total = 0.0
         tray_count = 0
@@ -249,6 +254,7 @@ def simulate(orders: list[dict], lookup: dict[str, float]) -> list[dict]:
             "Tray Count": tray_count,
             "Total DistVol": round(total, 3),
             "Box Assignment": box,
+            "Subtotal": subtotal,
             "Slack": round(slack, 3),
             "Over Capacity?": over,
             "Flagged SKUs": ", ".join(sorted(set(flagged))),
