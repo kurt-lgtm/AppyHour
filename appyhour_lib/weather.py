@@ -168,3 +168,26 @@ def get_transit_window_temps(readings, ship_date, transit_days):
     if not window:
         return None, None
     return sum(window) / len(window), max(window)
+
+
+def window_daily_high(readings, ship_date, transit_days):
+    """(avg_daily_high, peak) °F over the ship->delivery window.
+
+    avg_daily_high = mean of EACH DAY's max reading — the sustained-heat / daily-high basis the engine is
+    calibrated on (`dest_temp = AVG(peak_temp)`). Use THIS as the engine/ice temp, NOT the 24-h mean
+    (`get_transit_window_temps` avg), which runs ~10-15F cooler (it includes nights) and under-sizes ice +
+    under-fires express. peak = the single hottest reading (worst-case display). (None, None) if window empty.
+    """
+    if not readings:
+        return None, None
+    start = ship_date.strftime("%Y-%m-%d")
+    end = (ship_date + timedelta(days=transit_days)).strftime("%Y-%m-%d")
+    by_day = {}
+    for dt_txt, t in readings:
+        d = str(dt_txt)[:10]
+        if start <= d <= end:
+            by_day[d] = max(by_day.get(d, t), t)
+    if not by_day:
+        return None, None
+    highs = list(by_day.values())
+    return sum(highs) / len(highs), max(highs)
