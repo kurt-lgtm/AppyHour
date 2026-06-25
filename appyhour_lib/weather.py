@@ -150,3 +150,21 @@ def fetch_nws_alerts(
         return [], f"connection error: {e}"
     except Exception as e:
         return [], str(e)
+
+
+def get_transit_window_temps(readings, ship_date, transit_days):
+    """(avg_temp, peak_temp) °F over the ship->delivery window from OWM 3-hour readings.
+
+    readings: [(datetime_str, temp_F), ...] (lists from JSON also work). Window = ship day 00:00 through
+    ship_date + transit_days, 23:59. Returns (None, None) if no readings fall in the window. Canonical
+    shared reducer — GelPackCalculator has an identical local copy; engine + sheets import this one so
+    they agree on the temp a box experiences in transit.
+    """
+    if not readings:
+        return None, None
+    start = ship_date.strftime("%Y-%m-%d")
+    end = (ship_date + timedelta(days=transit_days)).strftime("%Y-%m-%d")
+    window = [t for dt_txt, t in readings if start <= str(dt_txt)[:10] <= end]
+    if not window:
+        return None, None
+    return sum(window) / len(window), max(window)
