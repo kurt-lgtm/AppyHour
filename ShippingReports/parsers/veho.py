@@ -136,8 +136,16 @@ def parse_veho_xlsx(filepath: str, zip3_map: Optional[Dict[str, str]] = None) ->
     invoice_id = os.path.basename(filepath).split('_')[1] if '_' in os.path.basename(filepath) else ''
 
     wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
-    ws = wb.active  # Veho invoices have single sheet "Query result"
-    headers = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+    # Veho invoices normally have a single sheet "Query result", but some exports
+    # arrive with no active sheet set (wb.active is None) — fall back to the first
+    # sheet, and skip cleanly if the workbook is empty/corrupt.
+    ws = wb.active or (wb[wb.sheetnames[0]] if wb.sheetnames else None)
+    if ws is None:
+        return []
+    first = next(ws.iter_rows(min_row=1, max_row=1), None)
+    if not first:
+        return []
+    headers = [cell.value for cell in first]
     col_idx = {h: i for i, h in enumerate(headers) if h}
 
     for row in ws.iter_rows(min_row=2, values_only=True):
