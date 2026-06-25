@@ -101,8 +101,10 @@ def knowledge_roots() -> list[Path]:
     return [p for p in cands if p.exists()]
 
 
-def knowledge_files() -> list[Path]:
-    """Individual durable Claude config FILES (not whole dirs)."""
+def claude_secret_files() -> list[Path]:
+    """Durable Claude config FILES that may hold secrets (API keys, tokens, MCP
+    auth). Backed up INSIDE the encrypted creds bundle, NEVER the cleartext
+    knowledge zip — settings can gain a secret later even if it has none today."""
     cc = Path.home() / ".claude"
     return [p for p in (cc / "settings.json", cc / "settings.local.json") if p.exists()]
 
@@ -120,9 +122,6 @@ def zip_knowledge(dst: Path) -> int:
                 if path.is_file() and not (set(path.parts) & _ZIP_SKIP_PARTS):
                     zf.write(path, path.relative_to(base))
                     count += 1
-        for path in knowledge_files():
-            zf.write(path, path.relative_to(base))
-            count += 1
     return count
 
 
@@ -169,12 +168,14 @@ def cred_files() -> list[Path]:
 
     paths = [p for p in sorted(base.glob("*.json")) if not _is_junk(p.name)]
     paths += sorted(base.glob("*.txt"))
-    pp = base / "portal_profiles"
-    if pp.is_dir():
-        paths += [p for p in sorted(pp.rglob("*")) if p.is_file() and "__pycache__" not in p.parts]
+    # NOTE: portal_profiles/ (Chrome profile clones) is deliberately EXCLUDED — its
+    # cookies/login-data are App-Bound-encrypted (machine-locked, non-portable to a
+    # restore target) and it bloats to ~470 files of regenerable browser state. The
+    # actual carrier-portal credentials live in portal_creds.json (caught by *.json).
     for env in (REPO_ROOT / ".env", REPO_ROOT / "cut_order_server" / ".env"):
         if env.exists():
             paths.append(env)
+    paths += claude_secret_files()  # settings*.json → encrypted, never the cleartext knowledge zip
     return paths
 
 
@@ -199,17 +200,21 @@ def encrypt_creds(dst: Path, passphrase: str) -> int:
     if not files:
         return 0
     base = app_dir()
+    cc = Path.home() / ".claude"
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED, strict_timestamps=False) as zf:
         for path in files:
-            # %APPDATA%/AppyHour/... → keep subpath (portal_profiles/x); repo files → repo/.env
+            # %APPDATA%/AppyHour/... → keep subpath; ~/.claude/... → claude/...; repo → repo/.env
             try:
                 arc = path.relative_to(base)
             except ValueError:
                 try:
-                    arc = Path("repo") / path.relative_to(REPO_ROOT)
+                    arc = Path("claude") / path.relative_to(cc)
                 except ValueError:
-                    arc = Path(path.name)
+                    try:
+                        arc = Path("repo") / path.relative_to(REPO_ROOT)
+                    except ValueError:
+                        arc = Path(path.name)
             zf.write(path, str(arc))
     salt = os.urandom(16)
     token = _fernet_for(passphrase, salt).encrypt(buf.getvalue())

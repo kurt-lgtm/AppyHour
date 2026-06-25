@@ -11,8 +11,8 @@ Decrypt tool: `scripts/decrypt_creds.py`. Off-machine secret you MUST keep: the
 | Asset | Tier / where | Backup artifact | Restore command |
 |---|---|---|---|
 | `shipping.db` (analytics/routing DB) | C daily → `E:\AppyHourBackups\daily\`; weekly → Drive | `shipping.daily-<date>.db` / `shipping.weekly-<date>.db` | copy newest snapshot → `%APPDATA%\AppyHour\shipping.db` |
-| `~/.knowledge` vault + durable `~/.claude` (skills, hooks, agents, plans, scheduled-tasks, rules, commands, projects/*/memory, settings*.json) | weekly → Drive + `E:\...\weekly\` | `coldchain-knowledge-backup-<date>.zip` | unzip into `%USERPROFILE%\` (arcnames are home-relative) |
-| Credentials (`%APPDATA%/AppyHour/*.json` + `*.txt` keys + `portal_profiles/` + repo-root `.env`) | weekly → Drive (encrypted) + `E:\...\creds\` | `coldchain-creds-backup-<date>.zip.enc` | `python scripts/decrypt_creds.py <file>.zip.enc <out_dir>` then place files back (see arcnames: bare name → `%APPDATA%\AppyHour\`, `repo/.env` → repo root) |
+| `~/.knowledge` vault + durable `~/.claude` (skills, hooks, agents, plans, scheduled-tasks, rules, commands, projects/*/memory) | weekly → Drive + `E:\...\weekly\` | `coldchain-knowledge-backup-<date>.zip` (CLEARTEXT — no secrets; settings moved out) | unzip into `%USERPROFILE%\` (arcnames are home-relative) |
+| Credentials (`%APPDATA%/AppyHour/*.json` + `*.txt` keys + `portal_profiles/` + repo-root `.env` + **`~/.claude/settings*.json`**) | weekly → Drive (**encrypted**) + `E:\...\creds\` | `coldchain-creds-backup-<date>.zip.enc` | `python scripts/decrypt_creds.py <file>.zip.enc <out_dir>` then place files back (arcnames: bare name → `%APPDATA%\AppyHour\`, `claude/...` → `%USERPROFILE%\.claude\`, `repo/.env` → repo root) |
 | Box-size lookup xlsx | weekly → Drive + `E:\...\reference\` | `coldchain-reference-backup-<date>.zip` | unzip → `%USERPROFILE%\Desktop\` (`box_simulation.py:20` reads it there) |
 | Logic docs | weekly (redundant w/ git) | `coldchain-logic-backup-<date>.zip` | usually skip — pull from the AppyHour repo |
 | SSH key | manual (ACL-blocked from automation) | `~/.ssh/id_ed25519` | copy from a safe location → `%USERPROFILE%\.ssh\` |
