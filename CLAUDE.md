@@ -2,6 +2,10 @@
 
 Desktop analytics for Elevate Foods (subscription cheese/charcuterie). Python + pywebview (netfx) + tkinter. Inventory forecasting, cut order generation, shipping analytics, order quality.
 
+## 🛠 Tool dispatch — READ FIRST
+
+**Before calling or writing ANY tool/script, consult [`TOOL_REGISTRY.md`](TOOL_REGISTRY.md)** — the canonical *capability → tool* dispatch table (40 MCP tools, ops scripts, ShipRouting, skills, routines). Find the capability, **call the listed canonical tool — never reinvent, hallucinate, or rebuild one** (it lists the ~48 dup/one-shot scripts to avoid). This is the primary small-model operating reference: each row is flagged **✅** small-model-safe (just call it) · **🔒** needs judgment/confirmation · **✍️** writes/mutates (dry-run + verify first). If a capability isn't there: codegraph → registry → `appyhour_lib` → grep, BEFORE creating anything.
+
 ## Map
 
 | Area | Purpose | CLAUDE.md |

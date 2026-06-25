@@ -20,11 +20,14 @@ dist/
 build/
 *.exe
 *.spec
+*.egg-info/
 __pycache__/
 *.pyc
 
 # Backups
 backups/
+*.bak
+*.committed-bak
 
 # Large/reference images
 123.svg
@@ -48,3 +51,6 @@ internal_recipients.json
 
 # Generated backup/report artifacts
 _outputs/
+
+# Derived code-intelligence index (regenerable)
+.codebase-context/
