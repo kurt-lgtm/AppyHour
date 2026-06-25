@@ -71,11 +71,18 @@ Into your projects root (`...\Claude Projects\`):
 on `sys.path`. Keep these names or fix the sys.path blocks (§6).
 
 ## 3. Restore the database
-> ✅ **Latest verified on Drive (checked 2026-06-22):** weekly auto-backups are running.
-> Use the newest, NOT the stale `pre-cutover` snapshot the old recovery doc named.
-- [ ] Download **`shipping.weekly-2026-06-21.db`** — id `1wcYREgMgGw339GYmDmzTBxhQsWDzhE1c` (130 MB, yesterday)
+> ⚠️ **Drive upload is BROKEN (as of 2026-06-24):** the weekly snapshot of `shipping.db`
+> still runs LOCALLY (→ `%APPDATA%\AppyHour\backups\`), but the offsite push via
+> `gws drive +upload` fails — `gws` is not installed / not on PATH — so new weeklies
+> (back to ~2026-06-14) were **never uploaded**. The Drive ids below are the last that
+> actually landed before the upload broke; anything newer lives only on this machine's
+> `%APPDATA%\AppyHour\backups\` (recover from the old SSD per §0a). Fix the uploader
+> first (reinstall/auth `gws`, or swap in rclone / the Drive API) — see §5a.
+> Use the newest available, NOT the stale `pre-cutover` snapshot the old recovery doc named.
+- [ ] **First check `%APPDATA%\AppyHour\backups\` (local) / the old SSD** for a snapshot newer than 06-21 — the local weeklies kept running even though the Drive upload didn't.
+- [ ] Download **`shipping.weekly-2026-06-21.db`** — id `1wcYREgMgGw339GYmDmzTBxhQsWDzhE1c` (130 MB; last one that reached Drive)
 - [ ] Copy to `%APPDATA%\AppyHour\shipping.db`
-- [ ] Catch up the gap since 06-21: re-run importers (carrier emails re-downloadable from carrier portals + RMFG emails)
+- [ ] Catch up the gap since the snapshot: re-run importers (carrier emails re-downloadable from carrier portals + RMFG emails)
 - [ ] Fallback if the weekly is corrupt: `shipping.weekly-2026-06-19.db` (id `1sTPOsEvR4FKo3_bcSYyOtHI5qVWVkGjZ`) or the original `shipping.pre-cutover-2026-06-11.db` (id `14Wjf8EOPnSqh_kwBPQSK9403AIAnq-4l`)
 
 ## 4. Restore vault + skills
@@ -94,12 +101,21 @@ Create `%APPDATA%\AppyHour\` if missing, then:
 Alternatively set env vars instead of the JSON: `SHOPIFY_STORE_URL`, `SHOPIFY_ACCESS_TOKEN`,
 `SHOPIFY_API_VERSION`, `OPENWEATHER_API_KEY` (see `appyhour_lib/credentials.py`).
 
-## 5a. Backup gap — FIXED 2026-06-22
+## 5a. Backup gap — PARTIALLY FIXED 2026-06-22, but OFFSITE UPLOAD BROKE 2026-06-24
 `scripts/backup_offsite.py` now also bundles `~/.knowledge/` + `~/.claude/skills/` into
-`coldchain-knowledge-backup-<date>.zip` and uploads it weekly. So from the next backup run
-onward the vault/skills are covered. **But the newest knowledge zip on Drive *before* that fix
-is still 2026-06-11** — until a fresh weekly run completes, restore from the dead disk's
-`~/.knowledge` if recoverable.
+`coldchain-knowledge-backup-<date>.zip` alongside the DB/logic snapshot — so the *content*
+of the weekly is covered.
+**⚠️ But the Drive UPLOAD is broken.** `backup_offsite.py` snapshots to
+`%APPDATA%\AppyHour\backups\` fine, then tries to push offsite with `gws drive +upload` —
+and `gws` is **not installed / not on PATH**, so the upload silently fails. The "weekly
+offsite" has therefore been **LOCAL-ONLY** since ~2026-06-14: no DB *or* knowledge zip has
+reached Drive since then. The newest knowledge zip on Drive is still **2026-06-11**.
+- **Fix the uploader:** reinstall/auth the `gws` CLI, or replace the uploader with `rclone`
+  / the Google Drive API, then run one backup and confirm the new zip/db actually appears on Drive.
+- Until then, treat Drive as stale: restore from the dead disk's `~/.knowledge` + the local
+  `%APPDATA%\AppyHour\backups\` if recoverable.
+- Note: the **code** is still safely offsite via the three GitHub repos (AppyHour, ShipRouting,
+  CommandCenter) — only the DB + vault/skills zips are stuck local.
 
 ## 6. Path sweep (ONLY if username/paths differ from `C:\Users\Work\Claude Projects`)
 Files that hardcode the old path — patch each to your new path:
@@ -124,7 +140,7 @@ Files that hardcode the old path — patch each to your new path:
 |---|---|---|---|
 | `appyhour_sync_on_logon` | At logon | `GelPackCalculator/sync_logon.py` (orchestrates sync_all_carriers + backfill_sync + auto_import) | none in repo — recreate from SSD XML |
 | `AppyHour Wednesday Ops Run` | Weekly Wed 14:00 | `AppyHourMCP/wednesday_ops_run.bat` (incl. routing post-mortem) | ✅ `AppyHourMCP/register_wednesday_task.bat` |
-| `AppyHour Weekly Offsite Backup` | Weekly Sun 02:00 | `scripts/backup_offsite.py` | ✅ `scripts/register_backup_task.bat` |
+| `AppyHour Weekly Offsite Backup` | Weekly Sun 02:00 | `scripts/backup_offsite.py` (⚠️ snapshots locally but Drive upload via `gws` is BROKEN — see §5a) | ✅ `scripts/register_backup_task.bat` |
 | `AppyHour Weather Actuals` | Daily 03:00 | `ShippingReports/weather_sync_cron.bat` | none — `schtasks /Create` one-liner in `HANDOFF.md` |
 | Postmortem runner (name TBC) | Mondays 09:00 | `ShippingReports/postmortem_runner.py` | none — schedule was a "suggestion"; confirm against SSD XML whether it was ever registered |
 

@@ -10,6 +10,7 @@ Companion: `HANDOFF.md` (session state) · `.claude/plans/2026-06-12-GAP-FIXES-p
 | 2 | **Recharge: grant address WRITE** on the API token (or issue a new token with it) | same G12 propagation (Recharge side) | ~3 min |
 | 3 | **Fill `%APPDATA%/AppyHour/portal_creds.json`** — FedEx Billing Online + UPS Billing Center logins (suffix-113 acct; file is ACL'd, never committed) | M2 `portal_pull.py` — automated invoice fetch, kills the ~3-wk FedEx lag | ~5 min |
 | 4 | **Create a Slack incoming webhook** (#core-team or an alerts channel) and tell me the URL → I set `AH_SLACK_WEBHOOK` | G3 alerting — escalations reach your phone instead of log files | ~5 min |
+| 5 | **Fix offsite backup upload** — `scripts/backup_offsite.py` snapshots `shipping.db` to `%APPDATA%/AppyHour/backups/` fine, but the Drive upload (`gws drive +upload`) is BROKEN: `gws` is not installed / not on PATH, so the "weekly offsite" has been **LOCAL-ONLY**. Reinstall/auth the `gws` CLI OR replace the uploader (rclone / Drive API); until then copy `%APPDATA%/AppyHour/backups/shipping.weekly-*.db` to Drive manually. (Code IS offsite via the 3 GitHub repos.) | true offsite DR for `shipping.db` | ~15 min |
 
 ## 🔴 Slack answers owed (6/12 triage — suggested replies ready)
 | # | Where / who | Ask | Suggested reply |
@@ -48,4 +49,4 @@ Companion: `HANDOFF.md` (session state) · `.claude/plans/2026-06-12-GAP-FIXES-p
 - ~~Trial-lane concession~~ → tried + insured + tracked (6/12)
 - ~~Folds G13 (eff-TNT) + G14 (engine=config)~~ → executed (6/12)
 - ~~6/15 trial-ice retrofit~~ → leave as-is, insurance starts clean 6/22 (6/12)
-- ~~Offsite backup~~ → automated weekly Sun 02:00 task (6/12)
+- ~~Offsite backup~~ → **REOPENED 6/25** — see 🔴 #5. The weekly Sun 02:00 task snapshots `shipping.db` LOCALLY only; the Drive upload step never worked (`gws` not installed/on PATH), so it was never truly offsite.
