@@ -15,7 +15,7 @@ from enum import Enum
 
 import requests
 
-from utils import format_error, to_json, SHIPPING_DIR, GELCALC_DIR, get_inventory_settings, shopify_paginate
+from utils import format_error, to_json, SHIPPING_DIR, GELCALC_DIR, get_inventory_settings, shopify_paginate, get_shopify_auth
 
 
 # Lazy-loaded modules
@@ -235,15 +235,11 @@ def register(mcp: object) -> None:
             JSON with tagged orders, conflicts resolved, and any errors.
         """
         try:
-            settings = get_inventory_settings()
-            store = settings.get("shopify_store_url", "").strip()
-            token = settings.get("shopify_access_token", "").strip()
-            if not store or not token:
+            try:
+                rest_base, headers = get_shopify_auth()  # canonical single-source (2026-04)
+            except Exception:
                 return to_json({"error": "Shopify credentials not configured"})
-
-            gql_url = f"https://{store}.myshopify.com/admin/api/2026-04/graphql.json"
-            rest_base = f"https://{store}.myshopify.com/admin/api/2026-04"
-            headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+            gql_url = f"{rest_base}/graphql.json"
 
             # Load zip overrides from GelPack settings
             gc_path = GELCALC_DIR / "gel_calc_shopify_settings.json"

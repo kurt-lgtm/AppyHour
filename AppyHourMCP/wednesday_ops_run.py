@@ -39,6 +39,7 @@ SHIPROUTING = Path(r"C:\Users\Work\Claude Projects\ShipRouting")
 REPORTS_DIR = Path(r"C:\Users\Work\Claude Projects\_outputs\reports")
 PYTHON = sys.executable
 ON_TIME_FLOOR_PCT = 93.0  # escalate when cohort on-time (delivered<=2 / FULL cohort) drops below this
+DELIVERY_STATUS_FREEZE_WARNING = 200
 
 
 def target_tuesday(today: date | None = None) -> date:
@@ -222,6 +223,87 @@ def build_cohort_report(tue: date, out_path: Path) -> dict:
         "tickets_in_cohort": len(cohort_rows),
         "out_path": str(out_path),
     }
+    return summary
+
+
+def delivery_status_hygiene(con) -> dict:
+    """Read-only health check for delivery_status status aging."""
+    cur = con.cursor()
+    cur.execute(
+        "SELECT COALESCE(status, 'NULL') AS status, COUNT(*) "
+        "FROM delivery_status GROUP BY COALESCE(status, 'NULL') "
+        "ORDER BY COUNT(*) DESC, status"
+    )
+    distribution = {status: count for status, count in cur.fetchall()}
+
+    age_expr = (
+        "julianday('now') - julianday(COALESCE("
+        "ds.fulfilled_at, "
+        "(SELECT COALESCE(f.fulfilled_at, f.order_date) "
+        "FROM fulfillments f "
+        "WHERE f.tracking_number = ds.tracking_number LIMIT 1), "
+        "ds.synced_at))"
+    )
+    stale_where = (
+        "ds.status NOT IN ('delivered', 'aged_out') "
+        "AND ds.delivery_date IS NULL "
+        f"AND {age_expr} "
+    )
+    cur.execute(
+        "SELECT COUNT(*) FROM delivery_status ds "
+        f"WHERE {stale_where} > 45"
+    )
+    freeze_indicator = cur.fetchone()[0]
+
+    cur.execute(
+        "SELECT COUNT(*) FROM delivery_status ds "
+        "WHERE ds.status NOT IN ('delivered', 'aged_out') "
+        f"AND {age_expr} <= 45"
+    )
+    active_in_transit = cur.fetchone()[0]
+
+    return {
+        "distribution": distribution,
+        "freeze_indicator": freeze_indicator,
+        "active_in_transit": active_in_transit,
+    }
+
+
+def run_delivery_status_hygiene() -> dict:
+    con = sqlite3.connect(f"file:{SHIPPING_DB}?mode=ro", uri=True)
+    try:
+        summary = delivery_status_hygiene(con)
+    finally:
+        con.close()
+
+    print(
+        "[delivery-status] distribution: "
+        f"{json.dumps(summary['distribution'], sort_keys=True)}",
+        flush=True,
+    )
+    print(
+        "[delivery-status] active_in_transit: "
+        f"{summary['active_in_transit']} | freeze_indicator: "
+        f"{summary['freeze_indicator']}",
+        flush=True,
+    )
+
+    if summary["freeze_indicator"] > DELIVERY_STATUS_FREEZE_WARNING:
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+            from appyhour_lib.notify import notify
+
+            notify(
+                f"Delivery status hygiene warning: {json.dumps(summary)}",
+                level="warning",
+            )
+        except Exception:
+            pass
+        print(
+            f"WARNING: DELIVERY STATUS HYGIENE -> {json.dumps(summary)}",
+            flush=True,
+        )
+
     return summary
 
 
@@ -475,6 +557,48 @@ def run_routing_postmortem(tue: date) -> dict:
     return summary
 
 
+def run_engine_parity_guard() -> dict:
+    """B4 (Kurt 2026-06-20): single-brain DRIFT ALARM. Kori's `compute_v2_routing` and build.py BOTH
+    route through `lib.engine.compute_routing`. If someone edits the Kori bridge to bypass the engine
+    (or the engine signature drifts from what Kori feeds it), the cohort sheet and the Shipping App would
+    apply DIFFERENT carriers for the same order. The parity test pins they can't -- we run it here so a
+    weekly run trips loudly the first Wednesday after any such drift, NOT mid-cohort.
+
+    Offline + deterministic (mocks the Shopify/data layer, :memory: DB) -> safe every week, no Shopify."""
+    import subprocess
+
+    test = SHIPROUTING / "tests" / "test_kori_engine_parity.py"
+    env = {**os.environ, "AH_DB_OVERRIDE": ":memory:", "FORGE_BASH_OK": "1"}
+    try:
+        p = subprocess.run(
+            [PYTHON, "-m", "pytest", str(test), "-q"],
+            cwd=str(SHIPROUTING), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=300, env=env,
+        )
+        out = (p.stdout or "") + (("\n[stderr]\n" + p.stderr) if p.stderr else "")
+        rc = p.returncode
+    except Exception as e:  # noqa: BLE001
+        out, rc = f"FAILED TO RUN: {e}", -1
+
+    drift = rc != 0
+    summary = {"test": str(test), "exit": rc, "drift": drift}
+    print(
+        f"[engine-parity] build.py<->Kori single-brain: "
+        f"{'DRIFT DETECTED' if drift else 'in sync'} (exit {rc})",
+        flush=True,
+    )
+    if drift:
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+            from appyhour_lib.notify import notify
+
+            notify(f"Engine parity DRIFT (Kori != build.py): {json.dumps(summary)}", level="error")
+        except Exception:
+            pass
+        print(f"WARNING: ENGINE PARITY DRIFT -> {json.dumps(summary)}\n{out.strip()}", flush=True)
+    return summary
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         prog="wednesday-ops-run",
@@ -486,6 +610,8 @@ def main() -> int:
     ap.add_argument("--skip-sync", action="store_true", help="Report only, no sync")
     ap.add_argument("--skip-postmortem", action="store_true",
                     help="Skip the routing post-mortem step")
+    ap.add_argument("--skip-parity", action="store_true",
+                    help="Skip the build.py<->Kori engine parity drift guard")
     ap.add_argument("--postmortem-only", action="store_true",
                     help="Run only the routing post-mortem step")
     args = ap.parse_args()
@@ -514,10 +640,19 @@ def main() -> int:
     result["report"] = build_cohort_report(tue, out_path)
     print(json.dumps(result["report"], indent=2), flush=True)
 
+    print("[delivery-status] running hygiene check...", flush=True)
+    result["delivery_status_hygiene"] = run_delivery_status_hygiene()
+    print(json.dumps(result["delivery_status_hygiene"], indent=2), flush=True)
+
     if not args.skip_postmortem:
         print("[postmortem] running routing post-mortem + cohort health...", flush=True)
         result["postmortem"] = run_routing_postmortem(tue)
         print(json.dumps(result["postmortem"], indent=2), flush=True)
+
+    if not args.skip_parity:
+        print("[engine-parity] running build.py<->Kori single-brain drift guard...", flush=True)
+        result["engine_parity"] = run_engine_parity_guard()
+        print(json.dumps(result["engine_parity"], indent=2), flush=True)
 
     print("\n[done]", flush=True)
     return 0

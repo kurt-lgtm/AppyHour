@@ -7,13 +7,21 @@ Error criteria (product-rules / Recharge Error Scan Learnings):
 - else (default recipe repeated, rotation not applied)              => ROTATION-REPEAT (not a dup error, but rotation bug)
 - only REAL if none of the above and food items genuinely off-recipe
 """
-import sys, json, time, re
+import sys, json, time, re, csv
 sys.path.insert(0, "C:/Users/Work/Claude Projects/AppyHour/AppyHourMCP")
 sys.path.insert(0, "C:/Users/Work/Claude Projects/AppyHour/InventoryReorder")
 from utils import get_shopify_auth
 import requests
 
-# 19 single-sub candidates: current order -> email
+# NOTE (2026-06-15): v4 is the canonical repeat-order dup-VERDICT engine. Two other
+# verdict dimensions live in the archive snapshot, recoverable if a future scan needs them:
+#   - MONG/SS double-sub validity (2+ active MONG/SS subs = legit repeat) -> check_repeat_subs_v3.py:75-96
+#   - box_contents qty-parse (Class-4B single-box curation dupe)          -> check_repeat_class_v2.py
+# (in _archive/scripts-canon-snapshot-2026-06-14/). Re-merge those only if the next scan needs them.
+
+# Default cohort: 19 single-sub candidates (current order -> email). Reusable: pass a CSV
+# (cols: order/current_order + email) as argv[1] to scan any cohort instead of this hardcoded set.
+#   python check_repeat_subs_v4.py [cohort.csv]
 CAND = {
  "#148985":"jenndela@gmail.com","#148801":"dimoebus@gmail.com","#147130":"kathyg233@comcast.net",
  "#147475":"spanyr@gmail.com","#147822":"anselee@gmail.com","#148971":"hrolinski@gmail.com",
@@ -23,6 +31,16 @@ CAND = {
  "#149105":"krystynh7@gmail.com","#147360":"qhoward1@yahoo.com","#147743":"goodnightmare123@gmail.com",
  "#148574":"mrenna100@yahoo.com",
 }
+
+if len(sys.argv) > 1:  # CSV cohort override (restores v3's reusable-scanner input)
+    CAND = {}
+    with open(sys.argv[1], encoding="utf-8") as _f:
+        for row in csv.DictReader(_f):
+            email = (row.get("email") or row.get("Email") or "").strip()
+            order = (row.get("current_order") or row.get("order") or row.get("Order") or "").strip()
+            if email:
+                CAND[order or email] = email
+    print(f"Loaded {len(CAND)} candidates from {sys.argv[1]}")
 
 SETTINGS=r"C:\Users\Work\Claude Projects\AppyHour\InventoryReorder\dist\inventory_reorder_settings.json"
 rc=json.load(open(SETTINGS,encoding="utf-8"))
