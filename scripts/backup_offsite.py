@@ -119,9 +119,18 @@ def zip_knowledge(dst: Path) -> int:
     with zipfile.ZipFile(dst, "w", compression=zipfile.ZIP_DEFLATED, strict_timestamps=False) as zf:
         for root in roots:
             for path in root.rglob("*"):
-                if path.is_file() and not (set(path.parts) & _ZIP_SKIP_PARTS):
-                    zf.write(path, path.relative_to(base))
-                    count += 1
+                if not path.is_file() or (set(path.parts) & _ZIP_SKIP_PARTS):
+                    continue
+                # SECURITY (P1, 2026-06-25 audit): the per-project memory dirs hold
+                # gorgias-credentials.md / rmfg-translator-credentials.md with LIVE secret values.
+                # NEVER sweep credential/secret markdown into this CLEARTEXT, Drive-uploaded zip —
+                # secrets belong only in the encrypted creds bundle (cred_files -> encrypt_creds).
+                _n = path.name.lower()
+                if path.suffix.lower() == ".md" and any(
+                        k in _n for k in ("credential", "creds", "secret", "password", "token", "apikey", "api-key")):
+                    continue
+                zf.write(path, path.relative_to(base))
+                count += 1
     return count
 
 
