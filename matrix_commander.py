@@ -249,7 +249,7 @@ SUBSTITUTION_FAMILIES: dict[str, list[str]] = {
         "MT-LONZ",
     ],
     # Bresaola / Piccante (lean beef / spicy)
-    "Bresaola / Piccante": ["MT-sBRES", "MT-BRAS", "MT-PP", "MT-4PP"],
+    "Bresaola / Piccante": ["MT-SBRES", "MT-BRAS", "MT-PP", "MT-4PP"],
     # ── Accompaniment families ───────────────────────────────────────
     # Jam / Preserves (sweet spreads)
     "Jam / Preserves": [
@@ -297,7 +297,7 @@ SUBSTITUTION_FAMILIES: dict[str, list[str]] = {
     "Nuts": [
         "AC-COCO",
         "AC-GAL",
-        "AC-WAL",
+        "AC-GLAW",
         "AC-RHAZ",
         "AC-MARC",
         "AC-SMAL",
@@ -1317,6 +1317,112 @@ def _shopify_graphql(base: str, headers: dict, query: str, variables: dict | Non
     return shopify_graphql(base, headers, query, variables)
 
 
+MATRIX_ORDERS_QUERY = """
+query($cursor: String, $q: String!) {
+  orders(first: 100, after: $cursor, query: $q) {
+    pageInfo { hasNextPage endCursor }
+    edges { node {
+      id name tags note email phone
+      shippingAddress { firstName lastName address1 address2 city provinceCode zip phone }
+      lineItems(first: 50) { pageInfo { hasNextPage } edges { node { sku quantity currentQuantity fulfillableQuantity } } }
+    } }
+  }
+}
+"""
+
+MATRIX_LINE_ITEMS_QUERY = """
+query($id: ID!, $cursor: String) {
+  order(id: $id) {
+    lineItems(first: 250, after: $cursor) {
+      pageInfo { hasNextPage endCursor }
+      edges { node { sku quantity currentQuantity fulfillableQuantity } }
+    }
+  }
+}
+"""
+
+
+def _shopify_graphql_matrix(base: str, headers: dict, query: str, variables: dict | None = None) -> dict:
+    """Execute an uncached Shopify GraphQL request with light throttle backoff."""
+    import time
+
+    import requests as req
+
+    url = f"{base}/graphql.json"
+    body = {"query": query}
+    if variables:
+        body["variables"] = variables
+
+    for attempt in range(5):
+        resp = req.post(url, headers=headers, json=body, timeout=30)
+        if resp.status_code == 429:
+            time.sleep(min(8.0, 1.5 * (attempt + 1)))
+            continue
+        resp.raise_for_status()
+        payload = resp.json()
+        errors = payload.get("errors") or []
+        throttled = any(
+            (err.get("extensions") or {}).get("code") == "THROTTLED" or "THROTTLED" in str(err).upper()
+            for err in errors
+        )
+        if throttled:
+            time.sleep(min(8.0, 1.5 * (attempt + 1)))
+            continue
+        if errors:
+            raise RuntimeError(f"GraphQL errors: {errors}")
+        extensions = payload.get("extensions") or {}
+        throttle = ((extensions.get("cost") or {}).get("throttleStatus") or {})
+        currently_available = throttle.get("currentlyAvailable")
+        if isinstance(currently_available, (int, float)) and currently_available < 100:
+            time.sleep(0.5)
+        return payload["data"]
+
+    raise RuntimeError("Shopify GraphQL throttled after 5 retries")
+
+
+def _fetch_orders_graphql(tag: str, shop_url: str, headers: dict) -> list[dict]:
+    """Fetch all open, unfulfilled Shopify orders matching a tag via GraphQL."""
+    import time
+
+    q = f"tag:{tag} status:open fulfillment_status:unfulfilled"
+    cursor = None
+    orders: list[dict] = []
+    start = time.perf_counter()
+    page = 0
+
+    while True:
+        page += 1
+        data = _shopify_graphql_matrix(shop_url, headers, MATRIX_ORDERS_QUERY, {"cursor": cursor, "q": q})
+        order_conn = data["orders"]
+        for edge in order_conn["edges"]:
+            order = edge["node"]
+            line_items = order["lineItems"]
+            if line_items["pageInfo"]["hasNextPage"]:
+                extra = []
+                sub_cursor = None
+                while True:
+                    d2 = _shopify_graphql_matrix(
+                        shop_url,
+                        headers,
+                        MATRIX_LINE_ITEMS_QUERY,
+                        {"id": order["id"], "cursor": sub_cursor},
+                    )
+                    li_conn = d2["order"]["lineItems"]
+                    extra.extend([li_edge["node"] for li_edge in li_conn["edges"]])
+                    if not li_conn["pageInfo"]["hasNextPage"]:
+                        break
+                    sub_cursor = li_conn["pageInfo"]["endCursor"]
+                order["lineItems"]["edges"] = [{"node": li} for li in extra]
+            orders.append(order)
+        if not order_conn["pageInfo"]["hasNextPage"]:
+            break
+        cursor = order_conn["pageInfo"]["endCursor"]
+
+    elapsed = time.perf_counter() - start
+    print(f"  GraphQL fetch wall-clock: {elapsed:.1f}s ({len(orders)} orders, {page} pages)")
+    return orders
+
+
 def _lookup_zero_variant_gids(base: str, headers: dict, skus: set[str]) -> dict[str, str]:
     """Look up $0 variant GIDs for a set of SKUs. Prefers cheapest variant."""
     import requests as req
@@ -1835,7 +1941,7 @@ def generate_matrix_xlsx(
     base, headers = _get_shopify_auth()
 
     print(f"  Fetching orders with tag '{rmfg_tag}'...")
-    shopify_orders = _fetch_orders_by_tag(base, headers, rmfg_tag)
+    shopify_orders = _fetch_orders_graphql(rmfg_tag, base, headers)
     print(f"  {len(shopify_orders)} orders fetched")
 
     if not shopify_orders:
@@ -1855,53 +1961,24 @@ def generate_matrix_xlsx(
 
     for o in shopify_orders:
         name = o["name"].replace("#", "")
-        tags = o.get("tags", "")
-        # Extract address from shipping_address or billing_address
-        # Orders from REST have line_items but may not have full address in "fields" fetch
-        # We fetched with fields="id,name,tags,line_items" — need to re-fetch with address
+        tags = ", ".join(o.get("tags") or [])
+        line_items = [edge["node"] for edge in (o.get("lineItems") or {}).get("edges", [])]
         order_data.append(
             {
-                "id": o["id"],
                 "name": name,
                 "tags": tags,
-                "line_items": o.get("line_items", []),
+                "line_items": line_items,
+                "order": o,
             }
         )
 
-        for li in o.get("line_items", []):
+        for li in line_items:
             sku = (li.get("sku") or "").strip()
-            fq = li.get("fulfillable_quantity", li.get("quantity", 0))
+            fq = li.get("fulfillableQuantity")
+            if fq is None:
+                fq = li.get("currentQuantity", li.get("quantity", 0))
             if sku and fq > 0:
                 all_skus.add(sku)
-
-    # We need full order details (address, phone, email) — re-fetch
-    print(f"  Fetching full order details...")
-    import requests as _req
-
-    full_orders: dict[int, dict] = {}
-    order_ids = [o["id"] for o in order_data]
-
-    # Fetch in batches of 50 by ID
-    for i in range(0, len(order_ids), 50):
-        batch = order_ids[i : i + 50]
-        ids_str = ",".join(str(oid) for oid in batch)
-        resp = _req.get(
-            f"{base}/orders.json",
-            headers=headers,
-            params={
-                "ids": ids_str,
-                "status": "any",
-                "fields": "id,name,email,phone,tags,note,shipping_address,line_items",
-                "limit": 250,
-            },
-            timeout=30,
-        )
-        if resp.ok:
-            for o in resp.json().get("orders", []):
-                full_orders[o["id"]] = o
-        _limiter.wait(cost=1)
-
-    print(f"  Full details for {len(full_orders)} orders")
 
     # Determine product columns from MFG translations
     # Only include SKUs that actually appear in orders
@@ -1959,15 +2036,17 @@ def generate_matrix_xlsx(
     # Write order rows
     row_num = 1
     for od in order_data:
-        full = full_orders.get(od["id"], {})
-        addr = full.get("shipping_address") or {}
+        full = od["order"]
+        addr = full.get("shippingAddress") or {}
 
         # Count food items
         food_count = 0
         order_skus: dict[str, int] = {}
         for li in od["line_items"]:
             sku = (li.get("sku") or "").strip()
-            fq = li.get("fulfillable_quantity", li.get("quantity", 0))
+            fq = li.get("fulfillableQuantity")
+            if fq is None:
+                fq = li.get("currentQuantity", li.get("quantity", 0))
             if sku and fq > 0:
                 order_skus[sku] = order_skus.get(sku, 0) + fq
                 if any(sku.startswith(p) for p in ("CH-", "MT-", "AC-")):
@@ -1982,21 +2061,30 @@ def generate_matrix_xlsx(
 
         # Zip: ensure text with leading zeroes
         raw_zip = str(addr.get("zip") or "").strip()
+        if "-" in raw_zip:
+            raw_zip = raw_zip.split("-", 1)[0]
         if raw_zip.isdigit() and len(raw_zip) < 5:
             raw_zip = raw_zip.zfill(5)
 
+        phone = addr.get("phone") or full.get("phone") or ""
+        phone_digits = _re.sub(r"\D", "", phone)
+        if len(phone_digits) == 11 and phone_digits.startswith("1"):
+            phone = phone_digits[1:]
+        elif len(phone_digits) == 10:
+            phone = phone_digits
+
         ws.cell(row_num, 1).value = numeric_oid
-        ws.cell(row_num, 2).value = f"{addr.get('first_name', '')} {addr.get('last_name', '')}".strip() or full.get(
+        ws.cell(row_num, 2).value = f"{addr.get('firstName') or ''} {addr.get('lastName') or ''}".strip() or full.get(
             "name", ""
         )
         ws.cell(row_num, 3).value = "SHIPPING"
         ws.cell(row_num, 4).value = food_count
-        ws.cell(row_num, 5).value = addr.get("phone") or full.get("phone") or ""
+        ws.cell(row_num, 5).value = phone
         ws.cell(row_num, 6).value = full.get("email", "")
         ws.cell(row_num, 7).value = addr.get("address1", "")
         ws.cell(row_num, 8).value = addr.get("address2", "")
         ws.cell(row_num, 9).value = addr.get("city", "")
-        ws.cell(row_num, 10).value = addr.get("province_code", "")
+        ws.cell(row_num, 10).value = addr.get("provinceCode", "")
         ws.cell(row_num, 11).value = raw_zip
         ws.cell(row_num, 12).value = od["tags"]
         ws.cell(row_num, 13).value = full.get("note", "") or ""
@@ -2079,6 +2167,7 @@ def cmd_generate(
     ship_day: str = "SAT",
     ship_date: str = "",
     gift_path: Optional[str] = None,
+    output_dir: Optional[str] = None,
 ) -> bool:
     """Generate RMFG matrix XLSX directly from Shopify orders."""
     print(f"\n{_BOLD}{'#' * 60}{_RESET}")
@@ -2090,6 +2179,7 @@ def cmd_generate(
         ship_day=ship_day,
         ship_date=ship_date,
         gift_path=gift_path,
+        output_dir=output_dir,
     )
 
     if not out_path:
@@ -2699,6 +2789,7 @@ def main() -> None:
     p_gen.add_argument("--day", "-d", choices=["SAT", "TUE"], default="SAT", help="Ship day (default: SAT)")
     p_gen.add_argument("--date", help="Ship date for filename (Mon or Tue date, e.g. 2026-03-30)")
     p_gen.add_argument("--gift", "-g", help="Gift redemption XLSX to merge")
+    p_gen.add_argument("--output", "-o", dest="output_dir", help="Directory for generated XLSX")
 
     # finalize
     p_fin = sub.add_parser("finalize", help="Merge gift orders + format fixes + MFG validation")
@@ -2735,6 +2826,7 @@ def main() -> None:
             ship_day=args.day,
             ship_date=getattr(args, "date", "") or "",
             gift_path=getattr(args, "gift", None),
+            output_dir=getattr(args, "output_dir", None),
         )
     elif args.command == "finalize":
         ok = cmd_finalize(
