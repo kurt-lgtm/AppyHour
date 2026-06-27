@@ -413,6 +413,17 @@ async def get_weather_alerts(params: AlertsInput) -> str:
 
 if __name__ == "__main__":
     try:
+        # Reap this stdio server if its client dies uncleanly (Windows often
+        # fails to deliver stdin-EOF on force-kill/crash). See appyhour_lib/proc.py
+        # and the 2026-06-27 orphaned-server incident.
+        try:
+            from appyhour_lib.proc import install_parent_death_watchdog
+
+            if install_parent_death_watchdog(logger=logger):
+                logger.info("parent-death watchdog active (ppid reaping)")
+        except Exception:
+            logger.warning("parent-death watchdog unavailable", exc_info=True)
+
         logger.info("Starting AppyHour Shipping MCP server")
         mcp.run()
     except Exception:

@@ -59,6 +59,19 @@ shopify_bulk.register(mcp)
 
 if __name__ == "__main__":
     try:
+        # Bind this stdio server's lifetime to its client. On Windows an unclean
+        # client shutdown often fails to deliver stdin-EOF, leaving an orphaned
+        # server holding a shipping.db connection (6 such orphans accumulated and
+        # contributed to the 2026-06-27 DB corruption). The watchdog hard-exits
+        # when the parent dies. See appyhour_lib/proc.py.
+        try:
+            from appyhour_lib.proc import install_parent_death_watchdog
+
+            if install_parent_death_watchdog(logger=logger):
+                logger.info("parent-death watchdog active (ppid reaping)")
+        except Exception:
+            logger.warning("parent-death watchdog unavailable", exc_info=True)
+
         logger.info("Starting AppyHour MCP server")
         mcp.run()
     except Exception:
