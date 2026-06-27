@@ -63,6 +63,9 @@ def logic_docs() -> list[Path]:
         REPO_ROOT / "HANDOFF.md",
     ]
     docs.extend(sorted((REPO_ROOT / ".claude" / "plans").glob("2026-06-1*.md")))
+    # routing-engine EXPLAINER HTML (stakeholder-facing clickable flowcharts) — part of the system's
+    # documentation; lives in the shared _outputs sink (one level up from this repo).
+    docs.extend(sorted((REPO_ROOT.parent / "_outputs" / "artifacts").glob("cold-chain-*.html")))
     return [p for p in docs if p.exists()]
 
 
@@ -71,7 +74,11 @@ def zip_logic_docs(dst: Path) -> int:
     docs = logic_docs()
     with zipfile.ZipFile(dst, "w", compression=zipfile.ZIP_DEFLATED, strict_timestamps=False) as zf:
         for path in docs:
-            zf.write(path, path.relative_to(REPO_ROOT))
+            try:
+                arc = path.relative_to(REPO_ROOT)
+            except ValueError:
+                arc = Path(path.name)   # files outside the repo (e.g. the _outputs/artifacts explainer HTML) → flat
+            zf.write(path, arc)
     return len(docs)
 
 
@@ -135,14 +142,21 @@ def zip_knowledge(dst: Path) -> int:
 
 
 def reference_files() -> list[Path]:
-    """Single-copy reference data NOT in git that the engine hard-depends on
-    (the box-size DistVol lookup; box_simulation.py crashes without it). It was
-    recovered from the old SSD in the 2026-06 restore — must not fall out of the
-    backup set again."""
+    """Single-copy reference data NOT in git that the engine hard-depends on — must not fall out of the
+    backup set again (the DistVol lookup was recovered from the old SSD in the 2026-06 restore):
+      - box-size DistVol lookup (box_simulation.py crashes without it),
+      - carrier COVERAGE files = the routing serviceability AUTHORITY (Veho/OnTrac zip lists; lose these and
+        the serviceability gate can't tell who serves a zip),
+      - mfg_translations.csv = RMFG product→column mapping (gitignored, so NOT in the code backup).
+    All non-secret → cleartext zip is fine. Flat-named in the zip, so keep filenames distinct."""
     desktop = Path.home() / "Desktop"
+    routing = app_dir() / "routing"
     cands = [
         desktop / "Onboarded Items with DistVol - Updated.xlsx",
         desktop / "DistVol_Proposal.xlsx",
+        routing / "veho_ground_plus.xlsx",
+        routing / "ontrac_master.xlsx",
+        REPO_ROOT / "mfg_translations.csv",
     ]
     return [p for p in cands if p.exists()]
 
@@ -184,6 +198,10 @@ def cred_files() -> list[Path]:
     for env in (REPO_ROOT / ".env", REPO_ROOT / "cut_order_server" / ".env"):
         if env.exists():
             paths.append(env)
+    # the backup's OWN Drive OAuth token — without it a restore can't even re-run this uploader (chicken-and-egg)
+    tok = REPO_ROOT / "InventoryReorder" / "dist" / "drive_oauth_token.json"
+    if tok.exists():
+        paths.append(tok)
     paths += claude_secret_files()  # settings*.json → encrypted, never the cleartext knowledge zip
     return paths
 

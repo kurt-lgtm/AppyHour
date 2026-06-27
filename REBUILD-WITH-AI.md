@@ -13,8 +13,14 @@ lane that holds the 2-day promise, size gel ice physics-first, post-mortem weekl
 (kurt@elevatefoods.co), Head of Ops. The system was refactored 2026-06-11 to: one DB, one importer,
 cost-aware routing engine (shadow), exception-only escalation.
 
+**2026-06-27 engine additions (LIVE in `ShipRouting`):**
+- **Carrier ZIP-SERVICEABILITY gate** (`build.py`, post-routing) — coverage files (`load_veho` active / `load_ontrac`) are the AUTHORITY for last-mile carriers. Any Veho/OnTrac rec whose dest zip isn't covered is auto-rerouted to **FedEx Home Delivery (same hub)** + hard-asserted (mirrors the Indy pallet gate); `_svc_rerouted` overrides `resolve_apply` keep-existing so it reaches Shopify. Post-hoc mirror: `qc_audit.py` SERVICEABILITY check. Fixed 391 Veho/OnTrac→unserviced-zip mis-routes on _SHIP_2026-06-29.
+- **`HISTORY_SERVICEABILITY` STATE-proof layer DROPPED** (`lib/features.build_history_lanes` returns empty `state`) — whole-state crediting from metro history was inventing rural coverage (268 of those mis-routes). z3-proof retained; history sets TNT, never final serviceability.
+- **Indy pallet over-cap fix** — gate-spilled orders now actually move off Indy at apply (`_indy_spilled` overrides keep-existing) + `apply.py` live-state Indy ≤6 guard.
+- **`load_veho()` is format-aware** — parses BOTH the old single-sheet file AND the new multi-sheet `Veho_GroundPlusSuite_*.xlsx` (tier *Ground Plus Zero*, per-hub IND+Nashville serviceability). Coverage exports = serviceability authority; keep current (OnTrac via `GelPackCalculator/download_ontrac_imap.py`).
+
 **2026-06-24 engine additions (LIVE in `ShipRouting/build.py`, env-gated):**
-- `HISTORY_SERVICEABILITY=1` — proven-ground lanes from delivery actuals (SE→Nashville visibility).
+- `HISTORY_SERVICEABILITY=1` — proven-ground lanes from delivery actuals (SE→Nashville visibility); **STATE layer dropped 2026-06-27 (above)**.
 - `CLOSEST_HUB_DEFAULT=1` — route to the geographically closest proven hub (breaks cost-ties off distance).
 - `CARRIER_TNT_TRUST=1` — rescue AIR-bound orders onto a FedEx/UPS GROUND lane the carrier itself quotes
   ≤2 (via owned **ShipStation/ShipEngine**, `lib/carrier_tnt.py`), +1 ice. Needs `%APPDATA%/AppyHour/shipengine_api_key.txt`. Degrades to no-op without the key. Kill: `=0`.
@@ -68,6 +74,7 @@ cost-aware routing engine (shadow), exception-only escalation.
 - Veho lanes = Indianapolis + Nashville ONLY; two-gate rule for any new carrier×hub. Enforced in code by
   `lib/features.legal_lane`/`CARRIER_HUBS` (UPS=Dallas-only too) at lane-build AND at invoice ingest — an
   impossible carrier@hub is a data bug (the 475 Veho@Dallas mis-attribution), not a routable lane.
+- **Carrier coverage exports are the serviceability AUTHORITY.** A last-mile carrier delivers a zip ONLY if that zip is in its coverage export (`load_veho` active / `load_ontrac`) — legality(carrier@hub) ≠ coverage(serves the *zip*). The `build.py` serviceability gate enforces it (uncovered Veho/OnTrac → FedEx Home Delivery, same hub). `HISTORY_SERVICEABILITY` may set TNT/speed but **never creates serviceability** (its STATE layer did → 391 mis-routes, dropped 2026-06-27). Keep exports current: OnTrac via `GelPackCalculator/download_ontrac_imap.py`; Veho via the GroundPlusSuite export (`load_veho` parses the multi-sheet format).
 - Dedup `(invoice_id, tracking)` at cohort rollup, one physical row per tracking at storage.
 - FedEx 2Day Express = last resort ($25); carrier cost order Veho $6 → OnTrac $8 → UPS $11 → FedEx HD $15.
 - **The Indy 6-pallet cap is enforced LIVE by the greedy `_indy_pallet_gate`** (engine.py) — this is the
@@ -78,11 +85,10 @@ cost-aware routing engine (shadow), exception-only escalation.
 ## 5. Refresh cadence for this backup
 Logic zip + DB snapshot to Drive **weekly** (goal: automated in M2 `pipeline_run.py`). Repos: push on every work session. THIS FILE lives in the logic zip + all three repos' awareness docs.
 
-⚠️ **2026-06-24 — OFFSITE UPLOAD IS BROKEN.** `scripts/backup_offsite.py` snapshots `shipping.db` →
-`%APPDATA%/AppyHour/backups/shipping.weekly-<date>.db` and then uploads via `gws drive +upload`, but
-**`gws` is not installed / not on PATH** on the current machine — the upload step fails (`'gws' is not
-recognized`) while the LOCAL snapshot still succeeds. So the "weekly offsite" has been **local-only**
-(snapshots exist back to 2026-06-14 in `backups/` but were NOT pushed to Drive). FIX: reinstall/auth the
-`gws` Google Workspace CLI (Internal OAuth app, 8 scopes), OR replace the uploader with `rclone`/the Drive
-API. Until then, copy `%APPDATA%/AppyHour/backups/shipping.weekly-*.db` + the logic zip to Drive manually.
-Code is safely offsite via the three GitHub repos regardless.
+✅ **2026-06-27 — OFFSITE UPLOAD WORKS** (gws dependency removed). `scripts/backup_offsite.py` now uploads
+via the **`drive.file` OAuth token** (same one `upload_sheet.py` uses; resumable, gws-independent) — verified
+uploading `shipping.weekly-<date>.db` (132MB) + logic/knowledge/reference zips to Drive. Run it with the
+**`appyhour-backup` skill** (repeatable: refresh THIS doc → `backup_offsite.py` → verify the `OFFSITE:` lines).
+⚠️ One gap remains: **`AH_BACKUP_PASSPHRASE` is unset** → the encrypted creds bundle is SKIPPED (refuses to
+upload plaintext secrets), so the Drive backup has the DB + docs + knowledge but NOT the API keys/tokens —
+set the passphrase (user env) to include creds. Code is offsite via the three GitHub repos regardless.
