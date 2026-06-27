@@ -184,7 +184,12 @@ def main() -> int:
     if not DB_PATH.exists():
         log.error(f"shipping.db missing: {DB_PATH}")
         return 1
-    db = sqlite3.connect(str(DB_PATH), timeout=30)
+    # Open through the canonical helper so WAL + busy_timeout are enforced.
+    # This writer racing other processes' checkpoints (no busy_timeout) was a
+    # cause of the 2026-06-27 shipping.db corruption. See appyhour_lib/db.py.
+    from appyhour_lib.db import connect as _db_connect
+
+    db = _db_connect(DB_PATH)
     db.row_factory = sqlite3.Row
 
     try:

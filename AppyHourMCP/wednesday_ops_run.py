@@ -151,8 +151,12 @@ def build_cohort_report(tue: date, out_path: Path) -> dict:
         raise RuntimeError("No sheet data")
     rows = rows[1:]  # skip header
 
-    # 2. Kori DB lookup for each row's order pickup
-    con = sqlite3.connect(SHIPPING_DB)
+    # 2. Kori DB lookup for each row's order pickup (read-only: all SELECTs).
+    # connect_ro can't take a write lock or trigger a checkpoint, so it stays
+    # out of the writer race that corrupted shipping.db on 2026-06-27.
+    from appyhour_lib.db import connect_ro as _db_connect_ro
+
+    con = _db_connect_ro(SHIPPING_DB)
     cur = con.cursor()
 
     cohort_rows = []

@@ -46,8 +46,11 @@ def _tee_to_shipping_db(rows: list[list[str]]) -> int:
         _AH = r"C:/Users/Work/Claude Projects/AppyHour"
         if _AH not in _sys.path:
             _sys.path.insert(0, _AH)
-        from appyhour_lib.paths import db_path
-        con = sqlite3.connect(str(db_path()), timeout=10)
+        from appyhour_lib.db import connect as _db_connect
+        # WAL + busy_timeout via the canonical helper — this MCP-side writer
+        # (running in up to N server instances at once) racing checkpoints with
+        # no busy_timeout helped corrupt shipping.db on 2026-06-27.
+        con = _db_connect()
         try:
             # Additive: extend schema if needed. The feedback table predates
             # the tee — add gorgias_link col + unique idx if missing.

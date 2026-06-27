@@ -397,14 +397,91 @@ def run_daily(dest_root: Path, today: date | None = None, keep: int = 14) -> dic
     return {"snapshot": str(snap), "kept": min(len(snaps), keep), "pruned": pruned}
 
 
+def snapshot_after_ingest(keep: int = 20, now: datetime | None = None) -> dict:
+    """Safe LOCAL snapshot of shipping.db taken at the END of every ingest.
+
+    Why: the weekly offsite backup is too coarse — the 2026-06-27 corruption
+    sat between weekly snapshots and ~2 days of churn were at risk. Snapshotting
+    after each ingest bounds worst-case loss to a single ingest cycle.
+
+    INTEGRITY GATE (critical): run ``PRAGMA quick_check`` first and REFUSE to
+    snapshot a corrupt DB. Without this, the post-ingest backup would happily
+    copy a torn 22 MB database over the last good 137 MB snapshot — turning a
+    minor incident into total loss. A corrupt DB leaves the prior good
+    snapshots untouched and raises a loud notification instead.
+
+    Returns a status dict: status ∈ {"ok", "skipped-corrupt", "error"}.
+    """
+    src = db_path()
+    backup_dir = app_dir() / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Integrity gate — read-only so it never locks out the live writer.
+    detail = "ok"
+    try:
+        ro = sqlite3.connect(f"file:{src.as_posix()}?mode=ro", uri=True, timeout=30)
+        try:
+            ro.execute("PRAGMA busy_timeout=10000")
+            rows = ro.execute("PRAGMA quick_check(1)").fetchall()
+        finally:
+            ro.close()
+        healthy = len(rows) == 1 and rows[0][0] == "ok"
+        if not healthy:
+            detail = f"quick_check={rows[:1]}"
+    except sqlite3.DatabaseError as exc:
+        healthy = False
+        detail = f"{type(exc).__name__}: {exc}"
+
+    if not healthy:
+        msg = f"shipping.db failed integrity gate ({detail}) — refusing to snapshot a corrupt DB"
+        print("backup_offsite: " + msg, file=sys.stderr)
+        try:
+            from appyhour_lib.notify import notify
+
+            notify(f"post-ingest backup SKIPPED: {msg}", level="error")
+        except Exception:
+            pass
+        return {"status": "skipped-corrupt", "detail": detail}
+
+    # 2. Consistent online-backup snapshot (cannot tear a live DB).
+    stamp = f"{now or datetime.now():%Y-%m-%d_%H%M%S}"
+    snap = backup_dir / f"shipping.after-ingest-{stamp}.db"
+    snapshot_sqlite(src, snap)
+
+    # 3. Rotate: keep the last N after-ingest snapshots (weekly/daily are separate).
+    snaps = sorted(backup_dir.glob("shipping.after-ingest-*.db"))
+    pruned = 0
+    for old in snaps[:-keep] if len(snaps) > keep else []:
+        try:
+            old.unlink()
+            pruned += 1
+        except Exception:
+            continue
+    pruned += prune_orphan_sidecars(backup_dir)
+    return {
+        "status": "ok",
+        "snapshot": str(snap),
+        "bytes": snap.stat().st_size if snap.exists() else 0,
+        "kept": min(len(snaps), keep),
+        "pruned": pruned,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-upload", action="store_true", help="Create files but skip Drive upload")
     parser.add_argument("--daily", action="store_true",
                         help="Daily local shipping.db snapshot to --dest (no zips, no upload)")
     parser.add_argument("--dest", help="Destination root for --daily (e.g. E:\\AppyHourBackups)")
+    parser.add_argument("--after-ingest", action="store_true",
+                        help="Integrity-gated local snapshot to backups/ (call at end of every ingest)")
     args = parser.parse_args(argv)
     try:
+        if args.after_ingest:
+            result = snapshot_after_ingest()
+            print("backup_offsite after-ingest " + " ".join(f"{k}={v}" for k, v in result.items()))
+            return 0 if result.get("status") == "ok" else 1
+
         if args.daily:
             if not args.dest:
                 print("backup_offsite: --daily requires --dest", file=sys.stderr)

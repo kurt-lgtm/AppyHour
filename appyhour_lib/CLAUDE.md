@@ -8,6 +8,8 @@ Shared Python library — pure utilities used by both MCP servers and desktop ap
 appyhour_lib/
 ├── __init__.py
 ├── credentials.py    # get_shopify_auth() — single source of truth
+├── paths.py          # db_path() — canonical shipping.db location
+├── db.py             # connect()/connect_ro() — MANDATORY shipping.db opener
 └── weather.py        # OpenWeatherMap, NWS alerts
 ```
 
@@ -23,6 +25,7 @@ appyhour_lib/
 
 - **Pure-only.** stdlib + `requests` for weather. No GUI, no MCP, no Flask.
 - **`get_shopify_auth()` is the SINGLE source.** AppyHourMCP re-exports it. Never duplicate auth elsewhere.
+- **`db.connect()`/`db.connect_ro()` are the ONLY sanctioned way to open `shipping.db`.** NEVER `sqlite3.connect()` it raw. The helper enforces `journal_mode=WAL` + `busy_timeout=10000` + `synchronous=NORMAL`; `busy_timeout` is per-connection (not persisted), and its absence let concurrent writers race a checkpoint and corrupt the DB on 2026-06-27. Writers → `connect()`, readers → `connect_ro()` (`mode=ro`, can't take a write lock or trigger a checkpoint).
 - **Backward compatibility.** This lib is a leaf — every consumer depends on it. Breaking changes ripple across 4+ apps.
 
 ## Consumers

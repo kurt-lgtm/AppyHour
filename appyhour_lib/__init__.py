@@ -2,6 +2,8 @@
 
 Public surface:
   • paths.db_path()                  — canonical shipping.db location
+  • db.connect() / db.connect_ro()   — MANDATORY shipping.db opener (WAL +
+                                       busy_timeout). NEVER sqlite3.connect raw.
   • paths.invoices_dir()             — carrier-invoice landing dir
   • box_classify.classify_box(...)   — order line-items → box-type bucket
   • internal_classify.is_internal(...) — flag staff/test shipments
