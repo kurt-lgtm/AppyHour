@@ -2736,6 +2736,159 @@ def cmd_full(xlsx_path: str, inventory_path: Optional[str] = None) -> bool:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 6: Inventory allocation — set each $0 variant's Available at RMFG to
+# HAVE - paid demand. Matrixify only assigns $0 SKUs; capping their Shopify
+# inventory to (HAVE minus the paid lines already committed this ship week)
+# stops Matrixify over-assigning the shared/disjoint physical stock.
+# Also emits HAVE/NEED/DELTA; negative deltas feed the swap process.
+# ═══════════════════════════════════════════════════════════════════════════
+ALLOC_AUDIT = Path(r"C:\Users\Work\Claude Projects\_outputs\logs\inventory_alloc_audit.jsonl")
+
+
+def _load_have_csv(path: str | Path) -> dict[str, float]:
+    """HAVE inventory CSV — accepts (SKU,HAVE) or (sku,available_qty) headers."""
+    have: dict[str, float] = {}
+    with open(str(path), encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            low = {(k or "").strip().lower(): v for k, v in row.items()}
+            sku = (low.get("sku") or "").strip()
+            raw = (low.get("have") or low.get("available_qty") or "0").strip()
+            if sku:
+                try:
+                    have[sku] = float(raw or 0)
+                except ValueError:
+                    have[sku] = 0.0
+    return have
+
+
+def _zero_variant_items(base: str, headers: dict, skus: set[str]) -> dict[str, dict]:
+    """{sku: {'variant': gid, 'item': inventoryItemGid}} for SKUs whose CHEAPEST
+    variant is price 0.00 — the in-box $0 variant Matrixify assigns. SKUs whose
+    cheapest variant costs > 0 (no $0 variant) are omitted (Kurt: skip those)."""
+    out: dict[str, dict] = {}
+    sl = sorted(skus)
+    for i in range(0, len(sl), 10):
+        batch = sl[i : i + 10]
+        q = " OR ".join(f"sku:{s}" for s in batch)
+        data = _shopify_graphql(
+            base, headers,
+            "query($q:String!){productVariants(first:50,query:$q){edges{node{id sku price inventoryItem{id}}}}}",
+            {"q": q},
+        )
+        best: dict[str, tuple] = {}
+        for edge in data["productVariants"]["edges"]:
+            n = edge["node"]
+            s = n["sku"]
+            if s not in skus:
+                continue
+            p = float(n.get("price", "999"))
+            if s not in best or p < best[s][0]:
+                best[s] = (p, n["id"], (n.get("inventoryItem") or {}).get("id"))
+        for s, (p, vgid, igid) in best.items():
+            if p == 0.0 and igid:
+                out[s] = {"variant": vgid, "item": igid}
+        _limiter.wait(cost=1)
+    return out
+
+
+def _resolve_location(base: str, headers: dict, name_contains: str):
+    """Resolve the RMFG fulfillment location gid by name substring.
+    Returns (gid, name) on a unique match, else (None, reason). Gracefully
+    reports the missing scope when `locations` is access-denied."""
+    try:
+        d = _shopify_graphql(base, headers, "{locations(first:50){edges{node{id name}}}}", {})
+    except Exception as e:
+        return None, f"locations access denied ({str(e)[:70]}) — add read_locations scope"
+    locs = [(n["node"]["id"], n["node"]["name"]) for n in d["locations"]["edges"]]
+    hits = [(g, nm) for g, nm in locs if name_contains.lower() in nm.lower()]
+    if len(hits) == 1:
+        return hits[0]
+    return None, f"'{name_contains}' matched {len(hits)} of {len(locs)} locations: {[nm for _, nm in locs]}"
+
+
+def cmd_allocate(rmfg_tag: str, inventory_csv: str, corrections: dict | None = None,
+                 location_name: str = "RMFG", commit: bool = False, limit: int | None = None) -> bool:
+    """Set $0-variant Available at RMFG = max(0, HAVE - paid demand). DRY-RUN unless commit."""
+    have = _load_have_csv(inventory_csv)
+    if corrections:
+        have.update(corrections)
+        print(f"  applied {len(corrections)} HAVE correction(s): {corrections}")
+    base, headers = _get_shopify_auth()
+
+    print(f"  Fetching orders '{rmfg_tag}' (open/unfulfilled)...")
+    orders = _fetch_orders_by_tag(base, headers, rmfg_tag)
+    paid: dict[str, int] = {}
+    need: dict[str, int] = {}
+    for o in orders:
+        for li in o.get("line_items", []):
+            s = (li.get("sku") or "").strip()
+            if not s:
+                continue
+            qf = li.get("fulfillable_quantity", 0) or 0
+            need[s] = need.get(s, 0) + qf
+            if float(li.get("price") or 0) > 0:
+                paid[s] = paid.get(s, 0) + qf
+    print(f"  {len(orders)} orders | {sum(need.values())} units demand | paid-line SKUs: {len(paid)}")
+
+    zv = _zero_variant_items(base, headers, set(have))
+    print(f"  {len(have)} HAVE SKUs | {len(zv)} with $0 variant (allocate) | {len(have) - len(zv)} without (skip)")
+
+    rows = []
+    for sku in zv:
+        h = have.get(sku, 0)
+        pd = paid.get(sku, 0)
+        nd = need.get(sku, 0)
+        rows.append({"sku": sku, "have": h, "paid": pd, "avail": max(0, h - pd),
+                     "need": nd, "delta": h - nd, "item": zv[sku]["item"]})
+    rows.sort(key=lambda r: r["delta"])  # most-negative delta (shortage) first
+    print(f"\n  {'SKU':<14}{'HAVE':>7}{'PAID':>7}{'AVAIL$0':>9}{'NEED':>7}{'DELTA':>8}")
+    shorts = []
+    for r in rows:
+        flag = "  <-- SHORT" if r["delta"] < 0 else ""
+        if r["delta"] < 0:
+            shorts.append(r["sku"])
+        print(f"  {r['sku']:<14}{r['have']:>7.0f}{r['paid']:>7.0f}{r['avail']:>9.0f}{r['need']:>7.0f}{r['delta']:>8.0f}{flag}")
+    print(f"\n  {len(shorts)} negative-delta SKU(s) (HAVE<NEED) -> swap candidates: {shorts}")
+
+    if not commit:
+        print(f"\n  DRY-RUN — no writes. {len(rows)} inventory sets planned (+ order-location move, separate).")
+        print("  Re-run with --commit once the token has read_locations + write_inventory scopes.")
+        return True
+
+    # ---- COMMIT: scope-gated, test-on-few via --limit, audit-logged ----
+    loc_gid, loc_msg = _resolve_location(base, headers, location_name)
+    if not loc_gid:
+        print(f"  CANNOT COMMIT: {loc_msg}")
+        return False
+    print(f"  RMFG location resolved: {loc_msg} ({loc_gid})")
+    todo = rows[:limit] if limit else rows
+    print(f"  Setting Available for {len(todo)} $0 variant(s) at RMFG (limit={limit or 'ALL'})...")
+    import datetime as _dt
+    ALLOC_AUDIT.parent.mkdir(parents=True, exist_ok=True)
+    ok_n = err_n = 0
+    with open(ALLOC_AUDIT, "a", encoding="utf-8") as alog:
+        for r in todo:
+            res = _shopify_graphql(
+                base, headers,
+                "mutation($i:InventorySetQuantitiesInput!){inventorySetQuantities(input:$i){"
+                "inventoryAdjustmentGroup{createdAt} userErrors{field message}}}",
+                {"i": {"name": "available", "reason": "correction", "ignoreCompareQuantity": True,
+                       "quantities": [{"inventoryItemId": r["item"], "locationId": loc_gid,
+                                       "quantity": int(r["avail"])}]}},
+            )
+            errs = res["inventorySetQuantities"]["userErrors"]
+            ok_n += not errs
+            err_n += bool(errs)
+            alog.write(json.dumps({"ts": _dt.datetime.now().isoformat(timespec="seconds"), "sku": r["sku"],
+                                   "set_available": int(r["avail"]), "location": loc_gid, "errors": errs}) + "\n")
+            print(f"    {r['sku']}: Available={int(r['avail'])}" + (f"  ERR {errs}" if errs else "  ok"))
+    print(f"  Inventory sets: {ok_n} ok / {err_n} err (audit -> {ALLOC_AUDIT.name}).")
+    print("  NOTE: order-location move to RMFG is a separate step (fulfillmentOrderMove) — "
+          "needs the fulfillment scopes + a supervised first run; not done here.")
+    return True
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="matrix_commander",
@@ -2803,6 +2956,14 @@ def main() -> None:
     p_full.add_argument("xlsx", help="Path to AHB_WeeklyProductionQuery XLSX file")
     p_full.add_argument("--inventory", "-i", help="Inventory CSV (sku,available_qty) or JSON path")
 
+    p_alloc = sub.add_parser("allocate", help="Set $0-variant Available at RMFG = HAVE - paid demand (dry-run default)")
+    p_alloc.add_argument("tag", help="RMFG tag (e.g. RMFG_20260626)")
+    p_alloc.add_argument("--inventory", "-i", required=True, help="HAVE CSV (SKU,HAVE)")
+    p_alloc.add_argument("--corrections", "-c", default="", help="HAVE overrides, e.g. CH-BBLUE=180,AC-FLH=1044")
+    p_alloc.add_argument("--location", "-L", default="RMFG", help="Fulfillment location name substring (default RMFG)")
+    p_alloc.add_argument("--commit", action="store_true", help="Write inventory (default: dry-run)")
+    p_alloc.add_argument("--limit", type=int, default=None, help="Test-on-few: only set the first N $0 variants")
+
     args = parser.parse_args()
 
     if args.command == "validate":
@@ -2837,6 +2998,17 @@ def main() -> None:
         )
     elif args.command == "full":
         ok = cmd_full(args.xlsx, getattr(args, "inventory", None))
+    elif args.command == "allocate":
+        corr: dict[str, float] = {}
+        for pair in (args.corrections or "").split(","):
+            if "=" in pair:
+                k, v = pair.split("=", 1)
+                try:
+                    corr[k.strip()] = float(v.strip())
+                except ValueError:
+                    pass
+        ok = cmd_allocate(args.tag, args.inventory, corrections=corr or None,
+                          location_name=args.location, commit=args.commit, limit=args.limit)
     else:
         parser.print_help()
         return
