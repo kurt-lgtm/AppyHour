@@ -11,8 +11,13 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
+
+# Land backups in Elevate Foods Drive > Operations > "Shipping Ops Backup" (no longer a flat dump).
+# Verified the drive.file token CAN write into this folder. Override via AH_BACKUP_DRIVE_FOLDER.
+BACKUP_FOLDER_ID = os.environ.get("AH_BACKUP_DRIVE_FOLDER", "18n52u00pE1icrx4P1lrDJ2pLsHpKIap8")
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -35,7 +40,10 @@ def _drive():
 
 def upload(svc, path: Path):
     media = MediaFileUpload(str(path), resumable=True)
-    res = svc.files().create(body={"name": path.name}, media_body=media,
+    body = {"name": path.name}
+    if BACKUP_FOLDER_ID:
+        body["parents"] = [BACKUP_FOLDER_ID]
+    res = svc.files().create(body=body, media_body=media,
                              fields="id,name,size,webViewLink", supportsAllDrives=True).execute()
     mb = int(res.get("size", 0)) / 1048576
     print(f"  OFFSITE: {path.name} ({mb:.1f}MB) id={res['id']} -> {res.get('webViewLink')}")
