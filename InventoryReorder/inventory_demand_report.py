@@ -93,9 +93,40 @@ def resolve_curation(sku):
 
 
 def is_large_box(sku):
-    """Large boxes get CEX-EC extra cheese."""
+    """True if the box is a LARGE size. Used for MED/CMED/LGE box-total bucketing ONLY.
+
+    NOTE: box size does NOT imply CEX-EC. CEX-EC rides on medium custom boxes too
+    (e.g. AHB-MCUST-MDT) and is absent from many large boxes. Use cexec_curation()
+    for CEX-EC counting, never this. (Kurt 2026-06-26)
+    """
     s = (sku or "").strip().upper()
     return s.startswith("AHB-L") or s.startswith("AHB-LCUST")
+
+
+def cexec_curation(line_items, box_curation):
+    """Return the curation a CEX-EC extra-cheese pick belongs to, or None if the
+    order carries no CEX-EC line item.
+
+    CEX-EC resolves ONLY when an actual CEX-EC* line item is present — never from
+    box size (Kurt feedback 2026-06-26). Resolution:
+      - suffixed CEX-EC-<CUR> (e.g. created post-charge in Shopify) → that curation
+      - bare CEX-EC (the queued-recharge case) → the box's curation
+    Guards against CEX-EM / CEX-EA (extra meat / accompaniment), which are not cheese.
+    """
+    suffix_cur = None
+    has_cex = False
+    for it in line_items:
+        sku = (it.get("sku") or "").strip().upper()
+        if sku != "CEX-EC" and not sku.startswith("CEX-EC-"):
+            continue
+        has_cex = True
+        if sku.startswith("CEX-EC-"):
+            for tok in sku[len("CEX-EC-"):].split("-"):
+                if tok in KNOWN_CURATIONS:
+                    suffix_cur = tok
+    if not has_cex:
+        return None
+    return suffix_cur or box_curation
 
 
 def load_settings():
@@ -371,14 +402,16 @@ def fetch_recharge_api(api_token, out_specialty=None):
 
             # Curation counts (non-MONTHLY only)
             if cur and cur != "MONTHLY":
+                # CEX-EC counts off the actual CEX-EC line item, NOT box size.
+                cex_cur = cexec_curation(charge.get("line_items", []), cur)
                 if is_wk1:
                     wk1_curations[cur] += 1
-                    if is_lg:
-                        wk1_large[cur] += 1
+                    if cex_cur:
+                        wk1_large[cex_cur] += 1
                 else:
                     wk2_curations[cur] += 1
-                    if is_lg:
-                        wk2_large[cur] += 1
+                    if cex_cur:
+                        wk2_large[cex_cur] += 1
 
             # Custom boxes (AHB-MCUST-TRAY / AHB-LCUST-TRAY) — no curation/MONTHLY match
             if cur is None:
@@ -613,21 +646,26 @@ def fetch_shopify_orders(settings, out_specialty=None):
                     else:
                         wk2_med["MONTHLY"] = wk2_med.get("MONTHLY", 0) + 1
             elif cur:
-                # Custom curation — count in per-curation tables
+                # Custom curation — count in per-curation tables.
+                # Box size (_lge/_med) and CEX-EC (_large) are INDEPENDENT:
+                # _lge/_med = physical box size; _large = CEX-EC line-item presence.
+                cex_cur = cexec_curation(line_items, cur)
                 if is_wk1:
                     wk1_curations[cur] += 1
                     if is_lg:
-                        wk1_large[cur] += 1
                         wk1_lge[cur] += 1
                     else:
                         wk1_med[cur] += 1
+                    if cex_cur:
+                        wk1_large[cex_cur] += 1
                 else:
                     wk2_curations[cur] += 1
                     if is_lg:
-                        wk2_large[cur] += 1
                         wk2_lge[cur] += 1
                     else:
                         wk2_med[cur] += 1
+                    if cex_cur:
+                        wk2_large[cex_cur] += 1
         else:
             # Non-subscription order — count pickable SKUs as addon demand
             target = wk1_addon if is_wk1 else wk2_addon
@@ -841,7 +879,7 @@ def main():
 
     # -- CEX-EC Totals --
     print(f"\n  {'=' * 96}")
-    print(f"  CEX-EC TOTALS (1 per large box only)")
+    print(f"  CEX-EC TOTALS (1 per order carrying a CEX-EC line item)")
     print(f"  {'-' * 96}")
     print(f"  {'Curation':<12} {'Cheese':<14} {'Name':<35} {'Wk1':>7} {'Wk2':>7}")
     print(f"  {'-' * 96}")
