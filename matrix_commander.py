@@ -2834,13 +2834,20 @@ def cmd_allocate(rmfg_tag: str, inventory_csv: str, corrections: dict | None = N
     zv = _zero_variant_items(base, headers, set(have))
     print(f"  {len(have)} HAVE SKUs | {len(zv)} with $0 variant (allocate) | {len(have) - len(zv)} without (skip)")
 
+    # PK-/MR- = 0-DistVol structural inserts/journal (made-to-order) — NEVER cap their inventory to 0.
     rows = []
+    _skipped_aa = []
     for sku in zv:
+        if sku.startswith(("PK-", "MR-")):
+            _skipped_aa.append(sku)
+            continue
         h = have.get(sku, 0)
         pd = paid.get(sku, 0)
         nd = need.get(sku, 0)
         rows.append({"sku": sku, "have": h, "paid": pd, "avail": max(0, h - pd),
                      "need": nd, "delta": h - nd, "item": zv[sku]["item"]})
+    if _skipped_aa:
+        print(f"  Excluded always-available structural SKUs from the cap (not stock-managed): {_skipped_aa}")
     rows.sort(key=lambda r: r["delta"])  # most-negative delta (shortage) first
     print(f"\n  {'SKU':<14}{'HAVE':>7}{'PAID':>7}{'AVAIL$0':>9}{'NEED':>7}{'DELTA':>8}")
     shorts = []
