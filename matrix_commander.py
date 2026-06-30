@@ -2865,17 +2865,30 @@ def cmd_allocate(rmfg_tag: str, inventory_csv: str, corrections: dict | None = N
     todo = rows[:limit] if limit else rows
     print(f"  Setting Available for {len(todo)} $0 variant(s) at RMFG (limit={limit or 'ALL'})...")
     import datetime as _dt
+    import uuid as _uuid
     ALLOC_AUDIT.parent.mkdir(parents=True, exist_ok=True)
     ok_n = err_n = 0
     with open(ALLOC_AUDIT, "a", encoding="utf-8") as alog:
         for r in todo:
+            # 2026-04: InventoryQuantityInput renamed compareQuantity -> REQUIRED changeFromQuantity
+            # (the item's current value at the location, for optimistic concurrency). Read it, pass it.
+            _cur = _shopify_graphql(
+                base, headers,
+                "query($id:ID!,$loc:ID!){inventoryItem(id:$id){inventoryLevel(locationId:$loc){"
+                "quantities(names:[\"available\"]){quantity}}}}",
+                {"id": r["item"], "loc": loc_gid},
+            )
+            _qs = (((_cur.get("inventoryItem") or {}).get("inventoryLevel") or {}).get("quantities")) or []
+            _from = _qs[0]["quantity"] if _qs else 0
+            # 2026-04 also requires the @idempotent(key:) directive on inventory-set mutations.
             res = _shopify_graphql(
                 base, headers,
-                "mutation($i:InventorySetQuantitiesInput!){inventorySetQuantities(input:$i){"
-                "inventoryAdjustmentGroup{createdAt} userErrors{field message}}}",
-                {"i": {"name": "available", "reason": "correction", "ignoreCompareQuantity": True,
+                "mutation($i:InventorySetQuantitiesInput!,$k:String!){inventorySetQuantities(input:$i)"
+                "@idempotent(key:$k){inventoryAdjustmentGroup{createdAt} userErrors{field message}}}",
+                {"i": {"name": "available", "reason": "correction",
                        "quantities": [{"inventoryItemId": r["item"], "locationId": loc_gid,
-                                       "quantity": int(r["avail"])}]}},
+                                       "quantity": int(r["avail"]), "changeFromQuantity": _from}]},
+                 "k": f"alloc-{r['sku']}-{int(r['avail'])}-{_uuid.uuid4().hex[:12]}"},
             )
             errs = res["inventorySetQuantities"]["userErrors"]
             ok_n += not errs
