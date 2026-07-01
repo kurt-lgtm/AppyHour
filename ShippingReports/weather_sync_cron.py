@@ -27,8 +27,16 @@ from pathlib import Path
 import requests
 
 # ── Config ────────────────────────────────────────────────────────────────
-SETTINGS_PATH = Path.home() / "AppData/Roaming/AppyHour/gel_calc_shopify_settings.json"
-DB_PATH = Path.home() / "AppData/Roaming/AppyHour/shipping.db"
+# Resolve via the canonical resolver so this honors APPYHOUR_DB_PATH. Needed because
+# the live DB physically lives in the Claude MSIX LocalCache
+# (…\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\AppyHour\shipping.db), NOT the
+# real %APPDATA%\Roaming — a bare/unpackaged terminal hardcoding Path.home()/AppData/Roaming
+# opens an empty path and reports "shipping.db missing". Set APPYHOUR_DB_PATH to the
+# LocalCache path when running unpackaged. Settings (OWM key) sit beside the DB.
+from appyhour_lib.paths import db_path  # noqa: E402
+
+DB_PATH = db_path()
+SETTINGS_PATH = DB_PATH.parent / "gel_calc_shopify_settings.json"
 LOOKBACK_DAYS = 30  # how far back to backfill (covers 2 ship_weeks comfortably)
 PADDING_DAYS = 2    # extend window past delivery date for tail-end temps
 MAX_CALLS = 1000    # OWM free-tier daily cap
@@ -120,7 +128,11 @@ def get_needed_pairs(db: sqlite3.Connection, lookback_days: int) -> list[tuple[s
         have.update(tuple(r) for r in existing)
 
     missing = [p for p in needed_list if p not in have]
-    log.info(f"Need {len(needed_list)} pairs, have {len(have)}, fetching {len(missing)}")
+    # `needed` is a set (arbitrary hash order) — sort NEWEST (zip,date) first so that when
+    # MAX_CALLS caps the run, the freshest gaps (this week's deliveries, needed by the
+    # ice/weather post-mortem) fill first and the oldest backlog fills last.
+    missing.sort(key=lambda p: p[1], reverse=True)
+    log.info(f"Need {len(needed_list)} pairs, have {len(have)}, fetching {len(missing)} (newest-first)")
     return missing
 
 

@@ -26,6 +26,7 @@ appyhour_lib/
 - **Pure-only.** stdlib + `requests` for weather. No GUI, no MCP, no Flask.
 - **`get_shopify_auth()` is the SINGLE source.** AppyHourMCP re-exports it. Never duplicate auth elsewhere.
 - **`db.connect()`/`db.connect_ro()` are the ONLY sanctioned way to open `shipping.db`.** NEVER `sqlite3.connect()` it raw. The helper enforces `journal_mode=WAL` + `busy_timeout=10000` + `synchronous=NORMAL`; `busy_timeout` is per-connection (not persisted), and its absence let concurrent writers race a checkpoint and corrupt the DB on 2026-06-27. Writers → `connect()`, readers → `connect_ro()` (`mode=ro`, can't take a write lock or trigger a checkpoint).
+- **ONE writer at a time — busy_timeout does NOT prevent two independent checkpointers from corrupting the WAL.** Corrupted again 2026-07-01 when a manual `weather_sync_cron.py` raced the live MCP servers. **Claude/agents stay READ-ONLY** (`connect_ro`); manual writers run only when the MCP servers aren't mid-sync. Recovery + the real DB path (MSIX LocalCache, NOT plain `%APPDATA%` on this box) live in `REBUILD-WITH-AI.md` §5.1 + memory `shipping-db-msix-wal-corruption`. Health check: `_outputs/scripts/shipping_db_healthcheck.py`.
 - **Backward compatibility.** This lib is a leaf — every consumer depends on it. Breaking changes ripple across 4+ apps.
 
 ## Consumers
