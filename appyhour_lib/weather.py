@@ -99,6 +99,79 @@ def fetch_weather_batch(
     return readings_dict, latlons_dict
 
 
+def _geocode_zip(api_key: str, zip_code: str) -> tuple[float | None, float | None]:
+    """US zip -> (lat, lon) via OWM geocoder, or (None, None)."""
+    try:
+        resp = requests.get("http://api.openweathermap.org/geo/1.0/zip",
+                            params={"zip": f"{zip_code},US", "appid": api_key}, timeout=10)
+        if resp.status_code != 200:
+            return None, None
+        geo = resp.json()
+        return geo.get("lat"), geo.get("lon")
+    except Exception:
+        return None, None
+
+
+def fetch_daily_by_zip(
+    api_key: str, zip_code: str, days: int = 8
+) -> tuple[list[tuple[str, float]] | None, float | None, float | None]:
+    """OWM One Call 3.0 DAILY forecast (up to 8 days) for a US zip.
+
+    Returns ([(date_str, daily_high_F), ...], lat, lon) or (None, lat/None, lon/None). Each tuple is one
+    day's HIGH in the SAME (dt_str, temp) shape as the 5-day/3-hour reader, so get_transit_window_temps /
+    window_daily_high merge 3-hour (near) + daily (far) readings transparently. Reaches ~8 days out — the
+    5-day/3-hour endpoint (fetch_weather_by_zip) only reaches 5, so a Wednesday delivery isn't in-window
+    until Friday; the 8-day daily covers it from any build day. Needs a One Call 3.0-entitled key.
+    """
+    lat, lon = _geocode_zip(api_key, zip_code)
+    if lat is None or lon is None:
+        return None, None, None
+    try:
+        resp = requests.get("https://api.openweathermap.org/data/3.0/onecall",
+                            params={"lat": lat, "lon": lon, "units": "imperial",
+                                    "exclude": "minutely,hourly,current,alerts", "appid": api_key}, timeout=15)
+        if resp.status_code != 200:
+            return None, lat, lon
+        data = resp.json()
+        off = data.get("timezone_offset", 0)     # local-date bucketing so the daily high lands on the right day
+        readings: list[tuple[str, float]] = []
+        for d in data.get("daily", [])[:days]:
+            date = datetime.utcfromtimestamp(d["dt"] + off).strftime("%Y-%m-%d")
+            hi = (d.get("temp") or {}).get("max")
+            if hi is not None:
+                readings.append((date, hi))
+        return (readings or None), lat, lon
+    except Exception:
+        return None, lat, lon
+
+
+def fetch_daily_batch(
+    api_key: str, zip_codes: list[str], days: int = 8, progress_callback: object | None = None
+) -> tuple[dict, dict]:
+    """8-day daily forecast for a list of zips concurrently. Same return shape as fetch_weather_batch."""
+    readings_dict: dict = {}
+    latlons_dict: dict = {}
+    if not zip_codes:
+        return readings_dict, latlons_dict
+
+    def _one(zc: str) -> tuple:
+        r, la, lo = fetch_daily_by_zip(api_key, zc, days)
+        return zc, r, la, lo
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futs = {pool.submit(_one, zc): zc for zc in zip_codes}
+        done = 0
+        for f in as_completed(futs):
+            done += 1
+            if progress_callback:
+                progress_callback(done, len(zip_codes), futs[f])
+            zc, r, la, lo = f.result()
+            readings_dict[zc] = r
+            if la is not None and lo is not None:
+                latlons_dict[zc] = (la, lo)
+    return readings_dict, latlons_dict
+
+
 def fetch_nws_alerts(
     lat: float, lon: float, days_ahead: int = NWS_HOLD_DAYS_AHEAD
 ) -> tuple[list[dict], str | None]:
