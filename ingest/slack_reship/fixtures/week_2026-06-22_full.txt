@@ -1,0 +1,141 @@
+: <@U01FYC7CZMH|Jess> cannot be delivered <https://admin.shopify.com/store/504ac4/orders/7180170952984|#151787>
+<https://appyhour.gorgias.com/app/views/238613/278963748> [2026-06-28 03:35:40 CST]
+
+: <@U01FYC7CZMH|Jess> <https://admin.shopify.com/store/504ac4/orders/7186518049048|#151966> Arrived warm
+<https://appyhour.gorgias.com/app/views/238613/278955303> [2026-06-28 03:14:26 CST]
+
+: <@U01FYC7CZMH|Jess> <https://admin.shopify.com/store/504ac4/orders/7209370452248|#153601> - _*Delayed in transit; Gourmet Bites*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279032807> [2026-06-27 22:44:41 CST]
+
+: <@U01FYC7CZMH|Jess> <https://admin.shopify.com/store/504ac4/orders/7214985347352|#154437> Arrived warm
+<https://appyhour.gorgias.com/app/views/238612/278909068> [2026-06-27 22:22:24 CST]
+
+: <@U01FYC7CZMH|Jess> <https://admin.shopify.com/store/504ac4/orders/7214511227160|#154397> - _*Delayed in transit*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279060388> [2026-06-27 22:04:49 CST]
+
+: <@U01FYC7CZMH|Jess> <https://admin.shopify.com/store/504ac4/orders/7180170952984|#151787> - _*Cannot be delivered*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/278963748> [2026-06-27 19:42:45 CST]
+
+: <@U08R19137UL|Kurt> Missing 2 items (limited release box) <https://admin.shopify.com/store/504ac4/orders/7213547127064|#154327>
+<https://appyhour.gorgias.com/app/views/238613/278915293> [2026-06-27 04:20:11 CST]
+
+: <@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7211548803352|#153882>
+<https://appyhour.gorgias.com/app/views/238613/278900913> [2026-06-27 03:59:35 CST]
+
+: <@U01FYC7CZMH|Jess> Delayed <https://admin.shopify.com/store/504ac4/orders/7211551064344|#153973>
+<https://appyhour.gorgias.com/app/ticket/278968822> [2026-06-27 02:44:44 CST]
+
+: <@U01FYC7CZMH|Jess> Delay in transit <https://admin.shopify.com/store/504ac4/orders/7209320382744|#153531>
+<https://appyhour.gorgias.com/app/views/238613/278907084> [2026-06-27 02:38:41 CST]
+
+: <@U01FYC7CZMH|Jess> Delay in transit <https://admin.shopify.com/store/504ac4/orders/7209312583960|#153317>
+<https://appyhour.gorgias.com/app/views/238613/278830299> [2026-06-27 01:03:18 CST]
+
+: <@U01FYC7CZMH|Jess> Delay in transit <https://admin.shopify.com/store/504ac4/orders/7174045008152|#151618> (Gourmet Bites)
+<https://appyhour.gorgias.com/app/views/238613/278819202> [2026-06-27 00:59:00 CST]
+
+: <@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7180176490776|#151870>
+<https://appyhour.gorgias.com/app/views/238613/278797762> [2026-06-27 00:06:16 CST]
+
+: <@U01FYC7CZMH|Jess> <https://admin.shopify.com/store/504ac4/orders/7190080192792|#152129> - _*Delayed in transit*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/278835089> [2026-06-26 23:38:06 CST]
+
+: <@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7211649990936|#154165>
+<https://appyhour.gorgias.com/app/views/238613/278796154> [2026-06-26 23:29:10 CST]
+
+: <@U01FYC7CZMH|Jess> <https://admin.shopify.com/store/504ac4/orders/7196338946328|#152535> - _*Delayed in transit; Gourmet Bites*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/278886174> [2026-06-26 20:12:18 CST]
+
+: <@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7208560951576|#153138> (Gourmet)
+<https://appyhour.gorgias.com/app/views/238613/278751988> [2026-06-26 03:04:57 CST]
+
+: <@U01FYC7CZMH|Jess> Delay in transit <https://admin.shopify.com/store/504ac4/orders/7199988711704|#152687>
+<https://appyhour.gorgias.com/app/views/238613/278775358> [2026-06-26 02:54:03 CST]
+
+: <@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7199993692440|#152779>
+<https://appyhour.gorgias.com/app/views/238613/278693191> [2026-06-26 00:49:12 CST]
+
+: <@U01FYC7CZMH|Jess> Arrived warm (Gourmet Bites) <https://admin.shopify.com/store/504ac4/orders/7183523774744|#151897>
+<https://appyhour.gorgias.com/app/views/238613/278675361> [2026-06-26 00:25:15 CST]
+
+: <@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7212274286872|#154194> (Gourmet)
+<https://appyhour.gorgias.com/app/views/238613/278675452> [2026-06-26 00:23:48 CST]
+
+: <@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7187287376152|#151986>
+<https://appyhour.gorgias.com/app/views/238613/278667512> [2026-06-26 00:17:07 CST]
+
+: <@U01FYC7CZMH|Jess> Arrived warm (Gourmet Bites) <https://admin.shopify.com/store/504ac4/orders/7209319301400|#153498>
+<https://appyhour.gorgias.com/app/views/238613/278650227> [2026-06-26 00:08:49 CST]
+
+: <@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7198047043864|#152606>
+<https://appyhour.gorgias.com/app/views/238613/278654049> [2026-06-26 00:02:28 CST]
+
+: <@U08R19137UL|Kurt> Can we ship this through FedEx because the customer found out OnTrac is using a car? <https://admin.shopify.com/store/504ac4/orders/7222735995160|#156218> (reship) [2026-06-26 00:02:06 CST]
+
+: <@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7153467785496|#149240>
+<https://appyhour.gorgias.com/app/views/238613/278640445> [2026-06-25 23:44:45 CST]
+
+: <@U08R19137UL|Kurt> Missing 2 items from limited release box <https://admin.shopify.com/store/504ac4/orders/7208647393560|#153153>
+<https://appyhour.gorgias.com/app/views/238613/278617559> [2026-06-25 22:54:28 CST]
+
+: <@U01FYC7CZMH|Jess> Damage box <https://admin.shopify.com/store/504ac4/orders/7190077702424|#152094>
+<https://appyhour.gorgias.com/app/views/238613/278628333> [2026-06-25 22:38:28 CST]
+
+: <@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7210522509592|#153656>
+<https://appyhour.gorgias.com/app/views/238612/278444118> [2026-06-25 22:27:50 CST]
+
+: <@U01FYC7CZMH|Jess> Misdelivered <https://admin.shopify.com/store/504ac4/orders/7209308619032|#153215>
+<https://appyhour.gorgias.com/app/views/238613/278617706> [2026-06-25 22:15:57 CST]
+
+: <@U01FYC7CZMH|Jess> Misdelivered <https://admin.shopify.com/store/504ac4/orders/7185716150552|#151948>
+<https://appyhour.gorgias.com/app/views/980720/277925334> [2026-06-25 21:06:45 CST]
+
+: <@U01FYC7CZMH|Jess> Lost in transit (Gourmet Bites) <https://admin.shopify.com/store/504ac4/orders/7209320612120|#153533>
+<https://appyhour.gorgias.com/app/views/238612/278565716> [2026-06-25 20:59:28 CST]
+
+: <@U01FYC7CZMH|Jess> misdelivered <https://admin.shopify.com/store/504ac4/orders/7133288661272|#146687>
+<https://appyhour.gorgias.com/app/ticket/278719110> [2026-06-25 20:31:05 CST]
+
+: <@U01FYC7CZMH|Jess> gel pack leak <https://admin.shopify.com/store/504ac4/orders/7188111393048|#152010>
+<https://appyhour.gorgias.com/app/views/988673/278478860> [2026-06-25 19:43:21 CST]
+
+: <@U08R19137UL|Kurt>, wrong order, customer insisted she only ordered 3 different bites <https://admin.shopify.com/store/504ac4/orders/7211311694104|#153707>
+<https://appyhour.gorgias.com/app/ticket/278614143> [2026-06-25 03:06:58 CST]
+
+: <@U01FYC7CZMH|Jess> Arrive warm (Gourmet Bites) <https://admin.shopify.com/store/504ac4/orders/7210669211928|#153667>
+<https://appyhour.gorgias.com/app/views/238613/278591462> [2026-06-25 00:51:51 CST]
+
+: Delayed <@U01FYC7CZMH|Jess> <https://admin.shopify.com/store/504ac4/orders/7211547951384|#153859>
+<https://appyhour.gorgias.com/app/views/238613/278515626> [2026-06-24 23:05:20 CST]
+
+: <@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7152748560664|#149209>
+<https://appyhour.gorgias.com/app/views/238612/278454587> [2026-06-24 20:11:20 CST]
+
+: <@U01FYC7CZMH|Jess> issue with order, veho <https://admin.shopify.com/store/504ac4/orders/7164522299672|#151203>
+<https://appyhour.gorgias.com/app/views/238613/278442193> [2026-06-24 04:05:53 CST]
+
+: Misdelivered <@U01FYC7CZMH|Jess> <https://admin.shopify.com/store/504ac4/orders/7154828542232|#149348>
+<https://appyhour.gorgias.com/app/ticket/278392943> [2026-06-24 00:23:12 CST]
+
+: <@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7093128855832|#140084>
+<https://appyhour.gorgias.com/app/views/238613/278289195> [2026-06-23 22:25:28 CST]
+
+: <@U08R19137UL|Kurt> Damaged box <https://admin.shopify.com/store/504ac4/orders/7131277394200|#146485> (inactive sub)
+<https://appyhour.gorgias.com/app/views/238613/278230250> [2026-06-23 22:09:29 CST]
+
+: <@U01FYC7CZMH|Jess> arrive warm <https://admin.shopify.com/store/504ac4/orders/7108562616600|#142841>
+<https://appyhour.gorgias.com/app/views/238613/278224251> [2026-06-23 22:05:25 CST]
+
+: <@U08R19137UL|Kurt> pls ship this week: <https://admin.shopify.com/store/504ac4/orders/7218376212760|#155224> thanks! [2026-06-23 03:49:31 CST]
+
+: <@U01FYC7CZMH|Jess> Lost in transit <https://admin.shopify.com/store/504ac4/orders/7155832619288|#149537>
+<https://appyhour.gorgias.com/app/views/238612/277488426> [2026-06-23 00:51:34 CST]
+
+: <@U01FYC7CZMH|Jess> Delay in transit <https://admin.shopify.com/store/504ac4/orders/7161714245912|#150550>
+<https://appyhour.gorgias.com/app/views/238613/278046991> [2026-06-22 21:54:45 CST]
+
+: <@U01FYC7CZMH|Jess> Delay in transit <https://admin.shopify.com/store/504ac4/orders/7156562133272|#149983>
+<https://appyhour.gorgias.com/app/views/238613/278038890> [2026-06-22 20:46:31 CST]
+
+: <@U01FYC7CZMH|Jess> Delay in transit <https://admin.shopify.com/store/504ac4/orders/7185266704664|#151937>
+<https://appyhour.gorgias.com/app/views/238613/277968963> [2026-06-22 19:54:51 CST]
