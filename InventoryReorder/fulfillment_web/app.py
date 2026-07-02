@@ -1319,7 +1319,14 @@ _MONTHLY_PATTERNS = {"AHB-MED", "AHB-LGE", "AHB-CMED", "AHB-CUR-MS", "AHB-BVAL",
 
 
 def normalize_sku(sku):
-    return EQUIV.get(sku, sku)
+    # strip+upper BEFORE the equiv map — CSV/manual inputs arrive stray-cased and
+    # a cased 'ch-brie' must still land on CH-EBRIE. Falsy input passes through
+    # unchanged (contract from the original cut_order_generator version;
+    # tests/test_cut_order_helpers.py pins both behaviors).
+    if not sku:
+        return sku
+    s = sku.strip().upper()
+    return EQUIV.get(s, s)
 
 
 def resolve_curation_from_box_sku(sku):

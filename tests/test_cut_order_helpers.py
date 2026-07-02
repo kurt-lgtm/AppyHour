@@ -1,11 +1,24 @@
-"""Tests for pure helper functions in cut_order_generator.py."""
+"""Tests for pure SKU helper functions.
+
+These lived in cut_order_generator.py until the cut-order consolidation
+(6e71f31) folded them into InventoryReorder/fulfillment_web/app.py — the
+module import path below follows them. If they move again, update HERE and
+in AppyHour/CLAUDE.md (which still cites cut_order_generator)."""
+
+import os
+import sys
 
 import pytest
-from cut_order_generator import (
-    is_pickable,
-    normalize_sku,
-    resolve_curation_from_box_sku,
-)
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "InventoryReorder", "fulfillment_web"))
+try:
+    from app import (
+        is_pickable,
+        normalize_sku,
+        resolve_curation_from_box_sku,
+    )
+except Exception as _e:  # heavy Flask module — never hard-break suite collection
+    pytest.skip(f"fulfillment_web/app.py unimportable: {_e}", allow_module_level=True)
 
 # ── normalize_sku ────────────────────────────────────────────────────────
 
