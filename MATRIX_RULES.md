@@ -12,12 +12,16 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
 
 ## Rules (negatives-first)
 
-1. **NEVER resolve CEX-EC curation from tag substrings.** `cur in tag` made `CEXEC.3.10.NMS` match
-   both NMS and MS → phantom expected-cheese flags (MS/SS steal NMS/HHIGH — same class as
-   `feedback_curation_substring_match`). Curation comes ONLY from resolved `CEX-EC-{suffix}`
-   assignment lines (removed 2026-07-02, `check_cexec_cheese_counts`). A CEX-EC tag with NO suffix
-   line = unresolved bare add-on → must be FLAGGED, never silently skipped (the bare-fix rule adds
-   the suffix line; see `feedback_cexec_resolution_rules`).
+1. **CEX-EC is a 3-level parent chain — resolve down it, never sideways** (Kurt 2026-07-02):
+   `CEX-EC` (bare parent line) → `CEX-EC-{suffix}` (curation child) → applied `CH-` SKU (the cheese
+   actually picked). All three legitimately COEXIST on one order — bare + suffix together is VALID,
+   not a duplicate to clean (vault SKU Quirks). NEVER resolve curation from tag substrings: `cur in
+   tag` made `CEXEC.3.10.NMS` match both NMS and MS → phantom expected-cheese flags (removed
+   2026-07-02, `check_cexec_cheese_counts`). Curation comes ONLY from the `CEX-EC-{suffix}` level;
+   the QC check walks the chain: bare with NO suffix line = unresolved → FLAG (never silently skip);
+   suffix with the expected `CH-` absent from assignments = missing cheese → FLAG. The `cex_ec`
+   settings map (suffix → CH-) is the level-2→3 edge for demand/QC, not an order fix
+   (`feedback_cexec_resolution_rules`).
 2. **CEX-EC counts off the actual CEX-EC line item, NEVER box size** — box-size proxy over-cut ~6×.
    CEX-EC = paid add-on on ANY box size. Trays (`AHB-*CUST-TRAY`) must never carry CEX-EC (no
    curation → no valid suffix); a tray+CEX-EC is an upstream Recharge-collection defect, not a
