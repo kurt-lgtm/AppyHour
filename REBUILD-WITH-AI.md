@@ -145,13 +145,19 @@ wrong empty file), Slack-on-failure via `appyhour_lib/notify.py` (`AH_SLACK_WEBH
 - Veho lanes = Indianapolis + Nashville ONLY; two-gate rule for any new carrier×hub. Enforced in code by
   `lib/features.legal_lane`/`CARRIER_HUBS` (UPS=Dallas-only too) at lane-build AND at invoice ingest — an
   impossible carrier@hub is a data bug (the 475 Veho@Dallas mis-attribution), not a routable lane.
-- **Carrier coverage exports are the serviceability AUTHORITY.** A last-mile carrier delivers a zip ONLY if that zip is in its coverage export (`load_veho` active / `load_ontrac`) — legality(carrier@hub) ≠ coverage(serves the *zip*). The `build.py` serviceability gate enforces it (uncovered Veho/OnTrac → FedEx Home Delivery, same hub). `HISTORY_SERVICEABILITY` may set TNT/speed but **never creates serviceability** (its STATE layer did → 391 mis-routes, dropped 2026-06-27). Keep exports current: OnTrac via `GelPackCalculator/download_ontrac_imap.py`; Veho via the GroundPlusSuite export (`load_veho` parses the multi-sheet format).
+- **Carrier coverage exports are the serviceability AUTHORITY.** A last-mile carrier delivers a zip ONLY if that zip is in its coverage export (`load_veho` active / `load_ontrac`) — legality(carrier@hub) ≠ coverage(serves the *zip*). The shared `lib/engine.serviceability_gate` enforces it (both build.py AND Kori call it) (uncovered Veho/OnTrac → FedEx Home Delivery, same hub). `HISTORY_SERVICEABILITY` may set TNT/speed but **never creates serviceability** (its STATE layer did → 391 mis-routes, dropped 2026-06-27). Keep exports current: OnTrac via `GelPackCalculator/download_ontrac_imap.py`; Veho via the GroundPlusSuite export (`load_veho` parses the multi-sheet format).
 - Dedup `(invoice_id, tracking)` at cohort rollup, one physical row per tracking at storage.
 - FedEx 2Day Express = last resort ($25); carrier cost order Veho $6 → OnTrac $8 → UPS $11 → FedEx HD $15.
-- **The Indy 6-pallet cap is enforced LIVE by the greedy `_indy_pallet_gate`** (engine.py) — this is the
-  shipped path. The `milp/` solver **makes the Indy keep/spill decision, surfaced as a human-reviewed draft**
-  (`milp/draft_sheet.py` emits a DRAFT routing xlsx); it is human-gated, not autonomous, and does not set a
-  live tag on its own. Live `compute_routing` still calls the greedy gate until the draft workflow is adopted.
+- **The Indy 6-pallet cap decision is made LIVE by the MILP solver** (`MILP_LIVE=1` CANON in build.py since
+  2026-07-02; `engine._indy_milp_gate`, HiGHS). Greedy `_indy_pallet_gate` = the automatic FALLBACK on any
+  solve failure and the kill-switch path (`MILP_LIVE=0`). Ice re-sizes off the spilled lane's `_ice_eff`;
+  every build snapshots `milp_live_/greedy_shadow_<tag>.json` for `milp/postmortem_ab.py` A/B.
+- **Reships are reason-aware** (`RESHIP_RECOVERY=1`, 2026-07-02): carrier-failure reships get a proven
+  healthy 1-day ground lane EXCLUDING the failed carrier (derived read-only from fulfillments) else 2Day
+  AIR — never generic 2-day ground. Non-failure reasons route normally. Kill `RESHIP_RECOVERY=0`.
+- **Dead-man-switch watchdogs** (rebuild these or failures go silent again): `appyhour_lib/heartbeat.py`
+  ledger + `scripts/automation_health.py` daily (HEARTBEAT_RULES.md is the SSOT) and
+  `ShipRouting/scripts/loop_scorecard.py` weekly (decision quality). Both Slack via `appyhour_lib.notify`.
 
 ## 5. Refresh cadence for this backup
 Logic zip + DB snapshot to Drive **weekly** (goal: automated in M2 `pipeline_run.py`). Repos: push on every work session. THIS FILE lives in the logic zip + all three repos' awareness docs.
