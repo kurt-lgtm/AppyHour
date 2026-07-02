@@ -98,6 +98,17 @@ is malformed`. `appyhour_lib/db.py` (WAL+busy_timeout) serializes lock *waits* b
 independent checkpointers. **Rule: only one writer at a time; Claude/agents stay READ-ONLY on shipping.db
 (`connect_ro`).** [[shipping-db-msix-wal-corruption]]
 
+**🔴 Enforcement (2026-07-02):** `appyhour_lib/db.py` `connect()` now takes an advisory single-writer lock —
+`<real_db>.writelock` beside the LocalCache DB (atomic `O_CREAT|O_EXCL`; JSON `{pid, create_time, script,
+started_at, host}`). A 2nd writer waits `AH_WRITE_LOCK_WAIT` (default 90s) then raises **`DBWriterBusy`**
+naming the holder instead of racing a checkpoint. Crash-safe: dead-PID / reused-PID (create_time mismatch) /
+over-`AH_WRITE_LOCK_MAX_AGE` (default 1800s) locks auto-break; nested `connect()` reentrant via refcount;
+`atexit` releases. Escape hatch `AH_WRITE_LOCK_DISABLE=1`. **`connect_ro()` never touches the lock.** Only
+protects writers that go through `connect()` — a raw `sqlite3.connect(shipping.db)` still bypasses it, so
+ALL writers must route through `connect()` (migration in progress; `shipping_invoice_db.init_db` done). If a
+run dies with a stuck lock the file is safe to delete manually: `rm <db>.writelock`. Tests:
+`AppyHour/tests/test_db_writelock.py` (temp DB only, never the live file).
+
 **Recovery (main image usually fine — the `-wal` sidecar is the corrupt part):**
 1. Read still works via `sqlite3.connect('file:<db>?mode=ro&immutable=1', uri=True)` (ignores the WAL).
 2. Newest clean restore point = `%APPDATA%/AppyHour/backups/shipping.after-ingest-*.db` (integrity-gated,

@@ -17,6 +17,27 @@ that touches ``shipping.db`` MUST open it through :func:`connect` (writers) or
 :func:`connect_ro` (readers). The pragmas below are the difference between
 "6 processes coexist fine" and "torn database".
 
+Single-writer lock (2026-07-02)
+===============================
+``busy_timeout`` serializes lock *waits* but does NOT stop two independent
+*processes* from each managing/checkpointing the WAL at the same time - which
+re-corrupted the DB on 2026-07-01 when a manual ingest raced the live MCP
+servers. So :func:`connect` (the writer path) also takes an **advisory
+single-writer lock**: a ``<db>.writelock`` file created atomically
+(``O_CREAT|O_EXCL``) beside the real DB. At most ONE writer process holds it;
+a second :func:`connect` waits up to ``AH_WRITE_LOCK_WAIT`` seconds (default 90)
+then raises :class:`DBWriterBusy` naming the holder, instead of corrupting.
+
+* Crash-safe: a lock whose holder PID is dead (or whose PID was reused - detected
+  by comparing the stored process *create time*) is broken and re-acquired.
+  ``AH_WRITE_LOCK_MAX_AGE`` (default 1800s) is a belt-and-suspenders backstop for
+  a SIGKILL where ``atexit`` never ran.
+* Reentrant: nested :func:`connect` in one process share the lock via a refcount;
+  it releases only when the last write connection closes.
+* Readers never lock: :func:`connect_ro` is untouched - the health check,
+  monitors, and analysis tools must never block.
+* Escape hatch: ``AH_WRITE_LOCK_DISABLE=1`` restores the pre-lock behavior.
+
 Pragma rationale
 ================
 * ``journal_mode=WAL``     - many concurrent readers don't block the writer.
@@ -39,15 +60,35 @@ checkpoint - which keeps the pool of *writers* small (the thing that races).
 """
 from __future__ import annotations
 
+import atexit
+import json
+import os
+import socket
 import sqlite3
+import sys
+import threading
+import time
+from datetime import datetime
 from pathlib import Path
 
 from .paths import db_path
 
-__all__ = ["connect", "connect_ro", "integrity_ok", "BUSY_TIMEOUT_MS"]
+__all__ = [
+    "connect", "connect_ro", "integrity_ok", "BUSY_TIMEOUT_MS",
+    "DBWriterBusy", "LockedConnection",
+]
 
 BUSY_TIMEOUT_MS = 10_000
 _WAL_AUTOCHECKPOINT_PAGES = 1000
+
+# Single-writer lock defaults (all env-overridable).
+_DEFAULT_WRITE_LOCK_WAIT = 90.0      # seconds a 2nd writer waits before DBWriterBusy
+_DEFAULT_WRITE_LOCK_MAX_AGE = 1800.0  # seconds; break a lock older than this (SIGKILL backstop)
+_LOCK_POLL = 0.25                     # seconds between contention polls
+
+
+class DBWriterBusy(RuntimeError):
+    """Raised by :func:`connect` when another live process holds the write lock."""
 
 
 def _apply_writer_pragmas(con: sqlite3.Connection) -> None:
@@ -58,21 +99,251 @@ def _apply_writer_pragmas(con: sqlite3.Connection) -> None:
     con.execute(f"PRAGMA wal_autocheckpoint={_WAL_AUTOCHECKPOINT_PAGES}")
 
 
-def connect(path: str | Path | None = None, *, timeout: float = 30.0) -> sqlite3.Connection:
-    """Open a READ/WRITE connection to shipping.db with safe-concurrency pragmas.
+# ── Process liveness / create-time (stdlib only; ctypes on Windows) ───────────
+# create_time defeats PID reuse: a live PID whose create_time != the stored one
+# is a *different* process, so the lock is stale.
+if os.name == "nt":
+    import ctypes
+    from ctypes import wintypes
+
+    _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    _STILL_ACTIVE = 259
+    # Set restypes/argtypes so 64-bit HANDLEs aren't truncated to 32-bit int.
+    _k32.OpenProcess.restype = wintypes.HANDLE
+    _k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    _k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    _k32.GetCurrentProcess.restype = wintypes.HANDLE
+    _k32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    _FT = ctypes.POINTER(wintypes.FILETIME)
+    _k32.GetProcessTimes.argtypes = [wintypes.HANDLE, _FT, _FT, _FT, _FT]
+
+    def _filetime_int(ft: wintypes.FILETIME) -> int:
+        return (int(ft.dwHighDateTime) << 32) | int(ft.dwLowDateTime)
+
+    def _pid_alive(pid: int) -> bool:
+        h = _k32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not h:
+            return False
+        try:
+            code = wintypes.DWORD()
+            if not _k32.GetExitCodeProcess(h, ctypes.byref(code)):
+                return False
+            return code.value == _STILL_ACTIVE
+        finally:
+            _k32.CloseHandle(h)
+
+    def _proc_create_time(pid: int) -> int | None:
+        h = _k32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not h:
+            return None
+        try:
+            c, e, k, u = (wintypes.FILETIME() for _ in range(4))
+            if not _k32.GetProcessTimes(h, ctypes.byref(c), ctypes.byref(e),
+                                        ctypes.byref(k), ctypes.byref(u)):
+                return None
+            return _filetime_int(c)
+        finally:
+            _k32.CloseHandle(h)
+
+    def _self_create_time() -> int | None:
+        c, e, k, u = (wintypes.FILETIME() for _ in range(4))
+        if not _k32.GetProcessTimes(_k32.GetCurrentProcess(), ctypes.byref(c),
+                                    ctypes.byref(e), ctypes.byref(k), ctypes.byref(u)):
+            return None
+        return _filetime_int(c)
+else:  # POSIX fallback (no create_time reuse guard; MAX_AGE covers staleness)
+    def _pid_alive(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True  # exists, not ours
+        except OSError:
+            return False
+        return True
+
+    def _proc_create_time(pid: int) -> int | None:  # noqa: ARG001
+        return None
+
+    def _self_create_time() -> int | None:
+        return None
+
+
+# ── Advisory single-writer lock ───────────────────────────────────────────────
+_refcounts: dict[str, int] = {}          # lockpath -> nesting depth in THIS process
+_refcount_lock = threading.Lock()
+_atexit_registered = False
+
+
+def _lock_disabled() -> bool:
+    return os.environ.get("AH_WRITE_LOCK_DISABLE", "").strip().lower() in ("1", "true", "yes")
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, "").strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _read_lock(lockpath: str) -> dict | None:
+    try:
+        with open(lockpath, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
+        return None
+
+
+def _holder_msg(lockpath: str, holder: dict | None) -> str:
+    if not holder:
+        return f"another writer holds {os.path.basename(lockpath)} (unreadable holder record)"
+    return (f"another writer holds shipping.db: PID {holder.get('pid')} "
+            f"{holder.get('script', '?')} since {holder.get('started_at', '?')}")
+
+
+def _lock_is_stale(lockpath: str, holder: dict | None, max_age: float) -> bool:
+    now = time.time()
+    if holder is None:
+        # Empty/torn/unparseable lock file. A live process writes its payload in
+        # microseconds, so only break if the file has been sitting unreadable a while.
+        try:
+            return (now - os.path.getmtime(lockpath)) > min(max_age, 30.0)
+        except OSError:
+            return True
+    pid = holder.get("pid")
+    if not isinstance(pid, int) or not _pid_alive(pid):
+        return True
+    stored_ct = holder.get("create_time")
+    live_ct = _proc_create_time(pid)
+    if stored_ct is not None and live_ct is not None and stored_ct != live_ct:
+        return True  # PID was reused by a different process
+    started = holder.get("started_at_epoch")
+    if isinstance(started, (int, float)) and (now - started) > max_age:
+        return True  # SIGKILL backstop — atexit never ran
+    return False
+
+
+def _create_lockfile(lockpath: str, wait_s: float, max_age_s: float) -> None:
+    deadline = time.monotonic() + max(0.0, wait_s)
+    while True:
+        try:
+            fd = os.open(lockpath, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            holder = _read_lock(lockpath)
+            if _lock_is_stale(lockpath, holder, max_age_s):
+                try:
+                    os.unlink(lockpath)
+                except FileNotFoundError:
+                    pass
+                continue  # retry immediately
+            if time.monotonic() >= deadline:
+                raise DBWriterBusy(_holder_msg(lockpath, holder))
+            time.sleep(_LOCK_POLL)
+            continue
+        else:
+            payload = {
+                "pid": os.getpid(),
+                "create_time": _self_create_time(),
+                "script": os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "?",
+                "started_at": datetime.now().isoformat(timespec="seconds"),
+                "started_at_epoch": time.time(),
+                "host": socket.gethostname(),
+            }
+            try:
+                os.write(fd, json.dumps(payload).encode("utf-8"))
+            finally:
+                os.close(fd)
+            return
+
+
+def _acquire_write_lock(lockpath: str, wait_s: float, max_age_s: float) -> None:
+    global _atexit_registered
+    with _refcount_lock:
+        if _refcounts.get(lockpath, 0) == 0:
+            _create_lockfile(lockpath, wait_s, max_age_s)  # may raise DBWriterBusy
+        _refcounts[lockpath] = _refcounts.get(lockpath, 0) + 1
+        if not _atexit_registered:
+            atexit.register(_release_all_locks)
+            _atexit_registered = True
+
+
+def _release_write_lock(lockpath: str) -> None:
+    with _refcount_lock:
+        n = _refcounts.get(lockpath, 0)
+        if n <= 1:
+            _refcounts.pop(lockpath, None)
+            try:
+                os.unlink(lockpath)
+            except FileNotFoundError:
+                pass
+        else:
+            _refcounts[lockpath] = n - 1
+
+
+def _release_all_locks() -> None:
+    with _refcount_lock:
+        for lockpath in list(_refcounts):
+            try:
+                os.unlink(lockpath)
+            except OSError:
+                pass
+        _refcounts.clear()
+
+
+class LockedConnection(sqlite3.Connection):
+    """A shipping.db write connection that releases its single-writer lock on close."""
+
+    _lock_path: str | None = None  # instance attr set by connect(); None = holds no lock
+
+    def close(self) -> None:  # noqa: D401
+        lockpath = getattr(self, "_lock_path", None)
+        if lockpath:
+            self._lock_path = None
+            _release_write_lock(lockpath)
+        super().close()
+
+
+def connect(path: str | Path | None = None, *, timeout: float = 30.0,
+            write_lock: bool = True, lock_wait: float | None = None) -> sqlite3.Connection:
+    """Open a READ/WRITE connection to shipping.db with safe-concurrency pragmas
+    AND an advisory single-writer lock.
 
     Use this for any code that INSERTs/UPDATEs/DELETEs. The ``busy_timeout``
-    pragma is the critical bit - it makes a blocked writer wait instead of
-    racing another process's checkpoint.
+    pragma serializes lock waits; the ``<db>.writelock`` file guarantees at most
+    one writer *process* (the thing that actually corrupts the WAL).
 
     Args:
-        path: DB path. Defaults to the canonical :func:`paths.db_path`.
-        timeout: Python-side connect timeout (seconds). Distinct from the
-            SQLite-internal ``busy_timeout`` pragma; both matter.
+        path: DB path. Defaults to the canonical :func:`paths.db_path`. The lock
+            file lives beside this path, so a temp DB (tests) gets its own lock.
+        timeout: Python-side connect timeout (seconds).
+        write_lock: acquire the single-writer lock (default True). Pass False to
+            skip it (rare — e.g. a schema-only bootstrap you know is exclusive).
+        lock_wait: seconds to wait for the lock before :class:`DBWriterBusy`.
+            None → ``AH_WRITE_LOCK_WAIT`` env or 90s. 0 → fail fast.
+
+    Raises:
+        DBWriterBusy: another live process already holds the write lock.
     """
     target = Path(path) if path is not None else db_path()
-    con = sqlite3.connect(str(target), timeout=timeout)
+    con = sqlite3.connect(str(target), timeout=timeout, factory=LockedConnection)
     _apply_writer_pragmas(con)
+    con._lock_path = None
+    if write_lock and not _lock_disabled():
+        lockpath = str(target) + ".writelock"
+        if lock_wait is not None:
+            wait = float(lock_wait)
+        else:
+            wait = _env_float("AH_WRITE_LOCK_WAIT", _DEFAULT_WRITE_LOCK_WAIT)
+        max_age = _env_float("AH_WRITE_LOCK_MAX_AGE", _DEFAULT_WRITE_LOCK_MAX_AGE)
+        try:
+            _acquire_write_lock(lockpath, wait, max_age)
+        except DBWriterBusy:
+            con.close()  # _lock_path is None → releases nothing, just closes sqlite
+            raise
+        con._lock_path = lockpath
     return con
 
 
@@ -83,7 +354,7 @@ def connect_ro(path: str | Path | None = None, *, timeout: float = 30.0) -> sqli
     forecasting series pulls). A read-only connection cannot take a write lock
     or trigger a checkpoint, so it can never participate in the write race that
     caused the 2026-06-27 corruption. It still applies the WAL, so it sees all
-    committed writes.
+    committed writes. Readers NEVER touch the single-writer lock.
     """
     target = Path(path) if path is not None else db_path()
     uri = "file:" + target.as_posix() + "?mode=ro"
