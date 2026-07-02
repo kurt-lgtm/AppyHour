@@ -17,15 +17,24 @@ from tools.constants import NAME_TO_SKU, FOOD_PREFIXES
 
 
 def _fetch_orders_by_tag(base: str, headers: dict[str, str], tag: str, fields: str = "id,name,line_items,email") -> list[dict]:
-    """Fetch all unfulfilled orders matching a specific tag."""
+    """Fetch all unfulfilled orders matching a specific tag.
+
+    🔴 MATRIX_RULES rule 3: REST `orders.json` has NO `tag` filter — Shopify silently ignores
+    unknown params, so the old `"tag": tag` returned the WHOLE open-unfulfilled store and
+    validate_production_matrix inflated `shopify_only`. Tag matched CLIENT-SIDE (exact,
+    comma-split — never substring); `tags` is forced into `fields` so the filter can run."""
+    want = tag.strip().lower()
+    field_set = {f.strip() for f in fields.split(",") if f.strip()}
+    field_set.add("tags")
     params = {
         "status": "open",
         "fulfillment_status": "unfulfilled",
         "limit": 250,
-        "tag": tag,
-        "fields": fields,
+        "fields": ",".join(sorted(field_set)),
     }
-    return shopify_paginate(f"{base}/orders.json", headers, params=params)
+    orders = shopify_paginate(f"{base}/orders.json", headers, params=params)
+    return [o for o in orders
+            if want in [t.strip().lower() for t in (o.get("tags") or "").split(",")]]
 
 
 def _parse_matrix(xlsx_path: str) -> tuple[dict[str, dict[str, int]], dict[str, str], dict[str, str]]:

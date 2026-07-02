@@ -28,8 +28,12 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
    per-order fix.
 3. **Shopify REST `orders.json` has NO `tag` filter** — it silently ignores the param and returns
    ALL open unfulfilled orders (`_fetch_orders_by_tag` shipped this way; worst inside `allocate`,
-   which then computed paid demand store-wide). Filter tags client-side or use the GraphQL tag query.
-   ⚠️ Bug still OPEN as of 2026-07-02 — fix must update this line.
+   which then computed paid demand store-wide). Filter tags client-side (EXACT comma-split match,
+   never substring — `RMFG_2026070` must not match `RMFG_20260706`) or use the GraphQL tag query.
+   ✅ FIXED 2026-07-02 in all three instances: `matrix_commander._fetch_orders_by_tag`,
+   `AppyHourMCP/tools/matrix_qc._fetch_orders_by_tag` (also forces `tags` into `fields`), and
+   `InventoryReorder/inventory_reorder.py` customer-lifecycle fetch (was double-counting the whole
+   store via a two-tag loop). Any NEW REST fetch must never pass a `tag` param.
 4. **Always filter line items to fulfillable** — GraphQL `fulfillableQuantity` / REST
    `fulfillable_quantity > 0`; removed/refunded items otherwise get picked.
 5. **QC must GATE, not report** — `qc_audit` exit 1 propagates through the wrapper. Never deliver an

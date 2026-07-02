@@ -862,9 +862,14 @@ class ShopifyClient:
         total_orders = 0
         reship_orders = 0
 
-        for tag in ("Subscription First Order", "Subscription Recurring Order"):
+        # 🔴 REST orders.json has NO `tag` filter (AppyHour/MATRIX_RULES.md rule 3) — the old
+        # two-tag loop with a `"tag"` param fetched the ENTIRE store per iteration (param
+        # silently ignored), double-counting every order and polluting lifecycle data with
+        # non-subscription orders. ONE fetch; subscription tags matched CLIENT-SIDE below.
+        _SUB_TAGS = ("subscription first order", "subscription recurring order")
+        if True:  # preserve loop indentation for the minimal diff
             url = (f"{self.store_url}/admin/api/{self.API_VERSION}/orders.json")
-            params = {"status": "any", "limit": 250, "tag": tag,
+            params = {"status": "any", "limit": 250,
                       "created_at_min": min_date_str}
 
             while url:
@@ -877,6 +882,9 @@ class ShopifyClient:
 
                 # Process this page immediately, then discard
                 for order in page_orders:
+                    _otags = [t.strip().lower() for t in (order.get("tags") or "").split(",")]
+                    if not any(t in _otags for t in _SUB_TAGS):
+                        continue
                     email = (order.get("email") or "").strip().lower()
                     if not email:
                         continue

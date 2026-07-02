@@ -1462,16 +1462,22 @@ def _lookup_zero_variant_gids(base: str, headers: dict, skus: set[str]) -> dict[
 
 
 def _fetch_orders_by_tag(base: str, headers: dict, tag: str) -> list[dict]:
-    """Fetch all unfulfilled Shopify orders matching a tag."""
+    """Fetch all unfulfilled Shopify orders matching a tag.
+
+    🔴 MATRIX_RULES rule 3: REST `orders.json` has NO `tag` filter — Shopify silently ignores
+    unknown params, so the old `"tag": tag` param returned the WHOLE open-unfulfilled store
+    (allocate then computed paid demand store-wide). The tag is now matched CLIENT-SIDE on each
+    page (exact, comma-split — never substring: `RMFG_2026070` must not match `RMFG_20260706`).
+    """
     import requests as req
 
+    want = tag.strip().lower()
     all_orders: list[dict] = []
     url = f"{base}/orders.json"
     params = {
         "status": "open",
         "fulfillment_status": "unfulfilled",
         "limit": 250,
-        "tag": tag,
         "fields": "id,name,tags,line_items",
     }
     page = 0
@@ -1479,8 +1485,10 @@ def _fetch_orders_by_tag(base: str, headers: dict, tag: str) -> list[dict]:
         page += 1
         resp = req.get(url, headers=headers, params=params if page == 1 else None, timeout=30)
         resp.raise_for_status()
-        orders = resp.json().get("orders", [])
-        all_orders.extend(orders)
+        for o in resp.json().get("orders", []):
+            otags = [t.strip().lower() for t in (o.get("tags") or "").split(",")]
+            if want in otags:
+                all_orders.append(o)
         link = resp.headers.get("Link", "")
         url = None
         if 'rel="next"' in link:
