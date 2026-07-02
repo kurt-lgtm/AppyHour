@@ -126,6 +126,7 @@ Canonical pipeline: `build.py` (I/O driver) → `lib/engine.compute_routing` (th
 | Build the weekly cut order | `/cut-order` | 🔒✍️ |
 | Weekly RMFG cheese portion yield audit (oz/slice vs spec, over/under-portion) | `/rmfg-yield-audit` | 🔒✍️ |
 | Weekly MT-FS bulk-meat throughput (demand = trays × spec oz, NOT inventory deltas) | `/mtfs-throughput` | 🔒✍️ |
+| Automation health / dead-man-switch check (absent heartbeats, failed schtasks, stale ingest, db integrity — silent-green, Slack-on-red) | `scripts/automation_health.py --verbose` (daily task `automation-health-daily` 12:15pm; SSOT `HEARTBEAT_RULES.md`; beats via `appyhour_lib.heartbeat.beat`) | ✅ |
 | Execute a SKU swap on a cohort (audited, $0-variant) | `/swap OLD NEW SHIP_TAG` | 🔒✍️ |
 | Build carrier-routing assignment sheet for a cohort | `ship-routing-assignment` | 🔒 |
 | Daily Command Center brief | `/today` | 🔒 |

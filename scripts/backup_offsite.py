@@ -397,6 +397,20 @@ def run(today: date | None = None) -> dict:
         "pruned": pruned,
     }
     _self_check_and_log(result, day)
+    # Dead-man-switch (HEARTBEAT_RULES.md): success beat + optional external healthchecks ping.
+    # Both fire-and-forget — a good backup must exit 0 even if the watchers can't be told.
+    try:
+        from appyhour_lib.heartbeat import beat
+        beat("offsite-backup")
+    except Exception:
+        pass
+    hc_url = os.environ.get("HEALTHCHECKS_BACKUP_URL")
+    if hc_url:
+        try:
+            import requests
+            requests.get(hc_url, timeout=10)
+        except Exception:
+            pass
     return result
 
 
