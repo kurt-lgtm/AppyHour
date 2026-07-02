@@ -32,7 +32,16 @@ Original 386-line CLAUDE.md preserved as `_CLAUDE-original-2026-05-10.md` (ledge
 | Swap / RMFG | `scripts/swaps/`, `~/.knowledge/ops/Swap Filtering*` | thermal/gel | appyhour MCP (matrix_qc) |
 | Add MCP tool | `AppyHourMCP/CLAUDE.md`, `AppyHourMCP/server.py` | desktop apps | — |
 | Bug / incident fix | `scripts/incident-fixes/`, MISTAKES.md | apps unless in scope | — |
+| Domain demand forecast (per-SKU/cohort, retention+curation aware) | `appyhour_forecast_demand` MCP, `/cut-order`, LTF sheet | TimesFM | — (domain-aware; TimesFM has NO swap/curation/churn knowledge) |
+| Generic TS forecast (new/un-modeled series, quantile bands, trading vol) | `forecast_ts.py` (TimesFM 2.5, pinned) | demand tools above | — (use ONLY when no domain forecaster owns the series; cross-check, not source-of-record) |
 | **Write ANY new script** (auth/recharge/swap/sheets/imap/weather/box) | **`TOOL_REGISTRY.md` FIRST** | — | call the canonical (get_shopify_auth, recharge_client, /swap…), never reimplement |
+
+## Box Sizing — DistVol (canonical fact)
+
+**DistVol** = AppyHour's per-SKU volumetric unit. `box_simulation.py` sums each order's DistVol → assigns a box size (`SMALL` ≤ 2.99, `LARGE` ≤ 6.7; rate `105.3` cu-in per 1.00 DistVol).
+- **Source of truth** = the `DistVol` column in `C:\Users\Work\Desktop\Onboarded Items with DistVol - Updated.xlsx` (hardcoded `box_simulation.py:20`). Single-copy on Desktop — in the backup rescue set.
+- Fallbacks when a SKU isn't in the xlsx: `PREFIX_DEFAULTS` (AC .12 / CH .20 / MT .07 / PK 0 / TR 1.0) + `MANUAL_OVERRIDES` in `box_simulation.py`.
+- Tools: `box_simulation.py [SHIP_TAG]` (compute), `audit_distvol_drift.py` (re-derive lookup vs CSV), `_outputs/box_distvol.db` + `_outputs/cache/sku_distvol_map.json` (cached map). See `TOOL_REGISTRY.md`.
 
 ## Run
 
@@ -55,7 +64,7 @@ pip install -e ".[dev]" && pytest
 
 ## Domain Quick-Ref
 
-- **SKU prefixes:** CH (cheese), MT (meat), AC (artisan), AHB (box type), BL (bulk), PR-CJAM (jam pairing), CEX-EC (extra cheese), PK/TR/EX (non-pickable). Only CH/MT/AC count for item-count error detection.
+- **SKU prefixes:** CH (cheese), MT (meat), AC (artisan), AHB (box type), BL (bulk), PR-CJAM (jam pairing), CEX-EC (extra cheese), TR (trays), PK (inserts), MR (journal). **All prefixes are pickable** — PK & MR carry 0 DistVol; TR has DistVol (~1.0); CH/AC/MT/TR have per-SKU DistVol from the xlsx. Only CH/MT/AC count for item-count error detection.
 - **Curations (11):** MONG, MDT, OWC, SPN, ALPN, ALPT, ISUN, HHIGH, NMS, BYO, SS, GEN, MS
 - **Error classes:** 2/3 (bundle missing), 4/4b (double food), 6 (curation mismatch), 7 (RC IDs missing), 11 (structural)
 - Box → curation: `resolve_curation_from_box_sku()` in `cut_order_generator.py`

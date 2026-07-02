@@ -43,6 +43,7 @@ Client namespacing: MCP tools are called as `mcp__appyhour__<name>` (always-on s
 | Validate production matrix (xlsx) vs Shopify by RMFG tag | `appyhour_validate_production_matrix` | ✅ |
 | Generate per-order swap LIST/preview (no writes) | `appyhour_generate_swap_list` | ✅ |
 | **EXECUTE SKU swaps** on a ship_tag cohort | `appyhour_swap_order_skus` (dry_run default True) | 🔒✍️ |
+| **ADD free ($0) variant(s)** to orders (pure add, idempotent; tag/box/explicit-order targeting) | `appyhour_add_order_variants` (dry_run default True) | 🔒✍️ |
 | **Add/remove tags** on ONE order (gel/routing/hold) | `appyhour_update_order_tags` | 🔒✍️ |
 
 ### Google Sheets (AppyHourMCP)
@@ -80,6 +81,7 @@ Run via `C:\Users\Work\anaconda3\python.exe <path>`.
 | Capability | Canonical tool | Disp | Never instead |
 |---|---|---|---|
 | Weekly RMFG cut order (3-tab xlsx) | `InventoryReorder/build_cut_order_xlsx_v2.py` (or `/cut-order`) | 🔒✍️ | v1 `build_cut_order_xlsx.py`; `agents/tuesday_cut_order.py` (empty demand) |
+| Weekly RMFG cheese portion yield audit (Before/After xlsx, oz/slice vs spec) | `_outputs/artifacts/2026-06-17-rmfg-production-invoices/` pipeline (or `/rmfg-yield-audit`) | 🔒✍️ | hand-rolling from the PDF; confusing w/ `inventory_reorder.py` wheel→slice yield |
 | Carrier-invoice ingest → shipping.db | `GelPackCalculator/auto_import.py [--dir]` | ✅✍️ | hand SQL inserts; double-import via Kori "Sync All" |
 | **Manual carrier download → auto-ingest** (UPS/FedEx working path) | `GelPackCalculator/ingest_downloads.py [--watch]` | ✅✍️ | `portal_pull.py` (PARKED) |
 | Carrier-billing portal LOGIN automation | `GelPackCalculator/portal_pull.py` | 🔒 | **PARKED 2026-06-24** (anti-bot dead-end) — use `ingest_downloads.py` |
@@ -91,6 +93,8 @@ Run via `C:\Users\Work\anaconda3\python.exe <path>`.
 | Gorgias→ops-sheet sync (CLI wrapper) | `AppyHourMCP/run_gorgias_update.py [--days --dry-run]` | ✅✍️ | raw gspread/Gorgias REST |
 | Wrong-address inbox automation | `scripts/automations/wrong_address_automation.py [--apply-untag --apply-fix --days]` | 🔒✍️ | `scripts/incident-fixes/fix_*` (one-shots) |
 | Ship-week postmortem / warm-cohort report | `ShippingReports/postmortem_runner.py` (or `appyhour-shipping-data` skill) | 🔒 | hand-rolled SQL join |
+| **Weekly shipping vendor×issue matrix** (warm/delayed/lost/etc by carrier, % of denom) | `python -m ingest.slack_reship.sync --week <Mon> --denom <N> --report` | 🔒 | hand-counting Slack OR `feedback.issue_type` (UNDERCOUNTS — Gorgias Contact Reason empty on ~all shipping tickets). Deterministic: same week+denom→same table. Counts = Slack `#reship-and-order-requests` parsed→joined to `fulfillments` for carrier. **Window = ticket RECEIPT date, %=count/denom** (per `~/.knowledge/ops/Weekly Shipping Issue Report.md` GATE). LIVE path needs `AH_SLACK_BOT_TOKEN` (scope channels:history); else `--dump-file <concise slack blob>`. |
+| Zero-shot TS forecast of ANY univariate series (CSV col → point + q10/median/q90) | `forecast_ts.py input.csv --horizon N` (TimesFM 2.5, pinned HF rev) | 🔒 | hand-rolled timesfm call (un-pinned, no OMP/UTF8 guard). **NOT** domain demand — that's `appyhour_forecast_demand`/`/cut-order`. Use for new/un-modeled series, safety-stock quantile bands, trading vol ranges. Needs `pip install "timesfm[torch]"` |
 | Box simulation (DistVol + box size for cohort) | `box_simulation.py [SHIP_TAG]` | ✅ | inline DistVol regex |
 | DistVol drift audit | `audit_distvol_drift.py` | 🔒 | re-derive the lookup |
 | SKU lifecycle scan (discontinued/seasonal/onetime) | `InventoryReorder/Errors/sku_lifecycle_scan.py [months]` | ✅ | hardcode SKU lists |
@@ -119,6 +123,7 @@ Canonical pipeline: `build.py` (I/O driver) → `lib/engine.compute_routing` (th
 | Capability | Skill | Disp |
 |---|---|---|
 | Build the weekly cut order | `/cut-order` | 🔒✍️ |
+| Weekly RMFG cheese portion yield audit (oz/slice vs spec, over/under-portion) | `/rmfg-yield-audit` | 🔒✍️ |
 | Execute a SKU swap on a cohort (audited, $0-variant) | `/swap OLD NEW SHIP_TAG` | 🔒✍️ |
 | Build carrier-routing assignment sheet for a cohort | `ship-routing-assignment` | 🔒 |
 | Daily Command Center brief | `/today` | 🔒 |
