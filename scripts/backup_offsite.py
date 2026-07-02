@@ -83,7 +83,13 @@ def zip_logic_docs(dst: Path) -> int:
 
 
 # Skip these heavy/regenerable parts when zipping any tree.
-_ZIP_SKIP_PARTS = {"__pycache__", ".git", "node_modules", ".venv", "venv"}
+# SECURITY (P1, 2026-07-02 audit): "browser_state"/"browser_profile" — the notebooklm
+# skill keeps a Chromium profile (Cookies, Login Data = LIVE Google session) under
+# skills/notebooklm/data/. The filename secret-filter below only catches *.md names,
+# so binary credential stores must be excluded at the directory level. NEVER let a
+# browser profile into the cleartext, Drive-uploaded knowledge zip.
+_ZIP_SKIP_PARTS = {"__pycache__", ".git", "node_modules", ".venv", "venv",
+                   "browser_state", "browser_profile"}
 
 
 def knowledge_roots() -> list[Path]:
