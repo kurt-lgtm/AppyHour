@@ -38,7 +38,7 @@ Client namespacing: MCP tools are called as `mcp__appyhour__<name>` (always-on s
 | Fetch unfulfilled orders by tags | `appyhour_fetch_orders` | ✅ |
 | Fetch tagged orders **+ per-order thermal analysis** | `appyhour_analyze_orders` | ✅ |
 | Search orders by #/email/name (returns line items+SKUs) | `appyhour_search_orders` | ✅ |
-| List / get / search products; list collections | `appyhour_list_products` · `appyhour_get_product` · `appyhour_search_products` · `appyhour_list_collections` | ✅ |
+| List / get / search products; list collections | `appyhour_list_products` · `appyhour_get_product` · `appyhour_search_products` (🔴 BROKEN: crashes on null-title products; use Shopify REST directly) · `appyhour_list_collections` | ✅ |
 | BULK read (>1000 rows; bulkOperationRunQuery+poll) | `appyhour_bulk_query` | 🔒 |
 | Validate production matrix (xlsx) vs Shopify by RMFG tag | `appyhour_validate_production_matrix` | ✅ |
 | Generate per-order swap LIST/preview (no writes) | `appyhour_generate_swap_list` | ✅ |
@@ -84,6 +84,7 @@ Run via `C:\Users\Work\anaconda3\python.exe <path>`.
 | Weekly RMFG cheese portion yield audit (Before/After xlsx, oz/slice vs spec) | `_outputs/artifacts/2026-06-17-rmfg-production-invoices/` pipeline (or `/rmfg-yield-audit`) | 🔒✍️ | hand-rolling from the PDF; confusing w/ `inventory_reorder.py` wheel→slice yield |
 | Carrier-invoice ingest → shipping.db | `GelPackCalculator/auto_import.py [--dir]` | ✅✍️ | hand SQL inserts; double-import via Kori "Sync All" |
 | **Manual carrier download → auto-ingest** (UPS/FedEx working path) | `GelPackCalculator/ingest_downloads.py [--watch]` | ✅✍️ | `portal_pull.py` (PARKED) |
+| **UPS invoice pull** (billing.ups.com, captcha-free via logged-in Chrome session) | claude-in-chrome real-session → My Invoices → Download **CSV:Full(250)** → `ingest_downloads.py --no-import` (stage) → **human** runs `auto_import.py` in real terminal. Rules: `GelPackCalculator/UPS_INVOICE_PULL_RULES.md` | 🔒✍️ | 🔴 Claude NEVER runs auto_import (MSIX corrupts shipping.db); NEVER fresh-login/captcha-solve (portal_pull PARKED); download CSV flat-file NOT PDF; never enter creds |
 | Carrier-billing portal LOGIN automation | `GelPackCalculator/portal_pull.py` | 🔒 | **PARKED 2026-06-24** (anti-bot dead-end) — use `ingest_downloads.py` |
 | Fetch ALL carrier invoice emails (FedEx+OnTrac+Veho) | `GelPackCalculator/sync_all_carriers.py` | ✅✍️ | `download_fedex_imap.py` alone (lags OnTrac/Veho) |
 | Per-carrier IMAP fetch (one carrier) | `GelPackCalculator/download_{fedex,ontrac,veho,shipping_pdfs}_imap.py` | ✅✍️ | — (prefer `sync_all_carriers` for weekly) |
@@ -124,6 +125,7 @@ Canonical pipeline: `build.py` (I/O driver) → `lib/engine.compute_routing` (th
 |---|---|---|
 | Build the weekly cut order | `/cut-order` | 🔒✍️ |
 | Weekly RMFG cheese portion yield audit (oz/slice vs spec, over/under-portion) | `/rmfg-yield-audit` | 🔒✍️ |
+| Weekly MT-FS bulk-meat throughput (demand = trays × spec oz, NOT inventory deltas) | `/mtfs-throughput` | 🔒✍️ |
 | Execute a SKU swap on a cohort (audited, $0-variant) | `/swap OLD NEW SHIP_TAG` | 🔒✍️ |
 | Build carrier-routing assignment sheet for a cohort | `ship-routing-assignment` | 🔒 |
 | Daily Command Center brief | `/today` | 🔒 |

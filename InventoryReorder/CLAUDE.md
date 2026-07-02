@@ -7,7 +7,7 @@ Demand forecasting + cut order generation + fulfillment web dashboard. Single-fi
 | Task | Read | Skip | Notes |
 |------|------|------|-------|
 | Generate cut order | `build_cut_order_xlsx_v2.py`, `~/.knowledge/ops/Cut Order*`, `cut_order_rules.md` AAAK | rest | Trigger="generate cut order" → run v2 no questions, Calibri font, hidden source cols |
-| Cut order demand model | `cut_order_generator.py` (resolve_curation_from_box_sku), `cut_order_demand_model.md` AAAK | gel/shipping | Demand = RC-queued + SH-orders, NO overlap by definition |
+| Cut order demand model | `fulfillment_web/app.py` (resolve_curation_from_box_sku ~line 1325), `cut_order_demand_model.md` AAAK | gel/shipping | Demand = RC-queued + SH-orders, NO overlap by definition |
 | AHB monthly split | `feedback_ahb_monthly_split.md` AAAK | rest | If ship-week crosses month → ASK MED/LGE/CMED items per month, charge-month not ship-date |
 | Day-of-week ship tags | `feedback_cut_order_day_of_week.md` AAAK | rest | Mon=2 ship-tags WK1; Tue+=only nextWk |
 | Demand audit | `_outputs/demand_audit_<WK1_END>.json` (last 8) | rest | Per-SKU RC/SH/Aliased breakdown |

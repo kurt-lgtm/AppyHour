@@ -67,7 +67,7 @@ pip install -e ".[dev]" && pytest
 - **SKU prefixes:** CH (cheese), MT (meat), AC (artisan), AHB (box type), BL (bulk), PR-CJAM (jam pairing), CEX-EC (extra cheese), TR (trays), PK (inserts), MR (journal). **All prefixes are pickable** — PK & MR carry 0 DistVol; TR has DistVol (~1.0); CH/AC/MT/TR have per-SKU DistVol from the xlsx. Only CH/MT/AC count for item-count error detection.
 - **Curations (11):** MONG, MDT, OWC, SPN, ALPN, ALPT, ISUN, HHIGH, NMS, BYO, SS, GEN, MS
 - **Error classes:** 2/3 (bundle missing), 4/4b (double food), 6 (curation mismatch), 7 (RC IDs missing), 11 (structural)
-- Box → curation: `resolve_curation_from_box_sku()` in `cut_order_generator.py`
+- Box → curation: `resolve_curation_from_box_sku()` in `InventoryReorder/fulfillment_web/app.py` (line ~1325)
 
 ## Style
 
