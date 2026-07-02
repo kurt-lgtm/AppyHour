@@ -742,23 +742,26 @@ def check_cexec_cheese_counts(
     checked = 0
 
     for o in orders:
-        # Find CEX-EC curations from tags
-        tags = [t.strip() for t in o.tags.split(",")]
+        # Curation comes ONLY from resolved CEX-EC-{suffix} assignments. The old tag-substring
+        # scan (`cur in tag_upper`) re-encoded the MS/NMS steal bug (CEXEC.3.10.NMS matched both
+        # NMS and MS) — removed 2026-07-02 (Kurt: suffix resolution is the contract; bare CEX-EC
+        # is fixed upstream by ADDING the suffix line, per cexec resolution rules).
         cexec_curations: list[str] = []
-        for tag in tags:
-            tag_upper = tag.upper()
-            if tag_upper.startswith("CEXEC") or tag_upper.startswith("CEX-EC"):
-                # Extract curation from tag like CEXEC.3.10.FIX or CEX-EC-MONG
-                for cur in cex_ec_config:
-                    if cur in tag_upper:
-                        cexec_curations.append(cur)
-
-        # Also check assignments for CEX-EC SKUs
         for sku in o.assignments:
             if sku.startswith("CEX-EC-"):
                 cur = sku.replace("CEX-EC-", "")
                 if cur not in cexec_curations:
                     cexec_curations.append(cur)
+
+        # Guard: a CEX-EC tag with NO resolved suffix assignment = unresolved bare add-on.
+        # Flag it — silently skipping would hide exactly the orders the bare-fix rule exists for.
+        has_cexec_tag = any(
+            t.strip().upper().startswith(("CEXEC", "CEX-EC")) for t in o.tags.split(",")
+        )
+        if has_cexec_tag and not cexec_curations:
+            issues.append(f"  #{o.order_id}: CEX-EC tag present but no CEX-EC-{{suffix}} line resolved")
+            checked += 1
+            continue
 
         if not cexec_curations:
             continue

@@ -17,7 +17,7 @@ Desktop analytics for Elevate Foods (subscription cheese/charcuterie). Python + 
 | `AppyHourShippingMCP/` | Shipping-only MCP server (subset) | `AppyHourShippingMCP/CLAUDE.md` |
 | `appyhour_lib/` | Shared library (weather, credentials) — **not** the AppyHour repo | `appyhour_lib/CLAUDE.md` |
 | `scripts/` | Loose utilities (swaps/audits/incident-fixes/utilities) | `scripts/README.md` |
-| `matrix_commander.py` + `matrix_commander_web/` | Fulfillment pipeline orchestrator | inline |
+| `matrix_commander.py` + `matrix_commander_web/` | Fulfillment pipeline orchestrator | **`MATRIX_RULES.md`** (constraints SSOT — read before ANY change) |
 
 Original 386-line CLAUDE.md preserved as `_CLAUDE-original-2026-05-10.md` (ledger).
 
