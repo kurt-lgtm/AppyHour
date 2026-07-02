@@ -334,7 +334,7 @@ async function runSync(dryRun) {
     const data = await resp.json();
 
     if (data.error) {
-      status(`Sync error: ${data.error}`);
+      status(`Sync error: ${data.message || data.error}`);
       btnPreview.disabled = false;
       btnExecute.disabled = false;
       return;

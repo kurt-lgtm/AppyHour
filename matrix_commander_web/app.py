@@ -438,7 +438,23 @@ def generate():
 
 @app.route("/api/sync", methods=["POST"])
 def sync_to_shopify():
-    """Sync matrix assignments to Shopify orders via $0 variant order edits."""
+    """Sync matrix assignments to Shopify orders via $0 variant order edits.
+
+    DISABLED 2026-07-02 (MATRIX_RULES.md rule 9): this endpoint both crashed
+    (OrderRow dataclasses accessed via .get()/.items()) and re-implemented sync
+    without the CLI pipeline's rate limiter, guard, active_prefixes, and
+    checkpoint persistence. A naive crash-fix would resurrect an unguarded
+    Shopify write path. Re-enable ONLY by routing through matrix_commander's
+    CLI sync functions.
+    """
+    return jsonify(
+        {
+            "error": "endpoint_disabled",
+            "message": "Web sync is disabled — use the CLI: python matrix_commander.py sync-shopify "
+                       "(dry-run default). See MATRIX_RULES.md rule 9.",
+        }
+    ), 501
+
     if not SESSION_STATE["orders"]:
         return jsonify({"error": "No orders loaded — run validate or generate first"}), 400
 
