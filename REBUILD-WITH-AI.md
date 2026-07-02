@@ -30,6 +30,16 @@ cost-aware routing engine (shadow), exception-only escalation.
 - **Constraints SSOT discipline:** `ShipRouting/ROUTING_RULES.md` is the single source of truth — read before any
   change, add missing constraints first, gotchas/negatives-first. Global rule `~/.claude/rules/feature-constraints-doc.md`.
 
+**2026-07-02 engine additions (LIVE in `ShipRouting`):**
+- **`MILP_LIVE=1` is now CANON (default ON)** (`ShipRouting/build.py`, commit e24375f) — the HiGHS solver
+  **makes the live Indy keep/spill decision** (superseding the greedy 6-pallet gate). Once upon adoption it
+  is autonomous (no human-gate). Kill with `MILP_LIVE=0`. Snapshots `milp_live/` vs `greedy_shadow/` for
+  `milp/postmortem_ab.py` warm-rate + cost A/B.
+- **`FENCE_FEDEX_HD=1` is now CANON (default ON)** (`ShipRouting/build.py`, commit bb4f716) — FedEx Home
+  Delivery orders become **hard fences at non-Indy hubs** (Dallas/Nashville; removes positive-pinning). Indy
+  is fence-free (can still spill MILP/greedy). Clarifies that FedEx Home is a carrier-of-last-resort exception,
+  not a hub route.
+
 **2026-06-27 engine additions (LIVE in `ShipRouting`):**
 - **Carrier ZIP-SERVICEABILITY gate** (`build.py`, post-routing) — coverage files (`load_veho` active / `load_ontrac`) are the AUTHORITY for last-mile carriers. Any Veho/OnTrac rec whose dest zip isn't covered is auto-rerouted to **FedEx Home Delivery (same hub)** + hard-asserted (mirrors the Indy pallet gate); `_svc_rerouted` overrides `resolve_apply` keep-existing so it reaches Shopify. Post-hoc mirror: `qc_audit.py` SERVICEABILITY check. Fixed 391 Veho/OnTrac→unserviced-zip mis-routes on _SHIP_2026-06-29.
 - **`HISTORY_SERVICEABILITY` STATE-proof layer DROPPED** (`lib/features.build_history_lanes` returns empty `state`) — whole-state crediting from metro history was inventing rural coverage (268 of those mis-routes). z3-proof retained; history sets TNT, never final serviceability.
@@ -79,7 +89,7 @@ cost-aware routing engine (shadow), exception-only escalation.
    - `appyhour-db-healthcheck` (daily ~noon) → `_outputs/scripts/shipping_db_healthcheck.py` (live-DB `quick_check`, Slack-on-fail; §5.1)
 7. **Verify:** `python AppyHour/scripts/validate_refactor_db.py --copy <restored>` vs expectations; run `GelPackCalculator/auto_import.py` (expect clean totals); launch Kori via `GelPackCalculator/kori/run_webview.bat`; run `ShipRouting/build.py` on the current `_SHIP_` cohort.
 
-## 5.1 🔴 DB LOCATION & CORRUPTION RECOVERY (added 2026-07-01 — read before touching the DB)
+## 5.1 🔴 DB LOCATION & CORRUPTION RECOVERY (updated 2026-07-02 — read before touching the DB)
 
 **Where the live DB physically is.** The AppyHour MCP servers run inside the Claude **MSIX package**
 (family `Claude_pzs8sxrjxfjjc`), so their `%APPDATA%` is REDIRECTED. The real live `shipping.db` is:
@@ -98,16 +108,16 @@ is malformed`. `appyhour_lib/db.py` (WAL+busy_timeout) serializes lock *waits* b
 independent checkpointers. **Rule: only one writer at a time; Claude/agents stay READ-ONLY on shipping.db
 (`connect_ro`).** [[shipping-db-msix-wal-corruption]]
 
-**🔴 Enforcement (2026-07-02):** `appyhour_lib/db.py` `connect()` now takes an advisory single-writer lock —
-`<real_db>.writelock` beside the LocalCache DB (atomic `O_CREAT|O_EXCL`; JSON `{pid, create_time, script,
-started_at, host}`). A 2nd writer waits `AH_WRITE_LOCK_WAIT` (default 90s) then raises **`DBWriterBusy`**
-naming the holder instead of racing a checkpoint. Crash-safe: dead-PID / reused-PID (create_time mismatch) /
-over-`AH_WRITE_LOCK_MAX_AGE` (default 1800s) locks auto-break; nested `connect()` reentrant via refcount;
-`atexit` releases. Escape hatch `AH_WRITE_LOCK_DISABLE=1`. **`connect_ro()` never touches the lock.** Only
-protects writers that go through `connect()` — a raw `sqlite3.connect(shipping.db)` still bypasses it, so
-ALL writers must route through `connect()` (migration in progress; `shipping_invoice_db.init_db` done). If a
-run dies with a stuck lock the file is safe to delete manually: `rm <db>.writelock`. Tests:
-`AppyHour/tests/test_db_writelock.py` (temp DB only, never the live file).
+**Enforcement (2026-07-02, commit 7d5e1a5):** `appyhour_lib/db.py` `connect()` now acquires an advisory
+single-writer lock — `<real_db>.writelock` beside the LocalCache DB (atomic `O_CREAT|O_EXCL`; JSON
+`{pid, create_time, script, started_at, host}`). A 2nd writer waits `AH_WRITE_LOCK_WAIT` (default 90s)
+then raises **`DBWriterBusy`** naming the holder instead of racing a checkpoint. Crash-safe: dead-PID /
+reused-PID (create_time mismatch) / over-`AH_WRITE_LOCK_MAX_AGE` (default 1800s) locks auto-break; nested
+`connect()` reentrant via refcount; `atexit` releases. **Escape hatch: env var `AH_WRITE_LOCK_DISABLE=1`.**
+**`connect_ro()` never touches the lock.** Only protects writers that go through `connect()` — a raw
+`sqlite3.connect(shipping.db)` still bypasses it, so ALL writers must route through `connect()` (migration
+in progress; `shipping_invoice_db.init_db` done). If a run dies with a stuck lock the file is safe to delete
+manually: `rm <db>.writelock`. Tests: `AppyHour/tests/test_db_writelock.py` (temp DB only, never the live file).
 
 **Recovery (main image usually fine — the `-wal` sidecar is the corrupt part):**
 1. Read still works via `sqlite3.connect('file:<db>?mode=ro&immutable=1', uri=True)` (ignores the WAL).
@@ -150,6 +160,9 @@ Logic zip + DB snapshot to Drive **weekly** (goal: automated in M2 `pipeline_run
 via the **`drive.file` OAuth token** (same one `upload_sheet.py` uses; resumable, gws-independent) — verified
 uploading `shipping.weekly-<date>.db` (132MB) + logic/knowledge/reference zips to Drive. Run it with the
 **`appyhour-backup` skill** (repeatable: refresh THIS doc → `backup_offsite.py` → verify the `OFFSITE:` lines).
-⚠️ One gap remains: **`AH_BACKUP_PASSPHRASE` is unset** → the encrypted creds bundle is SKIPPED (refuses to
-upload plaintext secrets), so the Drive backup has the DB + docs + knowledge but NOT the API keys/tokens —
+
+**2026-07-02 security updates:** `backup_offsite.py` now excludes `browser_state`/`browser_profile` dirs
+from the knowledge zip (commit fd6790d) — prevents cleartext cookie/login data leaks on Drive. Creds bundle
+encryption still required: **`AH_BACKUP_PASSPHRASE` is unset** → the encrypted creds bundle is SKIPPED (refuses
+to upload plaintext secrets), so the Drive backup has the DB + docs + knowledge but NOT the API keys/tokens —
 set the passphrase (user env) to include creds. Code is offsite via the three GitHub repos regardless.
