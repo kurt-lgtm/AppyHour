@@ -29,8 +29,34 @@
         <label>Ship Date</label>
         <input type="date" id="shipDate">
       </div>
+      <button id="btnHelp" class="btn help-btn" title="How to use Matrix Commander">?</button>
     </div>
   </header>
+
+  <!-- Help modal -->
+  <div id="helpModal" class="help-modal hidden">
+    <div class="help-card">
+      <div class="help-head">
+        <h2>HOW TO USE MATRIX COMMANDER</h2>
+        <button id="btnHelpClose" class="btn">✕</button>
+      </div>
+      <ol class="help-steps">
+        <li><b>Set the cohort</b> — Ship Day (SAT = main Saturday cohort, TUE = Dallas-only) and Ship Date, top right.</li>
+        <li><b>Get orders in</b> — either way:
+          <ul>
+            <li><b>Generate from Shopify</b>: enter the RMFG tag (e.g. <code>RMFG_20260706</code>) and click the button. Pulls live orders and builds the matrix directly — replaces the RMFG portal export.</li>
+            <li><b>Drop an xlsx</b>: drag the RMFG xlsx (plus optional gift xlsx) onto the drop zones, then <b>Validate Upload</b>.</li>
+          </ul>
+        </li>
+        <li><b>Read the QC checks</b> — validation runs 7 checks: order IDs, zip leading-zeroes, duplicate columns, production day, SKU mappings, MFG onboarding, and the CEX-EC chain (a bare CEX-EC with no CEX-EC-suffix line, or a suffix whose expected cheese is missing, gets flagged). Fix reds before going on.</li>
+        <li><b>Inventory cross-check</b> — Load from Settings (canonical <code>%APPDATA%</code> settings) or upload an inventory CSV. Shortages appear per SKU.</li>
+        <li><b>Swap resolution</b> — resolve each shortage; each decision is applied to the xlsx.</li>
+        <li><b>Finalize XLSX</b> — merges the gift sheet (if any) and writes the final matrix file.</li>
+        <li><b>Sync to Shopify</b> — <b>disabled in the web UI</b> (it bypassed the pipeline guardrails). Use the CLI: <code>python matrix_commander.py sync-shopify</code> (dry-run by default).</li>
+      </ol>
+      <p class="help-foot">Rules of the road live in <code>AppyHour/MATRIX_RULES.md</code> — read it before changing anything. Canonical CLI export: <code>matrix_commander.py generate</code> via <code>gen_rmfg_export.py</code> (QC-gated).</p>
+    </div>
+  </div>
 
   <!-- Generate Section -->
   <section id="generate-section">

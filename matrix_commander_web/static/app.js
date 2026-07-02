@@ -421,5 +421,12 @@ document.addEventListener('DOMContentLoaded', () => {
   nextMon.setDate(today.getDate() + daysUntilMonday);
   $('shipDate').value = nextMon.toISOString().split('T')[0];
 
+  // Help modal
+  $('btnHelp').addEventListener('click', () => $('helpModal').classList.remove('hidden'));
+  $('btnHelpClose').addEventListener('click', () => $('helpModal').classList.add('hidden'));
+  $('helpModal').addEventListener('click', (e) => {
+    if (e.target === $('helpModal')) $('helpModal').classList.add('hidden');
+  });
+
   status('Ready -- enter RMFG tag and click Generate, or drop an XLSX');
 });
