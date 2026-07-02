@@ -199,6 +199,105 @@ def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: 
     return swapped
 
 
+def _lookup_zero_variant_gids(base: str, headers: dict[str, str], skus: set[str]) -> dict[str, str]:
+    """Look up the $0.00 (free/curation) variant GID for each SKU.
+
+    HARD RULE (see shopify-api skill): adds onto a customer order MUST use the
+    $0.00 variant — a paid variant would charge the customer. Aborts if any SKU
+    has no $0.00 variant rather than falling back to a paid one.
+    """
+    sku_list = sorted(skus)
+    out: dict[str, str] = {}
+    for i in range(0, len(sku_list), 10):
+        batch = sku_list[i:i + 10]
+        query_str = " OR ".join(f"sku:{s}" for s in batch)
+        data = shopify_graphql(base, headers, """
+        query($q: String!) {
+          productVariants(first: 50, query: $q) {
+            edges { node { id sku price } }
+          }
+        }
+        """, {"q": query_str})
+        for edge in data["productVariants"]["edges"]:
+            node = edge["node"]
+            sku = node["sku"]
+            if sku in skus and node.get("price") == "0.00":
+                out.setdefault(sku, node["id"])
+        time.sleep(0.1)
+    missing = skus - set(out)
+    if missing:
+        raise RuntimeError(f"No $0.00 variant found for: {sorted(missing)} — aborting (never add a paid variant)")
+    return out
+
+
+def _add_variants_to_order(base: str, headers: dict[str, str], order_gid: str,
+                           add_gids: dict[str, str], qty: int = 1,
+                           skip_if_present: bool = True) -> list[str]:
+    """Add free variants to a single order. Returns descriptions of what was added.
+
+    Idempotent: with skip_if_present=True, a SKU already on the order (with
+    fulfillable qty > 0) is skipped, so re-running never double-adds.
+    Pure add — no existing line item is modified or removed.
+    """
+    data = shopify_graphql(base, headers, """
+        mutation orderEditBegin($id: ID!) {
+            orderEditBegin(id: $id) {
+                calculatedOrder {
+                    id
+                    lineItems(first: 100) { edges { node { id quantity sku } } }
+                }
+                userErrors { field message }
+            }
+        }
+    """, {"id": order_gid})
+
+    calc_order = data["orderEditBegin"]["calculatedOrder"]
+    if not calc_order:
+        raise RuntimeError(f"beginEdit failed: {data['orderEditBegin']['userErrors']}")
+    calc_id = calc_order["id"]
+
+    present = {edge["node"].get("sku") for edge in calc_order["lineItems"]["edges"]
+               if edge["node"].get("quantity", 0) > 0}
+
+    added: list[str] = []
+    for sku, gid in add_gids.items():
+        if skip_if_present and sku in present:
+            continue
+        shopify_graphql(base, headers, """
+            mutation orderEditAddVariant($id: ID!, $variantId: ID!, $quantity: Int!, $allowDuplicates: Boolean) {
+                orderEditAddVariant(id: $id, variantId: $variantId, quantity: $quantity, allowDuplicates: $allowDuplicates) {
+                    calculatedOrder { id }
+                    userErrors { field message }
+                }
+            }
+        """, {"id": calc_id, "variantId": gid, "quantity": qty, "allowDuplicates": True})
+        added.append(f"+{sku}(qty={qty})")
+
+    if not added:
+        return []  # nothing to do — leave the draft uncommitted
+
+    data = shopify_graphql(base, headers, """
+        mutation orderEditCommit($id: ID!) {
+            orderEditCommit(id: $id, notifyCustomer: false, staffNote: "Added free accompaniment(s)") {
+                order { id }
+                userErrors { field message }
+            }
+        }
+    """, {"id": calc_id})
+    errors = data["orderEditCommit"]["userErrors"]
+    if errors:
+        raise RuntimeError(f"commitEdit failed: {errors}")
+
+    try:
+        from tools.cache import get_store
+        get_store().bust("orders")
+    except Exception:  # noqa: BLE001 — cache bust is best-effort, never block a commit
+        logging.getLogger("appyhour_mcp.order_edit").warning(
+            "cache bust('orders') failed after add (non-fatal)", exc_info=True
+        )
+    return added
+
+
 def register(mcp: object) -> None:
     """Register order edit tools on the MCP server."""
 
@@ -372,3 +471,120 @@ def register(mcp: object) -> None:
             })
         except Exception as e:
             return format_error(e, "swap_order_skus")
+
+    class AddVariantsInput(BaseModel):
+        """Input for adding free variants to Shopify orders (pure add, no removal)."""
+        model_config = ConfigDict(str_strip_whitespace=True)
+
+        add_skus: list[str] = Field(..., description="SKUs to add. Each MUST have a $0.00 variant (e.g. ['AC-KETT', 'AC-RHB']).")
+        ship_tag: str = Field("", description="Optional: only orders carrying this ship tag (e.g. '_SHIP_2026-07-04').")
+        box_sku: str = Field("", description="Optional: only orders containing this exact box SKU.")
+        box_sku_contains: list[str] = Field(default_factory=list, description="Optional: only orders with a SKU containing ANY of these substrings (e.g. ['AHB-X4JUL']).")
+        order_names: list[str] = Field(default_factory=list, description="Optional: explicit order names/numbers (e.g. ['#155799', '154238']). Overrides tag/box filters when set.")
+        quantity: int = Field(1, ge=1, description="Quantity per added SKU (default 1).")
+        skip_if_present: bool = Field(True, description="If true (default), skip a SKU already on the order — makes re-runs safe (no double-add).")
+        dry_run: bool = Field(True, description="If true (default), preview without modifying orders.")
+
+    @mcp.tool(
+        name="appyhour_add_order_variants",
+        annotations={
+            "title": "Add Free Variants to Shopify Orders",
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
+    )
+    async def add_order_variants(params: AddVariantsInput) -> str:
+        """Add free ($0.00) variant(s) to unfulfilled Shopify orders — pure add, never removes.
+
+        Resolves each SKU to its $0.00 variant (aborts if none — never adds a paid
+        variant, so the customer is never charged). Idempotent: an order already
+        carrying a SKU is skipped, so re-running can't double-add.
+
+        Target selection: explicit order_names, OR (ship_tag / box_sku / box_sku_contains)
+        filters over unfulfilled orders.
+
+        WARNING: With dry_run=False, this modifies orders on your Shopify store.
+        """
+        try:
+            base, headers = get_shopify_auth()
+            add_gids = _lookup_zero_variant_gids(base, headers, set(params.add_skus))
+
+            # Build target order list
+            if params.order_names:
+                wanted = {n.strip().lstrip("#") for n in params.order_names}
+                all_orders = shopify_paginate(
+                    f"{base}/orders.json", headers,
+                    params={"status": "any", "limit": 250,
+                            "fields": "id,name,tags,line_items"},
+                )
+                targets = [o for o in all_orders if (o.get("name", "").lstrip("#")) in wanted]
+            else:
+                all_orders = shopify_paginate(
+                    f"{base}/orders.json", headers,
+                    params={"status": "open", "fulfillment_status": "unfulfilled",
+                            "limit": 250, "fields": "id,name,tags,line_items"},
+                )
+                targets = []
+                for o in all_orders:
+                    tags = [t.strip() for t in o.get("tags", "").split(",")]
+                    if params.ship_tag and params.ship_tag not in tags:
+                        continue
+                    skus = {(li.get("sku") or "") for li in o.get("line_items", [])
+                            if li.get("fulfillable_quantity", 0) > 0}
+                    if params.box_sku and params.box_sku not in skus:
+                        continue
+                    if params.box_sku_contains and not any(
+                        frag in s for s in skus for frag in params.box_sku_contains):
+                        continue
+                    targets.append(o)
+
+            targets.sort(key=lambda o: o.get("name", ""))
+
+            if params.dry_run:
+                preview = []
+                for o in targets:
+                    present = {(li.get("sku") or "") for li in o.get("line_items", [])
+                               if li.get("fulfillable_quantity", 0) > 0}
+                    to_add = [s for s in params.add_skus
+                              if not (params.skip_if_present and s in present)]
+                    preview.append({"order": o.get("name", ""), "would_add": to_add})
+                return to_json({
+                    "dry_run": True,
+                    "add_skus": params.add_skus,
+                    "zero_variant_gids": add_gids,
+                    "orders_matched": len(targets),
+                    "orders_needing_add": sum(1 for p in preview if p["would_add"]),
+                    "preview": preview[:100],
+                })
+
+            results, errors_list = [], []
+
+            def _do_add(order):
+                name = order.get("name", "")
+                gid = f"gid://shopify/Order/{order['id']}"
+                added = _add_variants_to_order(base, headers, gid, add_gids,
+                                               params.quantity, params.skip_if_present)
+                return {"order": name, "added": added or ["(already present — skipped)"]}
+
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                futures = {pool.submit(_do_add, o): o.get("name", "") for o in targets}
+                for future in as_completed(futures):
+                    name = futures[future]
+                    try:
+                        results.append(future.result())
+                    except Exception as e:
+                        errors_list.append({"order": name, "error": str(e)})
+
+            committed = sum(1 for r in results if r["added"] != ["(already present — skipped)"])
+            return to_json({
+                "orders_matched": len(targets),
+                "orders_committed": committed,
+                "orders_skipped": len(results) - committed,
+                "failed": len(errors_list),
+                "results": results[:30],
+                "errors": errors_list[:20],
+            })
+        except Exception as e:
+            return format_error(e, "add_order_variants")
