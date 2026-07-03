@@ -1012,7 +1012,8 @@ def check_routing_and_ice(orders: list[OrderRow]) -> CheckResult:
     def _is_tray(o: OrderRow) -> bool:
         return any(s.upper().startswith("TR-") or "TRAY" in s.upper() for s in o.assignments)
 
-    rows = [QCRow(o.order_id, *split_tags(o.tags), _is_tray(o)) for o in orders]
+    rows = [QCRow(o.order_id, *split_tags(o.tags), _is_tray(o),
+                  is_fixed="fixed_route" in (o.tags or "").lower()) for o in orders]
     rep = run_qc(rows)
     details = [f"{chk}: {names[:8]}{'…' if len(names) > 8 else ''}" for chk, names in rep.hard_fails.items()]
     details += [f"(warn) {chk}: {len(names)}" for chk, names in rep.warnings.items()]
