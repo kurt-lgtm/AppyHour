@@ -2903,18 +2903,38 @@ def _resolve_location(base: str, headers: dict, name_contains: str):
     return None, f"'{name_contains}' matched {len(hits)} of {len(locs)} locations: {[nm for _, nm in locs]}"
 
 
+def _variant_catalog_prices(base: str, headers: dict, variant_ids: list[str]) -> dict[str, float]:
+    """Batch-resolve each variant id's CATALOG price. Keyed by bare numeric id."""
+    out: dict[str, float] = {}
+    q = "query($ids:[ID!]!){ nodes(ids:$ids){ ... on ProductVariant{ id price } } }"
+    vids = [v for v in variant_ids if v]
+    for i in range(0, len(vids), 200):
+        chunk = ["gid://shopify/ProductVariant/" + v for v in vids[i:i + 200]]
+        d = _shopify_graphql(base, headers, q, {"ids": chunk})
+        for n in d.get("nodes") or []:
+            if n:
+                out[n["id"].split("/")[-1]] = float(n.get("price") or 0)
+    return out
+
+
 def compute_allocation(rmfg_tag: str, have: dict[str, float],
                        base: str | None = None, headers: dict | None = None) -> dict:
-    """Compute AVAIL$0 = max(0, HAVE - paid demand) per SKU for a cohort. Pure read.
+    """Compute ON_HAND$0 = max(0, HAVE - paid demand) per SKU for a cohort. Pure read.
 
     Shared by the CLI (`allocate`) and the web UI — the single-HAVE-sheet pipeline
     function. PK-/MR- structural SKUs (made-to-order) are never capped.
+
+    🔴 Paid demand is counted by the **DISTINCT PAID VARIANT** (catalog price > 0), NOT the
+    line-item `price` (unreliable — paid/curation lines often show $0 on the line). Each SKU
+    has two products sharing the SKU: the $0 in-box variant (the item we cap) and a priced
+    variant (the paid product). paid[sku] = units on the priced variant in the cohort.
     """
     if base is None or headers is None:
         base, headers = _get_shopify_auth()
 
     orders = _fetch_orders_by_tag(base, headers, rmfg_tag)
-    paid: dict[str, int] = {}
+    vunits: dict[str, int] = {}
+    vsku: dict[str, str] = {}
     need: dict[str, int] = {}
     for o in orders:
         for li in o.get("line_items", []):
@@ -2922,9 +2942,18 @@ def compute_allocation(rmfg_tag: str, have: dict[str, float],
             if not s:
                 continue
             qf = li.get("fulfillable_quantity", 0) or 0
+            if qf <= 0:
+                continue
             need[s] = need.get(s, 0) + qf
-            if float(li.get("price") or 0) > 0:
-                paid[s] = paid.get(s, 0) + qf
+            vid = str(li.get("variant_id") or "")
+            if vid:
+                vunits[vid] = vunits.get(vid, 0) + qf
+                vsku[vid] = s
+    catalog_price = _variant_catalog_prices(base, headers, list(vunits))
+    paid: dict[str, int] = {}
+    for vid, u in vunits.items():
+        if catalog_price.get(vid, 0) > 0:
+            paid[vsku[vid]] = paid.get(vsku[vid], 0) + u
 
     zv = _zero_variant_items(base, headers, set(have))
 
@@ -2959,7 +2988,12 @@ def compute_allocation(rmfg_tag: str, have: dict[str, float],
 def apply_allocation(rows: list[dict], location_name: str = "RMFG",
                      limit: int | None = None,
                      base: str | None = None, headers: dict | None = None) -> dict:
-    """COMMIT computed allocation rows to Shopify Available. Audit-logged, scope-gated."""
+    """COMMIT computed allocation rows to Shopify ON HAND (= HAVE - tagged paid).
+
+    Sets on_hand, NOT available: Shopify derives available = on_hand - committed itself, so
+    paid + curation commitments come off correctly. Setting available directly inflates on_hand
+    (on_hand = available + committed) and the paid subtraction is lost. Audit-logged, scope-gated.
+    """
     if base is None or headers is None:
         base, headers = _get_shopify_auth()
     loc_gid, loc_msg = _resolve_location(base, headers, location_name)
@@ -2978,17 +3012,19 @@ def apply_allocation(rows: list[dict], location_name: str = "RMFG",
             _cur = _shopify_graphql(
                 base, headers,
                 "query($id:ID!,$loc:ID!){inventoryItem(id:$id){inventoryLevel(locationId:$loc){"
-                "quantities(names:[\"available\"]){quantity}}}}",
+                "quantities(names:[\"on_hand\"]){quantity}}}}",
                 {"id": r["item"], "loc": loc_gid},
             )
             _qs = (((_cur.get("inventoryItem") or {}).get("inventoryLevel") or {}).get("quantities")) or []
             _from = _qs[0]["quantity"] if _qs else 0
             # 2026-04 also requires the @idempotent(key:) directive on inventory-set mutations.
+            # Set ON_HAND (not available): value = HAVE - tagged paid. Shopify then derives
+            # available = on_hand - committed itself (paid + curation commitments come off correctly).
             res = _shopify_graphql(
                 base, headers,
                 "mutation($i:InventorySetQuantitiesInput!,$k:String!){inventorySetQuantities(input:$i)"
                 "@idempotent(key:$k){inventoryAdjustmentGroup{createdAt} userErrors{field message}}}",
-                {"i": {"name": "available", "reason": "correction",
+                {"i": {"name": "on_hand", "reason": "correction",
                        "quantities": [{"inventoryItemId": r["item"], "locationId": loc_gid,
                                        "quantity": int(r["avail"]), "changeFromQuantity": _from}]},
                  "k": f"alloc-{r['sku']}-{int(r['avail'])}-{_uuid.uuid4().hex[:12]}"},

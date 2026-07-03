@@ -61,7 +61,8 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
     it". Same resolver feeds `apply_swaps_to_xlsx` column lookup — do NOT let the two drift back to
     `NAME_TO_SKU`-only (swaps silently skipped columns before). `mfg_translations.csv` is now
     git-tracked — refresh it from translator.robbinsmfginc.com via commit, never an untracked drop.
-11. **One HAVE sheet feeds BOTH the cross-check and the Shopify Available push** (2026-07-03): the
+12. **Allocate sets ON_HAND, and paid demand is counted by the DISTINCT PAID VARIANT** (Kurt 2026-07-03, three-bug fix). Each cheese SKU is TWO products sharing the SKU: a $0 in-box variant (the item we cap) and a priced add-on product. (a) Write **`on_hand` = HAVE − paid**, NEVER `available` — setting available makes Shopify back-compute `on_hand = available + committed` so the paid subtraction is lost; setting on_hand lets Shopify derive `available = on_hand − committed` and self-maintain as curation commits. (b) Count paid **by the priced variant's id** (`_variant_catalog_prices` catalog price > 0), NEVER by line-item `price` — paid/curation lines routinely show $0 on the line, so price-based counting is inverted (CH-GAOP read paid=1 instead of 76). (c) Use the **`_SHIP_<mon>` ship tag** for the cohort, not the RMFG cut tag. Equivalent check: $0 `available` should equal `HAVE − all-committed-both-products-in-tag`. Verify with an UNCACHED read (`_shopify_graphql_matrix`); the cached path returns stale pre-push values.
+13. **One HAVE sheet feeds BOTH the cross-check and the Shopify On Hand push** (2026-07-03): the
     web Inventory tab's loaded inventory drives `/api/allocate` → `compute_allocation` /
     `apply_allocation` (extracted from `cmd_allocate`; web routes through them per rule 9 — never
     re-implement the AVAIL$0 math in the web layer). Gotchas: **a tag matching 0 orders is
