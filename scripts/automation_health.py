@@ -29,6 +29,7 @@ EXPECTED = {
     "offsite-backup": 8 * 24,
     "forecast-a-monitor": 8 * 24,
     "loop-scorecard": 8 * 24,
+    "corrections-mining": 8 * 24,
     "automation-health": 2 * 24,
 }
 SYNC_HEARTBEAT_MAX_H = 48

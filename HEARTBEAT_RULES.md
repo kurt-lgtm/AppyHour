@@ -46,6 +46,7 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
 | `offsite-backup` | `scripts/backup_offsite.py` end of successful `run()` | 8 days |
 | `forecast-a-monitor` | `_outputs/scripts/forecast_a_monitor.py` | 8 days |
 | `loop-scorecard` | `ShipRouting/scripts/loop_scorecard.py` | 8 days |
+| `corrections-mining` | `_outputs/scripts/corrections_digest.py` | 8 days |
 | `automation-health` | `scripts/automation_health.py` self-beat | 2 days |
 
 Checker also probes (no beat needed): `sync_heartbeat.json` age (>48h), `schtasks` AppyHour* Last
