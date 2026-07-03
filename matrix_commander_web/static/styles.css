@@ -350,6 +350,23 @@ td.status-badge {
   letter-spacing: 1px;
 }
 
+/* Allocate Panel */
+.allocate-controls {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  margin-bottom: 10px;
+}
+.alloc-summary {
+  font-family: var(--font-chrome);
+  font-size: 11px;
+  color: var(--fg2);
+  margin-bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
 /* Swap Cards */
 .swap-card {
   background: var(--bg3);

@@ -61,6 +61,15 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
     it". Same resolver feeds `apply_swaps_to_xlsx` column lookup — do NOT let the two drift back to
     `NAME_TO_SKU`-only (swaps silently skipped columns before). `mfg_translations.csv` is now
     git-tracked — refresh it from translator.robbinsmfginc.com via commit, never an untracked drop.
+11. **One HAVE sheet feeds BOTH the cross-check and the Shopify Available push** (2026-07-03): the
+    web Inventory tab's loaded inventory drives `/api/allocate` → `compute_allocation` /
+    `apply_allocation` (extracted from `cmd_allocate`; web routes through them per rule 9 — never
+    re-implement the AVAIL$0 math in the web layer). Gotchas: **a tag matching 0 orders is
+    REFUSED** (paid=0 → push would set Available to raw HAVE and let parents over-allocate into
+    paid units — the exact failure allocate exists to prevent); commit requires a fresh preview and
+    invalidates it after push (re-preview after swaps); PK-/MR- structural SKUs stay uncapped;
+    Available push remains manual-confirm — never auto-commit (inventorySetQuantities is
+    effectively last-writer-wins even with changeFromQuantity read-then-write).
 
 Linked from `AppyHour/CLAUDE.md`. Audit that produced this doc:
 `_outputs/reports/2026-07-02-matrix-tool-audit.md`.

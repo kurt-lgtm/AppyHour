@@ -2903,16 +2903,16 @@ def _resolve_location(base: str, headers: dict, name_contains: str):
     return None, f"'{name_contains}' matched {len(hits)} of {len(locs)} locations: {[nm for _, nm in locs]}"
 
 
-def cmd_allocate(rmfg_tag: str, inventory_csv: str, corrections: dict | None = None,
-                 location_name: str = "RMFG", commit: bool = False, limit: int | None = None) -> bool:
-    """Set $0-variant Available at RMFG = max(0, HAVE - paid demand). DRY-RUN unless commit."""
-    have = _load_have_csv(inventory_csv)
-    if corrections:
-        have.update(corrections)
-        print(f"  applied {len(corrections)} HAVE correction(s): {corrections}")
-    base, headers = _get_shopify_auth()
+def compute_allocation(rmfg_tag: str, have: dict[str, float],
+                       base: str | None = None, headers: dict | None = None) -> dict:
+    """Compute AVAIL$0 = max(0, HAVE - paid demand) per SKU for a cohort. Pure read.
 
-    print(f"  Fetching orders '{rmfg_tag}' (open/unfulfilled)...")
+    Shared by the CLI (`allocate`) and the web UI — the single-HAVE-sheet pipeline
+    function. PK-/MR- structural SKUs (made-to-order) are never capped.
+    """
+    if base is None or headers is None:
+        base, headers = _get_shopify_auth()
+
     orders = _fetch_orders_by_tag(base, headers, rmfg_tag)
     paid: dict[str, int] = {}
     need: dict[str, int] = {}
@@ -2925,52 +2925,52 @@ def cmd_allocate(rmfg_tag: str, inventory_csv: str, corrections: dict | None = N
             need[s] = need.get(s, 0) + qf
             if float(li.get("price") or 0) > 0:
                 paid[s] = paid.get(s, 0) + qf
-    print(f"  {len(orders)} orders | {sum(need.values())} units demand | paid-line SKUs: {len(paid)}")
 
     zv = _zero_variant_items(base, headers, set(have))
-    print(f"  {len(have)} HAVE SKUs | {len(zv)} with $0 variant (allocate) | {len(have) - len(zv)} without (skip)")
 
     # PK-/MR- = 0-DistVol structural inserts/journal (made-to-order) — NEVER cap their inventory to 0.
     rows = []
-    _skipped_aa = []
+    skipped_structural = []
     for sku in zv:
         if sku.startswith(("PK-", "MR-")):
-            _skipped_aa.append(sku)
+            skipped_structural.append(sku)
             continue
         h = have.get(sku, 0)
         pd = paid.get(sku, 0)
         nd = need.get(sku, 0)
         rows.append({"sku": sku, "have": h, "paid": pd, "avail": max(0, h - pd),
                      "need": nd, "delta": h - nd, "item": zv[sku]["item"]})
-    if _skipped_aa:
-        print(f"  Excluded always-available structural SKUs from the cap (not stock-managed): {_skipped_aa}")
     rows.sort(key=lambda r: r["delta"])  # most-negative delta (shortage) first
-    print(f"\n  {'SKU':<14}{'HAVE':>7}{'PAID':>7}{'AVAIL$0':>9}{'NEED':>7}{'DELTA':>8}")
-    shorts = []
-    for r in rows:
-        flag = "  <-- SHORT" if r["delta"] < 0 else ""
-        if r["delta"] < 0:
-            shorts.append(r["sku"])
-        print(f"  {r['sku']:<14}{r['have']:>7.0f}{r['paid']:>7.0f}{r['avail']:>9.0f}{r['need']:>7.0f}{r['delta']:>8.0f}{flag}")
-    print(f"\n  {len(shorts)} negative-delta SKU(s) (HAVE<NEED) -> swap candidates: {shorts}")
+    shorts = [r["sku"] for r in rows if r["delta"] < 0]
+    return {
+        "order_count": len(orders),
+        "demand_units": sum(need.values()),
+        "paid_sku_count": len(paid),
+        "have_sku_count": len(have),
+        "zero_variant_count": len(zv),
+        "no_variant_count": len(have) - len(zv),
+        "rows": rows,
+        "shorts": shorts,
+        "skipped_structural": skipped_structural,
+        "all_covered": not shorts,
+    }
 
-    if not commit:
-        print(f"\n  DRY-RUN — no writes. {len(rows)} inventory sets planned (+ order-location move, separate).")
-        print("  Re-run with --commit once the token has read_locations + write_inventory scopes.")
-        return True
 
-    # ---- COMMIT: scope-gated, test-on-few via --limit, audit-logged ----
+def apply_allocation(rows: list[dict], location_name: str = "RMFG",
+                     limit: int | None = None,
+                     base: str | None = None, headers: dict | None = None) -> dict:
+    """COMMIT computed allocation rows to Shopify Available. Audit-logged, scope-gated."""
+    if base is None or headers is None:
+        base, headers = _get_shopify_auth()
     loc_gid, loc_msg = _resolve_location(base, headers, location_name)
     if not loc_gid:
-        print(f"  CANNOT COMMIT: {loc_msg}")
-        return False
-    print(f"  RMFG location resolved: {loc_msg} ({loc_gid})")
+        return {"ok": 0, "err": 0, "error": f"CANNOT COMMIT: {loc_msg}", "results": []}
     todo = rows[:limit] if limit else rows
-    print(f"  Setting Available for {len(todo)} $0 variant(s) at RMFG (limit={limit or 'ALL'})...")
     import datetime as _dt
     import uuid as _uuid
     ALLOC_AUDIT.parent.mkdir(parents=True, exist_ok=True)
     ok_n = err_n = 0
+    results = []
     with open(ALLOC_AUDIT, "a", encoding="utf-8") as alog:
         for r in todo:
             # 2026-04: InventoryQuantityInput renamed compareQuantity -> REQUIRED changeFromQuantity
@@ -2998,8 +2998,49 @@ def cmd_allocate(rmfg_tag: str, inventory_csv: str, corrections: dict | None = N
             err_n += bool(errs)
             alog.write(json.dumps({"ts": _dt.datetime.now().isoformat(timespec="seconds"), "sku": r["sku"],
                                    "set_available": int(r["avail"]), "location": loc_gid, "errors": errs}) + "\n")
-            print(f"    {r['sku']}: Available={int(r['avail'])}" + (f"  ERR {errs}" if errs else "  ok"))
-    print(f"  Inventory sets: {ok_n} ok / {err_n} err (audit -> {ALLOC_AUDIT.name}).")
+            results.append({"sku": r["sku"], "set_available": int(r["avail"]), "errors": errs})
+    return {"ok": ok_n, "err": err_n, "location": loc_msg, "results": results}
+
+
+def cmd_allocate(rmfg_tag: str, inventory_csv: str, corrections: dict | None = None,
+                 location_name: str = "RMFG", commit: bool = False, limit: int | None = None) -> bool:
+    """Set $0-variant Available at RMFG = max(0, HAVE - paid demand). DRY-RUN unless commit."""
+    have = _load_have_csv(inventory_csv)
+    if corrections:
+        have.update(corrections)
+        print(f"  applied {len(corrections)} HAVE correction(s): {corrections}")
+    base, headers = _get_shopify_auth()
+
+    print(f"  Fetching orders '{rmfg_tag}' (open/unfulfilled)...")
+    alloc = compute_allocation(rmfg_tag, have, base, headers)
+    print(f"  {alloc['order_count']} orders | {alloc['demand_units']} units demand | "
+          f"paid-line SKUs: {alloc['paid_sku_count']}")
+    print(f"  {alloc['have_sku_count']} HAVE SKUs | {alloc['zero_variant_count']} with $0 variant (allocate) | "
+          f"{alloc['no_variant_count']} without (skip)")
+    if alloc["skipped_structural"]:
+        print(f"  Excluded always-available structural SKUs from the cap (not stock-managed): "
+              f"{alloc['skipped_structural']}")
+    rows = alloc["rows"]
+    print(f"\n  {'SKU':<14}{'HAVE':>7}{'PAID':>7}{'AVAIL$0':>9}{'NEED':>7}{'DELTA':>8}")
+    for r in rows:
+        flag = "  <-- SHORT" if r["delta"] < 0 else ""
+        print(f"  {r['sku']:<14}{r['have']:>7.0f}{r['paid']:>7.0f}{r['avail']:>9.0f}{r['need']:>7.0f}{r['delta']:>8.0f}{flag}")
+    print(f"\n  {len(alloc['shorts'])} negative-delta SKU(s) (HAVE<NEED) -> swap candidates: {alloc['shorts']}")
+
+    if not commit:
+        print(f"\n  DRY-RUN — no writes. {len(rows)} inventory sets planned (+ order-location move, separate).")
+        print("  Re-run with --commit once the token has read_locations + write_inventory scopes.")
+        return True
+
+    # ---- COMMIT: scope-gated, test-on-few via --limit, audit-logged ----
+    result = apply_allocation(rows, location_name, limit, base, headers)
+    if result.get("error"):
+        print(f"  {result['error']}")
+        return False
+    print(f"  RMFG location resolved: {result['location']}")
+    for r in result["results"]:
+        print(f"    {r['sku']}: Available={r['set_available']}" + (f"  ERR {r['errors']}" if r["errors"] else "  ok"))
+    print(f"  Inventory sets: {result['ok']} ok / {result['err']} err (audit -> {ALLOC_AUDIT.name}).")
     print("  NOTE: order-location move to RMFG is a separate step (fulfillmentOrderMove) — "
           "needs the fulfillment scopes + a supervised first run; not done here.")
     return True

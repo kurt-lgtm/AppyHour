@@ -146,6 +146,76 @@ async function loadInventory(file) {
   }
 }
 
+// ── Allocate (Shopify Available push) ──────────────────────────────
+
+async function allocPreview() {
+  const tag = $('allocTag').value.trim();
+  if (!tag) { status('Enter the RMFG tag — paid demand comes from the cohort'); return; }
+
+  $('btnAllocPreview').disabled = true;
+  $('btnAllocCommit').disabled = true;
+  status('<span class="spinner"></span>Computing allocation (fetching cohort orders)...');
+
+  try {
+    const resp = await fetch('/api/allocate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tag }),
+    });
+    const data = await resp.json();
+    if (data.error) { status(`Allocate error: ${data.error}`); $('btnAllocPreview').disabled = false; return; }
+
+    const covered = data.all_covered
+      ? '<span style="color:var(--green)">HAVE covers NEED for every SKU — no shorts</span>'
+      : `<span style="color:var(--red)">${data.shorts.length} SKU(s) SHORT (HAVE &lt; NEED): ${data.shorts.join(', ')}</span>`;
+    $('allocSummary').innerHTML = `
+      <div>${data.order_count} orders | ${data.demand_units} units demand | ${data.paid_sku_count} paid-line SKUs</div>
+      <div>${data.have_sku_count} HAVE SKUs | ${data.zero_variant_count} with $0 variant | ${data.no_variant_count} skipped (no $0 variant)</div>
+      ${data.skipped_structural.length ? `<div>Structural (never capped): ${data.skipped_structural.join(', ')}</div>` : ''}
+      <div>${covered}</div>`;
+
+    const tbody = data.rows.map(r => {
+      const cls = r.delta < 0 ? 'short' : 'ok';
+      return `<tr class="${cls}">
+        <td>${r.sku}</td><td class="num">${r.have}</td><td class="num">${r.paid}</td>
+        <td class="num"><strong>${r.avail}</strong></td><td class="num">${r.need}</td>
+        <td class="num">${r.delta}</td></tr>`;
+    }).join('');
+    $('allocTable').innerHTML = `<table>
+      <thead><tr><th>SKU</th><th>Have</th><th>Paid</th><th>Avail $0</th><th>Need</th><th>Delta</th></tr></thead>
+      <tbody>${tbody}</tbody></table>`;
+
+    $('btnAllocCommit').disabled = false;
+    status(`Allocation preview: ${data.rows.length} inventory sets planned — review, then Push`);
+  } catch (e) {
+    status(`Allocate failed: ${e.message}`);
+  }
+  $('btnAllocPreview').disabled = false;
+}
+
+async function allocCommit() {
+  if (!confirm('Push Available quantities to Shopify? This overwrites Available on the $0 variants at RMFG.')) return;
+
+  $('btnAllocCommit').disabled = true;
+  status('<span class="spinner"></span>Pushing Available to Shopify...');
+
+  try {
+    const resp = await fetch('/api/allocate/commit', { method: 'POST' });
+    const data = await resp.json();
+    if (data.error) { status(`Push error: ${data.error}`); return; }
+
+    const errItems = data.results.filter(r => r.errors && r.errors.length);
+    let html = `<div style="color:var(--green)">Pushed: ${data.ok} ok / ${data.err} err @ ${escHtml(data.location)}</div>`;
+    if (errItems.length) {
+      html += errItems.map(r => `<div style="color:var(--red)">${r.sku}: ${escHtml(JSON.stringify(r.errors))}</div>`).join('');
+    }
+    $('allocSummary').innerHTML = html;
+    status(`Available pushed: ${data.ok} ok / ${data.err} err. Re-preview after any swaps.`);
+  } catch (e) {
+    status(`Push failed: ${e.message}`);
+  }
+}
+
 // ── Swaps ──────────────────────────────────────────────────────────
 
 function renderSwaps(shortages) {
@@ -274,8 +344,9 @@ async function runGenerate() {
     showValidation(data);
     markInventoryReady();
 
-    // Auto-fill sync tag from generate tag
+    // Auto-fill sync + allocate tags from generate tag
     $('syncTag').value = tag;
+    $('allocTag').value = tag;
 
     status(`Generated: ${data.filename} (${data.order_count} orders)`);
   } catch (e) {
@@ -419,6 +490,8 @@ document.addEventListener('DOMContentLoaded', () => {
   $('inventoryFile').addEventListener('change', e => {
     if (e.target.files.length) loadInventory(e.target.files[0]);
   });
+  $('btnAllocPreview').addEventListener('click', allocPreview);
+  $('btnAllocCommit').addEventListener('click', allocCommit);
   $('btnFinalize').addEventListener('click', runFinalize);
   $('btnPreviewSync').addEventListener('click', () => runSync(true));
   $('btnExecuteSync').addEventListener('click', () => runSync(false));

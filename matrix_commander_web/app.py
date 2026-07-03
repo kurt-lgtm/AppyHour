@@ -58,6 +58,8 @@ from matrix_commander import (
     _get_shopify_auth,
     _fetch_orders_by_tag,
     _lookup_zero_variant_gids,
+    compute_allocation,
+    apply_allocation,
 )
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
@@ -108,6 +110,8 @@ SESSION_STATE = {
     "unmapped": {},
     "demand": {},
     "inventory": {},
+    "allocation": None,
+    "allocation_tag": "",
     "shortages": [],
     "validation_results": [],
     "ship_day": "SAT",
@@ -314,6 +318,55 @@ def apply_swap():
                 "remaining_shortages": len(SESSION_STATE["shortages"]),
             }
         )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/allocate", methods=["POST"])
+def allocate_preview():
+    """Compute AVAIL$0 = max(0, HAVE - paid) from the session inventory (dry-run, read-only).
+
+    Routes through matrix_commander.compute_allocation (MATRIX_RULES rule 9) —
+    the same HAVE sheet loaded for the cross-check drives the Shopify Available push.
+    """
+    if not SESSION_STATE["inventory"]:
+        return jsonify({"error": "Load inventory first (Load from Settings or Upload CSV)"}), 400
+
+    body = request.get_json(silent=True) or {}
+    tag = (body.get("tag") or "").strip()
+    if not tag:
+        return jsonify({"error": "RMFG tag required (paid demand comes from the cohort's orders)"}), 400
+
+    try:
+        alloc = compute_allocation(tag, SESSION_STATE["inventory"])
+        if alloc["order_count"] == 0:
+            # Wrong/unapplied tag → paid=0 → push would set Available to raw HAVE. Never allow.
+            return jsonify({"error": f"0 orders match '{tag}' — wrong tag or cohort not tagged yet; refusing to allocate"}), 400
+        SESSION_STATE["allocation"] = alloc
+        SESSION_STATE["allocation_tag"] = tag
+        resp = {k: v for k, v in alloc.items() if k != "rows"}
+        resp["rows"] = [{k: v for k, v in r.items() if k != "item"} for r in alloc["rows"]]
+        resp["ok"] = True
+        return jsonify(resp)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/allocate/commit", methods=["POST"])
+def allocate_commit():
+    """Push the previewed allocation to Shopify Available. Requires a prior preview."""
+    alloc = SESSION_STATE.get("allocation")
+    if not alloc:
+        return jsonify({"error": "Preview the allocation first"}), 400
+
+    try:
+        result = apply_allocation(alloc["rows"])
+        if result.get("error"):
+            return jsonify({"error": result["error"]}), 400
+        # Stale after a push — force a fresh preview before any re-push (post-swap re-runs).
+        SESSION_STATE["allocation"] = None
+        result["ok"] = True
+        return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

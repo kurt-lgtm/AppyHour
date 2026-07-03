@@ -127,6 +127,21 @@
     <div id="inventoryTable" class="table-container"></div>
   </section>
 
+  <!-- Allocate Panel — push AVAIL$0 = max(0, HAVE − paid) to Shopify -->
+  <section id="allocate-panel" class="panel">
+    <h2>SHOPIFY AVAILABLE (ALLOCATE)</h2>
+    <div class="allocate-controls">
+      <div class="config-group">
+        <label>RMFG Tag</label>
+        <input type="text" id="allocTag" placeholder="RMFG_20260328">
+      </div>
+      <button id="btnAllocPreview" class="btn">Preview Allocation</button>
+      <button id="btnAllocCommit" class="btn danger" disabled>Push to Shopify</button>
+    </div>
+    <div id="allocSummary" class="alloc-summary"></div>
+    <div id="allocTable" class="table-container"></div>
+  </section>
+
   <!-- Swap Panel -->
   <section id="swap-panel" class="panel hidden">
     <h2>SWAP RESOLUTION</h2>
