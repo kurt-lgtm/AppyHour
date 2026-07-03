@@ -72,5 +72,15 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
     Available push remains manual-confirm — never auto-commit (inventorySetQuantities is
     effectively last-writer-wins even with changeFromQuantity read-then-write).
 
+14. **Col L (Tags) is QC-GATED for routing + ice at validation time** (`check_routing_and_ice`, 2026-07-03).
+    The export is the LAST artifact RMFG reads; on 2026-07-03 untagged CS drift-ins, 1522 missing-ice
+    orders, 176 residential-forcing `!FedEx Home Delivery` pins and 378 leaky single-hub fences ALL
+    reached the live cohort and were caught only by manual near-deadline checking. The check imports
+    the SHARED gate `ShipRouting/lib/qc_gate.py` (the same module apply.py runs pre-write — one gate,
+    two chokepoints): 5-form tag grammar (ROUTING_RULES §12; `lib/canon` is the ONLY parser — never
+    hand-roll a tag regex), untagged, HD pins, leaky fences, ice policy (`MAX_ICE_NONTRAY` env),
+    Indy pin count (info-only here — the CAP is enforced apply-side where box data lives). A missing/
+    unimportable qc_gate = the check FAILS loud, never skips. Trays = any TR-/TRAY SKU in assignments.
+
 Linked from `AppyHour/CLAUDE.md`. Audit that produced this doc:
 `_outputs/reports/2026-07-02-matrix-tool-audit.md`.

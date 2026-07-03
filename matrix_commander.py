@@ -992,6 +992,39 @@ def check_parent_fill(orders: list[OrderRow]) -> CheckResult:
     )
 
 
+def check_routing_and_ice(orders: list[OrderRow]) -> CheckResult:
+    """Col-L routing + ice QC — the shared ShipRouting gate (lib/qc_gate) run at EXPORT time.
+    MATRIX_RULES rule 14: the export is the last artifact RMFG reads; on 2026-07-03 untagged orders,
+    missing ice, HD pins and leaky fences all reached the sheet unchecked (caught manually near-deadline).
+    Checks per order: tag grammar (5-form, ROUTING_RULES §12), untagged, positive Home-Delivery pins,
+    leaky single-hub fences, ice policy (MAX_ICE_NONTRAY env), Indy pin count (info — cap is enforced
+    apply-side where box data lives). Trays = any TR-/TRAY SKU in assignments."""
+    import sys as _sys
+    _sr = r"C:\Users\Work\Claude Projects\ShipRouting"
+    if _sr not in _sys.path:
+        _sys.path.insert(0, _sr)
+    try:
+        from lib.qc_gate import QCRow, run_qc, split_tags
+    except Exception as e:  # loud, never silent — a missing gate is a FAIL, not a skip
+        return CheckResult("Routing & Ice (col L)", False,
+                           f"qc_gate unavailable ({type(e).__name__}: {e}) — cannot validate col L")
+
+    def _is_tray(o: OrderRow) -> bool:
+        return any(s.upper().startswith("TR-") or "TRAY" in s.upper() for s in o.assignments)
+
+    rows = [QCRow(o.order_id, *split_tags(o.tags), _is_tray(o)) for o in orders]
+    rep = run_qc(rows)
+    details = [f"{chk}: {names[:8]}{'…' if len(names) > 8 else ''}" for chk, names in rep.hard_fails.items()]
+    details += [f"(warn) {chk}: {len(names)}" for chk, names in rep.warnings.items()]
+    details += [f"(info) {k}: {v}" for k, v in rep.info.items()]
+    if not rep.passed:
+        n_bad = sum(len(v) for v in rep.hard_fails.values())
+        return CheckResult("Routing & Ice (col L)", False,
+                           f"{n_bad} routing/ice defect(s) in col L — DO NOT SUBMIT", details[:20])
+    return CheckResult("Routing & Ice (col L)", True,
+                       f"All {len(orders)} orders routed + iced per policy", details[:6])
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Inventory cross-check & shortage report
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2669,6 +2702,7 @@ def cmd_validate(xlsx_path: str) -> bool:
         check_mfg_onboarding(orders, mfg_translations),
         check_cexec_cheese_counts(orders, cex_ec, cexec_splits),
         check_parent_fill(orders),
+        check_routing_and_ice(orders),
     ]
 
     all_passed = print_validation_report(results, len(orders))
@@ -2772,6 +2806,7 @@ def cmd_full(xlsx_path: str, inventory_path: Optional[str] = None) -> bool:
         check_sku_mappings(unmapped),
         check_mfg_onboarding(orders, mfg_translations),
         check_cexec_cheese_counts(orders, cex_ec, cexec_splits),
+        check_routing_and_ice(orders),
     ]
 
     validation_passed = print_validation_report(results, len(orders))
