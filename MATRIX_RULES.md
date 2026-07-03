@@ -52,6 +52,15 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
 9. **Web UI (`matrix_commander_web`) must route through the CLI pipeline functions** — its `/api/sync`
    shipped both broken (dataclass `.get()`) AND bypassing the limiter/guard/checkpoints. Never
    re-implement sync in the web layer. ⚠️ Endpoint still broken as of 2026-07-02.
+10. **Column-name → SKU resolution is layered; a name resolving must NEVER pass MFG onboarding**
+    (2026-07-03): `parse_matrix` resolves `constants.NAME_TO_SKU` → `mfg_translations.csv` reverse →
+    live Shopify product titles + raw SKUs (lazy, only when local layers leave gaps; offline → `??-`
+    fallback as before). The Shopify layer exists because validation showed `??-` garbage for names
+    known to Shopify — but a Shopify-resolved SKU is still NOT onboarded at RMFG; the
+    `check_mfg_onboarding` FAIL must stay loud for it. Never treat "name resolved" as "RMFG can pick
+    it". Same resolver feeds `apply_swaps_to_xlsx` column lookup — do NOT let the two drift back to
+    `NAME_TO_SKU`-only (swaps silently skipped columns before). `mfg_translations.csv` is now
+    git-tracked — refresh it from translator.robbinsmfginc.com via commit, never an untracked drop.
 
 Linked from `AppyHour/CLAUDE.md`. Audit that produced this doc:
 `_outputs/reports/2026-07-02-matrix-tool-audit.md`.

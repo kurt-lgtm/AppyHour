@@ -399,6 +399,69 @@ class ShortageItem:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+def _normalize_name(name: str) -> str:
+    """Normalize a product name for matching (case/whitespace-insensitive)."""
+    return " ".join(name.casefold().split())
+
+
+_SHOPIFY_TITLE_TO_SKU: dict[str, str] | None = None
+
+
+def _fetch_shopify_title_to_sku() -> dict[str, str]:
+    """Fetch normalized product title → SKU from Shopify (lazy, cached per process).
+
+    Covers active/archived/draft — productVariants is status-agnostic. Best-effort:
+    returns {} on any network/auth failure so offline validation still works.
+    """
+    global _SHOPIFY_TITLE_TO_SKU
+    if _SHOPIFY_TITLE_TO_SKU is not None:
+        return _SHOPIFY_TITLE_TO_SKU
+    query = """
+    query($cursor: String) {
+      productVariants(first: 250, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        edges { node { sku product { title } } }
+      }
+    }
+    """
+    mapping: dict[str, str] = {}
+    try:
+        base, headers = _get_shopify_auth()
+        cursor = None
+        while True:
+            data = _shopify_graphql_matrix(base, headers, query, {"cursor": cursor})
+            conn = data["productVariants"]
+            for edge in conn["edges"]:
+                node = edge["node"]
+                sku = (node.get("sku") or "").strip()
+                title = ((node.get("product") or {}).get("title") or "").strip()
+                if sku and title:
+                    mapping.setdefault(_normalize_name(title), sku)
+                if sku:
+                    # Generated matrices emit the raw SKU as the column name when unmapped
+                    mapping.setdefault(_normalize_name(sku), sku)
+            if not conn["pageInfo"]["hasNextPage"]:
+                break
+            cursor = conn["pageInfo"]["endCursor"]
+    except Exception as exc:  # noqa: BLE001 — offline/auth failure degrades to CSV-only mapping
+        print(f"  WARN: Shopify name lookup unavailable ({exc}) — falling back to local mappings only")
+        return {}
+    _SHOPIFY_TITLE_TO_SKU = mapping
+    return mapping
+
+
+def _build_name_resolver() -> dict[str, str]:
+    """Name → SKU resolver: constants.NAME_TO_SKU first, then mfg_translations reverse."""
+    resolver = {_normalize_name(name): sku for name, sku in NAME_TO_SKU.items()}
+    for sku, mfg_name in load_mfg_translations().items():
+        name = mfg_name.split(": ", 1)[1] if ": " in mfg_name else mfg_name
+        resolver.setdefault(_normalize_name(name), sku)
+        resolver.setdefault(_normalize_name(sku), sku)  # raw-SKU column headers
+    for sku in NAME_TO_SKU.values():
+        resolver.setdefault(_normalize_name(sku), sku)
+    return resolver
+
+
 def parse_matrix(xlsx_path: str | Path) -> tuple[list[OrderRow], list[str], dict[str, str]]:
     """Parse the production matrix XLSX.
 
@@ -406,7 +469,13 @@ def parse_matrix(xlsx_path: str | Path) -> tuple[list[OrderRow], list[str], dict
         (orders, product_columns, unmapped_names)
         - orders: list of OrderRow
         - product_columns: list of product column headers found
-        - unmapped_names: {product_name: fallback_sku} for names not in NAME_TO_SKU
+        - unmapped_names: {product_name: fallback_sku} for names not resolvable via
+          NAME_TO_SKU, mfg_translations.csv reverse, or Shopify product titles
+
+    Name→SKU resolution order: constants.NAME_TO_SKU → mfg_translations.csv reverse →
+    Shopify product title (live, only queried when local layers leave gaps). A
+    Shopify-resolved SKU still fails the MFG-onboarding check if absent from
+    mfg_translations.csv — resolution here never bypasses that gate.
     """
     wb = openpyxl.load_workbook(str(xlsx_path), data_only=True, read_only=True)
     # Handle both RMFG download (Worksheet) and formatted files (Access_LIVE)
@@ -427,16 +496,31 @@ def parse_matrix(xlsx_path: str | Path) -> tuple[list[OrderRow], list[str], dict
     product_column_names: list[str] = []
     unmapped: dict[str, str] = {}
 
+    resolver = _build_name_resolver()
+    pending: list[tuple[int, str]] = []
     for idx, hdr in enumerate(headers):
         if hdr.startswith("AHB") and ": " in hdr:
             prod_name = hdr.split(": ", 1)[1]
             product_column_names.append(prod_name)
-            sku = NAME_TO_SKU.get(prod_name)
+            sku = resolver.get(_normalize_name(prod_name))
+            if sku is None:
+                pending.append((idx, prod_name))
+            else:
+                product_cols.append((idx, prod_name, sku))
+
+    # Local layers left gaps → try live Shopify product titles (best-effort)
+    if pending:
+        shopify_map = _fetch_shopify_title_to_sku()
+        for idx, prod_name in pending:
+            sku = shopify_map.get(_normalize_name(prod_name))
             if sku is None:
                 fallback = f"??-{prod_name[:20]}"
                 unmapped[prod_name] = fallback
                 sku = fallback
+            else:
+                print(f"  INFO: '{prod_name}' resolved via Shopify title → {sku} (not in local mappings)")
             product_cols.append((idx, prod_name, sku))
+        product_cols.sort(key=lambda t: t[0])
 
     # Check for duplicate column names
     seen_cols: dict[str, int] = {}
@@ -1221,11 +1305,12 @@ def apply_swaps_to_xlsx(
     for cell in ws[1]:
         headers.append(str(cell.value or ""))
 
+    resolver = _build_name_resolver()
     sku_to_col: dict[str, int] = {}
     for idx, h in enumerate(headers):
         if h.startswith("AHB") and ": " in h:
             prod_name = h.split(": ", 1)[1]
-            sku = NAME_TO_SKU.get(prod_name)
+            sku = resolver.get(_normalize_name(prod_name))
             if sku:
                 sku_to_col[sku] = idx + 1  # openpyxl is 1-indexed
 

@@ -3,6 +3,17 @@
 const $ = id => document.getElementById(id);
 const status = msg => { $('statusText').innerHTML = msg; };
 
+// ── Tabs ───────────────────────────────────────────────────────────
+
+function switchTab(tabId) {
+  document.querySelectorAll('.tab-page').forEach(p => p.classList.toggle('hidden', p.id !== tabId));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tabId));
+}
+
+function markInventoryReady() {
+  $('invReadyDot').classList.remove('hidden');
+}
+
 // ── File Upload (drag & drop + click) ──────────────────────────────
 
 function setupDropZone(zoneId, fileType) {
@@ -73,11 +84,9 @@ async function runValidation() {
     }
 
     showValidation(data);
+    markInventoryReady();
 
-    // Show inventory panel
-    $('inventory-panel').classList.remove('hidden');
-
-    status(data.all_passed ? 'All checks passed' : 'Validation issues found');
+    status(data.all_passed ? 'All checks passed — Inventory tab ready' : 'Validation issues found');
     $('btnValidate').disabled = false;
   } catch (e) {
     status(`Validation failed: ${e.message}`);
@@ -263,9 +272,7 @@ async function runGenerate() {
 
     // Show validation (auto-run by generate)
     showValidation(data);
-
-    // Show inventory panel
-    $('inventory-panel').classList.remove('hidden');
+    markInventoryReady();
 
     // Auto-fill sync tag from generate tag
     $('syncTag').value = tag;
@@ -400,6 +407,9 @@ function escHtml(s) {
 // ── Init ───────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.tab-btn').forEach(b =>
+    b.addEventListener('click', () => switchTab(b.dataset.tab)));
+
   setupDropZone('mainDrop', 'main');
   setupDropZone('giftDrop', 'gift');
 

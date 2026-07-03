@@ -6,7 +6,7 @@
 <title>Matrix Commander</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=Space+Mono:wght@400;700&family=Rajdhani:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/styles.css?v=1">
+<link rel="stylesheet" href="/static/styles.css?v=2">
 </head>
 <body>
 <div id="app">
@@ -58,6 +58,15 @@
     </div>
   </div>
 
+  <!-- Tab Bar -->
+  <nav id="tabBar">
+    <button class="tab-btn active" data-tab="tab-validate">VALIDATE</button>
+    <button class="tab-btn" data-tab="tab-inventory">INVENTORY<span id="invReadyDot" class="tab-dot hidden"></span></button>
+  </nav>
+
+  <!-- ══ VALIDATE TAB ══ -->
+  <div id="tab-validate" class="tab-page">
+
   <!-- Generate Section -->
   <section id="generate-section">
     <div class="generate-row">
@@ -96,8 +105,13 @@
     <div id="checksList"></div>
   </section>
 
+  </div><!-- /tab-validate -->
+
+  <!-- ══ INVENTORY TAB ══ -->
+  <div id="tab-inventory" class="tab-page hidden">
+
   <!-- Inventory Panel -->
-  <section id="inventory-panel" class="panel hidden">
+  <section id="inventory-panel" class="panel">
     <h2>INVENTORY</h2>
     <div class="inventory-controls">
       <button id="btnLoadInventory" class="btn">Load from Settings</button>
@@ -150,6 +164,8 @@
     <div id="syncErrors" class="sync-errors"></div>
   </section>
 
+  </div><!-- /tab-inventory -->
+
   <!-- Status Bar -->
   <footer id="statusBar">
     <span id="statusText">Ready</span>
@@ -157,6 +173,6 @@
 
 </div>
 
-<script src="/static/app.js?v=1"></script>
+<script src="/static/app.js?v=2"></script>
 </body>
 </html>

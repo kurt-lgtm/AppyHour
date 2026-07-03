@@ -75,6 +75,43 @@ body {
   border-radius: 3px;
 }
 
+/* Tab Bar */
+#tabBar {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.tab-btn {
+  background: transparent;
+  color: var(--fg2);
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px 18px;
+  font-family: var(--font-chrome);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tab-btn:hover { color: var(--fg); }
+.tab-btn.active {
+  color: var(--cyan);
+  border-bottom-color: var(--cyan);
+}
+.tab-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  display: inline-block;
+}
+.tab-page.hidden { display: none; }
+.tab-dot.hidden { display: none; }
+
 /* Generate Section */
 #generate-section { margin-bottom: 8px; }
 .generate-row {
