@@ -518,7 +518,7 @@ def parse_matrix(xlsx_path: str | Path) -> tuple[list[OrderRow], list[str], dict
                 unmapped[prod_name] = fallback
                 sku = fallback
             else:
-                print(f"  INFO: '{prod_name}' resolved via Shopify title → {sku} (not in local mappings)")
+                print(f"  INFO: '{prod_name}' resolved via Shopify title -> {sku} (not in local mappings)")
             product_cols.append((idx, prod_name, sku))
         product_cols.sort(key=lambda t: t[0])
 
