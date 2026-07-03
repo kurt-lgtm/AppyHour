@@ -1111,7 +1111,7 @@ def print_inventory_report(
 
     # Full demand table
     print(f"  {_BOLD}{'SKU':<14} {'Demand':>7} {'Avail':>7} {'Net':>7}  Status{_RESET}")
-    print(f"  {'─' * 52}")
+    print(f"  {'-' * 52}")
 
     for sku in sorted(food_demand.keys()):
         qty = food_demand[sku]
@@ -1147,7 +1147,7 @@ def print_inventory_report(
                 print(f"    {_CYAN}Swap candidates:{_RESET}")
                 for alt_sku, surplus in s.swap_candidates:
                     alt_name = SKU_TO_NAME.get(alt_sku, alt_sku)
-                    print(f"      → {alt_sku} ({alt_name}): {surplus} surplus")
+                    print(f"      -> {alt_sku} ({alt_name}): {surplus} surplus")
             elif s.family:
                 print(f"    {_YELLOW}No swap candidates with surplus in {s.family} family{_RESET}")
             else:
@@ -1163,12 +1163,12 @@ def print_demand_summary(demand: dict[str, int]) -> None:
     food_demand = {sku: qty for sku, qty in demand.items() if any(sku.startswith(p) for p in ("CH-", "MT-", "AC-"))}
     print(f"\n{_BOLD}  Demand Summary (food SKUs only){_RESET}")
     print(f"  {'SKU':<14} {'Name':<45} {'Qty':>5}")
-    print(f"  {'─' * 66}")
+    print(f"  {'-' * 66}")
     for sku in sorted(food_demand.keys()):
         name = SKU_TO_NAME.get(sku, "???")
         print(f"  {sku:<14} {name:<45} {food_demand[sku]:>5}")
     total = sum(food_demand.values())
-    print(f"  {'─' * 66}")
+    print(f"  {'-' * 66}")
     print(f"  {'TOTAL':<14} {'':<45} {total:>5}")
 
 
