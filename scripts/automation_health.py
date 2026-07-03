@@ -75,7 +75,9 @@ def check_sync_heartbeat(findings: list[str]) -> None:
     age_h = (datetime.now() - newest).total_seconds() / 3600
     if age_h > SYNC_HEARTBEAT_MAX_H:
         findings.append(f"ingest sync heartbeat stale: {age_h/24:.1f}d (max {SYNC_HEARTBEAT_MAX_H}h)")
-    bad = [k for k, v in data.items() if k.endswith("_status") and str(v).lower() not in ("ok", "success")]
+    # status values may carry detail suffixes ("ok:new_invoices=6 ...") — prefix match, not equality
+    bad = [k for k, v in data.items() if k.endswith("_status")
+           and not str(v).lower().startswith(("ok", "success"))]
     if bad:
         findings.append(f"ingest legs not ok: {', '.join(bad)}")
 
