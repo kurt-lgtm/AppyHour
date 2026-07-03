@@ -4,6 +4,10 @@
 > `ShipRouting/scripts/gen_rmfg_export.py`, or `AppyHourMCP` matrix tools. Change rules HERE first —
 > same commit as the code. Gotchas/negatives-first: each rule below encodes a failure that shipped.
 
+> 🧭 **NORTH STAR:** the matrix RMFG picks from matches paid demand EXACTLY — zero wrong physical boxes.
+> Every check in this doc exists because an error here becomes a mis-packed box at a customer's door
+> (the CEX-EC box-size proxy over-cut ~6× before the line-item rule).
+
 **What it is:** the canonical RMFG production-matrix export pipeline —
 `matrix_commander.py generate` (Shopify → Access_LIVE matrix xlsx) → `gen_rmfg_export.py` wrapper
 (generate → col-L curation → autofit → QC) → `qc_audit` gate. Validation twin:

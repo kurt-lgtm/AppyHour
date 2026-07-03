@@ -2,6 +2,11 @@
 
 Demand forecasting + cut order generation + fulfillment web dashboard. Single-file tkinter app + Flask/pywebview side panel.
 
+> 🧭 **NORTH STAR:** Tommy cuts EXACTLY what paid demand requires — no over-cut (the CEX-EC box-size
+> proxy over-cut ~6× before the line-item rule), no shortage, no stale inputs (a stale
+> `corrected_inventory_path` silently clobbered HAVE on 6/23). Demand = RC-queued + SH-orders, counted
+> from what customers actually bought — never from proxies.
+
 ## Task Routing
 
 | Task | Read | Skip | Notes |

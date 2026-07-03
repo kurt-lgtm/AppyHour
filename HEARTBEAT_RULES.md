@@ -3,6 +3,9 @@
 > 🔴 **PRE-CHANGE GATE:** read this before touching `appyhour_lib/heartbeat.py`,
 > `scripts/automation_health.py`, or any task wrapper's `beat()` call. Change rules HERE first, same commit.
 
+> 🧭 **NORTH STAR:** no automation failure stays silent past one checker cycle — silence IS the
+> failure signal.
+
 **What it is:** the inversion the Slack-on-completion hooks structurally can't do — **a task that never
 runs sends no Slack**, so silence looked like success (7 of 14 schtasks failed silently for a week,
 2026-07-02 audit; ingest heartbeat sat 5 days stale). Fragile tasks write a heartbeat on success;
