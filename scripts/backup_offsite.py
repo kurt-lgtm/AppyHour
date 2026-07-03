@@ -66,6 +66,7 @@ def logic_docs() -> list[Path]:
     # routing-engine EXPLAINER HTML (stakeholder-facing clickable flowcharts) — part of the system's
     # documentation; lives in the shared _outputs sink (one level up from this repo).
     docs.extend(sorted((REPO_ROOT.parent / "_outputs" / "artifacts").glob("cold-chain-*.html")))
+    docs.append(REPO_ROOT.parent / "AGENTS-START-HERE.md")   # agent onboarding map (workspace root, not git-tracked)
     return [p for p in docs if p.exists()]
 
 
