@@ -31,6 +31,7 @@ EXPECTED = {
     "loop-scorecard": 8 * 24,
     "corrections-mining": 8 * 24,
     "automation-health": 2 * 24,
+    "freshness-sweep": 8 * 24,
 }
 SYNC_HEARTBEAT_MAX_H = 48
 SCHTASK_PREFIXES = ("appyhour_daily",)  # Windows tasks whose Last Result we audit
