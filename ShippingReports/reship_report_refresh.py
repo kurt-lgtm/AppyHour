@@ -233,14 +233,47 @@ def build(weeks_back: int, dry_run: bool) -> None:
         state[key] = rec
     save_state(state)
 
-    cdf = tail_cdf(state, mondays)
+    # user overrides from Raw Data cols J-M (script never writes into them
+    # except to re-preserve; user edits survive refreshes and re-point pivots)
+    gclient = None
+    overrides: dict[str, dict] = {}
+    if not dry_run:
+        from google_integration import GoogleIntegration
+        gclient = GoogleIntegration(str(CREDS_FALLBACK))
+        try:
+            raw = gclient.read_sheet(SHEET_ID, "'Raw Data'!A3:M10000") or []
+        except Exception:
+            raw = []
+        for row in raw:
+            row = row + [""] * (13 - len(row))
+            if row[0]:
+                overrides[row[0]] = {"issue": row[9], "incoming": row[10],
+                                     "outgoing": row[11], "exclude": row[12].strip().lower() == "x"}
+
+    # effective view: overrides applied, excluded rows dropped from ALL counts
+    eff: dict[str, dict] = {}
+    for k, rec in state.items():
+        r = dict(rec)
+        o = overrides.get(k)
+        if o:
+            if o["issue"]:
+                r["issue"] = o["issue"]
+            if o["incoming"]:
+                r["original_cohort"] = o["incoming"]
+            if o["outgoing"]:
+                r["outbound"] = o["outgoing"]
+            r["excluded"] = o["exclude"]
+        eff[k] = r
+    work = {k: r for k, r in eff.items() if not r.get("excluded")}
+
+    cdf = tail_cdf(work, mondays)
     day_n = (today - this_mon).days
 
     def requests_by_day(mon: date, upto_offset: int | None = None) -> list[str]:
         """reship names attributed (R3) to cohort `mon`, by requested date (R4)."""
         tag = f"_SHIP_{mon.isoformat()}"
         names = []
-        for name, rec in state.items():
+        for name, rec in work.items():
             if rec.get("original_cohort") != tag or not rec.get("requested"):
                 continue
             off = (date.fromisoformat(rec["requested"]) - mon).days
@@ -255,7 +288,7 @@ def build(weeks_back: int, dry_run: bool) -> None:
     # per-week tabs
     for mon in mondays:
         tag = f"_SHIP_{mon.isoformat()}"
-        cohort_names = [n for n, rec in state.items() if rec.get("original_cohort") == tag]
+        cohort_names = [n for n, rec in work.items() if rec.get("original_cohort") == tag]
         denom = denoms[mon]
         rows: list[list] = []
         rows.append([f"REFRESHED {stamp}", f"cohort {tag}", f"denominator {denom} orders "
@@ -263,7 +296,7 @@ def build(weeks_back: int, dry_run: bool) -> None:
         rows.append([])
         rows.append(["ISSUE BREAKDOWN (unit = reship orders, R1/R6)"])
         rows.append(["Issue", "Count", "% of cohort"])
-        for issue, cnt in Counter(state[n]["issue"] for n in cohort_names).most_common():
+        for issue, cnt in Counter(work[n]["issue"] for n in cohort_names).most_common():
             rows.append([issue, cnt, f"{cnt/denom:.2%}" if denom else "n/a"])
         rows.append(["TOTAL", len(cohort_names), f"{len(cohort_names)/denom:.2%}" if denom else "n/a"])
         rows.append([])
@@ -289,18 +322,18 @@ def build(weeks_back: int, dry_run: bool) -> None:
         rows.append([])
         # Reconciliation panel: entered this calendar week (R4)
         wk_end = mon + timedelta(days=6)
-        entered_wk = [n for n, rec in state.items() if mon.isoformat() <= rec.get("entered", "") <= wk_end.isoformat()]
+        entered_wk = [n for n, rec in work.items() if mon.isoformat() <= rec.get("entered", "") <= wk_end.isoformat()]
         rows.append(["SHOPIFY RECONCILIATION — reship orders ENTERED this calendar week "
                      "(what an admin eyeball counts; entry date ≠ request date, R4)"])
         rows.append(["Entered this week (deduped orders)", len(entered_wk)])
-        for coh, cnt in Counter(state[n].get("original_cohort", "?") for n in entered_wk).most_common():
+        for coh, cnt in Counter(work[n].get("original_cohort", "?") for n in entered_wk).most_common():
             rows.append([f"  remediating {coh}", cnt])
         rows.append([])
         rows.append(["DETAIL"])
         rows.append(["Reship", "Requested", "Entered", "Issue", "Original", "Outbound week",
                      "Ticket", "Status"])
-        for n in sorted(cohort_names, key=lambda x: state[x].get("requested", "")):
-            rec = state[n]
+        for n in sorted(cohort_names, key=lambda x: work[x].get("requested", "")):
+            rec = work[n]
             rows.append([n, rec.get("requested") or "UNKNOWN", rec["entered"], rec["issue"],
                          rec.get("original", ""), rec.get("outbound", ""),
                          rec.get("ticket", ""), rec.get("status", "")])
@@ -314,7 +347,7 @@ def build(weeks_back: int, dry_run: bool) -> None:
     for mon in sorted(mondays):
         tag = f"_SHIP_{mon.isoformat()}"
         # headline = ALL attributed reships (incl. UNKNOWN requested) — must match Pivots
-        n_now = sum(1 for rec in state.values() if rec.get("original_cohort") == tag)
+        n_now = sum(1 for rec in work.values() if rec.get("original_cohort") == tag)
         denom = denoms[mon]
         off = (today - mon).days
         mature = off >= MATURITY_DAYS
@@ -329,44 +362,80 @@ def build(weeks_back: int, dry_run: bool) -> None:
                       "FINAL" if mature else f"maturing (day {off})"])
     tabs["Summary"] = srows
 
-    # Pivots tab — Dan's 4 views (2026-07-09), window = swept weeks
-    def pivot(counter: Counter, label: str) -> list[list]:
-        blk = [[label, "Count"]]
-        for k in sorted(counter, key=lambda x: (x == "(blank)", x)):
-            blk.append([k, counter[k]])
-        blk.append(["Grand Total", sum(counter.values())])
-        blk.append([])
-        return blk
-
-    window_recs = {n: rec for n, rec in state.items()
-                   if rec.get("entered", "") >= oldest.isoformat()}
-    prows: list[list] = [[f"REFRESHED {stamp}",
-                          f"window: reship orders entered since {oldest} (deduped, R6)"], []]
-    prows += pivot(Counter(r["entered"] for r in window_recs.values()),
-                   "Reship Created (Shopify entry date)")
-    prows += pivot(Counter(r.get("requested") or "(blank)" for r in window_recs.values()),
-                   "Reship Requested (Slack/Gorgias ticket date)")
-    prows += pivot(Counter(r.get("outbound") or "(blank)" for r in window_recs.values()),
-                   "Reship Outgoing ship week")
-    prows.append(["Reship Incoming ship week (original order's cohort)", "Count",
-                  "Cohort size (excl. reships)", "Reship rate"])
-    incoming = Counter(r.get("original_cohort") or "(blank)" for r in window_recs.values())
-    for coh in sorted(incoming, key=lambda x: (not x.startswith("_SHIP_"), x)):
-        cnt = incoming[coh]
+    # Raw Data tab — source cols A-I script-owned; J-M USER-owned overrides
+    # (preserved each refresh); N-P effective formulas. Pivots read N-P live.
+    window_keys = sorted([n for n, rec in state.items()
+                          if rec.get("entered", "") >= oldest.isoformat()],
+                         key=lambda n: (state[n]["entered"], n))
+    # ensure denominators for every incoming cohort seen (source OR override)
+    for n in window_keys:
+        coh = eff[n].get("original_cohort", "")
         if coh.startswith("_SHIP_"):
             mon_d = date.fromisoformat(coh.replace("_SHIP_", ""))
-            denom = denoms.get(mon_d) or cohort_denominator(coh)
-            denoms[mon_d] = denom
-            prows.append([coh, cnt, denom, f"{cnt/denom:.2%}" if denom else "n/a"])
+            if mon_d not in denoms:
+                denoms[mon_d] = cohort_denominator(coh)
+
+    rrows: list[list] = [
+        [f"REFRESHED {stamp}", f"window: entered since {oldest}",
+         "cols A-I refresh hourly (do not edit)", "cols J-M are YOURS (survive refresh)",
+         "put x in Exclude to strike a row", "pivots update instantly"],
+        ["Order", "Entered", "Requested", "Ticket", "Issue", "Incoming week",
+         "Outgoing week", "Status", "Original",
+         "Override Issue", "Override Incoming", "Override Outgoing", "Exclude",
+         "Eff Issue", "Eff Incoming", "Eff Outgoing"],
+    ]
+    for i, n in enumerate(window_keys):
+        rec = state[n]  # source values in A-I; overrides shown in J-M
+        o = overrides.get(n, {})
+        rnum = i + 3
+        rrows.append([
+            n, rec.get("entered", ""), rec.get("requested", ""), rec.get("ticket", ""),
+            rec.get("issue", ""), rec.get("original_cohort", ""), rec.get("outbound", ""),
+            rec.get("status", ""), rec.get("original", ""),
+            o.get("issue", ""), o.get("incoming", ""), o.get("outgoing", ""),
+            "x" if o.get("exclude") else "",
+            f'=IF($J{rnum}<>"",$J{rnum},$E{rnum})',
+            f'=IF($K{rnum}<>"",$K{rnum},$F{rnum})',
+            f'=IF($L{rnum}<>"",$L{rnum},$G{rnum})',
+        ])
+    tabs["Raw Data"] = rrows
+
+    # Pivots tab — live QUERY formulas over Raw Data effective cols (edit an
+    # override or Exclude on Raw Data -> these change instantly, no refresh)
+    rd = "'Raw Data'!$A$3:$P"
+    def q(sel_col: str) -> str:
+        return (f'=IFERROR(QUERY({rd}, "select {sel_col}, count(A) '
+                f"where A<>'' and M<>'x' group by {sel_col} order by {sel_col} "
+                f'label count(A) \'\'", 0), "no data")')
+    N = None  # null cell -> untouched/empty, so QUERY spills aren't blocked
+    prows: list[list] = [
+        [f"REFRESHED {stamp}",
+         f"live formulas over Raw Data (entered since {oldest}); overrides + Exclude apply instantly",
+         N, "Grand Total (excl. excluded):",
+         '=COUNTIFS(\'Raw Data\'!$A$3:$A,"<>",\'Raw Data\'!$M$3:$M,"<>x")'],
+        [],
+        ["Reship Created (entry date)", N, N, "Reship Requested (ticket date)", N, N,
+         "Reship Outgoing ship week", N, N, "Reship Incoming ship week", N, "Rate", N,
+         "Cohort size (excl. reships)", N],
+        [q("B"), N, N, q("C"), N, N, q("P"), N, N, q("O"), N,
+         '=ARRAYFORMULA(IF(J4:J="",,IFERROR(TEXT(K4:K/VLOOKUP(J4:J,$N$4:$O,2,FALSE),"0.00%"),"")))', N,
+         N, N],
+    ]
+    for i, mon_d in enumerate(sorted(denoms)):
+        row: list = [N] * 15
+        row[13] = f"_SHIP_{mon_d.isoformat()}"
+        row[14] = denoms[mon_d]
+        if i + 4 == 4:  # denominator rows start at row 4
+            prows[3][13] = row[13]
+            prows[3][14] = row[14]
         else:
-            prows.append([coh, cnt, "", ""])
-    prows.append(["Grand Total", sum(incoming.values())])
+            prows.append(row)
     tabs["Pivots"] = prows
 
     # Flags tab (Dan-owned decisions)
     frows = [[f"REFRESHED {stamp}"], [],
              ["Reship", "Flag", "Detail"]]
-    for n, rec in sorted(state.items()):
+    for n, rec in sorted(work.items()):
         coh = rec.get("original_cohort", "")
         if not coh.startswith("_SHIP_"):
             continue
@@ -391,8 +460,6 @@ def build(weeks_back: int, dry_run: bool) -> None:
                 print(r)
         return
 
-    from google_integration import GoogleIntegration
-    gclient = GoogleIntegration(str(CREDS_FALLBACK))
     existing = {s["properties"]["title"] for s in
                 gclient._sheets.spreadsheets().get(spreadsheetId=SHEET_ID).execute()["sheets"]}
     for name, rows in tabs.items():
@@ -400,11 +467,25 @@ def build(weeks_back: int, dry_run: bool) -> None:
             gclient.add_sheet_tab(SHEET_ID, name)
         gclient._sheets.spreadsheets().values().clear(
             spreadsheetId=SHEET_ID, range=f"'{name}'!A1:Z2000").execute()
-        width = max(len(r) for r in rows)
-        gclient._sheets.spreadsheets().values().update(
-            spreadsheetId=SHEET_ID, range=f"'{name}'!A1",
-            valueInputOption="USER_ENTERED",
-            body={"values": [r + [""] * (width - len(r)) for r in rows]}).execute()
+        # None cells serialize to JSON null = untouched (stays empty after the
+        # clear) — required so QUERY/ARRAYFORMULA spills on Pivots aren't blocked.
+        # Data tabs write RAW so date strings stay text (USER_ENTERED turns them
+        # into date serials that break QUERY group labels); formula cells need
+        # USER_ENTERED, so Raw Data splits A-M (RAW) from N-P (formulas).
+        if name == "Raw Data":
+            gclient._sheets.spreadsheets().values().update(
+                spreadsheetId=SHEET_ID, range=f"'{name}'!A1",
+                valueInputOption="RAW",
+                body={"values": [r[:13] for r in rows]}).execute()
+            gclient._sheets.spreadsheets().values().update(
+                spreadsheetId=SHEET_ID, range=f"'{name}'!N1",
+                valueInputOption="USER_ENTERED",
+                body={"values": [r[13:16] if len(r) > 13 else [None] for r in rows]}).execute()
+        else:
+            gclient._sheets.spreadsheets().values().update(
+                spreadsheetId=SHEET_ID, range=f"'{name}'!A1",
+                valueInputOption="USER_ENTERED" if name == "Pivots" else "RAW",
+                body={"values": rows}).execute()
         time.sleep(0.3)
     print(f"[reship-report] wrote {len(tabs)} tabs to {SHEET_ID} at {stamp}")
 

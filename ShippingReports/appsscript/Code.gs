@@ -58,11 +58,30 @@ function build_() {
   sweepAndEnrich_(state, oldest);
   saveState_(state);
 
-  var cdf = tailCdf_(state, today);
-  var tabs = buildTabs_(state, mondays, denoms, cdf, today, stamp);
-  Object.keys(tabs).forEach(function (name) { writeTab_(name, tabs[name]); });
+  // user overrides from Raw Data J-M (user-owned, survive refresh)
+  var overrides = loadOverrides_();
+  var eff = {};
+  Object.keys(state).forEach(function (k) {
+    var r = JSON.parse(JSON.stringify(state[k]));
+    var o = overrides[k];
+    if (o) {
+      if (o.issue) r.issue = o.issue;
+      if (o.incoming) r.original_cohort = o.incoming;
+      if (o.outgoing) r.outbound = o.outgoing;
+      r.excluded = o.exclude;
+    }
+    eff[k] = r;
+  });
+  var work = {};
+  Object.keys(eff).forEach(function (k) { if (!eff[k].excluded) work[k] = eff[k]; });
 
-  breachAlert_(state, mondays[0], denoms, today);
+  var cdf = tailCdf_(work, today);
+  var tabs = buildTabs_(work, state, overrides, mondays, denoms, cdf, today, stamp);
+  writeRawData_(tabs.rawData);
+  Object.keys(tabs.plain).forEach(function (name) { writeTab_(name, tabs.plain[name]); });
+  writeTab_('Pivots', tabs.pivots, true);
+
+  breachAlert_(work, mondays[0], denoms, today);
 }
 
 // ---------- Shopify ----------
@@ -216,16 +235,46 @@ function requestsByDay_(state, mon, upto) {
   return out;
 }
 
+// ---------- overrides / Raw Data ----------
+
+function loadOverrides_() {
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Raw Data');
+  if (!sh) return {};
+  var values = sh.getRange('A3:M' + Math.max(3, sh.getLastRow())).getValues();
+  var out = {};
+  values.forEach(function (row) {
+    if (row[0]) {
+      out[row[0]] = {
+        issue: String(row[9] || ''), incoming: String(row[10] || ''),
+        outgoing: String(row[11] || ''),
+        exclude: String(row[12] || '').trim().toLowerCase() === 'x',
+      };
+    }
+  });
+  return out;
+}
+
+function writeRawData_(rows) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ss.getSheetByName('Raw Data') || ss.insertSheet('Raw Data');
+  sh.clearContents();
+  var width = 16;
+  var padded = rows.map(function (r) { return r.concat(new Array(width - r.length).fill('')); });
+  sh.getRange(1, 1, padded.length, width).setValues(padded);
+  // dates as plain text so QUERY group labels stay readable
+  sh.getRange('B:D').setNumberFormat('@');
+}
+
 // ---------- tab builders ----------
 
-function buildTabs_(state, mondays, denoms, cdf, today, stamp) {
-  var tabs = {};
+function buildTabs_(work, state, overrides, mondays, denoms, cdf, today, stamp) {
+  var plain = {};
   var oldest = mondays[mondays.length - 1];
 
   mondays.forEach(function (mon) {
     var tag = '_SHIP_' + iso_(mon);
     var denom = denoms[tag];
-    var cohortNames = Object.keys(state).filter(function (k) { return state[k].original_cohort === tag; });
+    var cohortNames = Object.keys(work).filter(function (k) { return work[k].original_cohort === tag; });
     var rows = [];
     rows.push(['REFRESHED ' + stamp, 'cohort ' + tag,
       'denominator ' + denom + " orders (live Shopify, tag:'" + tag + "' -status:cancelled -tag:'Reship')",
@@ -233,7 +282,7 @@ function buildTabs_(state, mondays, denoms, cdf, today, stamp) {
     rows.push([]);
     rows.push(['ISSUE BREAKDOWN (unit = reship orders, R1/R6)']);
     rows.push(['Issue', 'Count', '% of cohort']);
-    var issues = countBy_(cohortNames.map(function (k) { return state[k].issue; }));
+    var issues = countBy_(cohortNames.map(function (k) { return work[k].issue; }));
     Object.keys(issues).sort(function (a, b) { return issues[b] - issues[a]; }).forEach(function (iss) {
       rows.push([iss, issues[iss], denom ? pct_(issues[iss] / denom) : 'n/a']);
     });
@@ -242,8 +291,8 @@ function buildTabs_(state, mondays, denoms, cdf, today, stamp) {
 
     var off = Math.min(daysBetween_(mon, today), MATURITY_DAYS);
     var prev = addDays_(mon, -7);
-    var thisN = requestsByDay_(state, mon, off).length;
-    var prevN = requestsByDay_(state, prev, off).length;
+    var thisN = requestsByDay_(work, mon, off).length;
+    var prevN = requestsByDay_(work, prev, off).length;
     var prevDenom = denoms['_SHIP_' + iso_(prev)] || 0;
     rows.push(['SAME-DAY-OFFSET COMPARISON (day ' + off + ', requested-date basis, R8)']);
     rows.push(['Cohort', 'requests by day ' + off, 'denominator', 'rate']);
@@ -257,26 +306,26 @@ function buildTabs_(state, mondays, denoms, cdf, today, stamp) {
     rows.push([]);
 
     var wkEnd = iso_(addDays_(mon, 6));
-    var enteredWk = Object.keys(state).filter(function (k) {
-      var e = state[k].entered || '';
+    var enteredWk = Object.keys(work).filter(function (k) {
+      var e = work[k].entered || '';
       return e >= iso_(mon) && e <= wkEnd;
     });
     rows.push(['SHOPIFY RECONCILIATION — reship orders ENTERED this calendar week (entry date != request date, R4)']);
     rows.push(['Entered this week (deduped orders)', enteredWk.length]);
-    var byCoh = countBy_(enteredWk.map(function (k) { return state[k].original_cohort || '?'; }));
+    var byCoh = countBy_(enteredWk.map(function (k) { return work[k].original_cohort || '?'; }));
     Object.keys(byCoh).sort(function (a, b) { return byCoh[b] - byCoh[a]; }).forEach(function (c) {
       rows.push(['  remediating ' + c, byCoh[c]]);
     });
     rows.push([]);
     rows.push(['DETAIL']);
     rows.push(['Reship', 'Requested', 'Entered', 'Issue', 'Original', 'Outbound week', 'Ticket', 'Status']);
-    cohortNames.sort(function (a, b) { return (state[a].requested || '') < (state[b].requested || '') ? -1 : 1; })
+    cohortNames.sort(function (a, b) { return (work[a].requested || '') < (work[b].requested || '') ? -1 : 1; })
       .forEach(function (k) {
-        var r = state[k];
+        var r = work[k];
         rows.push([k, r.requested || 'UNKNOWN', r.entered, r.issue, r.original || '',
                    r.outbound || '', r.ticket || '', r.status || '']);
       });
-    tabs['RS ' + tag] = rows;
+    plain['RS ' + tag] = rows;
   });
 
   // Summary
@@ -286,8 +335,8 @@ function buildTabs_(state, mondays, denoms, cdf, today, stamp) {
   mondays.slice().reverse().forEach(function (mon) {
     var tag = '_SHIP_' + iso_(mon);
     // headline = ALL attributed reships (incl UNKNOWN requested) — must match Pivots
-    var nNow = Object.keys(state).filter(function (k) { return state[k].original_cohort === tag; }).length;
-    var dated = requestsByDay_(state, mon, null).length;
+    var nNow = Object.keys(work).filter(function (k) { return work[k].original_cohort === tag; }).length;
+    var dated = requestsByDay_(work, mon, null).length;
     var undated = nNow - dated;
     var denom = denoms[tag];
     var off = daysBetween_(mon, today);
@@ -298,35 +347,73 @@ function buildTabs_(state, mondays, denoms, cdf, today, stamp) {
       (denom && typeof proj === 'number') ? pct_(proj / denom) : 'n/a',
       mature ? 'FINAL' : 'maturing (day ' + off + ')']);
   });
-  tabs['Summary'] = srows;
+  plain['Summary'] = srows;
 
-  // Pivots (Dan's 4 views)
-  var winRecs = {};
-  Object.keys(state).forEach(function (k) {
-    if ((state[k].entered || '') >= iso_(oldest)) winRecs[k] = state[k];
+  // Raw Data (source A-I from UNFILTERED state so excluded rows stay visible;
+  // overrides J-M re-preserved; N-P effective formulas)
+  var windowKeys = Object.keys(state).filter(function (k) {
+    return (state[k].entered || '') >= iso_(oldest);
+  }).sort(function (a, b) {
+    var x = state[a].entered + a, y = state[b].entered + b;
+    return x < y ? -1 : 1;
   });
-  var prows = [['REFRESHED ' + stamp, 'window: reship orders entered since ' + iso_(oldest) + ' (deduped, R6)'], []];
-  prows = prows.concat(pivot_(countBy_(vals_(winRecs, 'entered')), 'Reship Created (Shopify entry date)'));
-  prows = prows.concat(pivot_(countBy_(vals_(winRecs, 'requested', '(blank)')), 'Reship Requested (Slack/Gorgias ticket date)'));
-  prows = prows.concat(pivot_(countBy_(vals_(winRecs, 'outbound', '(blank)')), 'Reship Outgoing ship week'));
-  prows.push(['Reship Incoming ship week (original order cohort)', 'Count', 'Cohort size (excl. reships)', 'Reship rate']);
-  var incoming = countBy_(vals_(winRecs, 'original_cohort', '(blank)'));
-  Object.keys(incoming).sort().forEach(function (coh) {
-    if (coh.indexOf('_SHIP_') === 0) {
-      if (!(coh in denoms)) denoms[coh] = ordersCount_("tag:'" + coh + "' -status:cancelled -tag:'Reship'");
-      var dn = denoms[coh];
-      prows.push([coh, incoming[coh], dn, dn ? pct_(incoming[coh] / dn) : 'n/a']);
-    } else {
-      prows.push([coh, incoming[coh], '', '']);
+  windowKeys.forEach(function (k) {
+    var coh = (overrides[k] && overrides[k].incoming) || state[k].original_cohort || '';
+    if (coh.indexOf('_SHIP_') === 0 && !(coh in denoms)) {
+      denoms[coh] = ordersCount_("tag:'" + coh + "' -status:cancelled -tag:'Reship'");
     }
   });
-  prows.push(['Grand Total', Object.keys(winRecs).length]);
-  tabs['Pivots'] = prows;
+  var rrows = [
+    ['REFRESHED ' + stamp, 'window: entered since ' + iso_(oldest),
+     'cols A-I refresh hourly (do not edit)', 'cols J-M are YOURS (survive refresh)',
+     'put x in Exclude to strike a row', 'pivots update instantly'],
+    ['Order', 'Entered', 'Requested', 'Ticket', 'Issue', 'Incoming week', 'Outgoing week',
+     'Status', 'Original', 'Override Issue', 'Override Incoming', 'Override Outgoing',
+     'Exclude', 'Eff Issue', 'Eff Incoming', 'Eff Outgoing'],
+  ];
+  windowKeys.forEach(function (k, i) {
+    var rec = state[k], o = overrides[k] || {};
+    var rn = i + 3;
+    rrows.push([k, rec.entered || '', rec.requested || '', rec.ticket || '', rec.issue || '',
+      rec.original_cohort || '', rec.outbound || '', rec.status || '', rec.original || '',
+      o.issue || '', o.incoming || '', o.outgoing || '', o.exclude ? 'x' : '',
+      '=IF($J' + rn + '<>"",$J' + rn + ',$E' + rn + ')',
+      '=IF($K' + rn + '<>"",$K' + rn + ',$F' + rn + ')',
+      '=IF($L' + rn + '<>"",$L' + rn + ',$G' + rn + ')']);
+  });
+
+  // Pivots — live QUERY formulas over Raw Data effective cols
+  var rd = "'Raw Data'!$A$3:$P";
+  function q(col) {
+    return '=IFERROR(QUERY(' + rd + ', "select ' + col + ", count(A) where A<>'' and M<>'x' group by " +
+      col + ' order by ' + col + " label count(A) ''\", 0), \"no data\")";
+  }
+  var prows = [
+    ['REFRESHED ' + stamp,
+     'live formulas over Raw Data (entered since ' + iso_(oldest) + '); overrides + Exclude apply instantly',
+     '', 'Grand Total (excl. excluded):',
+     '=COUNTIFS(\'Raw Data\'!$A$3:$A,"<>",\'Raw Data\'!$M$3:$M,"<>x")'],
+    [],
+    ['Reship Created (entry date)', '', '', 'Reship Requested (ticket date)', '', '',
+     'Reship Outgoing ship week', '', '', 'Reship Incoming ship week', '', 'Rate', '',
+     'Cohort size (excl. reships)', ''],
+    [q('B'), '', '', q('C'), '', '', q('P'), '', '', q('O'), '',
+     '=ARRAYFORMULA(IF(J4:J="",,IFERROR(TEXT(K4:K/VLOOKUP(J4:J,$N$4:$O,2,FALSE),"0.00%"),"")))', '',
+     '', ''],
+  ];
+  Object.keys(denoms).sort().forEach(function (tag, i) {
+    if (i === 0) { prows[3][13] = tag; prows[3][14] = denoms[tag]; }
+    else {
+      var row = new Array(15).fill('');
+      row[13] = tag; row[14] = denoms[tag];
+      prows.push(row);
+    }
+  });
 
   // Flags
   var frows = [['REFRESHED ' + stamp], [], ['Reship', 'Flag', 'Detail']];
-  Object.keys(state).sort().forEach(function (k) {
-    var rec = state[k];
+  Object.keys(work).sort().forEach(function (k) {
+    var rec = work[k];
     var coh = rec.original_cohort || '';
     if (coh.indexOf('_SHIP_') !== 0) return;
     var cmon = new Date(coh.replace('_SHIP_', ''));
@@ -340,9 +427,9 @@ function buildTabs_(state, mondays, denoms, cdf, today, stamp) {
     if (!rec.requested)
       frows.push([k, 'UNKNOWN — no ticket found, needs manual check', 'entered ' + rec.entered]);
   });
-  tabs['Flags'] = frows;
+  plain['Flags'] = frows;
 
-  return tabs;
+  return { plain: plain, rawData: rrows, pivots: prows };
 }
 
 // ---------- state (_state hidden tab) ----------
