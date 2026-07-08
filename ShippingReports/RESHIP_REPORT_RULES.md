@@ -35,7 +35,42 @@ One tab per ship week (`_SHIP_<Monday>`), refreshed daily by a scheduled task; a
 
 ## Refresh & write discipline
 
-- **Daily scheduled task ~12:00 local** (machine asleep 6–8am), **CLI wrapper, never MCP tools in scheduled runs** (silent no-op risk). Manual re-run must be idempotent (full tab rewrite, no append-dup).
+**Owner = Google Apps Script bound to the Reship Sheet** (respec 2026-07-09 — cloud-side so
+refreshes don't depend on Kurt's machine being awake; the local Python runner becomes the
+backfill/debug tool and its 12:18 schtask is DISABLED once the Apps Script trigger is live).
+
+### Apps Script port spec
+
+- **Trigger:** time-driven, daily 12:00–13:00 window, Mon–Sat (Sat catches Fri-evening tickets).
+- **HTTP:** all three APIs via `UrlFetchApp` — Shopify GraphQL (`X-Shopify-Access-Token`),
+  Gorgias REST (Basic auth + custom `User-Agent` header — Cloudflare 1010 blocks default UA),
+  Slack incoming webhook (breach alerts) or `chat.postMessage` w/ bot token for DMs.
+- **Secrets in Script Properties ONLY** (`SHOPIFY_TOKEN`, `GORGIAS_USER/KEY`, `SLACK_WEBHOOK`) —
+  never in code, never in a sheet cell. Note: whoever can edit the script can read them; keep the
+  script owned by Kurt's account, editors = Kurt only.
+- **State = hidden `_state` tab** (one row per reship order: entered/requested/ticket/original/
+  original_cohort/total), NOT PropertiesService (9KB/prop limit). Same idempotent
+  full-tab-rewrite semantics as the Python runner.
+- **6-minute execution cap:** enrichment (original-order + Gorgias joins) is incremental — only
+  rows missing fields, oldest first, hard-capped ~150 lookups/run with a continuation flag; a
+  backlogged first run catches up over successive days (or seed `_state` from
+  `_outputs/cache/reship_report_state.json` once).
+- **Same counting rules (R1–R13) apply verbatim** — the port changes the host, not one rule.
+  The ship-Monday-precedes-complaint attribution guard MUST be ported (misattribution bug,
+  2026-07-08).
+- **Fail loud:** wrap main in try/catch → Slack webhook `[CRITICAL] reship report failed: …`;
+  Apps Script's own failure emails stay on as backup. Freshness cell `Summary!A1` timestamp
+  remains the reader-side assert; local `freshness_sweep.py` keeps watching the state cache
+  mtime ONLY until cutover, then switches to reading `Summary!A1` via the Sheets API.
+- **Cutover checklist:** (1) seed `_state`, (2) dry-run menu item writes to a `TEST_` tab,
+  (3) enable trigger, (4) disable local schtask `reship-report-refresh`, (5) point
+  freshness sweep at `Summary!A1`.
+
+### Local runner (fallback/backfill)
+
+- `ShippingReports/reship_report_refresh.py` — kept for backfills and as the reference
+  implementation; **CLI, never MCP tools in scheduled runs** (silent no-op risk). Manual re-run
+  must be idempotent (full tab rewrite, no append-dup).
 - **shipping.db is READ-ONLY** (`appyhour_lib.db.connect_ro()`, never raw `sqlite3.connect`, never a writer — WAL corruption 6/27 + 7/01).
 - **Writer-ownership gate:** the refresh task is not "shipped" until (a) schtask owner exists and (b) the sheet gets a freshness cell that a reader can assert on + coverage in `freshness_sweep.py`. A silently-dead refresh must fail loud (dead-cadence class: shopify_orders sync, feedback sync — both went stale unnoticed).
 - **Gorgias paced ≤~0.8 req/s** (reuse `_gorgias_get`); Shopify GraphQL nested page sizes ≤50.
