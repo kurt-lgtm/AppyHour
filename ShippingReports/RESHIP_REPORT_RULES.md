@@ -33,6 +33,13 @@ One tab per ship week (`_SHIP_<Monday>`), refreshed daily by a scheduled task; a
 12. **Warm ≠ routing in the issue table.** Arrived Warm/Burst = packaging bucket; Delayed/3+Days = routing bucket; never merged ([[gorgias-warm-delay-schema]]).
 13. **Drop pre-cache 5-digit order#s to a "stale" bucket** — they're 2024-25 orders with re-stamped Gorgias dates; they pollute current-week counts ([[feedback_5digit_orders_are_old_shopify]]).
 
+14. **Raw Data ownership split (Kurt 2026-07-09):** cols A–I = script-owned (rewritten hourly, hand
+    edits there are CLOBBERED); cols **J–M = user-owned** (`Override Issue/Incoming/Outgoing`,
+    `Exclude`='x') — the script preserves them across refreshes and applies them to EVERY computed
+    tab (Pivots, RS, Summary, Flags) so overridden numbers never diverge (the 124-vs-130 class).
+    Pivots are live QUERY formulas over the effective columns N–P — a Raw Data edit recomputes them
+    instantly. Overrides are corrections of record, not the place to hide bad weeks.
+
 ## Refresh & write discipline
 
 **Owner = Google Apps Script bound to the Reship Sheet** (respec 2026-07-09 — cloud-side so
