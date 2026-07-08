@@ -20,6 +20,8 @@
  */
 
 var SHEET_ID = SpreadsheetApp.getActiveSpreadsheet().getId();
+var PIVOT_SHEET_ID = '1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU'; // Kurt's pivot snapshot sheet
+var PIVOT_SINCE = '2026-06-30'; // fixed window start (Kurt 2026-07-09)
 var STATE_TAB = '_state';
 var MATURITY_DAYS = 14;
 var LATE_REPORT_DAYS = 16;
@@ -82,6 +84,48 @@ function build_() {
   writeTab_('Pivots', tabs.pivots, true);
 
   breachAlert_(work, mondays[0], denoms, today);
+  refreshPivotSheet_(state);
+}
+
+// ---------- secondary pivot sheet (hourly, overrides in I-K preserved) ----------
+
+function refreshPivotSheet_(state) {
+  var ss = SpreadsheetApp.openById(PIVOT_SHEET_ID);
+  var sh = ss.getSheetByName('Raw Data') || ss.insertSheet('Raw Data');
+  // preserve user cols I-K keyed by order
+  var prev = {};
+  if (sh.getLastRow() >= 3) {
+    sh.getRange('A3:K' + sh.getLastRow()).getValues().forEach(function (row) {
+      if (row[0]) prev[row[0]] = [row[8] || '', row[9] || '', row[10] || ''];
+    });
+  }
+  var keys = Object.keys(state).filter(function (k) {
+    return (state[k].entered || '') >= PIVOT_SINCE || k === '#135175';
+  }).sort(function (a, b) {
+    var x = (state[a].entered || '') + a, y = (state[b].entered || '') + b;
+    return x < y ? -1 : 1;
+  });
+  var rows = [
+    ['Reships entered since ' + PIVOT_SINCE + ' (+#135175 _HOLD) — refreshed ' +
+       Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm"),
+     'cols A-H source (hourly)', 'cols I-K yours: Override Requested / Override Created / Exclude(x)', ''],
+    ['Order', 'Requested', 'Created', 'Issue', 'Incoming week', 'Outgoing week', 'Status', 'Original',
+     'Override Requested', 'Override Created', 'Exclude', 'Eff Requested', 'Eff Created'],
+  ];
+  keys.forEach(function (k, i) {
+    var r = state[k], o = prev[k] || ['', '', ''];
+    var rn = i + 3;
+    rows.push([k, r.requested || '', r.entered || '', r.issue || '', r.original_cohort || '',
+      r.outbound || '', r.status || '', r.original || '', o[0], o[1], o[2],
+      '=IF($I' + rn + '<>"",$I' + rn + ',$B' + rn + ')',
+      '=IF($J' + rn + '<>"",$J' + rn + ',$C' + rn + ')']);
+  });
+  sh.clearContents();
+  var width = 13;
+  sh.getRange(1, 1, rows.length, width).setValues(rows.map(function (r) {
+    return r.concat(new Array(width - r.length).fill(''));
+  }));
+  sh.getRange('B:C').setNumberFormat('@');
 }
 
 // ---------- Shopify ----------
