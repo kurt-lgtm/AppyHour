@@ -128,8 +128,11 @@ def find_original(customer_gid: str, before_iso: str, self_name: str,
     return "", "PRIOR-NO-SHIP-TAG", 0.0
 
 
-def find_requested(email: str, entered: str) -> tuple[str, str]:
-    """R4: earliest Gorgias ticket within 14d before entry. -> (date, ticket_id)."""
+def find_requested(email: str, entered: str, floor_date: str = "") -> tuple[str, str]:
+    """R4: earliest Gorgias ticket in [floor, entered]. floor defaults to
+    entered-14d but callers pass the ORIGINAL's ship Monday — a complaint can't
+    predate the shipment (without the floor, a signup/confirmation thread wins
+    and poisons attribution — #158288, 2026-07-08)."""
     if not email:
         return "", ""
     from gorgias_sheets_sync import _gorgias_auth, _gorgias_get
@@ -141,7 +144,8 @@ def find_requested(email: str, entered: str) -> tuple[str, str]:
     g = _gorgias_get(f"{gbase}/tickets", auth=auth,
                      params={"customer_id": custs[0]["id"], "limit": 30,
                              "order_by": "created_datetime:desc"})
-    floor = (date.fromisoformat(entered) - timedelta(days=14)).isoformat()
+    floor = max(filter(None, [(date.fromisoformat(entered) - timedelta(days=14)).isoformat(),
+                              floor_date]))
     best, best_id = "", ""
     for t in (g.json().get("data", []) if g.ok else []):
         tc = (t.get("created_datetime") or "")[:10]
@@ -218,18 +222,21 @@ def build(weeks_back: int, dry_run: bool) -> None:
         })
         cust = r.get("customer") or {}
         rec["lifetime_orders"] = cust.get("numberOfOrders", "")
-        if not rec.get("requested"):
-            requested, ticket = find_requested(cust.get("email", ""), rec["entered"])
-            rec["requested"], rec["ticket"] = requested, ticket
+        # order matters: attribute FIRST (bounded by entered date only), then
+        # find the request ticket floored at the original's ship Monday
         if not rec.get("original_cohort"):
             if cust.get("id"):
                 o_name, o_coh, o_total = find_original(
-                    cust["id"], r["createdAt"], r["name"],
-                    rec.get("requested") or rec["entered"])
+                    cust["id"], r["createdAt"], r["name"], rec["entered"])
                 rec.update({"original": o_name, "original_cohort": o_coh, "original_total": o_total})
                 time.sleep(0.15)
             else:
                 rec.update({"original": "", "original_cohort": "NO-CUSTOMER", "original_total": 0.0})
+        if not rec.get("requested"):
+            coh = rec.get("original_cohort", "")
+            floor = coh.replace("_SHIP_", "") if coh.startswith("_SHIP_") else ""
+            requested, ticket = find_requested(cust.get("email", ""), rec["entered"], floor)
+            rec["requested"], rec["ticket"] = requested, ticket
         state[key] = rec
     save_state(state)
 

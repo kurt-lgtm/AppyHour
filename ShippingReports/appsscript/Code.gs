@@ -176,15 +176,19 @@ function sweepAndEnrich_(state, oldest) {
       rec.status = n.displayFulfillmentStatus;
       var cust = n.customer || {};
       rec.lifetime_orders = cust.numberOfOrders || '';
-      if (!rec.requested && enriched < MAX_ENRICH_PER_RUN) {
-        var rq = findRequested_(cust.email || '', rec.entered);
-        rec.requested = rq[0]; rec.ticket = rq[1];
+      // order matters: attribute FIRST (bounded by entered date), then find the
+      // request ticket floored at the original's ship Monday — a bogus-early
+      // ticket (signup thread) otherwise poisons attribution (#158288, 7/08)
+      if (!rec.original_cohort && enriched < MAX_ENRICH_PER_RUN && cust.id) {
+        var org = findOriginal_(cust.id, n.createdAt, n.name, rec.entered);
+        rec.original = org[0]; rec.original_cohort = org[1]; rec.original_total = org[2];
         enriched++;
       }
-      if (!rec.original_cohort && enriched < MAX_ENRICH_PER_RUN && cust.id) {
-        // R3 + ship-Monday-precedes-complaint guard (misattribution bug 2026-07-08)
-        var org = findOriginal_(cust.id, n.createdAt, n.name, rec.requested || rec.entered);
-        rec.original = org[0]; rec.original_cohort = org[1]; rec.original_total = org[2];
+      if (!rec.requested && enriched < MAX_ENRICH_PER_RUN) {
+        var coh = rec.original_cohort || '';
+        var floor = coh.indexOf('_SHIP_') === 0 ? coh.replace('_SHIP_', '') : '';
+        var rq = findRequested_(cust.email || '', rec.entered, floor);
+        rec.requested = rq[0]; rec.ticket = rq[1];
         enriched++;
       }
       state[n.name] = rec;
@@ -230,13 +234,14 @@ function gorgiasGet_(path, params) {
   return JSON.parse(resp.getContentText());
 }
 
-function findRequested_(email, entered) {
+function findRequested_(email, entered, floorDate) {
   if (!email) return ['', ''];
   var c = gorgiasGet_('/customers', { email: email });
   if (!c || !c.data || !c.data.length) return ['', ''];
   var t = gorgiasGet_('/tickets', { customer_id: c.data[0].id, limit: 30, order_by: 'created_datetime:desc' });
   if (!t || !t.data) return ['', ''];
   var floor = iso_(addDays_(new Date(entered), -14));
+  if (floorDate && floorDate > floor) floor = floorDate; // complaint can't predate shipment
   var best = '', bestId = '';
   t.data.forEach(function (tk) {
     var tc = (tk.created_datetime || '').slice(0, 10);
