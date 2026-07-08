@@ -21,7 +21,7 @@
 
 var SHEET_ID = SpreadsheetApp.getActiveSpreadsheet().getId();
 var PIVOT_SHEET_ID = '1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU'; // Kurt's pivot snapshot sheet
-var PIVOT_SINCE = '2026-06-30'; // fixed window start (Kurt 2026-07-09)
+var PIVOT_SINCE = '2026-07-06'; // fixed window start: reships entered this ship week onward (Kurt 2026-07-09)
 var STATE_TAB = '_state';
 var MATURITY_DAYS = 14;
 var LATE_REPORT_DAYS = 16;
@@ -100,7 +100,7 @@ function refreshPivotSheet_(state) {
     });
   }
   var keys = Object.keys(state).filter(function (k) {
-    return (state[k].entered || '') >= PIVOT_SINCE || k === '#135175';
+    return (state[k].entered || '') >= PIVOT_SINCE;
   }).sort(function (a, b) {
     var x = (state[a].entered || '') + a, y = (state[b].entered || '') + b;
     return x < y ? -1 : 1;

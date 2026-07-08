@@ -13,7 +13,7 @@
  */
 
 var MAIN_SHEET_ID = '1JgyYknIxJ3-UJxJOX-y78rf8cPNhT0uPy5FUw2zO9wE';
-var SINCE = '2026-06-30'; // fixed window start (Kurt 2026-07-09)
+var SINCE = '2026-07-06'; // reships entered this ship week onward (Kurt 2026-07-09)
 
 var STATE_COLS = ['key', 'entered', 'requested', 'ticket', 'issue', 'outbound', 'status',
                   'total', 'original', 'original_cohort', 'original_total', 'lifetime_orders'];
@@ -46,7 +46,7 @@ function refresh() {
   }
 
   var keys = Object.keys(state).filter(function (k) {
-    return (state[k].entered || '') >= SINCE || k === '#135175';
+    return (state[k].entered || '') >= SINCE;
   }).sort(function (a, b) {
     var x = (state[a].entered || '') + a, y = (state[b].entered || '') + b;
     return x < y ? -1 : 1;
