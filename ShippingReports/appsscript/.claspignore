@@ -1,0 +1,4 @@
+# main-sheet project only — PivotSheet.gs is pasted/pushed to the pivot sheet's own project
+**/**
+!Code.gs
+!appsscript.json

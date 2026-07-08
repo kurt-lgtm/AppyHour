@@ -39,8 +39,8 @@ function refresh() {
 
   // preserve user override cols I-K keyed by order
   var prev = {};
-  if (sh.getLastRow() >= 3) {
-    sh.getRange('A3:K' + sh.getLastRow()).getValues().forEach(function (row) {
+  if (sh.getLastRow() >= 2) {
+    sh.getRange('A2:K' + sh.getLastRow()).getValues().forEach(function (row) {
       if (row[0]) prev[row[0]] = [row[8] || '', row[9] || '', row[10] || ''];
     });
   }
@@ -52,28 +52,25 @@ function refresh() {
     return x < y ? -1 : 1;
   });
 
+  // headers in ROW 1 (sortable); Eff cols = anchored ARRAYFORMULAs (sort-safe)
   var rows = [
-    ['Reships entered since ' + SINCE + ' (+#135175 _HOLD) — refreshed ' +
-       Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm"),
-     'cols A-H source (hourly, from main sheet _state)',
-     'cols I-K yours: Override Requested / Override Created / Exclude(x)', ''],
     ['Order', 'Requested', 'Created', 'Issue', 'Incoming week', 'Outgoing week', 'Status', 'Original',
-     'Override Requested', 'Override Created', 'Exclude', 'Eff Requested', 'Eff Created'],
+     'Override Requested', 'Override Created', 'Exclude'],
   ];
-  keys.forEach(function (k, i) {
+  keys.forEach(function (k) {
     var r = state[k], o = prev[k] || ['', '', ''];
-    var rn = i + 3;
     rows.push([k, r.requested || '', r.entered || '', r.issue || '', r.original_cohort || '',
-      r.outbound || '', r.status || '', r.original || '', o[0], o[1], o[2],
-      '=IF($I' + rn + '<>"",$I' + rn + ',$B' + rn + ')',
-      '=IF($J' + rn + '<>"",$J' + rn + ',$C' + rn + ')']);
+      r.outbound || '', r.status || '', r.original || '', o[0], o[1], o[2]]);
   });
 
   sh.clearContents();
-  var width = 13;
+  var width = 11;
   sh.getRange(1, 1, rows.length, width).setValues(rows.map(function (r) {
     return r.concat(new Array(width - r.length).fill(''));
   }));
+  sh.getRange('L1:M1').setFormulas([[
+    '=ARRAYFORMULA({"Eff Requested"; IF(A2:A="",,IF(I2:I<>"",I2:I,B2:B))})',
+    '=ARRAYFORMULA({"Eff Created"; IF(A2:A="",,IF(J2:J<>"",J2:J,C2:C))})']]);
   sh.getRange('B:C').setNumberFormat('@');
 }
 
