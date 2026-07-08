@@ -13,7 +13,7 @@
  */
 
 var MAIN_SHEET_ID = '1JgyYknIxJ3-UJxJOX-y78rf8cPNhT0uPy5FUw2zO9wE';
-var SINCE = '2026-07-06'; // reships entered this ship week onward (Kurt 2026-07-09)
+var CUTOVER = '2026-07-08'; // membership = frozen _seed tab UNION entered >= cutover; rows persist once fulfilled
 
 var STATE_COLS = ['key', 'entered', 'requested', 'ticket', 'issue', 'outbound', 'status',
                   'total', 'original', 'original_cohort', 'original_total', 'lifetime_orders'];
@@ -45,8 +45,15 @@ function refresh() {
     });
   }
 
+  var seed = {};
+  var seedSh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('_seed');
+  if (seedSh) {
+    seedSh.getRange('A1:A' + Math.max(1, seedSh.getLastRow())).getValues().forEach(function (row) {
+      if (row[0]) seed[row[0]] = true;
+    });
+  }
   var keys = Object.keys(state).filter(function (k) {
-    return (state[k].entered || '') >= SINCE;
+    return seed[k] || (state[k].entered || '') >= CUTOVER;
   }).sort(function (a, b) {
     var x = (state[a].entered || '') + a, y = (state[b].entered || '') + b;
     return x < y ? -1 : 1;

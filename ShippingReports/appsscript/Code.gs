@@ -21,7 +21,7 @@
 
 var SHEET_ID = SpreadsheetApp.getActiveSpreadsheet().getId();
 var PIVOT_SHEET_ID = '1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU'; // Kurt's pivot snapshot sheet
-var PIVOT_SINCE = '2026-07-06'; // fixed window start: reships entered this ship week onward (Kurt 2026-07-09)
+var PIVOT_CUTOVER = '2026-07-08'; // membership = frozen _seed tab (7/08 unfulfilled queue) UNION entered >= cutover; rows persist once fulfilled (Kurt 7/09)
 var STATE_TAB = '_state';
 var MATURITY_DAYS = 14;
 var LATE_REPORT_DAYS = 16;
@@ -99,8 +99,16 @@ function refreshPivotSheet_(state) {
       if (row[0]) prev[row[0]] = [row[8] || '', row[9] || '', row[10] || ''];
     });
   }
+  // frozen seed membership (the 7/08 unfulfilled queue) — rows never drop on fulfillment
+  var seed = {};
+  var seedSh = ss.getSheetByName('_seed');
+  if (seedSh) {
+    seedSh.getRange('A1:A' + Math.max(1, seedSh.getLastRow())).getValues().forEach(function (row) {
+      if (row[0]) seed[row[0]] = true;
+    });
+  }
   var keys = Object.keys(state).filter(function (k) {
-    return (state[k].entered || '') >= PIVOT_SINCE;
+    return seed[k] || (state[k].entered || '') >= PIVOT_CUTOVER;
   }).sort(function (a, b) {
     var x = (state[a].entered || '') + a, y = (state[b].entered || '') + b;
     return x < y ? -1 : 1;
