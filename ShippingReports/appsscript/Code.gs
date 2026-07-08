@@ -24,7 +24,7 @@ var STATE_TAB = '_state';
 var MATURITY_DAYS = 14;
 var LATE_REPORT_DAYS = 16;
 var HIGH_VALUE = 150;
-var WEEKS_BACK = 3;
+var WEEKS_BACK = 2; // window starts 2 weeks back (Kurt 2026-07-09: from _SHIP_2026-06-22)
 var MAX_ENRICH_PER_RUN = 120; // 6-min cap guard
 
 // ---------- entry point ----------
@@ -285,12 +285,15 @@ function buildTabs_(state, mondays, denoms, cdf, today, stamp) {
     ['Cohort', 'Cohort size', 'Reships to date', 'Rate', 'Day', 'Projected final', 'Projected rate', 'Maturity']];
   mondays.slice().reverse().forEach(function (mon) {
     var tag = '_SHIP_' + iso_(mon);
-    var nNow = requestsByDay_(state, mon, null).length;
+    // headline = ALL attributed reships (incl UNKNOWN requested) — must match Pivots
+    var nNow = Object.keys(state).filter(function (k) { return state[k].original_cohort === tag; }).length;
+    var dated = requestsByDay_(state, mon, null).length;
+    var undated = nNow - dated;
     var denom = denoms[tag];
     var off = daysBetween_(mon, today);
     var mature = off >= MATURITY_DAYS;
-    var proj = mature ? nNow
-      : (cdf[Math.min(off, MATURITY_DAYS)] ? Math.round(nNow / cdf[Math.min(off, MATURITY_DAYS)] * 10) / 10 : 'n/a');
+    var c = cdf[Math.min(off, MATURITY_DAYS)];
+    var proj = mature ? nNow : (c ? Math.round((dated / c + undated) * 10) / 10 : 'n/a');
     srows.push([tag, denom, nNow, denom ? pct_(nNow / denom) : 'n/a', off, proj,
       (denom && typeof proj === 'number') ? pct_(proj / denom) : 'n/a',
       mature ? 'FINAL' : 'maturing (day ' + off + ')']);

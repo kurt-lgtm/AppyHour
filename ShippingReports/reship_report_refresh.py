@@ -313,11 +313,15 @@ def build(weeks_back: int, dry_run: bool) -> None:
               "Projected rate", "Maturity"]]
     for mon in sorted(mondays):
         tag = f"_SHIP_{mon.isoformat()}"
-        n_now = len(requests_by_day(mon))
+        # headline = ALL attributed reships (incl. UNKNOWN requested) — must match Pivots
+        n_now = sum(1 for rec in state.values() if rec.get("original_cohort") == tag)
         denom = denoms[mon]
         off = (today - mon).days
         mature = off >= MATURITY_DAYS
-        proj = n_now if mature else (round(n_now / cdf[min(off, MATURITY_DAYS)], 1)
+        # projection scales the dated subset, then adds the undated remainder
+        dated = len(requests_by_day(mon))
+        undated = n_now - dated
+        proj = n_now if mature else (round(dated / cdf[min(off, MATURITY_DAYS)] + undated, 1)
                                      if cdf.get(min(off, MATURITY_DAYS)) else "n/a")
         srows.append([tag, denom, n_now, f"{n_now/denom:.2%}" if denom else "n/a",
                       off, proj,
@@ -416,7 +420,7 @@ def build(weeks_back: int, dry_run: bool) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(prog="reship-report-refresh")
-    ap.add_argument("--weeks-back", type=int, default=3)
+    ap.add_argument("--weeks-back", type=int, default=2)  # window starts _SHIP_2026-06-22-style (Kurt 7/09)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
     try:
