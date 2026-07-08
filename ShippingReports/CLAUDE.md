@@ -2,6 +2,9 @@
 
 Analytics pipeline for subscription box shipping. Ingests carrier invoices (OnTrac, UPS, FedEx, Veho), Gorgias issues, Parcel Panel tracking → routing recommendations, cost analysis, performance reports.
 
+> 🔴 **Reship report:** any change to the daily reship tracking report / Reship Sheet reads
+> [`RESHIP_REPORT_RULES.md`](RESHIP_REPORT_RULES.md) FIRST (constraints SSOT — DRAFT, pending Kurt approval).
+
 ## Task Routing
 
 | Task | Read | Skip | Notes |
