@@ -25,7 +25,7 @@ One tab per ship week (`_SHIP_<Monday>`), refreshed daily by a scheduled task; a
 4. **NEVER conflate requested date (ticket created) with entered date (Shopify order created).** Dan froze entry 7/05, batch-entry 7/06–08 made a 5-day backlog read as a 3-day surge — the exact panic this report exists to kill. Both dates appear side by side; week-over-week comparisons use REQUESTED date only.
 5. **Shopify order sweeps must use `status:open`** (or exclude cancelled/closed explicitly). `fulfillment_status:unfulfilled` alone matches cancelled 2023 ghosts — read 104 when the true open queue was 69 (7/08).
 6. **Count orders (deduped IDs), never tag matches** — every reship order carries ≥2 `Reship*` tags; tag-match doubles the count. State it in the panel: "N orders".
-7. **Denominator = full cohort size, stated in the tab.** Rates only, never raw counts ([[feedback_cs_metrics_normalize]]). **Source = LIVE Shopify tag count** (`tag:'_SHIP_<Mon>' -status:cancelled`, GraphQL, snapshotted with timestamp each refresh — Kurt 2026-07-09). NOT the local `fulfillments` table (sync can die silently — the 7/07 dead-cadence class) and NOT RMFG email counts (weekly IMAP; kept as reconciliation cross-check only). Never derived silently ([[feedback_ask_cohort_count]]).
+7. **Denominator = full cohort size EXCLUDING reship orders, stated in the tab.** Rates only, never raw counts ([[feedback_cs_metrics_normalize]]). **Source = LIVE Shopify tag count** (`tag:'_SHIP_<Mon>' -status:cancelled -tag:'Reship'`, GraphQL, snapshotted with timestamp each refresh — Kurt 2026-07-09; reship exclusion Dan 2026-07-09: replacements carry the outbound cohort tag and would inflate its denominator). NOT the local `fulfillments` table (sync can die silently — the 7/07 dead-cadence class) and NOT RMFG email counts (weekly IMAP; kept as reconciliation cross-check only). Never derived silently ([[feedback_ask_cohort_count]]).
 8. **Week-over-week comparison is same-day-offset or maturity-adjusted, never raw partial vs final.** A cohort's requests keep arriving for ~7+ days post-ship ("assumed tail %"): show `day-N vs last week's day-N` AND `projected final = to-date ÷ historical CDF(day N)`. Comparing day-2 this week to day-7 last week fabricates improvement.
 9. **Tail curve is seasonal.** Fit the request-lag CDF from summer cohorts for summer weeks; never blend across the Apr/Nov boundary ([[seasonal-coldchain-baselines]]).
 10. **Slack channel = corroboration, NOT source of record.** Posting discipline varies and entry can be frozen; join Gorgias by customer email; reconcile counts in a footer: `Gorgias N / Slack M / Shopify orders K`.
@@ -41,7 +41,9 @@ backfill/debug tool and its 12:18 schtask is DISABLED once the Apps Script trigg
 
 ### Apps Script port spec
 
-- **Trigger:** time-driven, daily 12:00–13:00 window, Mon–Sat (Sat catches Fri-evening tickets).
+- **Trigger:** time-driven, HOURLY (Dan 2026-07-09). Enrichment stays incremental so most
+  hourly runs are cheap (denominator counts + new-order sweep only); the tail-CDF and pivots
+  recompute from state each run.
 - **HTTP:** all three APIs via `UrlFetchApp` — Shopify GraphQL (`X-Shopify-Access-Token`),
   Gorgias REST (Basic auth + custom `User-Agent` header — Cloudflare 1010 blocks default UA),
   Slack incoming webhook (breach alerts) or `chat.postMessage` w/ bot token for DMs.
@@ -75,6 +77,15 @@ backfill/debug tool and its 12:18 schtask is DISABLED once the Apps Script trigg
 - **Writer-ownership gate:** the refresh task is not "shipped" until (a) schtask owner exists and (b) the sheet gets a freshness cell that a reader can assert on + coverage in `freshness_sweep.py`. A silently-dead refresh must fail loud (dead-cadence class: shopify_orders sync, feedback sync — both went stale unnoticed).
 - **Gorgias paced ≤~0.8 req/s** (reuse `_gorgias_get`); Shopify GraphQL nested page sizes ≤50.
 - Sheet writes via appyhour MCP `sheets_write` interactively; the scheduled path uses the Sheets CLI/service-account wrapper.
+
+## Pivots tab (Dan 2026-07-09 — mirrors the 7/08 xlsx deliverable)
+
+Four blocks over the swept window, unit = deduped reship orders:
+1. **Reship Created** — count by Shopify entry date
+2. **Reship Requested** — count by Slack/Gorgias ticket date (`(blank)` = UNKNOWN, never estimated)
+3. **Reship Outgoing ship week** — count by the replacement's `_SHIP_` tag
+4. **Reship Incoming ship week** — count by ORIGINAL order's cohort + running reship rate per
+   ship week (rate vs that cohort's reship-excluded denominator, R7)
 
 ## Flags tab (Dan-owned decisions, from 7/09 policy discussion — pending Dan/Jessa confirmation)
 

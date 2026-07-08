@@ -78,9 +78,10 @@ def last_ship_tag(tags: list[str]) -> str:
 
 
 def cohort_denominator(tag: str) -> int:
-    """R7: live Shopify count of the cohort tag, cancelled excluded."""
+    """R7: live Shopify count of the cohort tag; cancelled AND reship orders
+    excluded (Dan 2026-07-09: reships must not inflate the denominator)."""
     d = gql('query($q:String!){ ordersCount(query:$q, limit:10000){ count } }',
-            {"q": f"tag:'{tag}' -status:cancelled"})
+            {"q": f"tag:'{tag}' -status:cancelled -tag:'Reship'"})
     return d["ordersCount"]["count"]
 
 
@@ -323,6 +324,40 @@ def build(weeks_back: int, dry_run: bool) -> None:
                       (f"{proj/denom:.2%}" if denom and isinstance(proj, (int, float)) else "n/a"),
                       "FINAL" if mature else f"maturing (day {off})"])
     tabs["Summary"] = srows
+
+    # Pivots tab — Dan's 4 views (2026-07-09), window = swept weeks
+    def pivot(counter: Counter, label: str) -> list[list]:
+        blk = [[label, "Count"]]
+        for k in sorted(counter, key=lambda x: (x == "(blank)", x)):
+            blk.append([k, counter[k]])
+        blk.append(["Grand Total", sum(counter.values())])
+        blk.append([])
+        return blk
+
+    window_recs = {n: rec for n, rec in state.items()
+                   if rec.get("entered", "") >= oldest.isoformat()}
+    prows: list[list] = [[f"REFRESHED {stamp}",
+                          f"window: reship orders entered since {oldest} (deduped, R6)"], []]
+    prows += pivot(Counter(r["entered"] for r in window_recs.values()),
+                   "Reship Created (Shopify entry date)")
+    prows += pivot(Counter(r.get("requested") or "(blank)" for r in window_recs.values()),
+                   "Reship Requested (Slack/Gorgias ticket date)")
+    prows += pivot(Counter(r.get("outbound") or "(blank)" for r in window_recs.values()),
+                   "Reship Outgoing ship week")
+    prows.append(["Reship Incoming ship week (original order's cohort)", "Count",
+                  "Cohort size (excl. reships)", "Reship rate"])
+    incoming = Counter(r.get("original_cohort") or "(blank)" for r in window_recs.values())
+    for coh in sorted(incoming, key=lambda x: (not x.startswith("_SHIP_"), x)):
+        cnt = incoming[coh]
+        if coh.startswith("_SHIP_"):
+            mon_d = date.fromisoformat(coh.replace("_SHIP_", ""))
+            denom = denoms.get(mon_d) or cohort_denominator(coh)
+            denoms[mon_d] = denom
+            prows.append([coh, cnt, denom, f"{cnt/denom:.2%}" if denom else "n/a"])
+        else:
+            prows.append([coh, cnt, "", ""])
+    prows.append(["Grand Total", sum(incoming.values())])
+    tabs["Pivots"] = prows
 
     # Flags tab (Dan-owned decisions)
     frows = [[f"REFRESHED {stamp}"], [],
