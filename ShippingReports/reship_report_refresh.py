@@ -29,8 +29,12 @@ from pathlib import Path
 
 import requests
 
-if sys.stdout and hasattr(sys.stdout, "buffer"):  # cp1252 console guard
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+try:  # cp1252 console guard — reconfigure, NOT a new TextIOWrapper: imported
+    # modules (ingest.slack_reship.sync) also wrap stdout, and a GC'd wrapper
+    # closes the shared buffer ("I/O operation on closed file")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, ValueError):
+    pass
 
 _HERE = Path(__file__).resolve().parent
 _ROOT = _HERE.parent
@@ -52,6 +56,7 @@ LATE_REPORT_DAYS = 16  # requested > Monday+16d -> flag (proxy for >14d post-del
 HIGH_VALUE = 150.0
 
 _BASE, _HEADERS = get_shopify_auth()
+_BASE = _BASE.replace(".myshopify.com.myshopify.com", ".myshopify.com")  # .env store var carries full domain
 
 
 def gql(query: str, variables: dict | None = None) -> dict:
