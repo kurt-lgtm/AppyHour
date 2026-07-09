@@ -85,6 +85,82 @@ def cohort_denominator(tag: str) -> int:
     return d["ordersCount"]["count"]
 
 
+PIVOT_SHEET_ID = "1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU"
+
+
+def tray_mix_rows(mondays: list[date], stamp: str) -> list[list]:
+    """Running Medium/Large Tray vs Regular per cohort — live SKU-filtered counts
+    (canonical rule: SKU contains MCUST=Medium Tray, LCUST=Large Tray; boxtype.py)."""
+    rows = [[f"REFRESHED {stamp}", "live Shopify counts; denominators exclude cancelled + reships"],
+            ["Cohort", "Cohort size", "Medium Tray", "Medium %", "Large Tray", "Large %",
+             "Regular Box", "Regular %"]]
+    for mon in sorted(mondays):
+        tag = f"_SHIP_{mon.isoformat()}"
+        base_q = f"tag:'{tag}' -status:cancelled -tag:'Reship'"
+        total = gql('query($q:String!){ ordersCount(query:$q, limit:10000){ count } }',
+                    {"q": base_q})["ordersCount"]["count"]
+        med = gql('query($q:String!){ ordersCount(query:$q, limit:10000){ count } }',
+                  {"q": base_q + " sku:AHB-MCUST*"})["ordersCount"]["count"]
+        lge = gql('query($q:String!){ ordersCount(query:$q, limit:10000){ count } }',
+                  {"q": base_q + " sku:AHB-LCUST*"})["ordersCount"]["count"]
+        reg = total - med - lge
+        pct = lambda n: f"{n/total:.1%}" if total else "n/a"  # noqa: E731
+        rows.append([tag, total, med, pct(med), lge, pct(lge), reg, pct(reg)])
+    return rows
+
+
+def triage_rows(state: dict, oldest: date, stamp: str, gclient) -> list[list]:
+    """Requested-but-not-entered candidates: recent Gorgias tickets carrying the
+    (spammy) 'Reship req' tag whose extracted order is NOT an original of any
+    reship order yet. UNVERIFIED feed for human confirmation — never counted in
+    pivots (R1/R2). User col F ('Decision') preserved across refreshes."""
+    from gorgias_sheets_sync import (_extract_order_from_gorgias_integrations,
+                                     _gorgias_auth, _gorgias_get)
+    auth, gbase = _gorgias_auth()
+    originals = {(rec.get("original") or "").lstrip("#") for rec in state.values()}
+    # preserve user Decision col F
+    prev = {}
+    try:
+        for row in gclient.read_sheet(SHEET_ID, "'Triage'!A2:F1000") or []:
+            row = row + [""] * (6 - len(row))
+            if row[0]:
+                prev[str(row[0])] = row[5]
+    except Exception:
+        pass
+    rows = [[f"REFRESHED {stamp}",
+             "UNVERIFIED feed (rule-81603-tagged tickets w/o a reship order) — NOT counted anywhere. "
+             "Col F is YOURS: reship / refund / no action", "", "", "", "Decision"],
+            ["Ticket", "Created", "Subject", "Order", "Customer email", "Decision"]]
+    cursor, done = None, False
+    while not done:
+        p = {"limit": 100, "order_by": "created_datetime:desc"}
+        if cursor:
+            p["cursor"] = cursor
+        g = _gorgias_get(f"{gbase}/tickets", auth=auth, params=p)
+        if not g.ok:
+            break
+        data = g.json()
+        for t in data.get("data", []):
+            created = (t.get("created_datetime") or "")[:10]
+            if created < oldest.isoformat():
+                done = True
+                break
+            tags = [x.get("name", "").lower() for x in (t.get("tags") or [])]
+            if not any(tg.startswith("reship") for tg in tags):
+                continue
+            o = (_extract_order_from_gorgias_integrations(t) or "").lstrip("#")
+            if o and o in originals:
+                continue  # already remediated by an entered reship
+            tid = str(t["id"])
+            email = ((t.get("customer") or {}).get("email")) or ""
+            rows.append([tid, created, (t.get("subject") or "")[:80], o,
+                         email, prev.get(tid, "")])
+        cursor = (data.get("meta") or {}).get("next_cursor")
+        if not cursor:
+            break
+    return rows
+
+
 def sweep_reships(since: date) -> list[dict]:
     """R1/R5/R6: deduped reship ORDERS created since `since`, cancelled excluded."""
     out, cursor = [], None
@@ -495,6 +571,25 @@ def build(weeks_back: int, dry_run: bool) -> None:
                 body={"values": rows}).execute()
         time.sleep(0.3)
     print(f"[reship-report] wrote {len(tabs)} tabs to {SHEET_ID} at {stamp}")
+
+    # Dan's pivot sheet extras: Tray Mix (cohort composition) + Triage feed
+    extra = {"Tray Mix": tray_mix_rows(mondays, stamp)}
+    try:
+        extra["Triage"] = triage_rows(state, oldest, stamp, gclient)
+    except Exception as e:
+        print(f"[reship-report] triage build failed (non-fatal): {e}")
+    p_existing = {s["properties"]["title"] for s in
+                  gclient._sheets.spreadsheets().get(spreadsheetId=PIVOT_SHEET_ID).execute()["sheets"]}
+    for name, rows in extra.items():
+        if name not in p_existing:
+            gclient.add_sheet_tab(PIVOT_SHEET_ID, name)
+        gclient._sheets.spreadsheets().values().clear(
+            spreadsheetId=PIVOT_SHEET_ID, range=f"'{name}'!A1:Z2000").execute()
+        gclient._sheets.spreadsheets().values().update(
+            spreadsheetId=PIVOT_SHEET_ID, range=f"'{name}'!A1",
+            valueInputOption="RAW", body={"values": rows}).execute()
+        time.sleep(0.3)
+    print(f"[reship-report] wrote {len(extra)} extra tabs to pivot sheet")
 
     # breach alert: current cohort worse than last at same day-offset
     off = min(day_n, MATURITY_DAYS)
