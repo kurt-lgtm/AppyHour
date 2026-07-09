@@ -37,6 +37,10 @@ _ROOT = _HERE.parent
 for p in (_ROOT, _ROOT / "AppyHourMCP" / "tools", _ROOT / "AppyHourMCP", _ROOT / "GelPackCalculator"):
     sys.path.insert(0, str(p))
 
+from dotenv import load_dotenv  # noqa: E402
+
+load_dotenv(_ROOT / ".env")  # AH_SLACK_BOT_TOKEN for the Triage feed, etc.
+
 from appyhour_lib.credentials import get_shopify_auth  # noqa: E402
 from appyhour_lib.notify import notify  # noqa: E402
 
@@ -158,54 +162,41 @@ def tray_mix_rows(mondays: list[date], stamp: str, work: dict) -> list[list]:
 
 
 def triage_rows(state: dict, oldest: date, stamp: str, gclient) -> list[list]:
-    """Requested-but-not-entered candidates: recent Gorgias tickets carrying the
-    (spammy) 'Reship req' tag whose extracted order is NOT an original of any
-    reship order yet. UNVERIFIED feed for human confirmation — never counted in
-    pivots (R1/R2). User col F ('Decision') preserved across refreshes."""
-    from gorgias_sheets_sync import (_extract_order_from_gorgias_integrations,
-                                     _gorgias_auth, _gorgias_get)
-    auth, gbase = _gorgias_auth()
+    """Requested-but-not-entered feed, SLACK ONLY (Kurt 2026-07-09 — the Gorgias
+    'Reship req' tag is rule-81603 spam and is banned as a source, R1).
+    Source: #reship-and-order-requests via the canonical ingest.slack_reship
+    parser. Rows whose order already has an entered reship are dropped.
+    User col F ('Decision') preserved across refreshes; never counted anywhere."""
+    import datetime as _dt
+
+    from ingest.slack_reship.parse import parse_record  # noqa: F401 (canonical parser)
+    from ingest.slack_reship.sync import fetch_slack_live
+
+    oldest_ts = _dt.datetime.combine(oldest, _dt.time()).timestamp()
+    records = fetch_slack_live(oldest_ts, _dt.datetime.now().timestamp())
+
     originals = {(rec.get("original") or "").lstrip("#") for rec in state.values()}
-    # preserve user Decision col F
     prev = {}
     try:
-        for row in gclient.read_sheet(SHEET_ID, "'Triage'!A2:F1000") or []:
+        for row in gclient.read_sheet(PIVOT_SHEET_ID, "'Triage'!A2:F1000") or []:
             row = row + [""] * (6 - len(row))
             if row[0]:
                 prev[str(row[0])] = row[5]
     except Exception:
         pass
     rows = [[f"REFRESHED {stamp}",
-             "UNVERIFIED feed (rule-81603-tagged tickets w/o a reship order) — NOT counted anywhere. "
-             "Col F is YOURS: reship / refund / no action", "", "", "", "Decision"],
-            ["Ticket", "Created", "Subject", "Order", "Customer email", "Decision"]]
-    cursor, done = None, False
-    while not done:
-        p = {"limit": 100, "order_by": "created_datetime:desc"}
-        if cursor:
-            p["cursor"] = cursor
-        g = _gorgias_get(f"{gbase}/tickets", auth=auth, params=p)
-        if not g.ok:
-            break
-        data = g.json()
-        for t in data.get("data", []):
-            created = (t.get("created_datetime") or "")[:10]
-            if created < oldest.isoformat():
-                done = True
-                break
-            tags = [x.get("name", "").lower() for x in (t.get("tags") or [])]
-            if not any(tg.startswith("reship") for tg in tags):
-                continue
-            o = (_extract_order_from_gorgias_integrations(t) or "").lstrip("#")
-            if o and o in originals:
-                continue  # already remediated by an entered reship
-            tid = str(t["id"])
-            email = ((t.get("customer") or {}).get("email")) or ""
-            rows.append([tid, created, (t.get("subject") or "")[:80], o,
-                         email, prev.get(tid, "")])
-        cursor = (data.get("meta") or {}).get("next_cursor")
-        if not cursor:
-            break
+             "Slack #reship-and-order-requests posts w/o an entered reship order — "
+             "NOT counted anywhere. Col F is YOURS: reship / refund / no action",
+             "", "", "", "Decision"],
+            ["Key", "Posted", "Issue", "Order", "Gorgias", "Decision"]]
+    for r in records:
+        onum = str(r.order_number or "")
+        if onum and onum in originals:
+            continue  # already remediated by an entered reship
+        key = str(r.gorgias_id or onum or (r.created_ts or ""))
+        rows.append([key, (r.created_ts or "")[:16], r.issue or "",
+                     f"#{onum}" if onum else "",
+                     str(r.gorgias_id or ""), prev.get(key, "")])
     return rows
 
 
