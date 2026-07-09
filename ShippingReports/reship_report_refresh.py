@@ -88,24 +88,72 @@ def cohort_denominator(tag: str) -> int:
 PIVOT_SHEET_ID = "1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU"
 
 
-def tray_mix_rows(mondays: list[date], stamp: str) -> list[list]:
-    """Running Medium/Large Tray vs Regular per cohort — live SKU-filtered counts
-    (canonical rule: SKU contains MCUST=Medium Tray, LCUST=Large Tray; boxtype.py)."""
-    rows = [[f"REFRESHED {stamp}", "live Shopify counts; denominators exclude cancelled + reships"],
-            ["Cohort", "Cohort size", "Medium Tray", "Medium %", "Large Tray", "Large %",
-             "Regular Box", "Regular %"]]
+def _count(q: str) -> int:
+    return gql('query($q:String!){ ordersCount(query:$q, limit:10000){ count } }',
+               {"q": q})["ordersCount"]["count"]
+
+
+def box_type_of(skus: list[str]) -> str:
+    """Kurt 2026-07-09: AHB-MCUST-TRAY -> Medium Tray, AHB-LCUST-TRAY -> Large
+    Tray (physical tray carton, vault Box Type Classification v2), else Regular."""
+    up = [(s or "").upper() for s in skus]
+    if any("LCUST-TRAY" in s for s in up):
+        return "Large Tray"
+    if any("MCUST-TRAY" in s for s in up):
+        return "Medium Tray"
+    return "Regular Box"
+
+
+def enrich_original_boxtypes(state: dict, mondays: list[date]) -> None:
+    """Fetch line-item SKUs of ORIGINAL orders (batched) -> rec['original_boxtype'].
+    Cached in state; only missing ones are fetched."""
+    tags = {f"_SHIP_{m.isoformat()}" for m in mondays}
+    todo = sorted({rec["original"].lstrip("#") for rec in state.values()
+                   if rec.get("original") and rec.get("original_cohort") in tags
+                   and not rec.get("original_boxtype")})
+    name_to_type = {}
+    for i in range(0, len(todo), 20):
+        batch = todo[i:i + 20]
+        q = " OR ".join(f"name:{n}" for n in batch)
+        d = gql("""query($q:String!){ orders(first:20, query:$q){
+                     edges{node{ name lineItems(first:50){edges{node{ sku }}} }}}}""", {"q": q})
+        for e in d["orders"]["edges"]:
+            skus = [le["node"]["sku"] for le in e["node"]["lineItems"]["edges"]]
+            name_to_type[e["node"]["name"].lstrip("#")] = box_type_of(skus)
+        time.sleep(0.2)
+    for rec in state.values():
+        n = (rec.get("original") or "").lstrip("#")
+        if n and n in name_to_type:
+            rec["original_boxtype"] = name_to_type[n]
+
+
+BOX_TYPES = ["Regular Box", "Medium Tray", "Large Tray"]
+
+
+def tray_mix_rows(mondays: list[date], stamp: str, work: dict) -> list[list]:
+    """Kurt's layout: per cohort, per box type — cohort discrete, reship discrete,
+    reship % (type reships / type cohort size). Tray = AHB-[ML]CUST-TRAY SKUs."""
+    rows = [[f"REFRESHED {stamp}",
+             "live Shopify counts; denominators exclude cancelled + reships; "
+             "reship type = ORIGINAL order's box type"],
+            ["Cohort", "Cohort size",
+             "Regular Box", "Regular Box Reship discrete", "Regular Box Reship %",
+             "Medium Tray", "Medium Tray Reship discrete", "Medium Tray Reship %",
+             "Large Tray", "Large Tray Reship discrete", "Large Tray Reship %"]]
     for mon in sorted(mondays):
         tag = f"_SHIP_{mon.isoformat()}"
         base_q = f"tag:'{tag}' -status:cancelled -tag:'Reship'"
-        total = gql('query($q:String!){ ordersCount(query:$q, limit:10000){ count } }',
-                    {"q": base_q})["ordersCount"]["count"]
-        med = gql('query($q:String!){ ordersCount(query:$q, limit:10000){ count } }',
-                  {"q": base_q + " sku:AHB-MCUST*"})["ordersCount"]["count"]
-        lge = gql('query($q:String!){ ordersCount(query:$q, limit:10000){ count } }',
-                  {"q": base_q + " sku:AHB-LCUST*"})["ordersCount"]["count"]
-        reg = total - med - lge
-        pct = lambda n: f"{n/total:.1%}" if total else "n/a"  # noqa: E731
-        rows.append([tag, total, med, pct(med), lge, pct(lge), reg, pct(reg)])
+        total = _count(base_q)
+        med = _count(base_q + " sku:AHB-MCUST-TRAY*")
+        lge = _count(base_q + " sku:AHB-LCUST-TRAY*")
+        sizes = {"Regular Box": total - med - lge, "Medium Tray": med, "Large Tray": lge}
+        resh = Counter(rec.get("original_boxtype") or "Regular Box"
+                       for rec in work.values() if rec.get("original_cohort") == tag)
+        row = [tag, total]
+        for bt in BOX_TYPES:
+            n, d = resh.get(bt, 0), sizes[bt]
+            row += [d, n, f"{n/d:.2%}" if d else "n/a"]
+        rows.append(row)
     return rows
 
 
@@ -314,6 +362,7 @@ def build(weeks_back: int, dry_run: bool) -> None:
             requested, ticket = find_requested(cust.get("email", ""), rec["entered"], floor)
             rec["requested"], rec["ticket"] = requested, ticket
         state[key] = rec
+    enrich_original_boxtypes(state, mondays)
     save_state(state)
 
     # user overrides from Raw Data cols J-M (script never writes into them
@@ -573,7 +622,7 @@ def build(weeks_back: int, dry_run: bool) -> None:
     print(f"[reship-report] wrote {len(tabs)} tabs to {SHEET_ID} at {stamp}")
 
     # Dan's pivot sheet extras: Tray Mix (cohort composition) + Triage feed
-    extra = {"Tray Mix": tray_mix_rows(mondays, stamp)}
+    extra = {"Tray Mix": tray_mix_rows(mondays, stamp, work)}
     try:
         extra["Triage"] = triage_rows(state, oldest, stamp, gclient)
     except Exception as e:
