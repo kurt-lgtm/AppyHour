@@ -685,13 +685,24 @@ def main() -> int:
     ap.add_argument("--weeks-back", type=int, default=2)  # window starts _SHIP_2026-06-22-style (Kurt 7/09)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
-    try:
-        build(args.weeks_back, args.dry_run)
-        return 0
-    except Exception as e:
-        notify(f"Reship report refresh FAILED: {type(e).__name__}: {e}", level="critical")
-        traceback.print_exc()
-        return 1
+    import os
+    for attempt in (1, 2):  # transient network flakes retry silently
+        try:
+            build(args.weeks_back, args.dry_run)
+            return 0
+        except Exception as e:
+            if attempt == 1:
+                print(f"[reship-report] attempt 1 failed ({type(e).__name__}), retrying in 60s")
+                time.sleep(60)
+                continue
+            # errors go to EMAIL only — never the shared Slack channel Dan reads
+            # (Kurt 2026-07-09); the webhook is reserved for breach alerts.
+            os.environ.pop("AH_SLACK_WEBHOOK", None)
+            notify(f"Reship report refresh FAILED (after retry): {type(e).__name__}: {e}",
+                   level="critical")
+            traceback.print_exc()
+            return 1
+    return 1
 
 
 if __name__ == "__main__":

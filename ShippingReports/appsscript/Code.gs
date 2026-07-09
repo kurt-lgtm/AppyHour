@@ -33,12 +33,9 @@ var MAX_ENRICH_PER_RUN = 120; // 6-min cap guard
 // ---------- entry point ----------
 
 function refresh() {
-  try {
-    build_();
-  } catch (e) {
-    slack_('[CRITICAL] Reship report (Apps Script) FAILED: ' + e, true);
-    throw e; // keep Apps Script failure emails as backup
-  }
+  // errors go to Apps Script failure EMAILS only — never the shared Slack
+  // channel (Kurt 2026-07-09); slack_ is reserved for breach alerts.
+  build_();
 }
 
 function build_() {
