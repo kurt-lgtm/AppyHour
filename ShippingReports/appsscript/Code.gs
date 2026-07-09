@@ -19,7 +19,8 @@
  *  6. Then DISABLE the local schtask 'reship-report-refresh' (cutover step).
  */
 
-var SHEET_ID = SpreadsheetApp.getActiveSpreadsheet().getId();
+var SHEET_ID = '1JgyYknIxJ3-UJxJOX-y78rf8cPNhT0uPy5FUw2zO9wE'; // main Reship Sheet (script may be bound anywhere)
+function mainSS_() { return SpreadsheetApp.openById(SHEET_ID); }
 var PIVOT_SHEET_ID = '1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU'; // Kurt's pivot snapshot sheet
 var PIVOT_CUTOVER = '2026-07-08'; // membership = frozen _seed tab (7/08 unfulfilled queue) UNION entered >= cutover; rows persist once fulfilled (Kurt 7/09)
 var STATE_TAB = '_state';
@@ -295,7 +296,7 @@ function requestsByDay_(state, mon, upto) {
 // ---------- overrides / Raw Data ----------
 
 function loadOverrides_() {
-  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Raw Data');
+  var sh = mainSS_().getSheetByName('Raw Data');
   if (!sh) return {};
   var values = sh.getRange('A3:M' + Math.max(3, sh.getLastRow())).getValues();
   var out = {};
@@ -312,7 +313,7 @@ function loadOverrides_() {
 }
 
 function writeRawData_(rows) {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ss = mainSS_();
   var sh = ss.getSheetByName('Raw Data') || ss.insertSheet('Raw Data');
   sh.clearContents();
   var width = 16;
@@ -495,7 +496,7 @@ var STATE_COLS = ['key', 'entered', 'requested', 'ticket', 'issue', 'outbound', 
                   'total', 'original', 'original_cohort', 'original_total', 'lifetime_orders', 'original_boxtype'];
 
 function loadState_() {
-  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(STATE_TAB);
+  var sh = mainSS_().getSheetByName(STATE_TAB);
   if (!sh) return {};
   var values = sh.getDataRange().getValues();
   var state = {};
@@ -511,7 +512,7 @@ function loadState_() {
 }
 
 function saveState_(state) {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ss = mainSS_();
   var sh = ss.getSheetByName(STATE_TAB) || ss.insertSheet(STATE_TAB);
   sh.hideSheet();
   var rows = [STATE_COLS];
@@ -530,7 +531,7 @@ function saveState_(state) {
 // ---------- sheet writes ----------
 
 function writeTab_(name, rows) {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ss = mainSS_();
   var sh = ss.getSheetByName(name) || ss.insertSheet(name);
   sh.clearContents();
   var width = Math.max.apply(null, rows.map(function (r) { return r.length; }).concat([1]));
