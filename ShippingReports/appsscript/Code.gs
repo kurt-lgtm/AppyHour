@@ -95,8 +95,8 @@ function refreshPivotSheet_(state) {
   // preserve user cols I-K keyed by order
   var prev = {};
   if (sh.getLastRow() >= 2) {
-    sh.getRange('A2:K' + sh.getLastRow()).getValues().forEach(function (row) {
-      if (row[0]) prev[row[0]] = [row[8] || '', row[9] || '', row[10] || ''];
+    sh.getRange('A2:L' + sh.getLastRow()).getValues().forEach(function (row) {
+      if (row[0]) prev[row[0]] = [row[9] || '', row[10] || '', row[11] || ''];
     });
   }
   // frozen seed membership (the 7/08 unfulfilled queue) — rows never drop on fulfillment
@@ -117,21 +117,22 @@ function refreshPivotSheet_(state) {
   // anchored ARRAYFORMULAs so user sorts can't break per-row references
   var rows = [
     ['Order', 'Requested', 'Created', 'Issue', 'Incoming week', 'Outgoing week', 'Status', 'Original',
-     'Override Requested', 'Override Created', 'Exclude'],
+     'Original Box Type', 'Override Requested', 'Override Created', 'Exclude'],
   ];
   keys.forEach(function (k) {
     var r = state[k], o = prev[k] || ['', '', ''];
     rows.push([k, r.requested || '', r.entered || '', r.issue || '', r.original_cohort || '',
-      r.outbound || '', r.status || '', r.original || '', o[0], o[1], o[2]]);
+      r.outbound || '', r.status || '', r.original || '', r.original_boxtype || '',
+      o[0], o[1], o[2]]);
   });
   sh.clearContents();
-  var width = 11;
+  var width = 12;
   sh.getRange(1, 1, rows.length, width).setValues(rows.map(function (r) {
     return r.concat(new Array(width - r.length).fill(''));
   }));
-  sh.getRange('L1:M1').setFormulas([[
-    '=ARRAYFORMULA({"Eff Requested"; IF(A2:A="",,IF(I2:I<>"",I2:I,B2:B))})',
-    '=ARRAYFORMULA({"Eff Created"; IF(A2:A="",,IF(J2:J<>"",J2:J,C2:C))})']]);
+  sh.getRange('M1:N1').setFormulas([[
+    '=ARRAYFORMULA({"Eff Requested"; IF(A2:A="",,IF(J2:J<>"",J2:J,B2:B))})',
+    '=ARRAYFORMULA({"Eff Created"; IF(A2:A="",,IF(K2:K<>"",K2:K,C2:C))})']]);
   sh.getRange('B:C').setNumberFormat('@');
 }
 
@@ -491,7 +492,7 @@ function buildTabs_(work, state, overrides, mondays, denoms, cdf, today, stamp) 
 // ---------- state (_state hidden tab) ----------
 
 var STATE_COLS = ['key', 'entered', 'requested', 'ticket', 'issue', 'outbound', 'status',
-                  'total', 'original', 'original_cohort', 'original_total', 'lifetime_orders'];
+                  'total', 'original', 'original_cohort', 'original_total', 'lifetime_orders', 'original_boxtype'];
 
 function loadState_() {
   var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(STATE_TAB);
