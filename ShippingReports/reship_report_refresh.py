@@ -695,14 +695,35 @@ def main() -> int:
                 print(f"[reship-report] attempt 1 failed ({type(e).__name__}), retrying in 60s")
                 time.sleep(60)
                 continue
-            # errors go to EMAIL only — never the shared Slack channel Dan reads
-            # (Kurt 2026-07-09); the webhook is reserved for breach alerts.
-            os.environ.pop("AH_SLACK_WEBHOOK", None)
-            notify(f"Reship report refresh FAILED (after retry): {type(e).__name__}: {e}",
-                   level="critical")
+            # errors DM Kurt first (never the shared channel Dan reads — Kurt
+            # 2026-07-09); email fallback if the DM fails. Webhook stays
+            # reserved for breach alerts.
+            msg = f"Reship report refresh FAILED (after retry): {type(e).__name__}: {e}"
+            if not dm_kurt(msg):
+                os.environ.pop("AH_SLACK_WEBHOOK", None)
+                notify(msg, level="critical")
             traceback.print_exc()
             return 1
     return 1
+
+
+KURT_SLACK_ID = "U08R19137UL"
+
+
+def dm_kurt(text: str) -> bool:
+    """DM Kurt via the bot token (needs chat:write scope). True on success."""
+    import os
+    token = os.environ.get("AH_SLACK_BOT_TOKEN", "").strip()
+    if not token:
+        return False
+    try:
+        r = requests.post("https://slack.com/api/chat.postMessage",
+                          headers={"Authorization": f"Bearer {token}"},
+                          json={"channel": KURT_SLACK_ID, "text": f":rotating_light: {text}"},
+                          timeout=15)
+        return bool(r.ok and r.json().get("ok"))
+    except Exception:
+        return False
 
 
 if __name__ == "__main__":
