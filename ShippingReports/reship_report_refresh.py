@@ -139,29 +139,47 @@ def enrich_original_boxtypes(state: dict, mondays: list[date]) -> None:
 BOX_TYPES = ["Regular Box", "Medium Tray", "Large Tray"]
 
 
-def tray_mix_rows(mondays: list[date], stamp: str, work: dict) -> list[list]:
-    """Kurt's layout: per cohort, per box type — cohort discrete, reship discrete,
-    reship % (type reships / type cohort size). Tray = AHB-[ML]CUST-TRAY SKUs."""
+def all_reships_rows(state: dict, mondays: list[date]) -> list[list]:
+    """Hidden '_all' tab on the pivot sheet: EVERY reship attributed to the window
+    cohorts (incl. ones outside the visible Raw Data membership), with a live
+    exclude-lookup into Raw Data col L — feeds Product Mix's instant COUNTIFS."""
+    tags = {f"_SHIP_{m.isoformat()}" for m in mondays}
+    rows = [["Order", "Incoming week", "Original Box Type", "Excluded"]]
+    for k in sorted(state):
+        rec = state[k]
+        if rec.get("original_cohort") in tags:
+            rows.append([k, rec["original_cohort"],
+                         rec.get("original_boxtype") or "Regular Box",
+                         f"=IFERROR(VLOOKUP($A{len(rows)+1},'Raw Data'!$A:$L,12,FALSE),\"\")"])
+    return rows
+
+
+def tray_mix_rows(mondays: list[date], stamp: str) -> list[list]:
+    """Kurt's layout: per cohort, per box type — cohort discrete (live Shopify,
+    script-written) + reship discrete/% as LIVE COUNTIFS over the hidden '_all'
+    tab, so an Exclude 'x' on Raw Data recomputes instantly (Kurt 2026-07-09)."""
     rows = [[f"REFRESHED {stamp}",
-             "live Shopify counts; denominators exclude cancelled + reships; "
-             "reship type = ORIGINAL order's box type"],
+             "sizes = live Shopify (hourly); reship counts = live formulas over _all "
+             "(instant, honor Exclude); reship type = ORIGINAL order's box type"],
             ["Cohort", "Cohort size",
              "Regular Box", "Regular Box Reship discrete", "Regular Box Reship %",
              "Medium Tray", "Medium Tray Reship discrete", "Medium Tray Reship %",
              "Large Tray", "Large Tray Reship discrete", "Large Tray Reship %"]]
-    for mon in sorted(mondays):
+    for i, mon in enumerate(sorted(mondays)):
         tag = f"_SHIP_{mon.isoformat()}"
         base_q = f"tag:'{tag}' -status:cancelled -tag:'Reship'"
         total = _count(base_q)
         med = _count(base_q + " sku:AHB-MCUST-TRAY*")
         lge = _count(base_q + " sku:AHB-LCUST-TRAY*")
         sizes = {"Regular Box": total - med - lge, "Medium Tray": med, "Large Tray": lge}
-        resh = Counter(rec.get("original_boxtype") or "Regular Box"
-                       for rec in work.values() if rec.get("original_cohort") == tag)
+        r = i + 3  # data rows start at sheet row 3
         row = [tag, total]
-        for bt in BOX_TYPES:
-            n, d = resh.get(bt, 0), sizes[bt]
-            row += [d, n, f"{n/d:.2%}" if d else "n/a"]
+        for bt, col in zip(BOX_TYPES, ("C", "F", "I")):
+            cnt_col = chr(ord(col) + 1)
+            row += [sizes[bt],
+                    (f"=COUNTIFS('_all'!$B:$B,$A{r},'_all'!$C:$C,\"{bt}\","
+                     f"'_all'!$D:$D,\"<>x\")"),
+                    f"=IF({col}{r}>0,TEXT({cnt_col}{r}/{col}{r},\"0.00%\"),\"n/a\")"]
         rows.append(row)
     return rows
 
@@ -627,13 +645,14 @@ def build(weeks_back: int, dry_run: bool) -> None:
     print(f"[reship-report] wrote {len(tabs)} tabs to {SHEET_ID} at {stamp}")
 
     # Dan's pivot sheet extras: Tray Mix (cohort composition) + Triage feed
-    extra = {"Product Mix": tray_mix_rows(mondays, stamp, work)}  # Kurt renamed the tab 7/09
+    extra = {"_all": all_reships_rows(state, mondays),          # hidden feed, formulas
+             "Product Mix": tray_mix_rows(mondays, stamp)}      # live COUNTIFS over _all
     try:
         extra["Triage"] = triage_rows(state, oldest, stamp, gclient)
     except Exception as e:
         print(f"[reship-report] triage build failed (non-fatal): {e}")
-    p_existing = {s["properties"]["title"] for s in
-                  gclient._sheets.spreadsheets().get(spreadsheetId=PIVOT_SHEET_ID).execute()["sheets"]}
+    p_meta = gclient._sheets.spreadsheets().get(spreadsheetId=PIVOT_SHEET_ID).execute()["sheets"]
+    p_existing = {s["properties"]["title"]: s["properties"]["sheetId"] for s in p_meta}
     for name, rows in extra.items():
         if name not in p_existing:
             gclient.add_sheet_tab(PIVOT_SHEET_ID, name)
@@ -641,8 +660,14 @@ def build(weeks_back: int, dry_run: bool) -> None:
             spreadsheetId=PIVOT_SHEET_ID, range=f"'{name}'!A1:Z2000").execute()
         gclient._sheets.spreadsheets().values().update(
             spreadsheetId=PIVOT_SHEET_ID, range=f"'{name}'!A1",
-            valueInputOption="RAW", body={"values": rows}).execute()
+            valueInputOption="RAW" if name == "Triage" else "USER_ENTERED",
+            body={"values": rows}).execute()
         time.sleep(0.3)
+    if "_all" in p_existing:  # keep the feed tab hidden
+        gclient._sheets.spreadsheets().batchUpdate(spreadsheetId=PIVOT_SHEET_ID, body={
+            "requests": [{"updateSheetProperties": {
+                "properties": {"sheetId": p_existing["_all"], "hidden": True},
+                "fields": "hidden"}}]}).execute()
     print(f"[reship-report] wrote {len(extra)} extra tabs to pivot sheet")
 
     # breach alert: current cohort worse than last at same day-offset
