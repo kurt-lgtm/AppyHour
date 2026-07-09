@@ -233,7 +233,7 @@ function gorgiasGet_(path, params) {
   var resp = UrlFetchApp.fetch('https://appyhour.gorgias.com/api' + path + (qs ? '?' + qs : ''), {
     headers: {
       Authorization: 'Basic ' + Utilities.base64Encode(
-        props.getProperty('GORGIAS_USER') + ':' + props.getProperty('GORGIAS_KEY')),
+        props.getProperty('GORGIAS_USER') + ':' + (props.getProperty('GORGIAS_KEY') || props.getProperty('GORGIAS_API_KEY'))),
       'User-Agent': 'AppyHourReshipReport/1.0', // default UA gets Cloudflare 1010
     },
     muteHttpExceptions: true,
