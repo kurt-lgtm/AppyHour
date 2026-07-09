@@ -622,7 +622,7 @@ def build(weeks_back: int, dry_run: bool) -> None:
     print(f"[reship-report] wrote {len(tabs)} tabs to {SHEET_ID} at {stamp}")
 
     # Dan's pivot sheet extras: Tray Mix (cohort composition) + Triage feed
-    extra = {"Tray Mix": tray_mix_rows(mondays, stamp, work)}
+    extra = {"Product Mix": tray_mix_rows(mondays, stamp, work)}  # Kurt renamed the tab 7/09
     try:
         extra["Triage"] = triage_rows(state, oldest, stamp, gclient)
     except Exception as e:
