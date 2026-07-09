@@ -377,6 +377,15 @@ def build(weeks_back: int, dry_run: bool) -> None:
             if row[0]:
                 overrides[row[0]] = {"issue": row[9], "incoming": row[10],
                                      "outgoing": row[11], "exclude": row[12].strip().lower() == "x"}
+        # pivot sheet's Exclude col (L) counts too — Dan works there (Kurt 7/09)
+        try:
+            praw = gclient.read_sheet(PIVOT_SHEET_ID, "'Raw Data'!A2:L10000") or []
+        except Exception:
+            praw = []
+        for row in praw:
+            row = row + [""] * (12 - len(row))
+            if row[0] and str(row[11]).strip().lower() == "x":
+                overrides.setdefault(row[0], {"issue": "", "incoming": "", "outgoing": ""})["exclude"] = True
 
     # effective view: overrides applied, excluded rows dropped from ALL counts
     eff: dict[str, dict] = {}

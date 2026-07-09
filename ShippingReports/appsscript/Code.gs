@@ -296,19 +296,29 @@ function requestsByDay_(state, mon, upto) {
 // ---------- overrides / Raw Data ----------
 
 function loadOverrides_() {
-  var sh = mainSS_().getSheetByName('Raw Data');
-  if (!sh) return {};
-  var values = sh.getRange('A3:M' + Math.max(3, sh.getLastRow())).getValues();
   var out = {};
-  values.forEach(function (row) {
-    if (row[0]) {
-      out[row[0]] = {
-        issue: String(row[9] || ''), incoming: String(row[10] || ''),
-        outgoing: String(row[11] || ''),
-        exclude: String(row[12] || '').trim().toLowerCase() === 'x',
-      };
-    }
-  });
+  var sh = mainSS_().getSheetByName('Raw Data');
+  if (sh) {
+    sh.getRange('A3:M' + Math.max(3, sh.getLastRow())).getValues().forEach(function (row) {
+      if (row[0]) {
+        out[row[0]] = {
+          issue: String(row[9] || ''), incoming: String(row[10] || ''),
+          outgoing: String(row[11] || ''),
+          exclude: String(row[12] || '').trim().toLowerCase() === 'x',
+        };
+      }
+    });
+  }
+  // pivot sheet's Exclude col (L) counts too — Dan works there (Kurt 7/09)
+  var psh = SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName('Raw Data');
+  if (psh && psh.getLastRow() >= 2) {
+    psh.getRange('A2:L' + psh.getLastRow()).getValues().forEach(function (row) {
+      if (row[0] && String(row[11] || '').trim().toLowerCase() === 'x') {
+        if (!out[row[0]]) out[row[0]] = { issue: '', incoming: '', outgoing: '', exclude: true };
+        else out[row[0]].exclude = true;
+      }
+    });
+  }
   return out;
 }
 
