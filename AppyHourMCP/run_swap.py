@@ -111,17 +111,19 @@ def swap_one(base, headers, order, swap_skus, variant_gids, swaps):
         raise RuntimeError(f"beginEdit failed: {data['orderEditBegin']['userErrors']}")
     calc_id = calc_order["id"]
 
-    calc_items = {}
+    # LIST, not dict — same SKU can appear on multiple lines; dict overwrote
+    # all but the last (balance-invariant fix, Kurt 2026-07-09 #157930)
+    calc_items = []
     for edge in calc_order["lineItems"]["edges"]:
         node = edge["node"]
         sku = node.get("sku") or ""
         if node.get("quantity", 0) > 0 and sku in swap_map:
-            calc_items[sku] = (node["id"], node["quantity"])
+            calc_items.append((sku, node["id"], node["quantity"]))
 
     if not calc_items:
         return name, [], "no swappable items in calculated order"
 
-    for old_sku, (li_id, qty) in calc_items.items():
+    for old_sku, li_id, qty in calc_items:
         new_sku = swap_map[old_sku]
         new_gid = variant_gids[new_sku]
         shopify_graphql(base, headers, """
@@ -152,7 +154,7 @@ def swap_one(base, headers, order, swap_skus, variant_gids, swaps):
     if errors:
         raise RuntimeError(f"commitEdit failed: {errors}")
 
-    swapped = [f"{s}->{swap_map[s]}" for s in calc_items]
+    swapped = [f"{s}->{swap_map[s]}(qty={q})" for s, _, q in calc_items]
     return name, swapped, None
 
 def main():

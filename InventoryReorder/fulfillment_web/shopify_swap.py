@@ -250,38 +250,42 @@ def execute_swap(
     calc = data["orderEditBegin"]["calculatedOrder"]
     calc_id = calc["id"]
 
-    # Find the old SKU line item
-    li_node = None
-    for edge in calc["lineItems"]["edges"]:
-        node = edge["node"]
-        if (node.get("sku") or "").strip() == old_sku and node["quantity"] > 0:
-            li_node = node
-            break
+    # Find ALL old-SKU line items — an order can carry the same SKU on multiple
+    # lines (e.g. two TR-TAPAS lines on #157930). Swapping only the first line
+    # leaves un-swapped quantity behind.
+    li_nodes = [
+        edge["node"] for edge in calc["lineItems"]["edges"]
+        if (edge["node"].get("sku") or "").strip() == old_sku and edge["node"]["quantity"] > 0
+    ]
 
-    if not li_node:
+    if not li_nodes:
         _audit({"order_gid": order_gid, "old_sku": old_sku, "new_variant_gid": new_variant_gid,
                 "result": "skip:not-found"})
         return {"success": False, "error": f"Line item {old_sku} not found or qty=0"}
 
+    total_qty = sum(n["quantity"] for n in li_nodes)
+
     # Revert info: to undo, swap new_variant_gid back to old_sku at this qty.
     _audit({"order_gid": order_gid, "old_sku": old_sku, "new_variant_gid": new_variant_gid,
-            "qty": li_node["quantity"], "result": "intent"})
+            "qty": total_qty, "lines": len(li_nodes), "result": "intent"})
 
-    # Step 2: Set old line item qty to 0
-    time.sleep(0.3)
-    data = _gql(store_url, token, """
-    mutation orderEditSetQuantity($id: ID!, $lineItemId: ID!, $quantity: Int!) {
-      orderEditSetQuantity(id: $id, lineItemId: $lineItemId, quantity: $quantity) {
-        calculatedOrder { id }
-        userErrors { field message }
-      }
-    }""", {"id": calc_id, "lineItemId": li_node["id"], "quantity": 0})
+    # Step 2: Set each old line item qty to 0
+    for li_node in li_nodes:
+        time.sleep(0.3)
+        data = _gql(store_url, token, """
+        mutation orderEditSetQuantity($id: ID!, $lineItemId: ID!, $quantity: Int!) {
+          orderEditSetQuantity(id: $id, lineItemId: $lineItemId, quantity: $quantity) {
+            calculatedOrder { id }
+            userErrors { field message }
+          }
+        }""", {"id": calc_id, "lineItemId": li_node["id"], "quantity": 0})
 
-    if data["orderEditSetQuantity"]["userErrors"]:
-        errors = data["orderEditSetQuantity"]["userErrors"]
-        return {"success": False, "error": f"setQuantity: {errors}"}
+        if data["orderEditSetQuantity"]["userErrors"]:
+            errors = data["orderEditSetQuantity"]["userErrors"]
+            return {"success": False, "error": f"setQuantity: {errors}"}
 
-    # Step 3: Add new variant
+    # Step 3: Add new variant at the SAME total qty removed (balance invariant —
+    # Kurt 2026-07-09, #157930 shipped a tray short after an unbalanced edit)
     time.sleep(0.3)
     data = _gql(store_url, token, """
     mutation orderEditAddVariant($id: ID!, $variantId: ID!, $quantity: Int!) {
@@ -290,7 +294,7 @@ def execute_swap(
         calculatedOrder { id }
         userErrors { field message }
       }
-    }""", {"id": calc_id, "variantId": new_variant_gid, "quantity": li_node["quantity"]})
+    }""", {"id": calc_id, "variantId": new_variant_gid, "quantity": total_qty})
 
     if data["orderEditAddVariant"]["userErrors"]:
         errors = data["orderEditAddVariant"]["userErrors"]
@@ -309,12 +313,12 @@ def execute_swap(
     if data["orderEditCommit"]["userErrors"]:
         errors = data["orderEditCommit"]["userErrors"]
         _audit({"order_gid": order_gid, "old_sku": old_sku, "new_variant_gid": new_variant_gid,
-                "qty": li_node["quantity"], "result": f"FAIL:commit:{errors}"})
+                "qty": total_qty, "result": f"FAIL:commit:{errors}"})
         return {"success": False, "error": f"commit: {errors}"}
 
     order = data["orderEditCommit"].get("order") or {}
     _audit({"order_gid": order_gid, "order_name": order.get("name"), "old_sku": old_sku,
-            "new_variant_gid": new_variant_gid, "qty": li_node["quantity"], "result": "OK"})
+            "new_variant_gid": new_variant_gid, "qty": total_qty, "result": "OK"})
     return {"success": True, "error": None}
 
 def execute_bulk_swap(
@@ -482,6 +486,28 @@ def execute_conditional_swap(
     calc_id = calc["id"]
     lines = {(e["node"].get("sku") or "").strip(): e["node"] for e in calc["lineItems"]["edges"]}
 
+    # BALANCE INVARIANT (Kurt 2026-07-09 — order #157930: this path zeroed a
+    # qty-2 TR-ICTRY line but the caller only passed 1 TR-TRUFF to add; the box
+    # shipped a tray short). The FULL line quantity is what gets removed here,
+    # regardless of what the caller assumed — so total add qty must equal total
+    # qty that will actually be zeroed. Checked BEFORE any mutation.
+    # Note: `lines` is keyed by SKU, so a duplicate-SKU order only zeroes the
+    # last line per SKU — the balance below counts exactly what will be zeroed.
+    qty_to_remove = sum(
+        lines[sku]["quantity"] for sku in set(removes)
+        if lines.get(sku) and lines[sku]["quantity"] > 0
+    )
+    qty_to_add = sum(qty for _, qty in adds)
+    if qty_to_remove != qty_to_add:
+        _audit({"order_gid": order_gid, "removes": list(removes), "adds": list(adds),
+                "result": f"ABORT:unbalanced remove={qty_to_remove} add={qty_to_add}"})
+        return {"success": False, "dry_run": False,
+                "error": f"ABORT: unbalanced conditional swap — would remove qty {qty_to_remove} "
+                         f"but add qty {qty_to_add}; edit NOT started"}
+
+    _audit({"order_gid": order_gid, "removes": list(removes), "adds": list(adds),
+            "qty": qty_to_remove, "result": "intent:conditional"})
+
     # Step 2: zero out each remove SKU that's present
     removed = []
     for sku in removes:
@@ -519,6 +545,10 @@ def execute_conditional_swap(
         order { id name } userErrors { field message } }
     }""", {"id": calc_id, "staffNote": staff_note})
     if d["orderEditCommit"]["userErrors"]:
+        _audit({"order_gid": order_gid, "removes": removed, "adds": added,
+                "result": f"FAIL:commit:{d['orderEditCommit']['userErrors']}"})
         return {"success": False, "dry_run": False, "error": f"commit: {d['orderEditCommit']['userErrors']}"}
+    _audit({"order_gid": order_gid, "order_name": d["orderEditCommit"]["order"]["name"],
+            "removes": removed, "adds": added, "qty": qty_to_remove, "result": "OK:conditional"})
     return {"success": True, "dry_run": False, "order_name": d["orderEditCommit"]["order"]["name"],
             "removed": removed, "added": added, "error": None}

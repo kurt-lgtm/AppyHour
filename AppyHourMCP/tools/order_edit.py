@@ -8,6 +8,7 @@ Uses InventoryReorder's static Admin API token.
 import json
 import csv
 import logging
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -27,6 +28,26 @@ DIETARY_RESTRICTION_FRAGMENTS = ("NNRS", "CORS", "NCRS")
 
 # Module-level variant GID cache — same SKUs get looked up every swap run
 _variant_gid_cache: dict[str, str] = {}
+
+
+# Append-only audit log — same file the fulfillment_web swap path writes
+# (shopify_swap.py). HARD RULE (Kurt 2026-06-19): never run a swap path
+# without a revert log. This closes the MCP-path gap (swap_audit.jsonl was
+# missing bulk MCP swaps — see memory swap-audit-log-incomplete).
+_AUDIT_LOG = os.path.join(
+    os.environ.get("SWAP_AUDIT_DIR", r"C:\Users\Work\Claude Projects\_outputs\logs"),
+    "swap_audit.jsonl",
+)
+
+
+def _audit(row: dict) -> None:
+    try:
+        os.makedirs(os.path.dirname(_AUDIT_LOG), exist_ok=True)
+        row = {"ts": datetime.now().isoformat(timespec="seconds"), "source": "mcp:order_edit", **row}
+        with open(_AUDIT_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+    except Exception:  # noqa: BLE001 — logging must never break a swap
+        pass
 
 
 def _lookup_variant_gids(base: str, headers: dict[str, str], skus: set[str]) -> dict[str, str]:
@@ -96,9 +117,12 @@ def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: 
         raise RuntimeError(f"beginEdit failed: {errors}")
     calc_id = calc_order["id"]
 
-    # Snapshot ALL line items for pre-commit verification
+    # Snapshot ALL line items for pre-commit verification.
+    # calc_items is a LIST — an order can carry the SAME SKU on multiple line
+    # items (e.g. two TR-TAPAS lines on #157930). A dict keyed by SKU silently
+    # dropped all but the last line, leaving un-swapped quantity behind.
     all_items_snapshot: dict[str, tuple[str, int]] = {}
-    calc_items: dict[str, tuple[str, int]] = {}
+    calc_items: list[tuple[str, str, int]] = []  # (old_sku, li_id, qty)
     for edge in calc_order["lineItems"]["edges"]:
         node = edge["node"]
         sku = node.get("sku") or ""
@@ -111,14 +135,16 @@ def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: 
             if sku in swaps:
                 if rc_bundle_only and not is_rc_bundle:
                     continue  # skip paid / non-bundle line items
-                calc_items[sku] = (li_id, qty)
+                calc_items.append((sku, li_id, qty))
 
     if not calc_items:
         raise RuntimeError("No swappable line items found in calculated order")
 
     swapped = []
     modified_li_ids: set[str] = set()
-    for old_sku, (calc_li_id, qty) in calc_items.items():
+    qty_removed = 0
+    qty_added = 0
+    for old_sku, calc_li_id, qty in calc_items:
         new_sku = swaps[old_sku]
         new_gid = variant_gids[new_sku]
         modified_li_ids.add(calc_li_id)
@@ -131,6 +157,7 @@ def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: 
                 }
             }
         """, {"id": calc_id, "lineItemId": calc_li_id, "quantity": 0})
+        qty_removed += qty
 
         shopify_graphql(base, headers, """
             mutation orderEditAddVariant($id: ID!, $variantId: ID!, $quantity: Int!, $allowDuplicates: Boolean) {
@@ -140,8 +167,19 @@ def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: 
                 }
             }
         """, {"id": calc_id, "variantId": new_gid, "quantity": qty, "allowDuplicates": True})
+        qty_added += qty
 
         swapped.append(f"{old_sku}->{new_sku}(qty={qty})")
+
+    # BALANCE INVARIANT (Kurt 2026-07-09, order #157930: removed 2 trays, added 1
+    # back — box shipped a tray short). Every swap must put back exactly as much
+    # quantity as it removed. Abort (never commit) on mismatch.
+    if qty_removed != qty_added:
+        _audit({"order_gid": order_gid, "swaps": swapped,
+                "result": f"ABORT:unbalanced removed={qty_removed} added={qty_added}"})
+        raise RuntimeError(
+            f"ABORT: unbalanced swap — removed qty {qty_removed} != added qty {qty_added}; edit NOT committed"
+        )
 
     # Pre-commit verification: re-fetch calculated order, check only target items changed
     verify_data = shopify_graphql(base, headers, """
@@ -184,7 +222,11 @@ def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: 
 
     errors = data["orderEditCommit"]["userErrors"]
     if errors:
+        _audit({"order_gid": order_gid, "swaps": swapped, "result": f"FAIL:commit:{errors}"})
         raise RuntimeError(f"commitEdit failed: {errors}")
+
+    _audit({"order_gid": order_gid, "swaps": swapped,
+            "qty_removed": qty_removed, "qty_added": qty_added, "result": "OK"})
 
     # Order mutated — invalidate cached order reads so subsequent fetches
     # see the edit (per cache.py bust contract).
