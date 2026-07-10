@@ -2169,8 +2169,6 @@ def generate_matrix_xlsx(
         full = od["order"]
         addr = full.get("shippingAddress") or {}
 
-        # Count food items
-        food_count = 0
         order_skus: dict[str, int] = {}
         for li in od["line_items"]:
             sku = (li.get("sku") or "").strip()
@@ -2179,8 +2177,6 @@ def generate_matrix_xlsx(
                 fq = li.get("currentQuantity", li.get("quantity", 0))
             if sku and fq > 0:
                 order_skus[sku] = order_skus.get(sku, 0) + fq
-                if any(sku.startswith(p) for p in ("CH-", "MT-", "AC-")):
-                    food_count += fq
 
         row_num += 1
         oid = od["name"]
@@ -2208,7 +2204,10 @@ def generate_matrix_xlsx(
             "name", ""
         )
         ws.cell(row_num, 3).value = "SHIPPING"
-        ws.cell(row_num, 4).value = food_count
+        # Total (col D) = sum of ALL product columns on the row (O..last), matching
+        # =SUM(O:EK). A CH/MT/AC-only food count under-counted — Kurt fixed a vF by
+        # hand on 2026-07-10 when TR/PK quantities were missing from the total.
+        ws.cell(row_num, 4).value = sum(q for s, q in order_skus.items() if s in sku_to_col)
         ws.cell(row_num, 5).value = phone
         ws.cell(row_num, 6).value = full.get("email", "")
         ws.cell(row_num, 7).value = addr.get("address1", "")
@@ -3045,7 +3044,10 @@ def apply_allocation(rows: list[dict], location_name: str = "RMFG",
         for r in todo:
             # 2026-04: InventoryQuantityInput renamed compareQuantity -> REQUIRED changeFromQuantity
             # (the item's current value at the location, for optimistic concurrency). Read it, pass it.
-            _cur = _shopify_graphql(
+            # MUST use the UNCACHED path: the cached _shopify_graphql returns a stale on_hand, so the
+            # changeFromQuantity no longer matches the persisted quantity -> repeated userErrors on
+            # re-push of a recently-changed SKU (CH-MONT, 2026-07-07). See MATRIX_RULES rule 13.
+            _cur = _shopify_graphql_matrix(
                 base, headers,
                 "query($id:ID!,$loc:ID!){inventoryItem(id:$id){inventoryLevel(locationId:$loc){"
                 "quantities(names:[\"on_hand\"]){quantity}}}}",

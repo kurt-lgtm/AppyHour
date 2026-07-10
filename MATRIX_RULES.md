@@ -16,6 +16,11 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
 
 ## Rules (negatives-first)
 
+0. **Column D "Total" = sum of ALL product columns on the row (`=SUM(O:EK)` semantics)** — NOT a
+   CH/MT/AC-only food count (Kurt 2026-07-10: wk0713 vF shipped with food-count totals; TR/PK
+   quantities were missing and Kurt hand-fixed row 17 with `=SUM(O17:EK17)`). If metadata columns
+   ever shift the product-column start, the total must still cover exactly the product columns.
+
 1. **CEX-EC is a 3-level parent chain — resolve down it, never sideways** (Kurt 2026-07-02):
    `CEX-EC` (bare parent line) → `CEX-EC-{suffix}` (curation child) → applied `CH-` SKU (the cheese
    actually picked). All three legitimately COEXIST on one order — bare + suffix together is VALID,
@@ -71,6 +76,13 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
     invalidates it after push (re-preview after swaps); PK-/MR- structural SKUs stay uncapped;
     Available push remains manual-confirm — never auto-commit (inventorySetQuantities is
     effectively last-writer-wins even with changeFromQuantity read-then-write).
+    **REGRESSION (2026-07-07):** `apply_allocation` read the `changeFromQuantity` (current on_hand,
+    the optimistic-lock arg) via the CACHED `_shopify_graphql` — so on any re-push of a SKU whose
+    on_hand was just changed, the stale cached value no longer matched the persisted quantity and
+    Shopify returned `changeFromQuantity argument no longer matches the persisted quantity` (hit live
+    on CH-MONT, failed twice, only succeeded via an uncached read). Rule 12 already mandates the
+    uncached path — the optimistic-lock read MUST use `_shopify_graphql_matrix`, never the cached
+    `_shopify_graphql`. Do not revert this read to the cached path.
 
 14. **Col L (Tags) is QC-GATED for routing + ice at validation time** (`check_routing_and_ice`, 2026-07-03).
     The export is the LAST artifact RMFG reads; on 2026-07-03 untagged CS drift-ins, 1522 missing-ice
