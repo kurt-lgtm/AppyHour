@@ -88,7 +88,28 @@ def _lookup_variant_gids(base: str, headers: dict[str, str], skus: set[str]) -> 
     return {sku: _variant_gid_cache[sku] for sku in skus}
 
 
-def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: dict[str, str], variant_gids: dict[str, str], rc_bundle_only: bool = True) -> list[str]:
+def _paid_skus_on_order(base: str, headers: dict[str, str], order_gid: str, skus: set[str]) -> dict[str, list[float]]:
+    """Map sku -> list of actual-paid amounts (>0 only) for the given SKUs on the order."""
+    data = shopify_graphql(base, headers, """
+        query($id: ID!) {
+            order(id: $id) {
+                lineItems(first: 100) {
+                    nodes { sku discountedUnitPriceAfterAllDiscountsSet { shopMoney { amount } } }
+                }
+            }
+        }
+    """, {"id": order_gid}, resource="orders-live")
+    hits: dict[str, list[float]] = {}
+    for li in data["order"]["lineItems"]["nodes"]:
+        sku = (li.get("sku") or "").strip()
+        if sku in skus:
+            paid = float(li["discountedUnitPriceAfterAllDiscountsSet"]["shopMoney"]["amount"])
+            if paid > 0:
+                hits.setdefault(sku, []).append(paid)
+    return hits
+
+
+def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: dict[str, str], variant_gids: dict[str, str], rc_bundle_only: bool = True, allow_paid: bool = False) -> list[str]:
     """Swap SKUs on a single order. Returns list of swap descriptions.
 
     Safety: snapshots all line items after beginEdit, verifies only target
@@ -96,7 +117,13 @@ def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: 
 
     When rc_bundle_only=True (default), only line items with the `_rc_bundle`
     custom attribute are eligible — paid add-ons (no props) are never swapped.
+
+    PAID-ITEM GUARD (Kurt 2026-07-10): even with rc_bundle_only=False, a line
+    the customer actually paid for (discounted price > $0) is skipped unless
+    allow_paid=True. We try not to mess with paid items at all; if one is ever
+    reverted, restore the EXACT variant id from the audit row.
     """
+    paid_hits = {} if allow_paid else _paid_skus_on_order(base, headers, order_gid, set(swaps))
     data = shopify_graphql(base, headers, """
         mutation orderEditBegin($id: ID!) {
             orderEditBegin(id: $id) {
@@ -135,6 +162,10 @@ def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: 
             if sku in swaps:
                 if rc_bundle_only and not is_rc_bundle:
                     continue  # skip paid / non-bundle line items
+                if sku in paid_hits:
+                    _audit({"order_gid": order_gid, "sku": sku,
+                            "result": f"SKIP:paid-item-guard paid={paid_hits[sku]}"})
+                    continue  # customer paid for this — never swap without allow_paid=True
                 calc_items.append((sku, li_id, qty))
 
     if not calc_items:
@@ -353,6 +384,7 @@ def register(mcp: object) -> None:
         box_sku_contains: list[str] = Field(default_factory=list, description="Optional: only process orders containing a box SKU whose name includes ANY of these substrings (e.g. ['-MDT', 'XMDT']). Applied in addition to box_sku.")
         dry_run: bool = Field(True, description="If true (default), preview without modifying orders")
         rc_bundle_only: bool = Field(True, description="If true (default), only swap line items with _rc_bundle property; skip paid/chosen items")
+        allow_paid: bool = Field(False, description="DANGER: if true, allows swapping lines the customer actually paid for (>$0 after discounts). Default false — paid items are NEVER touched (Kurt 2026-07-10); requires Kurt's explicit OK")
 
     @mcp.tool(
         name="appyhour_swap_order_skus",
@@ -481,7 +513,7 @@ def register(mcp: object) -> None:
                 if not email:
                     email = order.get("email", "") or ""
                 swap_map = _resolve_swap_map(idx, swap_skus)
-                swapped = _swap_order_skus(base, headers, order_gid, swap_map, variant_gids, params.rc_bundle_only)
+                swapped = _swap_order_skus(base, headers, order_gid, swap_map, variant_gids, params.rc_bundle_only, params.allow_paid)
                 return {"order": name, "email": email, "swaps": swapped}
 
             with ThreadPoolExecutor(max_workers=8) as pool:

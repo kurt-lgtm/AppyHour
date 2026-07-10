@@ -38,14 +38,23 @@ def _begin_response(items):
 class FakeGQL:
     """Records mutations; answers begin/verify/commit."""
 
-    def __init__(self, items):
+    def __init__(self, items, paid=None):
         self.items = items  # [(li_id, sku, qty, rc_bundle)]
+        self.paid = paid or {}  # sku -> actual-paid amount (default 0.0)
         self.set_qty_calls = []   # (li_id, qty)
         self.add_calls = []       # (variant_gid, qty)
         self.committed = False
 
-    def __call__(self, base, headers, query, variables=None):
+    def __call__(self, base, headers, query, variables=None, **kwargs):
         variables = variables or {}
+        if "discountedUnitPriceAfterAllDiscountsSet" in query:
+            # paid-item-guard pre-query (Kurt 2026-07-10)
+            nodes = [{"sku": sku, "quantity": qty,
+                      "discountedUnitPriceAfterAllDiscountsSet":
+                          {"shopMoney": {"amount": str(self.paid.get(sku, 0.0))}},
+                      "variant": {"id": f"gid://v/orig-{li_id}"}}
+                     for li_id, sku, qty, _ in self.items]
+            return {"order": {"lineItems": {"nodes": nodes}}}
         if "orderEditBegin" in query:
             return _begin_response(self.items)
         if "orderEditSetQuantity" in query:
@@ -199,6 +208,59 @@ def test_conditional_balanced_commits(monkeypatch, tmp_path):
     assert fake.committed
     assert fake.add_calls == [("gid://v/9", 2)]
     assert "OK:conditional" in (tmp_path / "audit.jsonl").read_text()
+
+
+# ---------------------------------------------------------------------------
+# Paid-item guard (Kurt 2026-07-10 — never touch paid lines; manual accounting
+# repair after a paid PINA/CCCS line slipped into a rotation batch)
+# ---------------------------------------------------------------------------
+
+def test_execute_swap_refuses_paid_line(monkeypatch, tmp_path):
+    import shopify_swap
+    fake = FakeGQL([("li1", "AC-PINA", 1, False)], paid={"AC-PINA": 5.0})
+    monkeypatch.setattr(shopify_swap, "_gql", fake)
+    monkeypatch.setattr(shopify_swap, "_AUDIT_LOG", str(tmp_path / "audit.jsonl"))
+    monkeypatch.setattr(shopify_swap.time, "sleep", lambda s: None)
+    result = shopify_swap.execute_swap(
+        "store", "token", "gid://shopify/Order/1", "AC-PINA", "gid://v/9")
+    assert not result["success"]
+    assert "paid-item guard" in result["error"]
+    assert fake.set_qty_calls == [] and fake.add_calls == [] and not fake.committed
+    assert "REFUSED:paid-item-guard" in (tmp_path / "audit.jsonl").read_text()
+
+
+def test_execute_swap_allow_paid_overrides(monkeypatch, tmp_path):
+    import shopify_swap
+    fake = FakeGQL([("li1", "AC-PINA", 1, False)], paid={"AC-PINA": 5.0})
+    monkeypatch.setattr(shopify_swap, "_gql", fake)
+    monkeypatch.setattr(shopify_swap, "_AUDIT_LOG", str(tmp_path / "audit.jsonl"))
+    monkeypatch.setattr(shopify_swap.time, "sleep", lambda s: None)
+    result = shopify_swap.execute_swap(
+        "store", "token", "gid://shopify/Order/1", "AC-PINA", "gid://v/9", allow_paid=True)
+    assert result["success"] and fake.committed
+
+
+def test_execute_swap_audit_records_old_variant(monkeypatch, tmp_path):
+    """Reverts must restore the EXACT variant removed — audit carries it."""
+    fake, result = _run_exec_swap(
+        monkeypatch, items=[("li1", "TR-ICTRY", 2, True)], tmp_path=tmp_path)
+    assert result["success"]
+    assert "gid://v/orig-li1" in (tmp_path / "audit.jsonl").read_text()
+
+
+def test_mcp_swap_skips_paid_line(monkeypatch, tmp_path):
+    from tools import order_edit
+    fake = FakeGQL([("li1", "AC-PINA", 1, False), ("li2", "MT-CCCS", 1, False)],
+                   paid={"AC-PINA": 5.0})
+    monkeypatch.setattr(order_edit, "shopify_graphql", fake)
+    monkeypatch.setattr(order_edit, "_AUDIT_LOG", str(tmp_path / "audit.jsonl"))
+    result = order_edit._swap_order_skus(
+        "base", {}, "gid://shopify/Order/1",
+        {"AC-PINA": "AC-APR", "MT-CCCS": "MT-SFEN"},
+        {"AC-APR": "gid://v/8", "MT-SFEN": "gid://v/9"},
+        rc_bundle_only=False)
+    assert result == ["MT-CCCS->MT-SFEN(qty=1)"]  # paid PINA line skipped
+    assert "SKIP:paid-item-guard" in (tmp_path / "audit.jsonl").read_text()
 
 
 def test_mcp_swap_unbalanced_impossible_by_construction(monkeypatch, tmp_path):

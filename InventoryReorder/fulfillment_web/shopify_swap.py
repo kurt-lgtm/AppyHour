@@ -217,6 +217,36 @@ def find_swap_targets(
 
     return targets
 
+def _line_paid_info(store_url: str, token: str, order_gid: str, sku: str) -> list[dict]:
+    """Actual-paid + variant identity for every line of `sku` on the order.
+
+    Returns [{"paid": float, "variant_gid": str|None, "qty": int}, ...] using
+    discountedUnitPriceAfterAllDiscountsSet (what the customer really paid).
+    """
+    data = _gql(store_url, token, """
+    query($id: ID!) {
+      order(id: $id) {
+        lineItems(first: 100) {
+          nodes {
+            sku
+            quantity
+            discountedUnitPriceAfterAllDiscountsSet { shopMoney { amount } }
+            variant { id }
+          }
+        }
+      }
+    }""", {"id": order_gid})
+    out = []
+    for li in data["order"]["lineItems"]["nodes"]:
+        if (li.get("sku") or "").strip() == sku:
+            out.append({
+                "paid": float(li["discountedUnitPriceAfterAllDiscountsSet"]["shopMoney"]["amount"]),
+                "variant_gid": (li.get("variant") or {}).get("id"),
+                "qty": li.get("quantity", 0),
+            })
+    return out
+
+
 def execute_swap(
     store_url: str,
     token: str,
@@ -224,11 +254,30 @@ def execute_swap(
     old_sku: str,
     new_variant_gid: str,
     staff_note: str = "",
+    allow_paid: bool = False,
 ) -> dict:
     """Swap old_sku for new variant on a single order via GraphQL order edit.
 
+    PAID-ITEM GUARD (Kurt 2026-07-10): a line the customer actually paid for
+    (discounted price > $0) is NEVER swapped unless allow_paid=True is passed
+    explicitly. Motivator: three paid lines slipped into a wk0713 rotation
+    batch; the revert used the $0 in-box variant instead of the exact variant
+    purchased, and Kurt had to repair the accounting manually. Paid items are
+    left alone; if a revert is ever required it MUST restore the exact
+    old_variant_gid recorded in the audit row — never lookup_variant_gid().
+
     Returns {success: bool, order_name: str, error: str | None}.
     """
+    paid_lines = _line_paid_info(store_url, token, order_gid, old_sku)
+    old_variant_gids = sorted({p["variant_gid"] for p in paid_lines if p["variant_gid"]})
+    paid_hits = [p for p in paid_lines if p["paid"] > 0]
+    if paid_hits and not allow_paid:
+        _audit({"order_gid": order_gid, "old_sku": old_sku, "new_variant_gid": new_variant_gid,
+                "old_variant_gids": old_variant_gids,
+                "result": f"REFUSED:paid-item-guard paid={[p['paid'] for p in paid_hits]}"})
+        return {"success": False,
+                "error": f"paid-item guard: {old_sku} paid line(s) {[p['paid'] for p in paid_hits]} — "
+                         f"customer keeps what they paid for (pass allow_paid=True only with Kurt's explicit OK)"}
     # Step 1: Begin edit
     data = _gql(store_url, token, """
     mutation orderEditBegin($id: ID!) {
@@ -265,8 +314,10 @@ def execute_swap(
 
     total_qty = sum(n["quantity"] for n in li_nodes)
 
-    # Revert info: to undo, swap new_variant_gid back to old_sku at this qty.
+    # Revert info: to undo, restore old_variant_gids EXACTLY (never lookup_variant_gid —
+    # the $0 in-box variant may differ from the variant on the removed line).
     _audit({"order_gid": order_gid, "old_sku": old_sku, "new_variant_gid": new_variant_gid,
+            "old_variant_gids": old_variant_gids,
             "qty": total_qty, "lines": len(li_nodes), "result": "intent"})
 
     # Step 2: Set each old line item qty to 0
@@ -318,7 +369,8 @@ def execute_swap(
 
     order = data["orderEditCommit"].get("order") or {}
     _audit({"order_gid": order_gid, "order_name": order.get("name"), "old_sku": old_sku,
-            "new_variant_gid": new_variant_gid, "qty": total_qty, "result": "OK"})
+            "new_variant_gid": new_variant_gid, "old_variant_gids": old_variant_gids,
+            "qty": total_qty, "result": "OK"})
     return {"success": True, "error": None}
 
 def execute_bulk_swap(
