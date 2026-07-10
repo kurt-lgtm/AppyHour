@@ -94,5 +94,49 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
     Indy pin count (info-only here — the CAP is enforced apply-side where box data lives). A missing/
     unimportable qc_gate = the check FAILS loud, never skips. Trays = any TR-/TRAY SKU in assignments.
 
+15. **Col L must PRESERVE `Gift_Redemption` and `Reship - <reason>` tags alongside route+gel**
+    (Kurt 2026-07-10). The wk0713 export's col-L filter kept ONLY routing+gel tags (correct fix for
+    the 10,469-stray-tag FORMAT trip), but it also stripped gift/reship identity — RMFG couldn't
+    tell which rows were gift redemptions or reships, and warm-history reships that should have been
+    obvious extra-ice candidates were invisible on the sheet. The allowed col-L set = 5-form routing
+    grammar + gel tags + `Gift_Redemption` + `Reship - <reason>` (and nested `Shipping::<reason>::`),
+    NOTHING else. A col L with any other stray tag OR missing gift/reship identity = regression.
+    ✅ Implemented 2026-07-10: `qc_gate.is_identity_tag`/`identity_tags_of` is the ONE definition
+    (Gift_Redemption underscore OR space form, `Reship*`, `Shipping::*`); `gen_rmfg_sheet` +
+    `ice_distvol_workflow.write_export` preserve them in col L; `qc_audit` FORMAT exempts them from
+    the stray check. Tests: `ShipRouting/tests/test_identity_tags.py`.
+
+16. **Reships — `Arrived Warm` history above all — get the 3×48 upgrade whenever slack allows**
+    (Kurt 2026-07-10). wk0713: several Arrived-Warm reships rode at standard max ice while the 3×48
+    pass targeted only forecast-heat orders — a reship IS a prior cold-chain failure; re-icing it at
+    the same level it failed at re-runs the experiment. `ice_distvol_workflow` target selection must
+    include every non-tray, non-air reship with DistVol slack ≥0.5 regardless of forecast margin.
+    ✅ Implemented 2026-07-10 (`select_targets`: `qc_gate.is_reship_tag` reships bypass the
+    max-config + under-iced gates; tray/air/slack gates still apply; the dry-run report counts
+    included reships). Tests: `ShipRouting/tests/test_identity_tags.py`.
+
+15b. **Export product headers use the RMFG TRANSLATOR's exact name form** (Kurt 2026-07-10). The vF
+    emitted `Walnut, Honey & Extra Virgin Olive Oil Crackers` (Shopify title, comma) but RMFG's
+    translator maps `Walnut Honey & …` (no comma) — 545 units would have failed their import mapping.
+    The translator export (`meal-type-export-appy-hour-*.csv`, latest in Downloads) is the authority
+    for header spelling; also mind its trailing-dot pairs (`Prairie Breeze.`=CH-PRBZ≠CH-BRZ,
+    `…Sharp Cheddar.`=CH-V5CH≠CH-ACAC) — a period is a different product.
+
+17. **One ice-target list per cohort, one canonical invocation** (Kurt 2026-07-10). Two agents ran
+    `ice_distvol_workflow.py` the same evening with different tag args (`RMFG_20260710` vs
+    `_SHIP_2026-07-13`) and got 293 vs 725 targets — the tag silently changes the cohort fetch AND
+    the effective-TNT/weather basis, and each run wrote its own `ice_overcap_override_*.json`. Rules:
+    (a) the workflow reads its tag + ship date from `ShipRouting/cohort.json` — passing a tag by hand
+    is for ad-hoc analysis only, never for a list that reaches a sheet; (b) exactly ONE override file
+    per cohort (`ice_overcap_override_<ship-date>.json`) — a second computation DIFFS against it and
+    surfaces the delta, never forks a parallel file; (c) the TNT-credit question (size ice to
+    effective transit vs to forecast heat regardless of TNT) is a DOCUMENTED POLICY toggle, not an
+    accident of arguments — record the chosen policy in the file's header and on the Summary tab.
+    ✅ Enforced 2026-07-10 (with the rule-15/16 pass): tag arg optional — default reads
+    `cohort.json` (hand tag ≠ cohort tag prints an AD-HOC warning); override file ship-date-keyed
+    via `override_path()` (gen_rmfg_sheet reads the same path); re-runs DIFF against the existing
+    file before overwriting; file is now a dict with a `policy`/`tag`/`ship_date` header
+    (`read_override()` still accepts legacy bare lists). Summary-tab policy note stays manual.
+
 Linked from `AppyHour/CLAUDE.md`. Audit that produced this doc:
 `_outputs/reports/2026-07-02-matrix-tool-audit.md`.
