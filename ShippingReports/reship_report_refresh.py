@@ -746,9 +746,9 @@ def build(weeks_back: int, dry_run: bool) -> None:
     cur = len(requests_by_day(this_mon, off))
     prv = len(requests_by_day(this_mon - timedelta(weeks=1), off))
     if prv and cur > prv:
-        notify(f"Reship report: _SHIP_{this_mon} at {cur} requests by day {off} vs {prv} "
-               f"last week same day — tracking WORSE. Sheet: docs.google.com/spreadsheets/d/{SHEET_ID}",
-               level="warning")
+        alert_kurt(f"Reship report: _SHIP_{this_mon} at {cur} requests by day {off} vs {prv} "
+                   f"last week same day — tracking WORSE. "
+                   f"Sheet: docs.google.com/spreadsheets/d/{SHEET_ID}")
 
 
 def main() -> int:
@@ -766,15 +766,35 @@ def main() -> int:
                 print(f"[reship-report] attempt 1 failed ({type(e).__name__}), retrying in 60s")
                 time.sleep(60)
                 continue
-            # ALL Slack alerts go to the single incoming webhook = Kurt's
-            # channel only (Kurt 2026-07-13). notify() posts to AH_SLACK_WEBHOOK,
-            # a webhook bound to exactly ONE channel; email is the fallback if
-            # the webhook itself errors.
-            msg = f"Reship report refresh FAILED (after retry): {type(e).__name__}: {e}"
-            notify(msg, level="critical")
+            alert_kurt(f"Reship report refresh FAILED (after retry): {type(e).__name__}: {e}")
             traceback.print_exc()
             return 1
     return 1
+
+
+KURT_SLACK_ID = "U08R19137UL"
+
+
+def alert_kurt(msg: str) -> None:
+    """Alert Kurt PRIVATELY only (Kurt 2026-07-13: never a public channel like
+    #reships). Bot DM via chat.postMessage (needs Bot chat:write scope); if that
+    isn't granted yet, fall back to EMAIL — NEVER the AH_SLACK_WEBHOOK, which is
+    bound to the public #reships channel."""
+    import os
+    token = os.environ.get("AH_SLACK_BOT_TOKEN", "").strip()
+    if token:
+        try:
+            r = requests.post("https://slack.com/api/chat.postMessage",
+                              headers={"Authorization": f"Bearer {token}"},
+                              json={"channel": KURT_SLACK_ID, "text": f":rotating_light: {msg}"},
+                              timeout=15)
+            if r.ok and r.json().get("ok"):
+                return
+        except Exception:
+            pass
+    # email fallback — explicitly drop the public-channel webhook first
+    os.environ.pop("AH_SLACK_WEBHOOK", None)
+    notify(msg, level="critical")
 
 
 if __name__ == "__main__":

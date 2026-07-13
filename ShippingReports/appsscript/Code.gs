@@ -564,15 +564,29 @@ function breachAlert_(state, thisMon, denoms, today) {
   }
 }
 
+var KURT_SLACK_ID = 'U08R19137UL';
+
+// Alert Kurt PRIVATELY only (Kurt 2026-07-13: never a public channel). Bot DM
+// via chat.postMessage (SLACK_BOT_TOKEN prop, needs Bot chat:write); email
+// fallback. NEVER the SLACK_WEBHOOK — that's bound to public #reships.
 function slack_(text, critical) {
-  var webhook = PropertiesService.getScriptProperties().getProperty('SLACK_WEBHOOK');
-  if (!webhook) return; // fail-silent on alerting, loud in execution log
+  var pfx = (critical ? ':rotating_light: ' : ':warning: ') + text;
+  var token = PropertiesService.getScriptProperties().getProperty('SLACK_BOT_TOKEN');
+  if (token) {
+    try {
+      var r = UrlFetchApp.fetch('https://slack.com/api/chat.postMessage', {
+        method: 'post', contentType: 'application/json',
+        headers: { Authorization: 'Bearer ' + token },
+        payload: JSON.stringify({ channel: KURT_SLACK_ID, text: pfx }),
+        muteHttpExceptions: true,
+      });
+      if (JSON.parse(r.getContentText()).ok) return;
+    } catch (e) { Logger.log('slack DM failed: ' + e); }
+  }
   try {
-    UrlFetchApp.fetch(webhook, {
-      method: 'post', contentType: 'application/json',
-      payload: JSON.stringify({ text: (critical ? ':rotating_light: ' : ':warning: ') + text }),
-    });
-  } catch (e) { Logger.log('slack failed: ' + e); }
+    MailApp.sendEmail(Session.getEffectiveUser().getEmail(),
+                      '[Reship report] alert', text);
+  } catch (e) { Logger.log('email fallback failed: ' + e); }
 }
 
 // ---------- utils ----------
