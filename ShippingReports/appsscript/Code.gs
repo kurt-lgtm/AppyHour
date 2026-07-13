@@ -19,9 +19,9 @@
  *  6. Then DISABLE the local schtask 'reship-report-refresh' (cutover step).
  */
 
-var SHEET_ID = '1JgyYknIxJ3-UJxJOX-y78rf8cPNhT0uPy5FUw2zO9wE'; // main Reship Sheet (script may be bound anywhere)
+var PIVOT_SHEET_ID = '1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU'; // Kurt's pivot sheet — the only sheet the engine touches (Kurt 2026-07-13, decoupled from the old main sheet)
+var SHEET_ID = PIVOT_SHEET_ID; // state (_state) now lives on the pivot sheet
 function mainSS_() { return SpreadsheetApp.openById(SHEET_ID); }
-var PIVOT_SHEET_ID = '1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU'; // Kurt's pivot snapshot sheet
 var PIVOT_CUTOVER = '2026-07-08'; // membership = frozen _seed tab (7/08 unfulfilled queue) UNION entered >= cutover; rows persist once fulfilled (Kurt 7/09)
 var STATE_TAB = '_state';
 var MATURITY_DAYS = 14;
@@ -66,35 +66,8 @@ function build_() {
   sweepAndEnrich_(state, sweepFrom);
   enrichBoxTypes_(state, mondays);
   fillRequestedFromSlack_(state, histSince);
-  // Delete-to-remove (Kurt 2026-07-13, NO hide list): a row the user deleted from
-  // pivot Raw Data is detected in refreshPivotSheet_ and never re-written. The
-  // suppressed set is internal (Script Property), user never manages it.
   saveState_(state);
 
-  // user overrides from Raw Data J-M (user-owned, survive refresh)
-  var overrides = loadOverrides_();
-  var eff = {};
-  Object.keys(state).forEach(function (k) {
-    var r = JSON.parse(JSON.stringify(state[k]));
-    var o = overrides[k];
-    if (o) {
-      if (o.issue) r.issue = o.issue;
-      if (o.incoming) r.original_cohort = o.incoming;
-      if (o.outgoing) r.outbound = o.outgoing;
-      r.excluded = o.exclude;
-    }
-    eff[k] = r;
-  });
-  var work = {};
-  Object.keys(eff).forEach(function (k) { if (!eff[k].excluded) work[k] = eff[k]; });
-
-  var cdf = tailCdf_(work, today);
-  var tabs = buildTabs_(work, state, overrides, mondays, denoms, cdf, today, stamp);
-  writeRawData_(tabs.rawData);
-  Object.keys(tabs.plain).forEach(function (name) { writeTab_(name, tabs.plain[name]); });
-  writeTab_('Pivots', tabs.pivots, true);
-
-  breachAlert_(work, mondays[0], denoms, today);
   refreshPivotSheet_(state, mondays);
   writeProductMix_(mondays, denoms, stamp);
   try { writeTriage_(state, oldest, stamp); }
