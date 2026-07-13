@@ -123,10 +123,14 @@ function refreshPivotSheet_(state, mondays) {
   existing.forEach(function (row) {
     var r = state[row[0]];
     if (!r) return;
-    if (!row[1]) row[1] = r.requested || '';
-    if (!row[2]) row[2] = r.entered || '';
-    row[3] = r.issue || ''; row[4] = r.original_cohort || ''; row[5] = r.outbound || '';
-    row[6] = r.status || ''; row[7] = r.original || ''; row[8] = r.original_boxtype || '';
+    if (!row[1] && r.requested) row[1] = r.requested;
+    if (!row[2] && r.entered) row[2] = r.entered;
+    if (r.issue) row[3] = r.issue;
+    if (r.original_cohort) row[4] = r.original_cohort;
+    if (r.outbound) row[5] = r.outbound;
+    if (r.status) row[6] = r.status;
+    if (r.original) row[7] = r.original;
+    if (r.original_boxtype) row[8] = r.original_boxtype;
   });
 
   var floor = watermark;
