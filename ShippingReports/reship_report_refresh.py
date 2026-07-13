@@ -183,28 +183,33 @@ def tray_mix_rows(mondays: list[date], stamp: str) -> list[list]:
     script-written) + reship discrete/% as LIVE COUNTIFS over the hidden '_all'
     tab, so an Exclude 'x' on Raw Data recomputes instantly (Kurt 2026-07-09)."""
     rows = [[f"REFRESHED {stamp}",
-             "sizes = live Shopify (hourly); reship counts = live formulas over _all "
-             "(instant, honor Exclude); reship type = ORIGINAL order's box type"],
+             "sizes = live Shopify (hourly); reship counts = live COUNTIFS over the "
+             "visible Raw Data (same rows as Count-of-incoming-week; honor Exclude). "
+             "Reship type = ORIGINAL order's box type; blank type counts as Regular."],
             ["Cohort", "Cohort size",
              "Regular Box", "Regular Box Reship discrete", "Regular Box Reship %",
              "Medium Tray", "Medium Tray Reship discrete", "Medium Tray Reship %",
              "Large Tray", "Large Tray Reship discrete", "Large Tray Reship %"]]
+    RD = "'Raw Data'"  # E=incoming week, I=box type, L=exclude
     for i, mon in enumerate(sorted(mondays)):
         tag = f"_SHIP_{mon.isoformat()}"
         base_q = f"tag:'{tag}' -status:cancelled -tag:'Reship'"
         total = _count(base_q)
         med = _count(base_q + " sku:AHB-MCUST-TRAY*")
         lge = _count(base_q + " sku:AHB-LCUST-TRAY*")
-        sizes = {"Regular Box": total - med - lge, "Medium Tray": med, "Large Tray": lge}
         r = i + 3  # data rows start at sheet row 3
-        row = [tag, total]
-        for bt, col in zip(BOX_TYPES, ("C", "F", "I")):
-            cnt_col = chr(ord(col) + 1)
-            row += [sizes[bt],
-                    (f"=COUNTIFS('_all'!$B:$B,$A{r},'_all'!$C:$C,\"{bt}\","
-                     f"'_all'!$D:$D,\"<>x\")"),
-                    f"=IF({col}{r}>0,TEXT({cnt_col}{r}/{col}{r},\"0.00%\"),\"n/a\")"]
-        rows.append(row)
+        # Medium/Large by box type; Regular = all-incoming MINUS med MINUS lge so
+        # blank-box-type rows fall into Regular and the three RECONCILE to
+        # Count-of-incoming-week for this cohort.
+        med_cnt = f"=COUNTIFS({RD}!$E:$E,$A{r},{RD}!$I:$I,\"Medium Tray\",{RD}!$L:$L,\"<>x\")"
+        lge_cnt = f"=COUNTIFS({RD}!$E:$E,$A{r},{RD}!$I:$I,\"Large Tray\",{RD}!$L:$L,\"<>x\")"
+        reg_cnt = f"=COUNTIFS({RD}!$E:$E,$A{r},{RD}!$L:$L,\"<>x\")-G{r}-J{r}"
+        rows.append([
+            tag, total,
+            total - med - lge, reg_cnt, f'=IF(C{r}>0,TEXT(D{r}/C{r},"0.00%"),"n/a")',
+            med, med_cnt, f'=IF(F{r}>0,TEXT(G{r}/F{r},"0.00%"),"n/a")',
+            lge, lge_cnt, f'=IF(I{r}>0,TEXT(J{r}/I{r},"0.00%"),"n/a")',
+        ])
     return rows
 
 
@@ -705,8 +710,7 @@ def build(weeks_back: int, dry_run: bool) -> None:
     print(f"[reship-report] wrote {len(tabs)} tabs to {SHEET_ID} at {stamp}")
 
     # Dan's pivot sheet extras: Tray Mix (cohort composition) + Triage feed
-    extra = {"_all": all_reships_rows(state, mondays),          # hidden feed, formulas
-             "Product Mix": tray_mix_rows(mondays, stamp)}      # live COUNTIFS over _all
+    extra = {"Product Mix": tray_mix_rows(mondays, stamp)}  # live COUNTIFS over Raw Data
     try:
         extra["Triage"] = triage_rows(state, oldest, stamp, gclient)
     except Exception as e:
@@ -734,11 +738,6 @@ def build(weeks_back: int, dry_run: bool) -> None:
         spreadsheetId=DAILY_SHEET_ID, range="'Daily'!A1",
         valueInputOption="RAW", body={"values": daily_rows(state, stamp)}).execute()
 
-    if "_all" in p_existing:  # keep the feed tab hidden
-        gclient._sheets.spreadsheets().batchUpdate(spreadsheetId=PIVOT_SHEET_ID, body={
-            "requests": [{"updateSheetProperties": {
-                "properties": {"sheetId": p_existing["_all"], "hidden": True},
-                "fields": "hidden"}}]}).execute()
     print(f"[reship-report] wrote {len(extra)} extra tabs to pivot sheet")
 
     # breach alert: current cohort worse than last at same day-offset
