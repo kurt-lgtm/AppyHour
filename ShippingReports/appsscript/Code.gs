@@ -33,28 +33,14 @@ var MAX_ENRICH_PER_RUN = 120; // 6-min cap guard
 // ---------- entry point ----------
 
 function refresh() {
-  // errors DM Kurt first (SLACK_BOT_TOKEN prop w/ chat:write), Apps Script
-  // failure emails as backup — never the shared channel (Kurt 2026-07-09).
+  // ALL Slack alerts (error + breach) go to the single SLACK_WEBHOOK = Kurt's
+  // channel only (Kurt 2026-07-13). Apps Script failure emails are the backup.
   try {
     build_();
   } catch (e) {
-    dmKurt_(':rotating_light: Reship report (Apps Script) FAILED: ' + e);
+    slack_(':rotating_light: Reship report (Apps Script) FAILED: ' + e, true);
     throw e;
   }
-}
-
-var KURT_SLACK_ID = 'U08R19137UL';
-
-function dmKurt_(text) {
-  var token = PropertiesService.getScriptProperties().getProperty('SLACK_BOT_TOKEN');
-  if (!token) return;
-  try {
-    UrlFetchApp.fetch('https://slack.com/api/chat.postMessage', {
-      method: 'post', contentType: 'application/json',
-      headers: { Authorization: 'Bearer ' + token },
-      payload: JSON.stringify({ channel: KURT_SLACK_ID, text: text }),
-    });
-  } catch (err) { Logger.log('dmKurt failed: ' + err); }
 }
 
 function build_() {

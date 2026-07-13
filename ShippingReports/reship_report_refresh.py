@@ -95,6 +95,30 @@ def cohort_denominator(tag: str) -> int:
 
 
 PIVOT_SHEET_ID = "1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU"
+DAILY_SHEET_ID = "1VHzlyvFabVYUGpR71tgJfYDglI85KnCQOCYJFyZvGsI"  # 3-month daily counts (Kurt 7/10)
+HISTORY_DAYS = 92
+
+
+def daily_rows(state: dict, stamp: str) -> list[list]:
+    """One row per calendar day, trailing HISTORY_DAYS: requested count, created
+    count, ship week (Monday of that date's Mon-Sun week). Requested UNKNOWNs
+    can't appear here by definition — footer states the gap (R11)."""
+    today = date.today()
+    start = today - timedelta(days=HISTORY_DAYS)
+    req = Counter(r["requested"] for r in state.values() if r.get("requested"))
+    ent = Counter(r["entered"] for r in state.values() if r.get("entered"))
+    unknown = sum(1 for r in state.values()
+                  if not r.get("requested") and (r.get("entered") or "") >= start.isoformat())
+    rows = [["Date", "Count of requested", "Count of created", "Ship week",
+             f"REFRESHED {stamp}",
+             f"{unknown} reships in window have no ticket found (excluded from requested counts)"]]
+    d = start
+    while d <= today:
+        iso = d.isoformat()
+        rows.append([iso, req.get(iso, 0), ent.get(iso, 0),
+                     f"_SHIP_{monday_of(d).isoformat()}"])
+        d += timedelta(days=1)
+    return rows
 
 
 def _count(q: str) -> int:
@@ -292,6 +316,40 @@ def find_requested(email: str, entered: str, floor_date: str = "") -> tuple[str,
     return best, best_id
 
 
+def fill_requested_from_slack(state: dict, since: date) -> None:
+    """Requested-date fallback: Gorgias misses ~half of shipping tickets, so for
+    reships with no ticket found, use the #reship-and-order-requests post date
+    for the ORIGINAL order (canonical slack_reship parser). Gorgias date wins
+    when both exist; Slack fills gaps only (ticket field marked 'slack')."""
+    need = {k: (rec.get("original") or "").lstrip("#") for k, rec in state.items()
+            if not rec.get("requested") and rec.get("original")}
+    if not need:
+        return
+    try:
+        import datetime as _dt
+        from ingest.slack_reship.sync import fetch_slack_live
+        records = fetch_slack_live(
+            _dt.datetime.combine(since, _dt.time()).timestamp(),
+            _dt.datetime.now().timestamp())
+    except Exception as e:
+        print(f"[reship-report] slack requested-fill skipped: {e}")
+        return
+    by_order: dict[str, str] = {}
+    for r in records:
+        if r.order_number and r.created_ts:
+            o = str(r.order_number)
+            d = r.created_ts[:10]
+            if o not in by_order or d < by_order[o]:
+                by_order[o] = d
+    filled = 0
+    for k, orig in need.items():
+        if orig in by_order:
+            state[k]["requested"] = by_order[orig]
+            state[k]["ticket"] = "slack"
+            filled += 1
+    print(f"[reship-report] slack filled {filled} requested dates")
+
+
 def load_state() -> dict:
     if STATE_PATH.exists():
         return json.loads(STATE_PATH.read_text(encoding="utf-8"))
@@ -346,8 +404,9 @@ def build(weeks_back: int, dry_run: bool) -> None:
     # denominators (R7)
     denoms = {m: cohort_denominator(f"_SHIP_{m.isoformat()}") for m in mondays}
 
-    # sweep + enrich (R1/R3/R4/R5)
-    reships = sweep_reships(oldest)
+    # sweep + enrich (R1/R3/R4/R5) — window extends 92d back for the Daily tab
+    hist_since = min(oldest, today - timedelta(days=HISTORY_DAYS))
+    reships = sweep_reships(hist_since)
     for r in reships:
         key = r["name"]
         rec = state.get(key, {})
@@ -377,6 +436,7 @@ def build(weeks_back: int, dry_run: bool) -> None:
             rec["requested"], rec["ticket"] = requested, ticket
         state[key] = rec
     enrich_original_boxtypes(state, mondays)
+    fill_requested_from_slack(state, hist_since)
     save_state(state)
 
     # user overrides from Raw Data cols J-M (script never writes into them
@@ -663,6 +723,17 @@ def build(weeks_back: int, dry_run: bool) -> None:
             valueInputOption="RAW" if name == "Triage" else "USER_ENTERED",
             body={"values": rows}).execute()
         time.sleep(0.3)
+    # Daily 3-month tab on Kurt's counts sheet
+    d_meta = gclient._sheets.spreadsheets().get(spreadsheetId=DAILY_SHEET_ID).execute()["sheets"]
+    d_titles = {s["properties"]["title"] for s in d_meta}
+    if "Daily" not in d_titles:
+        gclient.add_sheet_tab(DAILY_SHEET_ID, "Daily")
+    gclient._sheets.spreadsheets().values().clear(
+        spreadsheetId=DAILY_SHEET_ID, range="'Daily'!A1:Z2000").execute()
+    gclient._sheets.spreadsheets().values().update(
+        spreadsheetId=DAILY_SHEET_ID, range="'Daily'!A1",
+        valueInputOption="RAW", body={"values": daily_rows(state, stamp)}).execute()
+
     if "_all" in p_existing:  # keep the feed tab hidden
         gclient._sheets.spreadsheets().batchUpdate(spreadsheetId=PIVOT_SHEET_ID, body={
             "requests": [{"updateSheetProperties": {
@@ -695,35 +766,15 @@ def main() -> int:
                 print(f"[reship-report] attempt 1 failed ({type(e).__name__}), retrying in 60s")
                 time.sleep(60)
                 continue
-            # errors DM Kurt first (never the shared channel Dan reads — Kurt
-            # 2026-07-09); email fallback if the DM fails. Webhook stays
-            # reserved for breach alerts.
+            # ALL Slack alerts go to the single incoming webhook = Kurt's
+            # channel only (Kurt 2026-07-13). notify() posts to AH_SLACK_WEBHOOK,
+            # a webhook bound to exactly ONE channel; email is the fallback if
+            # the webhook itself errors.
             msg = f"Reship report refresh FAILED (after retry): {type(e).__name__}: {e}"
-            if not dm_kurt(msg):
-                os.environ.pop("AH_SLACK_WEBHOOK", None)
-                notify(msg, level="critical")
+            notify(msg, level="critical")
             traceback.print_exc()
             return 1
     return 1
-
-
-KURT_SLACK_ID = "U08R19137UL"
-
-
-def dm_kurt(text: str) -> bool:
-    """DM Kurt via the bot token (needs chat:write scope). True on success."""
-    import os
-    token = os.environ.get("AH_SLACK_BOT_TOKEN", "").strip()
-    if not token:
-        return False
-    try:
-        r = requests.post("https://slack.com/api/chat.postMessage",
-                          headers={"Authorization": f"Bearer {token}"},
-                          json={"channel": KURT_SLACK_ID, "text": f":rotating_light: {text}"},
-                          timeout=15)
-        return bool(r.ok and r.json().get("ok"))
-    except Exception:
-        return False
 
 
 if __name__ == "__main__":
