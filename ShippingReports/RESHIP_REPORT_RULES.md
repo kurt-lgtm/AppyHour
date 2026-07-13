@@ -49,17 +49,19 @@ One tab per ship week (`_SHIP_<Monday>`), refreshed daily by a scheduled task; a
 16. **Slack parser parity gate.** The Triage + requested-fill JS port of `ingest.slack_reship.parse`
     MUST match the Python parser exactly — verified 2026-07-13 on 200 live messages (110 classified,
     0 mismatches, `scratchpad/parser_parity.py`). Re-run parity if either parser's ISSUE_RULES change.
-17. **Pivot Raw Data is WALK-FORWARD APPEND-ONLY (Kurt 2026-07-13, Option 2).** `refreshPivotSheet_`
-    never auto-removes and never re-orders: (1) updates rows still on the sheet in place from state
-    (Status/date refresh), keeping overrides J-L; (2) appends reships whose ORDER # is above
-    `PIVOT_WATERMARK` (max order # ever processed — monotonic+unique, no date-granularity hole);
-    (3) advances the watermark. **To remove a reship: DELETE its row.** Its order# <= watermark →
-    never reconsidered → permanent (re-add the # to undo). **No auto-aging** — cohorts do NOT drop
-    off; rows accumulate until Kurt prunes them (WEEKS_BACK/mondays no longer gate the pivot ledger,
-    only the cohort-summary tabs). Distinct from **Exclude `x`** = visible-but-uncounted. First GAS
-    run adopts the current sheet (floor = highest order# present) so it does NOT flood with 92-day
-    history. Full-tab wipe → DM heads-up, NOT auto-restored (walk-forward). REJECTED: hide list,
-    delete-detection/suppressed-set, dynamic-window+rewrite (all deemed too much bookkeeping).
+17. **Pivot Raw Data is WALK-FORWARD APPEND-ONLY, 9 columns (Kurt 2026-07-13, Option 2).** Columns:
+    Order · Requested · Created · Issue · Incoming week · Outgoing week · Status · Original · Box
+    Type. **Override/Eff/Exclude columns REMOVED** — the writer appends each row once and only
+    BACKFILLS BLANK Requested/Created cells (never overwrites what Kurt typed), so dates are edited
+    IN PLACE and stick; Status/issue/cohort/box/original are refreshed each run. Append is gated by
+    `PIVOT_WATERMARK` (max order # ever processed — monotonic+unique, no date-granularity hole).
+    **To remove a reship: DELETE its row** → order# <= watermark → never reconsidered → permanent
+    (re-add the # to undo). **To take out of counts: also DELETE** (no more Exclude `x`; the Count
+    tabs + Product Mix count ALL rows, no filter). **No auto-aging** — rows accumulate until Kurt
+    prunes; WEEKS_BACK/mondays gate only the cohort-summary tabs. First GAS run adopts the current
+    sheet (floor = highest order# present) — no 92-day flood. Full-tab wipe → DM heads-up, NOT
+    auto-restored. REJECTED: hide list, delete-detection/suppressed-set, dynamic-window+rewrite,
+    override/eff/exclude columns (all deemed too much bookkeeping for a walk-forward ledger).
 
 ## Refresh & write discipline
 

@@ -201,9 +201,9 @@ def tray_mix_rows(mondays: list[date], stamp: str) -> list[list]:
         # Medium/Large by box type; Regular = all-incoming MINUS med MINUS lge so
         # blank-box-type rows fall into Regular and the three RECONCILE to
         # Count-of-incoming-week for this cohort.
-        med_cnt = f"=COUNTIFS({RD}!$E:$E,$A{r},{RD}!$I:$I,\"Medium Tray\",{RD}!$L:$L,\"<>x\")"
-        lge_cnt = f"=COUNTIFS({RD}!$E:$E,$A{r},{RD}!$I:$I,\"Large Tray\",{RD}!$L:$L,\"<>x\")"
-        reg_cnt = f"=COUNTIFS({RD}!$E:$E,$A{r},{RD}!$L:$L,\"<>x\")-G{r}-J{r}"
+        med_cnt = f"=COUNTIFS({RD}!$E:$E,$A{r},{RD}!$I:$I,\"Medium Tray\")"
+        lge_cnt = f"=COUNTIFS({RD}!$E:$E,$A{r},{RD}!$I:$I,\"Large Tray\")"
+        reg_cnt = f"=COUNTIFS({RD}!$E:$E,$A{r})-G{r}-J{r}"
         rows.append([
             tag, total,
             total - med - lge, reg_cnt, f'=IF(C{r}>0,TEXT(D{r}/C{r},"0.00%"),"n/a")',

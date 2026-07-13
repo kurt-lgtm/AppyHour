@@ -102,14 +102,6 @@ function build_() {
   writeDaily_(state, stamp);
 }
 
-// ---------- pivot Raw Data: WALK-FORWARD APPEND-ONLY (Kurt 2026-07-13, Option 2) ----------
-// Never auto-removes. Each run: (1) UPDATE rows still on the sheet in place from
-// state (Status/dates refresh), keeping order + overrides; (2) APPEND reships not
-// on the sheet whose ORDER # is above the watermark; (3) advance the watermark to
-// the highest order # processed. Watermark = max reship order NUMBER (monotonic +
-// unique — no date-granularity holes). A row you DELETE has order# <= watermark,
-// so it's never reconsidered — permanent, no hide list, no suppressed set. Rows
-// accumulate until YOU prune them. WEEKS_BACK/mondays no longer gate the ledger.
 function orderNum_(key) { var n = parseInt(String(key).replace(/[^0-9]/g, ''), 10); return isNaN(n) ? 0 : n; }
 
 function refreshPivotSheet_(state, mondays) {
@@ -118,29 +110,25 @@ function refreshPivotSheet_(state, mondays) {
   var props = PropertiesService.getScriptProperties();
   var watermark = parseInt(props.getProperty('PIVOT_WATERMARK') || '0', 10) || 0;
 
-  // existing rows (A-L) in sheet order; present set by order #
   var existing = [], present = {};
   if (sh.getLastRow() >= 2) {
-    sh.getRange('A2:L' + sh.getLastRow()).getValues().forEach(function (row) {
+    sh.getRange('A2:I' + sh.getLastRow()).getValues().forEach(function (row) {
       if (row[0]) { existing.push(row); present[row[0]] = true; }
     });
   }
-  // accidental full-wipe heads-up (walk-forward = we do NOT auto-restore)
   if (existing.length === 0 && watermark) {
-    try { slack_('Reship pivot Raw Data is EMPTY (walk-forward ledger). Only NEW reships populate; deleted history is not restored.', true); } catch (e) {}
+    try { slack_('Reship pivot Raw Data is EMPTY. Only new reships will populate.', true); } catch (e) {}
   }
 
-  // (1) update present rows in place from state (keep overrides J-L, keep order)
   existing.forEach(function (row) {
     var r = state[row[0]];
-    if (!r) return;  // beyond the sweep horizon — leave the ledger row as-is
-    row[1] = r.requested || ''; row[2] = r.entered || ''; row[3] = r.issue || '';
-    row[4] = r.original_cohort || ''; row[5] = r.outbound || ''; row[6] = r.status || '';
-    row[7] = r.original || ''; row[8] = r.original_boxtype || '';
+    if (!r) return;
+    if (!row[1]) row[1] = r.requested || '';
+    if (!row[2]) row[2] = r.entered || '';
+    row[3] = r.issue || ''; row[4] = r.original_cohort || ''; row[5] = r.outbound || '';
+    row[6] = r.status || ''; row[7] = r.original || ''; row[8] = r.original_boxtype || '';
   });
 
-  // (2) floor = max(watermark, highest order# already on the sheet). Append
-  // reships not present with order# > floor (adopts current rows on first run).
   var floor = watermark;
   existing.forEach(function (row) { floor = Math.max(floor, orderNum_(row[0])); });
   var maxNum = floor;
@@ -149,21 +137,17 @@ function refreshPivotSheet_(state, mondays) {
   }).sort(function (a, b) { return orderNum_(a) - orderNum_(b); }).forEach(function (k) {
     var r = state[k];
     existing.push([k, r.requested || '', r.entered || '', r.issue || '', r.original_cohort || '',
-      r.outbound || '', r.status || '', r.original || '', r.original_boxtype || '', '', '', '']);
+      r.outbound || '', r.status || '', r.original || '', r.original_boxtype || '']);
     maxNum = Math.max(maxNum, orderNum_(k));
   });
 
-  // (3) write header + all rows; advance watermark to the highest # processed
   var rows = [['Order', 'Requested', 'Created', 'Issue', 'Incoming week', 'Outgoing week', 'Status',
-    'Original', 'Original Box Type', 'Override Requested', 'Override Created', 'Exclude']].concat(existing);
+    'Original', 'Original Box Type']].concat(existing);
   sh.clearContents();
-  var width = 12;
+  var width = 9;
   sh.getRange(1, 1, rows.length, width).setValues(rows.map(function (r) {
     return r.slice(0, width).concat(new Array(Math.max(0, width - r.length)).fill(''));
   }));
-  sh.getRange('M1:N1').setFormulas([[
-    '=ARRAYFORMULA({"Eff Requested"; IF(A2:A="",,IF(J2:J<>"",J2:J,B2:B))})',
-    '=ARRAYFORMULA({"Eff Created"; IF(A2:A="",,IF(K2:K<>"",K2:K,C2:C))})']]);
   sh.getRange('B:C').setNumberFormat('@');
   props.setProperty('PIVOT_WATERMARK', String(maxNum));
 }
@@ -781,15 +765,15 @@ function writeProductMix_(mondays, denoms, stamp) {
      'Regular Box', 'Regular Box Reship discrete', 'Regular Box Reship %',
      'Medium Tray', 'Medium Tray Reship discrete', 'Medium Tray Reship %',
      'Large Tray', 'Large Tray Reship discrete', 'Large Tray Reship %']];
-  var RD = "'Raw Data'";  // E=incoming, I=box type, L=exclude
+  var RD = "'Raw Data'";  // E=incoming, I=box type
   mondays.slice().sort(function (a, b) { return a - b; }).forEach(function (mon, i) {
     var tag = '_SHIP_' + iso_(mon);
     var base = "tag:'" + tag + "' -status:cancelled -tag:'Reship'";
     var total = ordersCount_(base), med = ordersCount_(base + ' sku:AHB-MCUST-TRAY*'),
         lge = ordersCount_(base + ' sku:AHB-LCUST-TRAY*'), r = i + 3;
-    var medC = '=COUNTIFS(' + RD + '!$E:$E,$A' + r + ',' + RD + '!$I:$I,"Medium Tray",' + RD + '!$L:$L,"<>x")';
-    var lgeC = '=COUNTIFS(' + RD + '!$E:$E,$A' + r + ',' + RD + '!$I:$I,"Large Tray",' + RD + '!$L:$L,"<>x")';
-    var regC = '=COUNTIFS(' + RD + '!$E:$E,$A' + r + ',' + RD + '!$L:$L,"<>x")-G' + r + '-J' + r;
+    var medC = '=COUNTIFS(' + RD + '!$E:$E,$A' + r + ',' + RD + '!$I:$I,"Medium Tray")';
+    var lgeC = '=COUNTIFS(' + RD + '!$E:$E,$A' + r + ',' + RD + '!$I:$I,"Large Tray")';
+    var regC = '=COUNTIFS(' + RD + '!$E:$E,$A' + r + ')-G' + r + '-J' + r;
     rows.push([tag, total,
       total - med - lge, regC, '=IF(C' + r + '>0,TEXT(D' + r + '/C' + r + ',"0.00%"),"n/a")',
       med, medC, '=IF(F' + r + '>0,TEXT(G' + r + '/F' + r + ',"0.00%"),"n/a")',
