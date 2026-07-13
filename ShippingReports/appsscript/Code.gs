@@ -66,10 +66,9 @@ function build_() {
   sweepAndEnrich_(state, sweepFrom);
   enrichBoxTypes_(state, mondays);
   fillRequestedFromSlack_(state, histSince);
-  // casual-hide: drop hidden orders from EVERYTHING (Kurt 2026-07-13). Deleted
-  // after sweep so they don't persist; re-swept+re-dropped each run (idempotent).
-  var hide = loadHide_();
-  Object.keys(hide).forEach(function (k) { delete state[k]; });
+  // Delete-to-remove (Kurt 2026-07-13, NO hide list): a row the user deleted from
+  // pivot Raw Data is detected in refreshPivotSheet_ and never re-written. The
+  // suppressed set is internal (Script Property), user never manages it.
   saveState_(state);
 
   // user overrides from Raw Data J-M (user-owned, survive refresh)
@@ -119,12 +118,34 @@ function refreshPivotSheet_(state, mondays) {
   // whose ORIGINAL order is in the last WEEKS_BACK+1 ship weeks — fulfilled or
   // not, no date cutoff. Drops _seed/CUTOVER. Reconciles all tabs.
   var tags = cohortTags_(mondays);
-  var keys = Object.keys(state).filter(function (k) {
-    return tags[state[k].original_cohort];
-  }).sort(function (a, b) {
+  var windowKeys = Object.keys(state).filter(function (k) { return tags[state[k].original_cohort]; });
+
+  // DELETE-TO-REMOVE (Kurt 2026-07-13, no hide list): detect rows the user
+  // deleted from Raw Data since our last write and never re-add them. Memory is
+  // internal (Script Properties), never user-managed.
+  var props = PropertiesService.getScriptProperties();
+  var present = {}; Object.keys(prev).forEach(function (k) { present[k] = true; });
+  var lastWritten = (props.getProperty('PIVOT_LAST_WRITTEN') || '').split(',').filter(String);
+  var suppressed = {};
+  (props.getProperty('PIVOT_SUPPRESSED') || '').split(',').filter(String).forEach(function (k) { suppressed[k] = true; });
+  var windowSet = {}; windowKeys.forEach(function (k) { windowSet[k] = true; });
+  // guard: total wipe (present empty but we wrote rows last time) = accident, not
+  // 200 deletions — skip suppression this run.
+  var wipe = lastWritten.length > 5 && Object.keys(present).length === 0;
+  if (!wipe) {
+    lastWritten.forEach(function (k) {
+      if (windowSet[k] && !present[k]) suppressed[k] = true;  // was written, now gone = deleted
+    });
+  }
+  // prune suppressed to the current window (aged-out cohorts drop off)
+  Object.keys(suppressed).forEach(function (k) { if (!windowSet[k]) delete suppressed[k]; });
+
+  var keys = windowKeys.filter(function (k) { return !suppressed[k]; }).sort(function (a, b) {
     var x = (state[a].entered || '') + a, y = (state[b].entered || '') + b;
     return x < y ? -1 : 1;
   });
+  props.setProperty('PIVOT_LAST_WRITTEN', keys.join(','));
+  props.setProperty('PIVOT_SUPPRESSED', Object.keys(suppressed).join(','));
   // headers in ROW 1 (sortable/filterable — Kurt 7/09); Eff cols are single
   // anchored ARRAYFORMULAs so user sorts can't break per-row references
   var rows = [
@@ -650,22 +671,6 @@ function cohortTags_(mondays) {
   var t = {};
   mondays.forEach(function (m) { t['_SHIP_' + iso_(m)] = true; });
   return t;
-}
-
-// ---- casual-hide (bound-script, hidden '_hide' tab; NOT editor-proof) ----
-function loadHide_() {
-  var set = {};
-  try {
-    var sh = SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName('_hide');
-    if (sh && sh.getLastRow() >= 1) {
-      sh.getRange('A1:A' + sh.getLastRow()).getValues().forEach(function (r) {
-        var v = String(r[0] || '').trim();
-        if (!v || v.toLowerCase() === 'order') return;
-        set['#' + v.replace(/^#/, '')] = true;
-      });
-    }
-  } catch (e) { Logger.log('loadHide failed: ' + e); }
-  return set;
 }
 
 // ---- box-type enrichment (ORIGINAL order's box type; -TRAY SKUs) ----

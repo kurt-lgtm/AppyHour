@@ -49,11 +49,13 @@ One tab per ship week (`_SHIP_<Monday>`), refreshed daily by a scheduled task; a
 16. **Slack parser parity gate.** The Triage + requested-fill JS port of `ingest.slack_reship.parse`
     MUST match the Python parser exactly — verified 2026-07-13 on 200 live messages (110 classified,
     0 mismatches, `scratchpad/parser_parity.py`). Re-run parity if either parser's ISSUE_RULES change.
-17. **Order hiding is CASUAL-hide only (bound script).** Hidden `_hide` tab (one order # per row) →
-    those orders dropped from state before ANY tab is written (absent from all tabs + counts).
-    Invisible in normal view; **findable** by View→Hidden sheets or opening Apps Script. NOT
-    editor-proof — full editor-proof hiding needs a standalone script (declined 2026-07-13 for
-    simplicity). Never claim the hide is secure against a determined editor.
+17. **Delete-to-remove, NO hide list (Kurt 2026-07-13).** To remove a reship: DELETE its row from
+    pivot Raw Data. `refreshPivotSheet_` detects it (was in `PIVOT_LAST_WRITTEN`, now absent from the
+    sheet) and adds it to an internal `PIVOT_SUPPRESSED` Script Property → never re-written.
+    Permanent (re-add the # manually to undo). Guard: a full-tab wipe (present==0 after writing >5
+    last run) is treated as an accident and does NOT suppress. Distinct from **Exclude `x`** =
+    visible-but-uncounted. Rejected: a user-managed `_hide` tab (Kurt: "I really don't want a hide
+    list… just let me delete from the raw").
 
 ## Refresh & write discipline
 
