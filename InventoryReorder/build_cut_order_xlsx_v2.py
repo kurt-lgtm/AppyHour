@@ -42,6 +42,7 @@ from inventory_demand_report import (
     SAT_DEPLETION,
     TUE_DEPLETION,
     WK1_END,
+    WK1_SHIP_TAGS,
     WK1_START,
     WK2_END,
     WK2_START,
@@ -52,6 +53,11 @@ from inventory_demand_report import (
     parse_depletion_xlsx,
 )
 from fulfillment_web.invoice_processor import extract_bulk_weights
+
+# Ship weeks ALWAYS start Monday, so the cut order is labeled by its ship-week
+# Monday — the forward ship-tag date (next week's _SHIP_ Monday), NOT WK1_END
+# (the upcoming Saturday, which is only the Recharge billing boundary). (Kurt 2026-07-06)
+SHIP_WEEK_MONDAY = date.fromisoformat(WK1_SHIP_TAGS[-1].replace("_SHIP_", ""))
 
 # ── Design Tokens ────────────────────────────────────────────────────
 
@@ -1040,23 +1046,24 @@ def _build_cut_order_tab(
             3: 8,   # C Avail
             4: 10,  # D Recharge
             5: 10,  # E Shopify
-            6: 8,   # F +Assign
-            7: 1,   # G spacer
-            8: 10,  # H Final Demand
-            9: 10,  # I After
-            10: 9,  # J Cut (slices)
-            11: 9,  # K Good?
-            12: 9,  # L Wheel lb
-            13: 9,  # M Slice oz
-            14: 9,  # N Wheels
-            15: 8,  # O Safety (hidden)
+            6: 10,  # F First Order
+            7: 8,   # G +Assign
+            8: 1,   # H spacer
+            9: 10,  # I Final Demand
+            10: 10, # J After
+            11: 9,  # K Cut (slices)
+            12: 9,  # L Good?
+            13: 9,  # M Wheel lb
+            14: 9,  # N Slice oz
+            15: 9,  # O Wheels
+            16: 8,  # P Safety (hidden)
         },
     )
-    LAST_COL = 14
-    ws.column_dimensions["O"].hidden = True
+    LAST_COL = 15
+    ws.column_dimensions["P"].hidden = True
 
     # ── Title bar ──
-    _merge_title_bar(ws, 1, f"CUT ORDER \u2014 Week of {WK1_END}", LAST_COL)
+    _merge_title_bar(ws, 1, f"CUT ORDER \u2014 Ship Week of {SHIP_WEEK_MONDAY}", LAST_COL)
 
     rc_total = data["rc_wk1_curs"]
     sh_total = data["sh_wk1_total"]
@@ -1072,6 +1079,7 @@ def _build_cut_order_tab(
         "Avail",
         "Recharge",
         "Shopify",
+        "First Order",
         "+Assign",
         "",  # spacer
         "Final Demand",
@@ -1191,51 +1199,55 @@ def _build_cut_order_tab(
         c_sh = ws_.cell(row=row_num, column=5, value=sr["sh1"])
         c_sh.font = F_NUM
         c_sh.alignment = A_RIGHT
-        # F: +Assign W1 = SUMIF(PR-CJAM+MONTHLY) + SUMIF(CEX-EC)
-        ws_[f"F{row_num}"] = (
+        # F: First Order (input — projected new-subscriber first-order demand, filled manually)
+        ws_.cell(row=row_num, column=6).font = F_INPUT
+        ws_.cell(row=row_num, column=6).fill = FILL_INPUT
+        ws_.cell(row=row_num, column=6).alignment = A_RIGHT
+        # G: +Assign W1 = SUMIF(PR-CJAM+MONTHLY) + SUMIF(CEX-EC)
+        ws_[f"G{row_num}"] = (
             f"=SUMIF({prcjam_sku_range},A{row_num},{prcjam_w1_range})"
             f"+SUMIF({cexec_sku_range},A{row_num},{cexec_w1_range})"
         )
-        ws_.cell(row=row_num, column=6).font = F_NUM
-        ws_.cell(row=row_num, column=6).alignment = A_RIGHT
-        # G: spacer
-        # H: Final Demand = Recharge (D) + Shopify (E) + Assign (F) + Safety (O)
-        ws_[f"H{row_num}"] = f"=D{row_num}+E{row_num}+F{row_num}+O{row_num}"
-        ws_.cell(row=row_num, column=8).font = F_NUM_BOLD
-        ws_.cell(row=row_num, column=8).alignment = A_RIGHT
-        # I: After = Avail (C) - Final Demand (H)
-        ws_[f"I{row_num}"] = f"=C{row_num}-H{row_num}"
+        ws_.cell(row=row_num, column=7).font = F_NUM
+        ws_.cell(row=row_num, column=7).alignment = A_RIGHT
+        # H: spacer
+        # I: Final Demand = Recharge (D) + Shopify (E) + First Order (F) + Assign (G) + Safety (P)
+        ws_[f"I{row_num}"] = f"=D{row_num}+E{row_num}+F{row_num}+G{row_num}+P{row_num}"
         ws_.cell(row=row_num, column=9).font = F_NUM_BOLD
         ws_.cell(row=row_num, column=9).alignment = A_RIGHT
-        # J: Cut (input — number of slices to cut)
-        ws_.cell(row=row_num, column=10).font = F_INPUT
-        ws_.cell(row=row_num, column=10).fill = FILL_INPUT
+        # J: After = Avail (C) - Final Demand (I)
+        ws_[f"J{row_num}"] = f"=C{row_num}-I{row_num}"
+        ws_.cell(row=row_num, column=10).font = F_NUM_BOLD
         ws_.cell(row=row_num, column=10).alignment = A_RIGHT
-        # K: Good?
-        ws_[f"K{row_num}"] = (
-            f'=IF(H{row_num}=0,"",IF(I{row_num}+J{row_num}>=0,"OK","NEED "&ABS(I{row_num}+J{row_num})))'
+        # K: Cut (input — number of slices to cut)
+        ws_.cell(row=row_num, column=11).font = F_INPUT
+        ws_.cell(row=row_num, column=11).fill = FILL_INPUT
+        ws_.cell(row=row_num, column=11).alignment = A_RIGHT
+        # L: Good?
+        ws_[f"L{row_num}"] = (
+            f'=IF(I{row_num}=0,"",IF(J{row_num}+K{row_num}>=0,"OK","NEED "&ABS(J{row_num}+K{row_num})))'
         )
-        ws_.cell(row=row_num, column=11).font = F_GOOD
-        ws_.cell(row=row_num, column=11).alignment = A_CENTER
-        # L: Wheel lb (input — weight of one raw wheel, lbs)
-        ws_.cell(row=row_num, column=12).font = F_INPUT
-        ws_.cell(row=row_num, column=12).fill = FILL_INPUT
-        ws_.cell(row=row_num, column=12).alignment = A_RIGHT
-        # M: Slice oz (input — finished slice weight, oz)
+        ws_.cell(row=row_num, column=12).font = F_GOOD
+        ws_.cell(row=row_num, column=12).alignment = A_CENTER
+        # M: Wheel lb (input — weight of one raw wheel, lbs)
         ws_.cell(row=row_num, column=13).font = F_INPUT
         ws_.cell(row=row_num, column=13).fill = FILL_INPUT
         ws_.cell(row=row_num, column=13).alignment = A_RIGHT
-        # N: Wheels (computed) = ROUNDUP(Cut slices * Slice oz / (Wheel lb * 16)) — whole wheels
-        ws_[f"N{row_num}"] = (
-            f'=IF(OR(J{row_num}=0,L{row_num}=0,M{row_num}=0),"",'
-            f"ROUNDUP(J{row_num}*M{row_num}/(L{row_num}*16),0))"
-        )
-        ws_.cell(row=row_num, column=14).font = F_NUM_BOLD
+        # N: Slice oz (input — finished slice weight, oz)
+        ws_.cell(row=row_num, column=14).font = F_INPUT
+        ws_.cell(row=row_num, column=14).fill = FILL_INPUT
         ws_.cell(row=row_num, column=14).alignment = A_RIGHT
-        # O: Safety (hidden) — flat 25 if raw demand (D+E+F) > 25 else 0; avoids circular ref with H
-        ws_[f"O{row_num}"] = f"=IF((D{row_num}+E{row_num}+F{row_num})>25,25,0)"
-        ws_.cell(row=row_num, column=15).font = F_NUM
+        # O: Wheels (computed) = ROUNDUP(Cut slices * Slice oz / (Wheel lb * 16)) — whole wheels
+        ws_[f"O{row_num}"] = (
+            f'=IF(OR(K{row_num}=0,M{row_num}=0,N{row_num}=0),"",'
+            f"ROUNDUP(K{row_num}*N{row_num}/(M{row_num}*16),0))"
+        )
+        ws_.cell(row=row_num, column=15).font = F_NUM_BOLD
         ws_.cell(row=row_num, column=15).alignment = A_RIGHT
+        # P: Safety (hidden) — flat 25 if raw demand (D+E+F+G) > 25 else 0; avoids circular ref with I
+        ws_[f"P{row_num}"] = f"=IF((D{row_num}+E{row_num}+F{row_num}+G{row_num})>25,25,0)"
+        ws_.cell(row=row_num, column=16).font = F_NUM
+        ws_.cell(row=row_num, column=16).alignment = A_RIGHT
 
     def _write_section(ws_: Worksheet, start_row: int, label: str, bg: str, fg: str, rows_: list[dict]) -> int:
         """Write a section header + sub-grouped rows. Returns next available row."""
@@ -1277,9 +1289,9 @@ def _build_cut_order_tab(
             ws_.cell(row=r, column=3).font = F_NUM_MUTED
             ws_.cell(row=r, column=3).alignment = A_RIGHT
 
-            ws_[f"H{r}"] = f"=SUM({','.join(f'H{dr}' for dr in data_rows)})"
-            ws_.cell(row=r, column=8).font = F_NUM_MUTED
-            ws_.cell(row=r, column=8).alignment = A_RIGHT
+            ws_[f"I{r}"] = f"=SUM({','.join(f'I{dr}' for dr in data_rows)})"
+            ws_.cell(row=r, column=9).font = F_NUM_MUTED
+            ws_.cell(row=r, column=9).alignment = A_RIGHT
 
         return r
 
@@ -1291,9 +1303,9 @@ def _build_cut_order_tab(
     # ── Conditional Formatting ──
     data_start = HDR_ROW + 1
 
-    # After (I): red < 0, green if ok
+    # After (J): red < 0, green if ok
     ws.conditional_formatting.add(
-        f"I{data_start}:I{last_row}",
+        f"J{data_start}:J{last_row}",
         CellIsRule(
             operator="lessThan",
             formula=["0"],
@@ -1302,7 +1314,7 @@ def _build_cut_order_tab(
         ),
     )
     ws.conditional_formatting.add(
-        f"I{data_start}:I{last_row}",
+        f"J{data_start}:J{last_row}",
         CellIsRule(
             operator="greaterThanOrEqual",
             formula=["0"],
@@ -1311,22 +1323,22 @@ def _build_cut_order_tab(
         ),
     )
 
-    # Good? (K)
+    # Good? (L)
     ws.conditional_formatting.add(
-        f"K{data_start}:K{last_row}",
-        FormulaRule(formula=[f'K{data_start}="OK"'], fill=PatternFill("solid", fgColor=OK_BG), font=Font(color=OK_FG)),
+        f"L{data_start}:L{last_row}",
+        FormulaRule(formula=[f'L{data_start}="OK"'], fill=PatternFill("solid", fgColor=OK_BG), font=Font(color=OK_FG)),
     )
     ws.conditional_formatting.add(
-        f"K{data_start}:K{last_row}",
+        f"L{data_start}:L{last_row}",
         FormulaRule(
-            formula=[f'LEFT(K{data_start},4)="NEED"'],
+            formula=[f'LEFT(L{data_start},4)="NEED"'],
             fill=PatternFill("solid", fgColor=SHORTAGE_BG),
             font=Font(color=SHORTAGE_FG),
         ),
     )
 
-    # Input column highlights: Cut (J), Wheel lb (L), Slice oz (M)
-    for _col in ("J", "L", "M"):
+    # Input column highlights: First Order (F), Cut (K), Wheel lb (M), Slice oz (N)
+    for _col in ("F", "K", "M", "N"):
         ws.conditional_formatting.add(
             f"{_col}{data_start}:{_col}{last_row}",
             CellIsRule(
@@ -1370,7 +1382,7 @@ def main() -> str:
     wb.move_sheet("Cut Order", offset=-1)
 
     # Save
-    ship_date = WK1_END.isoformat()
+    ship_date = SHIP_WEEK_MONDAY.isoformat()
     out_path = os.path.join(BASE, f"cut_order_v2_{ship_date}.xlsx")
     wb.save(out_path)
 

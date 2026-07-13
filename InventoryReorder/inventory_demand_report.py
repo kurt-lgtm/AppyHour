@@ -25,7 +25,7 @@ import os
 import sys
 import time
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 # -- Paths --
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -48,10 +48,51 @@ def _coming_saturday(d: date) -> date:
     return d + timedelta(days=(5 - d.weekday()) % 7)  # 5 = Saturday; today if already Sat
 
 _TODAY = date.today()
-WK1_START = _TODAY - timedelta(days=7)      # lookback; pre-today charges already processed (harmless)
-WK1_END = _coming_saturday(_TODAY)          # ship-week boundary — captures the cohort being cut
+# Recharge bills a week BEFORE ship (Kurt 2026-07-07: "we charge the orders a week before
+# we actually ship them"). So the CHARGE window is the ship week's PRECEDING Sunday→Saturday:
+# it ENDS on the upcoming Saturday ("always Saturday" — the billing boundary) and starts the
+# Sunday 6 days earlier. The ship week it serves starts the Monday AFTER that Saturday
+# (WK1_END + 2), used ONLY as the display label — NOT to anchor the window (anchoring on the
+# ship week pulls a week too far forward = next week's cohort; that inflated AHB-MED 242→375).
+WK1_END = _coming_saturday(_TODAY)                  # charge-week Saturday — the billing boundary
+WK1_START = WK1_END - timedelta(days=6)             # Sunday of the charge week (Sun→Sat)
+_SHIP_WEEK_MONDAY = WK1_END + timedelta(days=2)     # Monday of the SERVED ship week (label only)
 WK2_START = WK1_END + timedelta(days=1)     # WK2 degenerate (builder drops it)
 WK2_END = WK1_END                           # also caps the API scheduled_at_max pull
+
+
+def _assert_window_invariants():
+    """Hard gate on the charge-week window (Cut Order Rules.md invariant, 2026-07-07).
+
+    The 7/13 cut was built with the window anchored on the SHIP week instead of the
+    CHARGE week — one week forward — and over-pulled AHB-MED 242->375. The window is
+    now computed correctly by construction above, but these values are documented as
+    hand-overridable; this assert makes a bad override die loudly instead of shipping
+    a wrong cut. Bypass for a deliberate custom window: AH_CUT_WINDOW_OVERRIDE=1.
+    """
+    if os.environ.get("AH_CUT_WINDOW_OVERRIDE") == "1":
+        print("⚠️  AH_CUT_WINDOW_OVERRIDE=1 — charge-week window invariants NOT enforced")
+        return
+    problems = []
+    if WK1_END.weekday() != 5:
+        problems.append(f"WK1_END {WK1_END} is not a Saturday")
+    if WK1_END != _coming_saturday(_TODAY):
+        problems.append(f"WK1_END {WK1_END} != coming Saturday {_coming_saturday(_TODAY)} "
+                        "(window must end at the NEXT billing boundary from today, "
+                        "never anchored on the ship week)")
+    if WK1_START != WK1_END - timedelta(days=6):
+        problems.append(f"WK1_START {WK1_START} != WK1_END-6 (window must be Sun→Sat)")
+    if _SHIP_WEEK_MONDAY != WK1_END + timedelta(days=2) or _SHIP_WEEK_MONDAY.weekday() != 0:
+        problems.append(f"ship-week label {_SHIP_WEEK_MONDAY} != WK1_END+2 Monday")
+    if problems:
+        raise SystemExit(
+            "CUT-ORDER WINDOW INVARIANT VIOLATION — refusing to build a wrong cut:\n  "
+            + "\n  ".join(problems)
+            + "\n(see Cut Order Rules.md 'Charge-week window'; deliberate custom window: "
+            "set AH_CUT_WINDOW_OVERRIDE=1)")
+
+
+_assert_window_invariants()
 
 PICKABLE_PREFIXES = ("CH-", "MT-", "AC-")
 
@@ -262,6 +303,44 @@ def _load_recharge_csv(path):
     return list(charges_by_id.values())
 
 
+_CHARGE_COUNT_LEDGER = r"C:\Users\Work\Claude Projects\_outputs\cache\cut_order_charge_counts.json"
+
+
+def _warn_charge_count_drift(total, threshold_pct=40):
+    """Loud sanity banner when this week's queued-charge pull jumps vs the prior run.
+
+    The wrong-window 7/13 pull was 2525 charges vs the correct 1227 — a >100% jump
+    that nothing flagged. Real demand doesn't double week-over-week; a jump this size
+    means the window (or tag scope) is wrong. Warn-only: growth is possible, a human
+    decides. Fire-and-forget ledger — never fails the pull.
+    """
+    try:
+        ledger = []
+        if os.path.exists(_CHARGE_COUNT_LEDGER):
+            with open(_CHARGE_COUNT_LEDGER, encoding="utf-8") as f:
+                ledger = json.load(f)
+        window = f"{WK1_START.isoformat()}..{WK1_END.isoformat()}"
+        prior = next((e for e in reversed(ledger) if e["window"] != window), None)
+        if prior and prior["total"] > 0:
+            delta_pct = (total - prior["total"]) / prior["total"] * 100
+            if abs(delta_pct) > threshold_pct:
+                print(f"\n{'!' * 78}\n"
+                      f"⚠️  CHARGE-COUNT DRIFT: {total} queued charges this window vs "
+                      f"{prior['total']} last window ({delta_pct:+.0f}%).\n"
+                      f"   Real demand rarely moves >{threshold_pct}% week-over-week — check the "
+                      f"scheduled_at window\n"
+                      f"   ({window}) before trusting this cut (wrong-window burn: 7/13, 2525 vs 1227).\n"
+                      f"{'!' * 78}\n")
+        ledger = [e for e in ledger if e["window"] != window][-7:]
+        ledger.append({"window": window, "total": total,
+                       "pulled_at": datetime.now().isoformat(timespec="seconds")})
+        os.makedirs(os.path.dirname(_CHARGE_COUNT_LEDGER), exist_ok=True)
+        with open(_CHARGE_COUNT_LEDGER, "w", encoding="utf-8") as f:
+            json.dump(ledger, f, indent=1)
+    except Exception as e:
+        print(f"  (charge-count ledger skipped: {type(e).__name__}: {e})")
+
+
 def fetch_recharge_api(api_token, out_specialty=None):
     """Fetch queued charges. Returns pickable SKU demand + curation counts per week.
 
@@ -326,6 +405,8 @@ def fetch_recharge_api(api_token, out_specialty=None):
             time.sleep(0.5)
 
         print(f"\r  Fetched {len(all_charges)} total queued charges.     ")
+
+    _warn_charge_count_drift(len(all_charges))
 
     # Per-week: pickable SKU demand + curation counts
     wk1_skus = defaultdict(int)
