@@ -28,7 +28,7 @@ var MATURITY_DAYS = 14;
 var LATE_REPORT_DAYS = 16;
 var HIGH_VALUE = 150;
 var WEEKS_BACK = 2; // window starts 2 weeks back (Kurt 2026-07-09: from _SHIP_2026-06-22)
-var MAX_ENRICH_PER_RUN = 120; // 6-min cap guard
+var MAX_ENRICH_PER_RUN = 60; // Gorgias 429 guard
 
 // ---------- entry point ----------
 

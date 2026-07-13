@@ -303,22 +303,28 @@ def find_requested(email: str, entered: str, floor_date: str = "") -> tuple[str,
     if not email:
         return "", ""
     from gorgias_sheets_sync import _gorgias_auth, _gorgias_get
-    auth, gbase = _gorgias_auth()
-    g = _gorgias_get(f"{gbase}/customers", auth=auth, params={"email": email})
-    custs = g.json().get("data", []) if g.ok else []
-    if not custs:
+    # best-effort: a Gorgias rate-limit (429) or transient error must NOT crash
+    # the whole run — leave requested blank, fill on a later run.
+    try:
+        auth, gbase = _gorgias_auth()
+        g = _gorgias_get(f"{gbase}/customers", auth=auth, params={"email": email})
+        custs = g.json().get("data", []) if g.ok else []
+        if not custs:
+            return "", ""
+        g = _gorgias_get(f"{gbase}/tickets", auth=auth,
+                         params={"customer_id": custs[0]["id"], "limit": 30,
+                                 "order_by": "created_datetime:desc"})
+        floor = max(filter(None, [(date.fromisoformat(entered) - timedelta(days=14)).isoformat(),
+                                  floor_date]))
+        best, best_id = "", ""
+        for t in (g.json().get("data", []) if g.ok else []):
+            tc = (t.get("created_datetime") or "")[:10]
+            if floor <= tc <= entered:
+                best, best_id = tc, str(t["id"])  # desc list -> last in-range = earliest
+        return best, best_id
+    except Exception as e:
+        print(f"[reship-report] gorgias lookup skipped ({type(e).__name__}) for {email}")
         return "", ""
-    g = _gorgias_get(f"{gbase}/tickets", auth=auth,
-                     params={"customer_id": custs[0]["id"], "limit": 30,
-                             "order_by": "created_datetime:desc"})
-    floor = max(filter(None, [(date.fromisoformat(entered) - timedelta(days=14)).isoformat(),
-                              floor_date]))
-    best, best_id = "", ""
-    for t in (g.json().get("data", []) if g.ok else []):
-        tc = (t.get("created_datetime") or "")[:10]
-        if floor <= tc <= entered:
-            best, best_id = tc, str(t["id"])  # desc list -> last in-range = earliest
-    return best, best_id
 
 
 def fill_requested_from_slack(state: dict, since: date) -> None:
@@ -412,6 +418,11 @@ def build(weeks_back: int, dry_run: bool) -> None:
     # sweep + enrich (R1/R3/R4/R5) — window extends 92d back for the Daily tab
     hist_since = min(oldest, today - timedelta(days=HISTORY_DAYS))
     reships = sweep_reships(hist_since)
+    # cap Gorgias/Shopify enrichment lookups per run — a 92-day sweep otherwise
+    # bursts hundreds of Gorgias calls and trips 429. Incremental: cached in
+    # _state, so unfilled ones complete over the next few runs.
+    MAX_ENRICH = 60
+    enriched = 0
     for r in reships:
         key = r["name"]
         rec = state.get(key, {})
@@ -426,19 +437,21 @@ def build(weeks_back: int, dry_run: bool) -> None:
         rec["lifetime_orders"] = cust.get("numberOfOrders", "")
         # order matters: attribute FIRST (bounded by entered date only), then
         # find the request ticket floored at the original's ship Monday
-        if not rec.get("original_cohort"):
+        if not rec.get("original_cohort") and enriched < MAX_ENRICH:
             if cust.get("id"):
                 o_name, o_coh, o_total = find_original(
                     cust["id"], r["createdAt"], r["name"], rec["entered"])
                 rec.update({"original": o_name, "original_cohort": o_coh, "original_total": o_total})
+                enriched += 1
                 time.sleep(0.15)
             else:
                 rec.update({"original": "", "original_cohort": "NO-CUSTOMER", "original_total": 0.0})
-        if not rec.get("requested"):
+        if not rec.get("requested") and enriched < MAX_ENRICH:
             coh = rec.get("original_cohort", "")
             floor = coh.replace("_SHIP_", "") if coh.startswith("_SHIP_") else ""
             requested, ticket = find_requested(cust.get("email", ""), rec["entered"], floor)
             rec["requested"], rec["ticket"] = requested, ticket
+            enriched += 1
         state[key] = rec
     enrich_original_boxtypes(state, mondays)
     fill_requested_from_slack(state, hist_since)
