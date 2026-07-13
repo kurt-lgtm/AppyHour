@@ -102,71 +102,70 @@ function build_() {
   writeDaily_(state, stamp);
 }
 
-// ---------- secondary pivot sheet (hourly, overrides in I-K preserved) ----------
+// ---------- pivot Raw Data: WALK-FORWARD APPEND-ONLY (Kurt 2026-07-13, Option 2) ----------
+// Never auto-removes. Each run: (1) UPDATE rows still on the sheet in place from
+// state (Status/dates refresh), keeping order + overrides; (2) APPEND reships not
+// on the sheet whose ORDER # is above the watermark; (3) advance the watermark to
+// the highest order # processed. Watermark = max reship order NUMBER (monotonic +
+// unique — no date-granularity holes). A row you DELETE has order# <= watermark,
+// so it's never reconsidered — permanent, no hide list, no suppressed set. Rows
+// accumulate until YOU prune them. WEEKS_BACK/mondays no longer gate the ledger.
+function orderNum_(key) { var n = parseInt(String(key).replace(/[^0-9]/g, ''), 10); return isNaN(n) ? 0 : n; }
 
 function refreshPivotSheet_(state, mondays) {
   var ss = SpreadsheetApp.openById(PIVOT_SHEET_ID);
   var sh = ss.getSheetByName('Raw Data') || ss.insertSheet('Raw Data');
-  // preserve user cols J-L (override requested/created, exclude) keyed by order
-  var prev = {};
+  var props = PropertiesService.getScriptProperties();
+  var watermark = parseInt(props.getProperty('PIVOT_WATERMARK') || '0', 10) || 0;
+
+  // existing rows (A-L) in sheet order; present set by order #
+  var existing = [], present = {};
   if (sh.getLastRow() >= 2) {
     sh.getRange('A2:L' + sh.getLastRow()).getValues().forEach(function (row) {
-      if (row[0]) prev[row[0]] = [row[9] || '', row[10] || '', row[11] || ''];
+      if (row[0]) { existing.push(row); present[row[0]] = true; }
     });
   }
-  // FULL-WINDOW membership (Kurt 2026-07-13, the "23" decision): every reship
-  // whose ORIGINAL order is in the last WEEKS_BACK+1 ship weeks — fulfilled or
-  // not, no date cutoff. Drops _seed/CUTOVER. Reconciles all tabs.
-  var tags = cohortTags_(mondays);
-  var windowKeys = Object.keys(state).filter(function (k) { return tags[state[k].original_cohort]; });
-
-  // DELETE-TO-REMOVE (Kurt 2026-07-13, no hide list): detect rows the user
-  // deleted from Raw Data since our last write and never re-add them. Memory is
-  // internal (Script Properties), never user-managed.
-  var props = PropertiesService.getScriptProperties();
-  var present = {}; Object.keys(prev).forEach(function (k) { present[k] = true; });
-  var lastWritten = (props.getProperty('PIVOT_LAST_WRITTEN') || '').split(',').filter(String);
-  var suppressed = {};
-  (props.getProperty('PIVOT_SUPPRESSED') || '').split(',').filter(String).forEach(function (k) { suppressed[k] = true; });
-  var windowSet = {}; windowKeys.forEach(function (k) { windowSet[k] = true; });
-  // guard: total wipe (present empty but we wrote rows last time) = accident, not
-  // 200 deletions — skip suppression this run.
-  var wipe = lastWritten.length > 5 && Object.keys(present).length === 0;
-  if (!wipe) {
-    lastWritten.forEach(function (k) {
-      if (windowSet[k] && !present[k]) suppressed[k] = true;  // was written, now gone = deleted
-    });
+  // accidental full-wipe heads-up (walk-forward = we do NOT auto-restore)
+  if (existing.length === 0 && watermark) {
+    try { slack_('Reship pivot Raw Data is EMPTY (walk-forward ledger). Only NEW reships populate; deleted history is not restored.', true); } catch (e) {}
   }
-  // prune suppressed to the current window (aged-out cohorts drop off)
-  Object.keys(suppressed).forEach(function (k) { if (!windowSet[k]) delete suppressed[k]; });
 
-  var keys = windowKeys.filter(function (k) { return !suppressed[k]; }).sort(function (a, b) {
-    var x = (state[a].entered || '') + a, y = (state[b].entered || '') + b;
-    return x < y ? -1 : 1;
+  // (1) update present rows in place from state (keep overrides J-L, keep order)
+  existing.forEach(function (row) {
+    var r = state[row[0]];
+    if (!r) return;  // beyond the sweep horizon — leave the ledger row as-is
+    row[1] = r.requested || ''; row[2] = r.entered || ''; row[3] = r.issue || '';
+    row[4] = r.original_cohort || ''; row[5] = r.outbound || ''; row[6] = r.status || '';
+    row[7] = r.original || ''; row[8] = r.original_boxtype || '';
   });
-  props.setProperty('PIVOT_LAST_WRITTEN', keys.join(','));
-  props.setProperty('PIVOT_SUPPRESSED', Object.keys(suppressed).join(','));
-  // headers in ROW 1 (sortable/filterable — Kurt 7/09); Eff cols are single
-  // anchored ARRAYFORMULAs so user sorts can't break per-row references
-  var rows = [
-    ['Order', 'Requested', 'Created', 'Issue', 'Incoming week', 'Outgoing week', 'Status', 'Original',
-     'Original Box Type', 'Override Requested', 'Override Created', 'Exclude'],
-  ];
-  keys.forEach(function (k) {
-    var r = state[k], o = prev[k] || ['', '', ''];
-    rows.push([k, r.requested || '', r.entered || '', r.issue || '', r.original_cohort || '',
-      r.outbound || '', r.status || '', r.original || '', r.original_boxtype || '',
-      o[0], o[1], o[2]]);
+
+  // (2) floor = max(watermark, highest order# already on the sheet). Append
+  // reships not present with order# > floor (adopts current rows on first run).
+  var floor = watermark;
+  existing.forEach(function (row) { floor = Math.max(floor, orderNum_(row[0])); });
+  var maxNum = floor;
+  Object.keys(state).filter(function (k) {
+    return !present[k] && orderNum_(k) > floor;
+  }).sort(function (a, b) { return orderNum_(a) - orderNum_(b); }).forEach(function (k) {
+    var r = state[k];
+    existing.push([k, r.requested || '', r.entered || '', r.issue || '', r.original_cohort || '',
+      r.outbound || '', r.status || '', r.original || '', r.original_boxtype || '', '', '', '']);
+    maxNum = Math.max(maxNum, orderNum_(k));
   });
+
+  // (3) write header + all rows; advance watermark to the highest # processed
+  var rows = [['Order', 'Requested', 'Created', 'Issue', 'Incoming week', 'Outgoing week', 'Status',
+    'Original', 'Original Box Type', 'Override Requested', 'Override Created', 'Exclude']].concat(existing);
   sh.clearContents();
   var width = 12;
   sh.getRange(1, 1, rows.length, width).setValues(rows.map(function (r) {
-    return r.concat(new Array(width - r.length).fill(''));
+    return r.slice(0, width).concat(new Array(Math.max(0, width - r.length)).fill(''));
   }));
   sh.getRange('M1:N1').setFormulas([[
     '=ARRAYFORMULA({"Eff Requested"; IF(A2:A="",,IF(J2:J<>"",J2:J,B2:B))})',
     '=ARRAYFORMULA({"Eff Created"; IF(A2:A="",,IF(K2:K<>"",K2:K,C2:C))})']]);
   sh.getRange('B:C').setNumberFormat('@');
+  props.setProperty('PIVOT_WATERMARK', String(maxNum));
 }
 
 // ---------- Shopify ----------

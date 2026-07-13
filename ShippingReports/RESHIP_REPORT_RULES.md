@@ -49,13 +49,17 @@ One tab per ship week (`_SHIP_<Monday>`), refreshed daily by a scheduled task; a
 16. **Slack parser parity gate.** The Triage + requested-fill JS port of `ingest.slack_reship.parse`
     MUST match the Python parser exactly — verified 2026-07-13 on 200 live messages (110 classified,
     0 mismatches, `scratchpad/parser_parity.py`). Re-run parity if either parser's ISSUE_RULES change.
-17. **Delete-to-remove, NO hide list (Kurt 2026-07-13).** To remove a reship: DELETE its row from
-    pivot Raw Data. `refreshPivotSheet_` detects it (was in `PIVOT_LAST_WRITTEN`, now absent from the
-    sheet) and adds it to an internal `PIVOT_SUPPRESSED` Script Property → never re-written.
-    Permanent (re-add the # manually to undo). Guard: a full-tab wipe (present==0 after writing >5
-    last run) is treated as an accident and does NOT suppress. Distinct from **Exclude `x`** =
-    visible-but-uncounted. Rejected: a user-managed `_hide` tab (Kurt: "I really don't want a hide
-    list… just let me delete from the raw").
+17. **Pivot Raw Data is WALK-FORWARD APPEND-ONLY (Kurt 2026-07-13, Option 2).** `refreshPivotSheet_`
+    never auto-removes and never re-orders: (1) updates rows still on the sheet in place from state
+    (Status/date refresh), keeping overrides J-L; (2) appends reships whose ORDER # is above
+    `PIVOT_WATERMARK` (max order # ever processed — monotonic+unique, no date-granularity hole);
+    (3) advances the watermark. **To remove a reship: DELETE its row.** Its order# <= watermark →
+    never reconsidered → permanent (re-add the # to undo). **No auto-aging** — cohorts do NOT drop
+    off; rows accumulate until Kurt prunes them (WEEKS_BACK/mondays no longer gate the pivot ledger,
+    only the cohort-summary tabs). Distinct from **Exclude `x`** = visible-but-uncounted. First GAS
+    run adopts the current sheet (floor = highest order# present) so it does NOT flood with 92-day
+    history. Full-tab wipe → DM heads-up, NOT auto-restored (walk-forward). REJECTED: hide list,
+    delete-detection/suppressed-set, dynamic-window+rewrite (all deemed too much bookkeeping).
 
 ## Refresh & write discipline
 
