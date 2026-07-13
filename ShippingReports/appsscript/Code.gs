@@ -59,8 +59,17 @@ function build_() {
     denoms[tag] = ordersCount_("tag:'" + tag + "' -status:cancelled -tag:'Reship'");
   });
 
-  // R1/R5/R6 sweep + R3/R4 incremental enrichment
-  sweepAndEnrich_(state, oldest);
+  // R1/R5/R6 sweep + R3/R4 incremental enrichment. Sweep 92d back so the Daily
+  // tab has history; enrichment stays incremental under the 6-min GAS cap.
+  var histSince = iso_(addDays_(today, -HISTORY_DAYS));
+  var sweepFrom = histSince < iso_(oldest) ? new Date(histSince) : oldest;
+  sweepAndEnrich_(state, sweepFrom);
+  enrichBoxTypes_(state, mondays);
+  fillRequestedFromSlack_(state, histSince);
+  // casual-hide: drop hidden orders from EVERYTHING (Kurt 2026-07-13). Deleted
+  // after sweep so they don't persist; re-swept+re-dropped each run (idempotent).
+  var hide = loadHide_();
+  Object.keys(hide).forEach(function (k) { delete state[k]; });
   saveState_(state);
 
   // user overrides from Raw Data J-M (user-owned, survive refresh)
@@ -87,31 +96,31 @@ function build_() {
   writeTab_('Pivots', tabs.pivots, true);
 
   breachAlert_(work, mondays[0], denoms, today);
-  refreshPivotSheet_(state);
+  refreshPivotSheet_(state, mondays);
+  writeProductMix_(mondays, denoms, stamp);
+  try { writeTriage_(state, oldest, stamp); }
+  catch (e) { Logger.log('triage failed (non-fatal): ' + e); }
+  writeDaily_(state, stamp);
 }
 
 // ---------- secondary pivot sheet (hourly, overrides in I-K preserved) ----------
 
-function refreshPivotSheet_(state) {
+function refreshPivotSheet_(state, mondays) {
   var ss = SpreadsheetApp.openById(PIVOT_SHEET_ID);
   var sh = ss.getSheetByName('Raw Data') || ss.insertSheet('Raw Data');
-  // preserve user cols I-K keyed by order
+  // preserve user cols J-L (override requested/created, exclude) keyed by order
   var prev = {};
   if (sh.getLastRow() >= 2) {
     sh.getRange('A2:L' + sh.getLastRow()).getValues().forEach(function (row) {
       if (row[0]) prev[row[0]] = [row[9] || '', row[10] || '', row[11] || ''];
     });
   }
-  // frozen seed membership (the 7/08 unfulfilled queue) — rows never drop on fulfillment
-  var seed = {};
-  var seedSh = ss.getSheetByName('_seed');
-  if (seedSh) {
-    seedSh.getRange('A1:A' + Math.max(1, seedSh.getLastRow())).getValues().forEach(function (row) {
-      if (row[0]) seed[row[0]] = true;
-    });
-  }
+  // FULL-WINDOW membership (Kurt 2026-07-13, the "23" decision): every reship
+  // whose ORIGINAL order is in the last WEEKS_BACK+1 ship weeks — fulfilled or
+  // not, no date cutoff. Drops _seed/CUTOVER. Reconciles all tabs.
+  var tags = cohortTags_(mondays);
   var keys = Object.keys(state).filter(function (k) {
-    return seed[k] || (state[k].entered || '') >= PIVOT_CUTOVER;
+    return tags[state[k].original_cohort];
   }).sort(function (a, b) {
     var x = (state[a].entered || '') + a, y = (state[b].entered || '') + b;
     return x < y ? -1 : 1;
@@ -625,4 +634,221 @@ function pivot_(counter, label) {
   blk.push(['Grand Total', Object.keys(counter).reduce(function (s, k) { return s + counter[k]; }, 0)]);
   blk.push([]);
   return blk;
+}
+
+// ================= HEADLESS PORT ADDITIONS (2026-07-13) =================
+// Plan: .claude/plans/2026-07-13-reship-headless-port.md. Ports Product Mix,
+// Triage (JS Slack parser), Daily, box-type enrichment, hide gate. Membership
+// = original_cohort in the last WEEKS_BACK+1 ship weeks (full window, drops
+// _seed/CUTOVER — Kurt 2026-07-13, the "23" decision).
+
+var SLACK_CHANNEL = 'C095UVCKCBB';   // #reship-and-order-requests
+var DAILY_SHEET_ID = '1VHzlyvFabVYUGpR71tgJfYDglI85KnCQOCYJFyZvGsI';
+var HISTORY_DAYS = 92;
+
+function cohortTags_(mondays) {
+  var t = {};
+  mondays.forEach(function (m) { t['_SHIP_' + iso_(m)] = true; });
+  return t;
+}
+
+// ---- casual-hide (bound-script, hidden '_hide' tab; NOT editor-proof) ----
+function loadHide_() {
+  var set = {};
+  try {
+    var sh = SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName('_hide');
+    if (sh && sh.getLastRow() >= 1) {
+      sh.getRange('A1:A' + sh.getLastRow()).getValues().forEach(function (r) {
+        var v = String(r[0] || '').trim();
+        if (!v || v.toLowerCase() === 'order') return;
+        set['#' + v.replace(/^#/, '')] = true;
+      });
+    }
+  } catch (e) { Logger.log('loadHide failed: ' + e); }
+  return set;
+}
+
+// ---- box-type enrichment (ORIGINAL order's box type; -TRAY SKUs) ----
+function boxTypeOf_(skus) {
+  var up = skus.map(function (s) { return (s || '').toUpperCase(); });
+  if (up.some(function (s) { return s.indexOf('LCUST-TRAY') >= 0; })) return 'Large Tray';
+  if (up.some(function (s) { return s.indexOf('MCUST-TRAY') >= 0; })) return 'Medium Tray';
+  return 'Regular Box';
+}
+function enrichBoxTypes_(state, mondays) {
+  var tags = cohortTags_(mondays), need = [];
+  Object.keys(state).forEach(function (k) {
+    var r = state[k];
+    if (r.original && tags[r.original_cohort] && !r.original_boxtype) {
+      var nm = String(r.original).replace(/^#/, '');
+      if (need.indexOf(nm) < 0) need.push(nm);
+    }
+  });
+  var map = {};
+  for (var i = 0; i < need.length; i += 20) {
+    var batch = need.slice(i, i + 20);
+    var q = batch.map(function (n) { return 'name:' + n; }).join(' OR ');
+    var d = shopifyGql_('query($q:String!){ orders(first:20, query:$q){ edges{node{ name lineItems(first:50){edges{node{ sku }}} }}}}', { q: q });
+    d.orders.edges.forEach(function (e) {
+      map[e.node.name.replace(/^#/, '')] = boxTypeOf_(e.node.lineItems.edges.map(function (le) { return le.node.sku; }));
+    });
+  }
+  Object.keys(state).forEach(function (k) {
+    var nm = String(state[k].original || '').replace(/^#/, '');
+    if (nm && map[nm]) state[k].original_boxtype = map[nm];
+  });
+}
+
+// ---- Slack parser (JS port of ingest.slack_reship.parse; parity-tested) ----
+var ISSUE_RULES_ = [
+  [/melted\s+ice|ice\s*pack\s*melt/, 'Shipping::Damaged in transit::Arrived Warm (melted)', 'shipping'],
+  [/(ice|gel)\s*pack\s*(leak|broke|exploded|leaked)/, 'Shipping::Damaged in transit::Broken/Leaking Ice Pack', 'shipping'],
+  [/arriv\w*\s+warm|arrive\s+warm|arrived\s+warm|\bwarm\b/, 'Shipping::Damaged in transit::Arrived Warm', 'shipping'],
+  [/lost\s+in\s+transit|\blost\b/, 'Shipping::Lost in Transit/Misdelivered::Lost', 'shipping'],
+  [/misdeliver\w*|mis-deliver\w*/, 'Shipping::Lost in Transit/Misdelivered::Misdelivered', 'shipping'],
+  [/cannot\s+be?\s+deliver\w*|undeliverable|can'?t\s+deliver/, 'Shipping::Cannot be delivered', 'shipping'],
+  [/delay\w*\s+in\s+transit|delay\s+in\s+transit|\bdelay\w*\b/, 'Shipping::Delayed in transit', 'shipping'],
+  [/damage\w*\s+box|box\s+damage\w*|damaged\s+in\s+transit/, 'Shipping::Damaged in transit::Box damaged', 'shipping'],
+  [/missing\s+\d*\s*item|missing\s+\w+\s+item/, 'Order::Missing item', 'fulfillment'],
+  [/wrong\s+order|wrong\s+item/, 'Order::Wrong item', 'fulfillment']
+];
+function classifyReship_(text) {
+  var t = String(text).toLowerCase();
+  for (var i = 0; i < ISSUE_RULES_.length; i++) {
+    if (ISSUE_RULES_[i][0].test(t)) return [ISSUE_RULES_[i][1], ISSUE_RULES_[i][2]];
+  }
+  return [null, null];
+}
+function parseReshipMsg_(text, createdIso) {
+  var c = classifyReship_(text);
+  if (!c[0]) return null;
+  var onum = (String(text).match(/#\s*(\d{5,6})\b/) || [])[1] || null;
+  var gid = (String(text).match(/gorgias\.com\/app\/(?:views\/\d+\/|ticket\/)(\d+)/) || [])[1] || null;
+  return { order_number: onum ? parseInt(onum, 10) : null, issue: c[0], team: c[1],
+           gorgias_id: gid ? parseInt(gid, 10) : null, created_ts: createdIso };
+}
+function fetchSlackReship_(oldestEpoch) {
+  var token = PropertiesService.getScriptProperties().getProperty('SLACK_BOT_TOKEN');
+  if (!token) return [];
+  var out = [], cursor = '', guard = 0;
+  do {
+    var url = 'https://slack.com/api/conversations.history?channel=' + SLACK_CHANNEL +
+              '&oldest=' + oldestEpoch + '&limit=200' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+    var r = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true });
+    var d = JSON.parse(r.getContentText());
+    if (!d.ok) { Logger.log('slack history: ' + d.error); break; }
+    (d.messages || []).forEach(function (m) {
+      var iso = Utilities.formatDate(new Date(parseFloat(m.ts) * 1000), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+      var rec = parseReshipMsg_(m.text || '', iso);
+      if (rec) out.push(rec);
+    });
+    cursor = (d.response_metadata || {}).next_cursor || '';
+  } while (cursor && ++guard < 50);
+  return out;
+}
+
+// ---- Slack requested-date fill (gaps Gorgias missed; original order match) ----
+function fillRequestedFromSlack_(state, sinceDate) {
+  var need = {};
+  Object.keys(state).forEach(function (k) {
+    if (!state[k].requested && state[k].original) need[k] = String(state[k].original).replace(/^#/, '');
+  });
+  if (!Object.keys(need).length) return;
+  var epoch = Math.floor(new Date(sinceDate).getTime() / 1000);
+  var recs = fetchSlackReship_(epoch);
+  var byOrder = {};
+  recs.forEach(function (r) {
+    if (r.order_number && r.created_ts) {
+      var o = String(r.order_number), d = r.created_ts.slice(0, 10);
+      if (!byOrder[o] || d < byOrder[o]) byOrder[o] = d;
+    }
+  });
+  Object.keys(need).forEach(function (k) {
+    if (byOrder[need[k]]) { state[k].requested = byOrder[need[k]]; state[k].ticket = 'slack'; }
+  });
+}
+
+// ---- Product Mix (COUNTIFS over pivot Raw Data; reconciles with Counts) ----
+function writeProductMix_(mondays, denoms, stamp) {
+  var rows = [
+    ['REFRESHED ' + stamp,
+     'sizes = live Shopify; reship counts = COUNTIFS over Raw Data (same rows as Count-of-incoming-week; honor Exclude); blank box-type = Regular'],
+    ['Cohort', 'Cohort size',
+     'Regular Box', 'Regular Box Reship discrete', 'Regular Box Reship %',
+     'Medium Tray', 'Medium Tray Reship discrete', 'Medium Tray Reship %',
+     'Large Tray', 'Large Tray Reship discrete', 'Large Tray Reship %']];
+  var RD = "'Raw Data'";  // E=incoming, I=box type, L=exclude
+  mondays.slice().sort(function (a, b) { return a - b; }).forEach(function (mon, i) {
+    var tag = '_SHIP_' + iso_(mon);
+    var base = "tag:'" + tag + "' -status:cancelled -tag:'Reship'";
+    var total = ordersCount_(base), med = ordersCount_(base + ' sku:AHB-MCUST-TRAY*'),
+        lge = ordersCount_(base + ' sku:AHB-LCUST-TRAY*'), r = i + 3;
+    var medC = '=COUNTIFS(' + RD + '!$E:$E,$A' + r + ',' + RD + '!$I:$I,"Medium Tray",' + RD + '!$L:$L,"<>x")';
+    var lgeC = '=COUNTIFS(' + RD + '!$E:$E,$A' + r + ',' + RD + '!$I:$I,"Large Tray",' + RD + '!$L:$L,"<>x")';
+    var regC = '=COUNTIFS(' + RD + '!$E:$E,$A' + r + ',' + RD + '!$L:$L,"<>x")-G' + r + '-J' + r;
+    rows.push([tag, total,
+      total - med - lge, regC, '=IF(C' + r + '>0,TEXT(D' + r + '/C' + r + ',"0.00%"),"n/a")',
+      med, medC, '=IF(F' + r + '>0,TEXT(G' + r + '/F' + r + ',"0.00%"),"n/a")',
+      lge, lgeC, '=IF(I' + r + '>0,TEXT(J' + r + '/I' + r + ',"0.00%"),"n/a")']);
+  });
+  writeTabTo_(PIVOT_SHEET_ID, 'Product Mix', rows, true);
+}
+
+// ---- Triage (Slack-only feed, requested-not-entered) ----
+function writeTriage_(state, oldest, stamp) {
+  var originals = {};
+  Object.keys(state).forEach(function (k) {
+    var o = String(state[k].original || '').replace(/^#/, ''); if (o) originals[o] = true;
+  });
+  var prev = {};
+  try {
+    var psh = SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName('Triage');
+    if (psh && psh.getLastRow() >= 3) {
+      psh.getRange('A3:F' + psh.getLastRow()).getValues().forEach(function (row) {
+        if (row[0]) prev[String(row[0])] = row[5];
+      });
+    }
+  } catch (e) {}
+  var recs = fetchSlackReship_(Math.floor(new Date(oldest).getTime() / 1000));
+  var rows = [['REFRESHED ' + stamp,
+    'Slack #reship-and-order-requests posts w/o an entered reship order — NOT counted anywhere. Col F is YOURS: reship / refund / no action', '', '', '', 'Decision'],
+    ['Key', 'Posted', 'Issue', 'Order', 'Gorgias', 'Decision']];
+  recs.forEach(function (r) {
+    var onum = String(r.order_number || '');
+    if (onum && originals[onum]) return;  // already remediated
+    var key = String(r.gorgias_id || onum || (r.created_ts || ''));
+    rows.push([key, (r.created_ts || '').slice(0, 16), r.issue || '',
+               onum ? '#' + onum : '', String(r.gorgias_id || ''), prev[key] || '']);
+  });
+  writeTabTo_(PIVOT_SHEET_ID, 'Triage', rows, false);
+}
+
+// ---- Daily 92-day tab (Date / requested / created / ship week) ----
+function writeDaily_(state, stamp) {
+  var today = new Date(), start = addDays_(today, -HISTORY_DAYS);
+  var req = {}, ent = {}, unknown = 0, startIso = iso_(start);
+  Object.keys(state).forEach(function (k) {
+    var r = state[k];
+    if (r.requested) req[r.requested] = (req[r.requested] || 0) + 1;
+    if (r.entered) ent[r.entered] = (ent[r.entered] || 0) + 1;
+    if (!r.requested && (r.entered || '') >= startIso) unknown++;
+  });
+  var rows = [['Date', 'Count of requested', 'Count of created', 'Ship week',
+    'REFRESHED ' + stamp, unknown + ' reships in window have no ticket found (excluded from requested)']];
+  for (var d = new Date(start); d <= today; d = addDays_(d, 1)) {
+    var s = iso_(d);
+    rows.push([s, req[s] || 0, ent[s] || 0, '_SHIP_' + iso_(mondayOf_(d))]);
+  }
+  writeTabTo_(DAILY_SHEET_ID, 'Daily', rows, false);
+}
+
+// ---- generic write helper for the extra sheets ----
+function writeTabTo_(sheetId, name, rows, userEntered) {
+  var ss = SpreadsheetApp.openById(sheetId);
+  var sh = ss.getSheetByName(name) || ss.insertSheet(name);
+  sh.clearContents();
+  var w = Math.max.apply(null, rows.map(function (r) { return r.length; }).concat([1]));
+  var padded = rows.map(function (r) { return r.concat(new Array(w - r.length).fill('')); });
+  var rng = sh.getRange(1, 1, padded.length, w);
+  if (userEntered) rng.setValues(padded); else rng.setValues(padded);
 }

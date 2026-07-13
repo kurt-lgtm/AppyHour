@@ -40,6 +40,21 @@ One tab per ship week (`_SHIP_<Monday>`), refreshed daily by a scheduled task; a
     Pivots are live QUERY formulas over the effective columns N–P — a Raw Data edit recomputes them
     instantly. Overrides are corrections of record, not the place to hide bad weeks.
 
+15. **Headless owner = the sheet-bound Apps Script `Code.gs`** (2026-07-13 port). Hourly trigger on
+    Kurt's account, cloud-side (PC-off safe). The local `reship_report_refresh.py` is the
+    reference/backfill only and its schtask is DISABLED at cutover — **two writers race and clobber**
+    (never run both). Membership = **every reship whose ORIGINAL order is in the last WEEKS_BACK+1
+    ship weeks** (full window; the "23-for-07-06" decision) — NOT the retired `_seed`/`CUTOVER`
+    model. All tabs reconcile because they count this one set.
+16. **Slack parser parity gate.** The Triage + requested-fill JS port of `ingest.slack_reship.parse`
+    MUST match the Python parser exactly — verified 2026-07-13 on 200 live messages (110 classified,
+    0 mismatches, `scratchpad/parser_parity.py`). Re-run parity if either parser's ISSUE_RULES change.
+17. **Order hiding is CASUAL-hide only (bound script).** Hidden `_hide` tab (one order # per row) →
+    those orders dropped from state before ANY tab is written (absent from all tabs + counts).
+    Invisible in normal view; **findable** by View→Hidden sheets or opening Apps Script. NOT
+    editor-proof — full editor-proof hiding needs a standalone script (declined 2026-07-13 for
+    simplicity). Never claim the hide is secure against a determined editor.
+
 ## Refresh & write discipline
 
 **Owner = Google Apps Script bound to the Reship Sheet** (respec 2026-07-09 — cloud-side so
