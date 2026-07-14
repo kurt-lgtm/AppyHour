@@ -263,21 +263,33 @@ def _fetch_all_data(settings: dict) -> dict:
         available[sku] = inventory.get(sku, 0) - sat_dep.get(sku, 0) - tue_dep.get(sku, 0)
 
     # -- Override with corrected inventory if provided --
+    # The weekly HAVE (corrected_inventory_path) is AUTHORITATIVE for on-hand: a SKU the
+    # HAVE does NOT list has on-hand 0, NOT a stale value from the 3-week-old base INV_CSV.
+    # (Bug 2026-07-14: GFLEECE et al. dropped from the HAVE showed stale 6/23 base Avail;
+    # harmless only because those had 0 demand — a dropped high-demand SKU would mis-cut.)
     corrected_inv_path = settings.get("corrected_inventory_path", "")
     if corrected_inv_path and os.path.exists(corrected_inv_path):
         try:
             _ci_wb = openpyxl.load_workbook(corrected_inv_path, read_only=True, data_only=True)
             _ci_ws = _ci_wb[_ci_wb.sheetnames[0]]
-            _ci_count = 0
+            _ci_have: dict[str, int] = {}
             for _ci_row in _ci_ws.iter_rows(min_row=2, values_only=True):
                 _ci_sku = (_ci_row[0] or "") if _ci_row else ""
                 _ci_qty = _ci_row[6] if len(_ci_row) > 6 else None  # Column G = Corrected Qty
                 if _ci_sku and _ci_qty is not None:
-                    _ci_sku = _normalize_sku(str(_ci_sku).strip())
-                    available[_ci_sku] = int(float(_ci_qty))
-                    _ci_count += 1
+                    _ci_have[_normalize_sku(str(_ci_sku).strip())] = int(float(_ci_qty))
             _ci_wb.close()
-            print(f"  Overrode {_ci_count} SKUs from corrected inventory: {corrected_inv_path}")
+            if _ci_have:
+                # HAVE is the sole authority: rebuild available from it; SKUs absent → 0.
+                _stale = sorted(s for s in available if s not in _ci_have and available.get(s, 0) != 0)
+                available = dict(_ci_have)
+                print(f"  Overrode {len(_ci_have)} SKUs from corrected inventory (AUTHORITATIVE): "
+                      f"{corrected_inv_path}")
+                if _stale:
+                    print(f"  Zeroed {len(_stale)} SKU(s) absent from HAVE (no stale base fallback): "
+                          f"{', '.join(_stale[:20])}{' …' if len(_stale) > 20 else ''}")
+            else:
+                print(f"  Warning: corrected inventory had 0 usable rows, keeping base: {corrected_inv_path}")
         except Exception as e:
             print(f"  Warning: Could not load corrected inventory: {e}")
 
