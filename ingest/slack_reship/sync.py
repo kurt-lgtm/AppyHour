@@ -38,12 +38,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from ingest.slack_reship.parse import (  # noqa: E402
     ReshipRecord, parse_concise_blob, parse_detailed_blob, parse_messages,
 )
+# box-type display order (kept local so importing sync doesn't trigger Shopify
+# auth — boxtype.py authenticates at import; only pull it in lazily when needed).
+BOX_ORDER = ["Regular Box", "Medium Tray", "Large Tray"]
 
 try:
     from appyhour_lib.paths import db_path
 except Exception:
     def db_path() -> Path:  # type: ignore
-        return Path(os.environ["APPDATA"]) / "AppyHour" / "shipping.db"
+        return Path(os.environ.get("APPYHOUR_DB_PATH") or (r"C:\AppyHourData\shipping.db" if os.path.exists(r"C:\AppyHourData\shipping.db") else str(Path(os.environ["APPDATA"]) / "AppyHour" / "shipping.db")))
+
+# Readers MUST use connect_ro (mode=ro) — never raw sqlite3.connect on the live
+# DB (MSIX+WAL corruption guard, appyhour_lib/CLAUDE.md).
+from appyhour_lib.db import connect_ro  # noqa: E402
 
 CHANNEL_ID = "C095UVCKCBB"  # #reship-and-order-requests
 REPORT_TZ = "America/Chicago"
@@ -126,7 +133,7 @@ def fetch_dump(path: Path) -> list[ReshipRecord]:
 # ---------- enrich + window filter -------------------------------------------
 def enrich_and_filter(records: list[ReshipRecord], start_date: str, end_date: str,
                       db: Path) -> list[dict]:
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    con = connect_ro(db)
     out = []
     seen_gid: set[int] = set()
     for r in records:
@@ -154,7 +161,80 @@ def enrich_and_filter(records: list[ReshipRecord], start_date: str, end_date: st
     return out
 
 
+# ---------- auto denominator (cohort shipped volume) -------------------------
+def auto_denom(week: str, db: Path) -> int:
+    """denom = COUNT(fulfillments tagged _SHIP_<week>) — the shipped cohort size.
+    Read-only. Replaces the old manual --denom arg so the weekly task self-serves."""
+    con = connect_ro(db)
+    try:
+        (n,) = con.execute(
+            "SELECT COUNT(*) FROM fulfillments WHERE tags LIKE ?",
+            (f"%_SHIP_{week}%",),
+        ).fetchone()
+    finally:
+        con.close()
+    return int(n)
+
+
+# ---------- box-type enrichment (Shopify line-item SKUs) ---------------------
+def enrich_box_types(rows: list[dict]) -> None:
+    """Mutate rows in place, adding row['box'] (Regular Box / Medium Tray /
+    Large Tray / unknown). Isolated import so the no-Shopify markdown path still
+    works if creds are absent."""
+    onums = [r["order"] for r in rows if r.get("order") is not None]
+    mapping: dict[int, str] = {}
+    if onums:
+        try:
+            from ingest.slack_reship.boxtype import box_types_for
+            mapping = box_types_for(onums)
+        except Exception as e:  # creds missing / API down — don't kill the report
+            print(f"# WARN box-type lookup failed: {e}", file=sys.stderr)
+    for r in rows:
+        r["box"] = mapping.get(r.get("order"), "unknown")
+
+
+def box_summary_grid(rows: list[dict], denom: int) -> tuple[list[list], int]:
+    """Box-type breakdown of reshipped orders (list-of-lists for the sheet).
+    Returns (grid, header_row_offset)."""
+    counts = defaultdict(int)
+    for r in rows:
+        counts[r.get("box", "unknown")] += 1
+    pct = lambda n: f"{100*n/denom:.2f}%" if denom else "—"
+    grid = [["Box type", "Reshipped", "% denom"]]
+    order = BOX_ORDER + [k for k in counts if k not in BOX_ORDER]
+    tot = 0
+    for b in order:
+        if b not in counts:
+            continue
+        grid.append([b, counts[b], pct(counts[b])])
+        tot += counts[b]
+    grid.append(["Total", tot, pct(tot)])
+    return grid, 0
+
+
 # ---------- deterministic matrix (GATE rule 2: % of denom) -------------------
+def matrix_grid(rows: list[dict], denom: int, issues: list[str]) -> list[list]:
+    """Same numbers as build_matrix() but as a 2D list for the Google Sheet."""
+    grid = defaultdict(lambda: defaultdict(int))
+    for x in rows:
+        grid[x["carrier"]][x["col"]] += 1
+    vendors = VENDOR_ORDER + sorted(c for c in grid if c not in VENDOR_ORDER)
+    vendors = [v for v in vendors if grid[v]]
+    pct = lambda n: f"{100*n/denom:.2f}%" if denom else "—"
+    out = [["Vendor"] + issues + ["Total", "% denom"]]
+    col_tot = defaultdict(int)
+    grand = 0
+    for v in vendors:
+        rt = sum(grid[v].get(i, 0) for i in issues)
+        for i in issues:
+            col_tot[i] += grid[v].get(i, 0)
+        grand += rt
+        out.append([v] + [grid[v].get(i, 0) for i in issues] + [rt, pct(rt)])
+    out.append(["Total"] + [col_tot[i] for i in issues] + [grand, pct(grand)])
+    out.append(["% denom"] + [pct(col_tot[i]) for i in issues] + ["", ""])
+    return out
+
+
 def build_matrix(rows: list[dict], denom: int, issues: list[str]) -> str:
     grid = defaultdict(lambda: defaultdict(int))
     for x in rows:
@@ -187,10 +267,16 @@ def build_matrix(rows: list[dict], denom: int, issues: list[str]) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--week", required=True, help="ship-week Monday YYYY-MM-DD")
-    ap.add_argument("--denom", type=int, required=True, help="cohort total (ASK Kurt)")
+    ap.add_argument("--denom", type=int, default=None,
+                    help="cohort total; omit to auto-count fulfillments _SHIP_<week>")
     ap.add_argument("--issues", default="Delayed,Warm,Lost,Undeliverable,Damaged")
     ap.add_argument("--dump-file", help="no-token fallback: concise slack blob")
     ap.add_argument("--report", action="store_true")
+    ap.add_argument("--box-types", action="store_true",
+                    help="enrich each order with box type via Shopify line items")
+    ap.add_argument("--push", action="store_true",
+                    help="write/refresh this week's tab in the reship Google Sheet")
+    ap.add_argument("--sheet-id", default=None, help="override cached sheet id")
     args = ap.parse_args()
 
     oldest, latest, start_date, end_date = week_window(args.week)
@@ -198,13 +284,35 @@ def main() -> None:
     recs = (fetch_dump(Path(args.dump_file)) if args.dump_file
             else fetch_slack_live(oldest, latest))
     rows = enrich_and_filter(recs, start_date, end_date, db_path())
+    denom = args.denom if args.denom is not None else auto_denom(args.week, db_path())
+
+    # box types needed if the flag is set OR we're pushing to the sheet
+    if args.box_types or args.push:
+        enrich_box_types(rows)
 
     src = "DUMP" if args.dump_file else "LIVE Slack API"
-    print(f"# Weekly Shipping — _SHIP_{args.week} · denom {args.denom} "
+    print(f"# Weekly Shipping — _SHIP_{args.week} · denom {denom} "
           f"· tickets received {start_date}–{end_date} · source {src}")
     print(f"_{len(rows)} shipping tickets in window (carrier-joined)._\n")
     if args.report:
-        print(build_matrix(rows, args.denom, issues))
+        print(build_matrix(rows, denom, issues))
+    if args.box_types or args.push:
+        box_grid, _ = box_summary_grid(rows, denom)
+        print("\n## Box type of reshipped orders")
+        for r in box_grid:
+            print("| " + " | ".join(str(c) for c in r) + " |")
+
+    if args.push:
+        from ingest.slack_reship.sheet_push import build_rows, push
+        vmatrix = matrix_grid(rows, denom, issues)
+        bgrid, _ = box_summary_grid(rows, denom)
+        sheet_rows = build_rows(args.week, denom, len(rows), start_date, end_date,
+                                src, vmatrix, bgrid)
+        # header rows (1-indexed) for styling: vendor block hdr, box block hdr
+        vendor_hdr = 6                 # title(1) sub(2) note(3) blank(4) "CARRIER"(5) -> matrix hdr(6)
+        box_hdr = 8 + len(vmatrix)     # matrix rows 6..5+N, blank, "BOX TYPE" label, then box hdr
+        url = push(args.week, sheet_rows, vendor_hdr, box_hdr, sheet_id=args.sheet_id)
+        print(f"\nPUSHED: {url}")
 
 
 if __name__ == "__main__":

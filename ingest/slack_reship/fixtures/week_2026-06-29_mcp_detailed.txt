@@ -1,0 +1,1034 @@
+Channel: #reship-and-order-requests (C095UVCKCBB)
+
+=== Message from dan <dan@elevatefoods.co> (U061A4MPQ8N) at 2026-07-06 03:57:12 CST ===
+Message TS: 1783281432.961389
+Hey team - can you enter those reships from before now?  Is there any confusion on the approach <@U038GRYNULF|Jo> <@U078K8T9UMB|Adel>
+Thread: 3 replies (latest: 2026-07-06 04:12:02 CST)
+
+=== Message at 2026-07-06 03:42:04 CST ===
+Message TS: 1783280524.396099
+<@U061A4MPQ8N|dan> <@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7220545421592|#155712>
+<https://appyhour.gorgias.com/app/views/980720/279670126|appyhour.gorgias.com/app/views/980720/279670126>
+Thread: 1 replies (latest: 2026-07-06 03:56:23 CST)
+Files: image.png (ID: F0BEU0BQHE3, image/png, 30.4 KB), image.png (ID: F0BF62DQ0A1, image/png, 84.8 KB)
+
+=== Message at 2026-07-06 03:26:51 CST ===
+Message TS: 1783279611.786879
+<@U061A4MPQ8N|dan> <@U01FYC7CZMH|Jess> Delayed in transit (3 days)
+<https://admin.shopify.com/store/504ac4/orders/7224159699224|#156558>
+<https://appyhour.gorgias.com/app/views/980720/279709002|appyhour.gorgias.com/app/views/980720/279709002>
+Thread: 1 replies (latest: 2026-07-06 03:55:45 CST)
+Files: image.png (ID: F0BF9AEN3B4, image/png, 62.8 KB), image.png (ID: F0BETUV9NK1, image/png, 153.1 KB)
+
+=== Message at 2026-07-06 02:22:37 CST ===
+Message TS: 1783275757.797979
+<@U061A4MPQ8N|dan> <@U01FYC7CZMH|Jess> Arrived warm, customer wants to cancel sub
+<https://admin.shopify.com/store/504ac4/orders/7216419045656|#154731> (Gourmet Bites)
+<https://appyhour.gorgias.com/app/views/238613/280310790|appyhour.gorgias.com/app/views/238613/280310790>
+Thread: 1 replies (latest: 2026-07-06 02:25:43 CST)
+Files: image.png (ID: F0BF96GCD0S, image/png, 27.7 KB)
+
+=== Message from dan <dan@elevatefoods.co> (U061A4MPQ8N) at 2026-07-05 23:30:20 CST ===
+Message TS: 1783265420.408899
+Team- all these tags that are coming in - those are reships that haven't been submitted and entered into Shopify right?
+Thread: 2 replies (latest: 2026-07-05 23:42:58 CST)
+Reactions: raised_hands::skin-tone-2 (1)
+
+=== Message from dan <dan@elevatefoods.co> (U061A4MPQ8N) at 2026-07-05 21:43:18 CST ===
+Message TS: 1783258998.280029
+I will evaluate each reship on Monday
+
+=== Message from dan <dan@elevatefoods.co> (U061A4MPQ8N) at 2026-07-05 21:43:09 CST ===
+Message TS: 1783258989.298929
+Zero more reships entered today unless I authorize them directly
+
+=== Message from dan <dan@elevatefoods.co> (U061A4MPQ8N) at 2026-07-05 21:42:57 CST ===
+Message TS: 1783258977.824439
+Do not add a reship into Shopify and Do not respond to those customers other than saying that we will get back to them soon
+
+=== Message from dan <dan@elevatefoods.co> (U061A4MPQ8N) at 2026-07-05 21:42:26 CST ===
+Message TS: 1783258946.335999
+Hey folks thanks for this.  To be clear, I should not see one reship in Shopify today nor should I see a commitment to ship to customers in Gorgias
+
+(1) we're promising cheese that we don't have
+(2) there are too many reships
+
+Customer Support agents SHOULD NOT BE ADDING RESHIPS INTO SHOPIFY nor telling customers that we will reship their box.
+
+Please confirm.  I've already seen two.
+Thread: 6 replies (latest: 2026-07-05 21:58:22 CST)
+
+=== Message at 2026-07-05 21:33:42 CST ===
+Message TS: 1783258422.395639
+<@U061A4MPQ8N|dan> <@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7217396089112|154966> - _*Delayed in transit; 5 days (routed incorrectly)*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/280275367|appyhour.gorgias.com/app/views/238613/280275367>
+Thread: 1 replies (latest: 2026-07-07 03:39:47 CST)
+Files: image.png (ID: F0BF282SHL3, image/png, 27.9 KB)
+
+=== Message at 2026-07-05 21:20:48 CST ===
+Message TS: 1783257648.572899
+<@U061A4MPQ8N|dan> <@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7218929860888|155337> - _*Arrived warm*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/280264732|appyhour.gorgias.com/app/views/238613/280264732>
+Thread: 1 replies (latest: 2026-07-07 03:37:51 CST)
+Files: image.png (ID: F0BFAC2NL1F, image/png, 18.5 KB)
+
+=== Message from dan <dan@elevatefoods.co> (U061A4MPQ8N) at 2026-07-05 04:18:24 CST ===
+Message TS: 1783196304.556919
+<@U01FYC7CZMH|Jess> and Customer Support Team - *this is not your fault at all and I definitely trust you*.  This is me needing to get a handle on what is happening so that we can dive deep and implement a fix for next week.  I truly appreciate your hard work here and this will be temporary
+Reactions: raised_hands::skin-tone-2 (1)
+
+=== Message from dan <dan@elevatefoods.co> (U061A4MPQ8N) at 2026-07-05 04:15:15 CST ===
+Message TS: 1783196115.733219
+I'll take a look at each one within 24 hours and give an approval / ask questions
+
+=== Message from dan <dan@elevatefoods.co> (U061A4MPQ8N) at 2026-07-05 04:14:33 CST ===
+Message TS: 1783196073.700109
+As they come in, please copy/paste into slack and I'll review each one to try to get a handle on them...
+
+=== Message at 2026-07-05 03:56:44 CST ===
+Message TS: 1783195004.549799
+If that’s the case then we need to create a separate folder in Gorgias for all reship requests.
+All tickets will be transferred there. I will do this tomorrow. Thanks.
+
+=== Message from dan <dan@elevatefoods.co> (U061A4MPQ8N) at 2026-07-05 03:36:04 CST ===
+Message TS: 1783193764.757399
+Thank you for the hard work
+
+=== Message from dan <dan@elevatefoods.co> (U061A4MPQ8N) at 2026-07-05 03:36:01 CST ===
+Message TS: 1783193761.502889
+Hey <@U01FYC7CZMH|Jess> <@U08R19137UL|Kurt> <!here> - I just called Kurt and we don’t have a handle on our reships at all.
+
+Say you're investigating with ops and someone responds to buy us time.  All reships should be tagged to me.
+
+I need to be tagged IN ALL RESHIPS and can be the only one to approve.
+
+Please confirm and apologies for the back and forth.
+
+=== Message at 2026-07-05 03:33:27 CST ===
+Message TS: 1783193607.199789
+.
+
+=== Message at 2026-07-05 03:31:15 CST ===
+Message TS: 1783193475.091089
+.
+
+=== Message from dan <dan@elevatefoods.co> (U061A4MPQ8N) at 2026-07-05 02:37:42 CST ===
+Message TS: 1783190262.156299
+Thank you all - definitely concerning but welll figure it out - really really appreciate the hard work
+Reactions: heart (1)
+
+=== Message at 2026-07-05 02:29:56 CST ===
+Message TS: 1783189796.124489
+Happy 4th of July!
+
+=== Message at 2026-07-05 02:24:01 CST ===
+Message TS: 1783189441.861089
+Happy 4th of July everyone! :tada::partying_face::clinking_glasses:
+
+=== Message at 2026-07-05 02:23:59 CST ===
+Message TS: 1783189439.064639
+<@U061A4MPQ8N|dan> Yeah we can resume this on Monday..for now, enjoy the day and rest of the weekend.
+
+=== Message at 2026-07-05 02:20:54 CST ===
+Message TS: 1783189254.660909
+Thanks so much both!
+
+=== Message at 2026-07-05 02:16:29 CST ===
+Message TS: 1783188989.667909
+I agree. It is a bit alarming and challenging, hopefully, we can address it early. thanks for your support. <@U061A4MPQ8N|dan>
+
+=== Message at 2026-07-05 02:09:51 CST ===
+Message TS: 1783188591.432889
+Totally understand, <@U061A4MPQ8N|dan>. Reships are a lot of work on our end too, so we definitely share the concern and only do them when truly necessary. Thanks for the support! :pray:
+
+=== Message from dan <dan@elevatefoods.co> (U061A4MPQ8N) at 2026-07-05 01:58:11 CST ===
+Message TS: 1783187891.904019
+No keep going with what you do, don’t tag me - it's fine — it's just extremely concerning.  Let's check in on Monday about this.
+
+Thank you and thanks everyone for the help here.  We’ll get this more under control soon on the ops side
+
+Dan
+Reactions: heart (2)
+
+=== Message at 2026-07-05 01:34:29 CST ===
+Message TS: 1783186469.976129
+Let me know. Thanks for checking in! I know you're just concerned.
+
+=== Message at 2026-07-05 01:33:13 CST ===
+Message TS: 1783186393.015349
+Do you still want to be tagged in all reships? I will have my team follow if you want to... but it's going to be very stressful for you especially Wednesday - Monday. Tuesday is only our quiet day
+
+=== Message at 2026-07-05 01:31:40 CST ===
+Message TS: 1783186300.921269
+Plus the process to check every single tracking info and post it in slack. This really made the team struggle to clear the queue.
+
+=== Message at 2026-07-05 01:30:41 CST ===
+Message TS: 1783186241.080149
+I know it really sucks. The team is also very stressed about this. It takes 5 mins or more to reship a single order.
+
+=== Message from dan <dan@elevatefoods.co> (U061A4MPQ8N) at 2026-07-05 01:30:10 CST ===
+Message TS: 1783186210.699919
+I'm sorry
+
+=== Message from dan <dan@elevatefoods.co> (U061A4MPQ8N) at 2026-07-05 01:26:16 CST ===
+Message TS: 1783185976.879889
+Ok continue — thanks Jess
+
+=== Message from dan <dan@elevatefoods.co> (U061A4MPQ8N) at 2026-07-05 01:26:07 CST ===
+Message TS: 1783185967.242499
+Ugh…that sucks
+
+=== Message at 2026-07-05 01:24:10 CST ===
+Message TS: 1783185850.087729
+You can ask Kurt bec I know he's well aware of the issue and I'm confident to say reships are very controlled.
+
+=== Message at 2026-07-05 01:20:39 CST ===
+Message TS: 1783185639.441949
+<@U061A4MPQ8N|dan> they still ask approval from me for arrived warm and 3days delayed in transit orders. I only gave them the authority for reasons like: damaged, gel pack burst and 4+ delayed in transit) OTHER THAN THAT should go through ME OR KURT.
+we experienced high volume of reships this week bec of the heat wave/weather related and issue with the # of ice packs.
+another thing to note were delayed in transit (3 or more days) mostly from FedEx but we still have from Ontrac and Veho
+
+=== Message at 2026-07-05 01:14:36 CST ===
+Message TS: 1783185276.162339
+Lisa's two orders: recurring cheese box<https://admin.shopify.com/store/504ac4/orders/7222062842136|admin.shopify.com/store/504ac4/orders/7222062842136>
+prepaid box <https://admin.shopify.com/store/504ac4/orders/7221237481752|admin.shopify.com/store/504ac4/orders/7221237481752>
+
+=== Message at 2026-07-05 01:13:19 CST ===
+Message TS: 1783185199.242619
+<@U061A4MPQ8N|dan> you can check the ticket here <https://appyhour.gorgias.com/app/ticket/280076031|appyhour.gorgias.com/app/ticket/280076031>
+they had two orders, one 3-box prepaid and the other one is the recurring
+
+=== Message from dan <dan@elevatefoods.co> (U061A4MPQ8N) at 2026-07-05 01:09:17 CST ===
+Message TS: 1783184957.490729
+I want to be copied and approve any further reships directly.  Do not commit to a reship to customer without my direct approval.
+
+Can whoever is working please confirm their receipt here?
+
+=== Message from dan <dan@elevatefoods.co> (U061A4MPQ8N) at 2026-07-05 00:52:33 CST ===
+Message TS: 1783183953.818599
+<@U01FYC7CZMH|Jess> and team - can you please send me a detailed review of why Lisa Davis is getting two reships?
+
+=== Message from dan <dan@elevatefoods.co> (U061A4MPQ8N) at 2026-07-05 00:52:09 CST ===
+Message TS: 1783183929.924759
+<!here> — please see above
+
+=== Message from dan <dan@elevatefoods.co> (U061A4MPQ8N) at 2026-07-05 00:50:58 CST ===
+Message TS: 1783183858.011069
+We can re evaluate when we have better rate
+
+=== Message from dan <dan@elevatefoods.co> (U061A4MPQ8N) at 2026-07-05 00:49:59 CST ===
+Message TS: 1783183799.391849
+Hi <@U01FYC7CZMH|Jess> - arrived warms and reships are out of control.  I want to revert back to an approval model immediately starting now.
+
+Please confirm and communicate with your team.
+
+=== Message at 2026-07-04 22:56:52 CST ===
+Message TS: 1783177012.185899
+<@U08R19137UL|Kurt> Pls ship tues RMFG <https://admin.shopify.com/store/504ac4/orders/7238464897304|#159429> <https://appyhour.gorgias.com/app/views/238612/280033783|appyhour.gorgias.com/app/views/238612/280033783>
+Thread: 2 replies (latest: 2026-07-07 00:28:36 CST)
+Files: image.png (ID: F0BF98QB9N0, image/png, 64.9 KB)
+
+=== Message at 2026-07-04 22:32:00 CST ===
+Message TS: 1783175520.449179
+<@U08R19137UL|Kurt> Only 3 trays inside the box <https://admin.shopify.com/store/504ac4/orders/7213648773400|#154338>
+<https://appyhour.gorgias.com/app/views/238612/280011671|appyhour.gorgias.com/app/views/238612/280011671>
+Thread: 1 replies (latest: 2026-07-04 22:53:06 CST)
+Reactions: white_check_mark (1)
+Files: image.png (ID: F0BEQ3YP8BZ, image/png, 168.1 KB)
+
+=== Message at 2026-07-04 21:39:13 CST ===
+Message TS: 1783172353.618949
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7224156422424|156479> - _*Arrived warm*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238612/280068691|appyhour.gorgias.com/app/views/238612/280068691>
+Thread: 2 replies (latest: 2026-07-05 22:54:31 CST)
+Files: image.png (ID: F0BF5BJA9TL, image/png, 23.8 KB)
+
+=== Message at 2026-07-04 20:56:23 CST ===
+Message TS: 1783169783.165159
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7212912836888|154260> - _*Arrived warm; Gourmet Bites*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/280180837|appyhour.gorgias.com/app/views/238613/280180837>
+Thread: 3 replies (latest: 2026-07-05 22:46:21 CST)
+Files: image.png (ID: F0BF75VDN65, image/png, 26.7 KB)
+
+=== Message at 2026-07-04 04:18:51 CST ===
+Message TS: 1783109931.492549
+<@U01FYC7CZMH|Jess> Arrived warm, Veho <https://admin.shopify.com/store/504ac4/orders/7218931630360|#155381>
+<https://appyhour.gorgias.com/app/views/238613/279997145|appyhour.gorgias.com/app/views/238613/279997145>
+Thread: 2 replies (latest: 2026-07-05 23:37:10 CST)
+Files: image.png (ID: F0BF4M8B801, image/png, 43.0 KB)
+
+=== Message at 2026-07-04 04:13:26 CST ===
+Message TS: 1783109606.511689
+<@U01FYC7CZMH|Jess> Arrived warm, Veho <https://appyhour.gorgias.com/app/views/238613/279996350|#156817>
+<https://appyhour.gorgias.com/app/views/238613/279996350|appyhour.gorgias.com/app/views/238613/279996350>
+Thread: 2 replies (latest: 2026-07-05 23:50:01 CST)
+Files: image.png (ID: F0BEZE8BSLD, image/png, 99.4 KB)
+
+=== Message at 2026-07-04 04:04:53 CST ===
+Message TS: 1783109093.425009
+<@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7224150524184|#156327>
+<https://appyhour.gorgias.com/app/views/238613/279992254|appyhour.gorgias.com/app/views/238613/279992254>
+Thread: 2 replies (latest: 2026-07-05 23:46:17 CST)
+Files: image.png (ID: F0BEMBCE9RD, image/png, 18.2 KB)
+
+=== Message at 2026-07-04 03:15:21 CST ===
+Message TS: 1783106121.847959
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7222013296920|156090> - _*Arrived warm; Gourmet Bites*_
+Gorgias: <https://appyhour.gorgias.com/app/views/988673/279344772|appyhour.gorgias.com/app/views/988673/279344772>
+Thread: 1 replies (latest: 2026-07-04 03:16:44 CST)
+Files: image.png (ID: F0BFWSLVAQ0, image/png, 18.6 KB)
+
+=== Message at 2026-07-04 02:28:32 CST ===
+Message TS: 1783103312.935559
+<@U08R19137UL|Kurt> ship for 7/6, thank you <https://admin.shopify.com/store/504ac4/orders/7230989828376|#157913>
+
+=== Message at 2026-07-04 01:52:44 CST ===
+Message TS: 1783101164.945709
+<@U08R19137UL|Kurt>, new order is <https://admin.shopify.com/store/504ac4/orders/7236951310616?newlyCreated=true|159343>. ship for week of 7/6
+
+=== Message at 2026-07-04 01:13:44 CST ===
+Message TS: 1783098824.055999
+<@U08R19137UL|Kurt>, please ship for 7/6. thank you <https://admin.shopify.com/store/504ac4/orders/7236874666264?newlyCreated=true|159335>
+
+=== Message at 2026-07-04 00:57:26 CST ===
+Message TS: 1783097846.074609
+<@U08R19137UL|Kurt> reship order <https://admin.shopify.com/store/504ac4/orders/7236860510488?newlyCreated=true|#159332>. Please put veho, fedex, and ontrac block on her account and ship her replacement and future orders using UPS only. thank u
+Thread: 10 replies (latest: 2026-07-04 02:00:54 CST)
+
+=== Message at 2026-07-04 00:45:34 CST ===
+Message TS: 1783097134.071209
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7216413606168|154730> - _*Delayed in transit (3 days); Gourmet Bites*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279985629|appyhour.gorgias.com/app/views/238613/279985629>
+
+wants a refund and cancel sub
+Thread: 1 replies (latest: 2026-07-04 00:58:40 CST)
+Files: image.png (ID: F0BF1U6CLQJ, image/png, 24.0 KB)
+
+=== Message at 2026-07-04 00:39:49 CST ===
+Message TS: 1783096789.860729
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7225471992088|156850> - _*Arrived warm (previous order was delayed in transit)*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279985425|appyhour.gorgias.com/app/views/238613/279985425>
+Thread: 2 replies (latest: 2026-07-04 02:32:00 CST)
+Files: image.png (ID: F0BEYJJ0YUD, image/png, 15.5 KB)
+
+=== Message at 2026-07-04 00:22:13 CST ===
+Message TS: 1783095733.456849
+<@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7217518674200|#155170>
+<https://appyhour.gorgias.com/app/views/980720/279611099|appyhour.gorgias.com/app/views/980720/279611099>
+Thread: 2 replies (latest: 2026-07-05 23:29:18 CST)
+Files: image.png (ID: F0BF1R3KSE6, image/png, 26.0 KB)
+
+=== Message at 2026-07-04 00:20:03 CST ===
+Message TS: 1783095603.214449
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7224166449432|156736> - _*Delayed in transit (3 days)*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279977996|appyhour.gorgias.com/app/views/238613/279977996>
+Thread: 1 replies (latest: 2026-07-04 00:58:59 CST)
+Files: image.png (ID: F0BEYFU5U3F, image/png, 17.5 KB)
+
+=== Message at 2026-07-04 00:17:26 CST ===
+Message TS: 1783095446.214379
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7222014673176|156131> - _*Delayed in transit (3 days); Gourmet Bites*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279973985|appyhour.gorgias.com/app/views/238613/279973985>
+Thread: 1 replies (latest: 2026-07-04 00:58:51 CST)
+Files: image.png (ID: F0BEVGYBV6F, image/png, 14.6 KB)
+
+=== Message at 2026-07-04 00:15:00 CST ===
+Message TS: 1783095300.020479
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7224167072024|156748> - _*Misdelivered*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279977377|appyhour.gorgias.com/app/views/238613/279977377>
+Thread: 2 replies (latest: 2026-07-05 23:33:54 CST)
+Files: image.png (ID: F0BFW46ECQY, image/png, 36.8 KB)
+
+=== Message at 2026-07-04 00:11:21 CST ===
+Message TS: 1783095081.721809
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7224164221208|156671> - _*Delayed in transit (3 days)*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279976457|appyhour.gorgias.com/app/views/238613/279976457>
+Thread: 2 replies (latest: 2026-07-05 23:16:08 CST)
+Files: image.png (ID: F0BEYENLDQD, image/png, 24.3 KB)
+
+=== Message at 2026-07-04 00:09:49 CST ===
+Message TS: 1783094989.870099
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7100610216216|141364> - _*Delayed in transit (3 days)*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279974990|appyhour.gorgias.com/app/views/238613/279974990>
+Thread: 2 replies (latest: 2026-07-05 23:56:01 CST)
+Files: image.png (ID: F0BF3LV7QBT, image/png, 49.8 KB)
+
+=== Message at 2026-07-04 00:08:12 CST ===
+Message TS: 1783094892.101959
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7220545126680|155707> - _*Delayed in transit (3 days)*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279958997|appyhour.gorgias.com/app/views/238613/279958997>
+Thread: 2 replies (latest: 2026-07-05 23:55:04 CST)
+Files: image.png (ID: F0BEYE3CXRB, image/png, 34.4 KB), image.png (ID: F0BF3LJAXEV, image/png, 10.0 MB), image.png (ID: F0BELC5QR6K, image/png, 37.7 KB)
+
+=== Message at 2026-07-04 00:05:44 CST ===
+Message TS: 1783094744.495959
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7222011592984|156052> - _*Delayed in transit (3 days)*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279974332|appyhour.gorgias.com/app/views/238613/279974332>
+Thread: 2 replies (latest: 2026-07-05 23:19:09 CST)
+Files: image.png (ID: F0BF5EK2W6Q, image/png, 34.2 KB)
+
+=== Message at 2026-07-03 23:23:00 CST ===
+Message TS: 1783092180.334459
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7218930024728|155342> - _*Arrived warm*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279970993|appyhour.gorgias.com/app/views/238613/279970993>
+Thread: 1 replies (latest: 2026-07-03 23:33:29 CST)
+Files: image.png (ID: F0BEV8E9Q1H, image/png, 33.3 KB), image.png (ID: F0BEV8GLS4B, image/png, 15.0 MB), image.png (ID: F0BF57T8XGC, image/png, 16.4 MB)
+
+=== Message at 2026-07-03 22:42:26 CST ===
+Message TS: 1783089746.553299
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7223459119384|156265> - _*Arrived warm; Gourmet Bites*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279970612|appyhour.gorgias.com/app/views/238613/279970612>
+Thread: 1 replies (latest: 2026-07-03 23:33:24 CST)
+Files: image.png (ID: F0BEY00493P, image/png, 21.3 KB)
+
+=== Message at 2026-07-03 22:35:59 CST ===
+Message TS: 1783089359.404239
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7218932056344|155401> - _*Delayed in transit (3 days)*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279969334|appyhour.gorgias.com/app/views/238613/279969334>
+Thread: 2 replies (latest: 2026-07-05 23:11:03 CST)
+Files: image.png (ID: F0BEZ7M3M0W, image/png, 26.2 KB)
+
+=== Message at 2026-07-03 22:33:19 CST ===
+Message TS: 1783089199.055239
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7217403625752|155150> - _*Delayed in transit (3 days)*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279968429|appyhour.gorgias.com/app/views/238613/279968429>
+Thread: 2 replies (latest: 2026-07-05 23:18:15 CST)
+Files: image.png (ID: F0BF34X0FED, image/png, 25.9 KB)
+
+=== Message at 2026-07-03 22:26:13 CST ===
+Message TS: 1783088773.340749
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7217390256408|154811> - _*Delayed in transit (3 days)*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279967679|appyhour.gorgias.com/app/views/238613/279967679>
+
+wants a refund and to pause subscription for the summer
+Thread: 3 replies (latest: 2026-07-05 23:09:06 CST)
+Files: image.png (ID: F0BF33KP7HP, image/png, 24.8 KB)
+
+=== Message at 2026-07-03 22:18:25 CST ===
+Message TS: 1783088305.858179
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7224153833752|156407> - _*Delayed in transit (3 days)*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279963273|appyhour.gorgias.com/app/views/238613/279963273>
+Thread: 2 replies (latest: 2026-07-05 23:08:05 CST)
+Files: image.png (ID: F0BEKP6QDFH, image/png, 36.5 KB)
+
+=== Message at 2026-07-03 22:09:28 CST ===
+Message TS: 1783087768.586639
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7222006153496|155902> - _*Delayed in transit (3 days)*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279960536|appyhour.gorgias.com/app/views/238613/279960536>
+Thread: 2 replies (latest: 2026-07-05 23:06:19 CST)
+Files: image.png (ID: F0BF30NQF0R, image/png, 29.7 KB)
+
+=== Message at 2026-07-03 22:07:37 CST ===
+Message TS: 1783087657.548169
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7221761245464|155812> - _*Delayed in transit (3 days)*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279930471|appyhour.gorgias.com/app/views/238613/279930471>
+Thread: 2 replies (latest: 2026-07-05 22:57:14 CST)
+Files: image.png (ID: F0BF4Q2MA6Q, image/png, 23.4 KB)
+
+=== Message from dan <dan@elevatefoods.co> (U061A4MPQ8N) at 2026-07-03 21:51:43 CST ===
+Message TS: 1783086703.736559
+Tommy is out please tag me instead
+Reactions: white_check_mark (1)
+
+=== Message from dan <dan@elevatefoods.co> (U061A4MPQ8N) at 2026-07-03 21:51:36 CST ===
+Message TS: 1783086696.141979
+Tell her to try those
+
+=== Message from dan <dan@elevatefoods.co> (U061A4MPQ8N) at 2026-07-03 21:51:32 CST ===
+Message TS: 1783086692.616229
+Tell them we typically don't hold spreads.  We're bringing in some flavored Fromage fraise which would be similar in October so you should look oily for that.
+
+Let's sub with alp blossom and marinated sheep and goat milk cheese for now
+Reactions: white_check_mark (1)
+
+=== Message at 2026-07-03 21:49:14 CST ===
+Message TS: 1783086554.195119
+<@U0AH66UB6MR|Tommy Amorim> <@U08R19137UL|Kurt> What cheese should i swap for the montasio?
+<https://appyhour.gorgias.com/app/views/238612/279712379|appyhour.gorgias.com/app/views/238612/279712379>
+Reactions: white_check_mark (1)
+Files: image.png (ID: F0BEKHS32CF, image/png, 108.6 KB)
+
+=== Message at 2026-07-03 21:48:24 CST ===
+Message TS: 1783086504.945619
+-
+
+=== Message at 2026-07-03 21:06:40 CST ===
+Message TS: 1783084000.103359
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7222006874392|155928> - _*Delayed in transit (3 days)*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/280066665|appyhour.gorgias.com/app/views/238613/280066665>
+Thread: 2 replies (latest: 2026-07-05 23:13:05 CST)
+Files: image.png (ID: F0BEKA1G1TR, image/png, 10.5 KB)
+
+=== Message at 2026-07-03 21:01:12 CST ===
+Message TS: 1783083672.185889
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7215285010712|154483> - _*Delayed in transit (3 days); Gourmet Bites*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279954234|appyhour.gorgias.com/app/views/238613/279954234>
+
+wants a refund
+Thread: 1 replies (latest: 2026-07-03 22:36:09 CST)
+Files: image.png (ID: F0BF0KV55J6, image/png, 15.5 KB)
+
+=== Message at 2026-07-03 20:57:24 CST ===
+Message TS: 1783083444.125919
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7218929041688|155313> - _*Delayed in transit (3 days)*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279953538|appyhour.gorgias.com/app/views/238613/279953538>
+Thread: 3 replies (latest: 2026-07-06 00:31:13 CST)
+Files: image.png (ID: F0BEUBG56G3, image/png, 31.8 KB)
+
+=== Message at 2026-07-03 20:52:32 CST ===
+Message TS: 1783083152.137689
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7220569800984|155723> - _*Delayed in transit (3 days); Gourmet Bites*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279938666|appyhour.gorgias.com/app/views/238613/279938666>
+Thread: 1 replies (latest: 2026-07-03 22:35:49 CST)
+Files: image.png (ID: F0BEYHPUFAS, image/png, 24.1 KB), image.png (ID: F0BF2FGFUM7, image/png, 386.0 KB), image.png (ID: F0BF49UC9LL, image/png, 460.7 KB), image.png (ID: F0BFUTPQG2U, image/png, 398.7 KB)
+
+=== Message at 2026-07-03 20:48:47 CST ===
+Message TS: 1783082927.988109
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7164521414936|151178> - _*Delayed in transit (3 days)*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279940505|appyhour.gorgias.com/app/views/238613/279940505>
+
+wants a refund
+Thread: 2 replies (latest: 2026-07-05 22:53:11 CST)
+Files: image.png (ID: F0BEX8HAFRB, image/png, 27.2 KB)
+
+=== Message at 2026-07-03 20:46:36 CST ===
+Message TS: 1783082796.325559
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7219569164568|155466> - _*Delayed in transit (3 days); Gourmet Bites*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279936675|appyhour.gorgias.com/app/views/238613/279936675>
+Thread: 1 replies (latest: 2026-07-03 22:35:26 CST)
+Files: image.png (ID: F0BFUSQU2DN, image/png, 10.2 KB), image.png (ID: F0BFUSQQCFJ, image/png, 8.8 KB)
+
+=== Message at 2026-07-03 20:44:00 CST ===
+Message TS: 1783082640.263919
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7223583670552|156269> - _*Delayed in transit (3 days); Gourmet Bites*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279936340|appyhour.gorgias.com/app/views/238613/279936340>
+Thread: 1 replies (latest: 2026-07-03 22:35:15 CST)
+Files: image.png (ID: F0BEYG9D8UW, image/png, 29.2 KB)
+
+=== Message at 2026-07-03 20:37:24 CST ===
+Message TS: 1783082244.717099
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7222015328536|156147> - _*Delayed in transit (3 days)*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279932295|appyhour.gorgias.com/app/views/238613/279932295>
+Thread: 2 replies (latest: 2026-07-05 22:52:08 CST)
+Files: image.png (ID: F0BEU813VMH, image/png, 18.2 KB)
+
+=== Message at 2026-07-03 20:28:02 CST ===
+Message TS: 1783081682.754429
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7215730786584|154637> - _*Delayed in transit (3 days)*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279929828|appyhour.gorgias.com/app/views/238613/279929828>
+Thread: 2 replies (latest: 2026-07-05 23:40:58 CST)
+Files: image.png (ID: F0BF0DMS0SW, image/png, 21.4 KB), image.png (ID: F0BEYDBCJK0, image/png, 1.8 MB)
+
+=== Message at 2026-07-03 20:24:29 CST ===
+Message TS: 1783081469.785209
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7215731147032|154644> - _*Arrived warm*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279921535|appyhour.gorgias.com/app/views/238613/279921535>
+Thread: 2 replies (latest: 2026-07-05 23:51:47 CST)
+Files: image.png (ID: F0BF44Y7DC4, image/png, 16.4 KB)
+
+=== Message at 2026-07-03 20:22:35 CST ===
+Message TS: 1783081355.354269
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7224152326424|156377> - _*Arrived warm*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238613/279913374|appyhour.gorgias.com/app/views/238613/279913374>
+Thread: 2 replies (latest: 2026-07-05 22:47:22 CST)
+Files: image.png (ID: F0BFUNFECQY, image/png, 27.0 KB)
+
+=== Message at 2026-07-03 04:01:50 CST ===
+Message TS: 1783022510.465909
+<@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7215732752664|#154677>
+<https://appyhour.gorgias.com/app/ticket/279958978|appyhour.gorgias.com/app/ticket/279958978>
+Thread: 4 replies (latest: 2026-07-03 23:06:56 CST)
+Files: image.png (ID: F0BENQQ0BFD, image/png, 15.4 KB)
+
+=== Message at 2026-07-03 03:52:27 CST ===
+Message TS: 1783021947.232919
+<@U01FYC7CZMH|Jess> Delayed in transit <https://admin.shopify.com/store/504ac4/orders/7214349353240|#154386>
+<https://appyhour.gorgias.com/app/ticket/279957328|appyhour.gorgias.com/app/ticket/279957328>
+Thread: 2 replies (latest: 2026-07-04 01:43:19 CST)
+Files: image.png (ID: F0BENNHSXD1, image/png, 15.7 KB)
+
+=== Message at 2026-07-03 03:40:23 CST ===
+Message TS: 1783021223.126499
+<@U01FYC7CZMH|Jess> Delayed in transit <https://admin.shopify.com/store/504ac4/orders/7220545519896|#155715>
+<https://appyhour.gorgias.com/app/ticket/279954983|appyhour.gorgias.com/app/ticket/279954983>
+Thread: 2 replies (latest: 2026-07-05 23:10:10 CST)
+Files: image.png (ID: F0BEYKJLPB6, image/png, 35.7 KB)
+
+=== Message at 2026-07-03 03:27:59 CST ===
+Message TS: 1783020479.370939
+<@U01FYC7CZMH|Jess> Misdelivered <https://admin.shopify.com/store/504ac4/orders/7220403732760|#155531> (Gourmet Bites)
+<https://appyhour.gorgias.com/app/ticket/279951970|appyhour.gorgias.com/app/ticket/279951970>
+Thread: 1 replies (latest: 2026-07-03 22:33:45 CST)
+Files: image.png (ID: F0BERG5E42Z, image/png, 46.2 KB), image.png (ID: F0BERG996F7, image/png, 29.3 KB), image.png (ID: F0BEWNQB1KK, image/png, 99.8 KB)
+
+=== Message at 2026-07-03 02:49:51 CST ===
+Message TS: 1783018191.276059
+<@U08R19137UL|Kurt> 2nd reship, new order <https://admin.shopify.com/store/504ac4/orders/7235173810456?newlyCreated=true|#158823>
+Thread: 2 replies (latest: 2026-07-03 03:02:17 CST)
+
+=== Message at 2026-07-03 02:18:46 CST ===
+Message TS: 1783016326.415779
+<@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7218092114200|#155202>
+<https://appyhour.gorgias.com/app/views/238613/279889726|appyhour.gorgias.com/app/views/238613/279889726>
+Thread: 2 replies (latest: 2026-07-05 21:38:53 CST)
+Files: image.png (ID: F0BECV7MAH5, image/png, 53.3 KB)
+
+=== Message at 2026-07-03 00:37:56 CST ===
+Message TS: 1783010276.468469
+<@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7223350001944|#156257> (Gourmet Bites)
+refund request, customer would like to cancel sub
+<https://appyhour.gorgias.com/app/views/238613/279831925|appyhour.gorgias.com/app/views/238613/279831925>
+Thread: 2 replies (latest: 2026-07-04 01:28:55 CST)
+Files: image.png (ID: F0BERG9UJK0, image/png, 32.5 KB)
+
+=== Message at 2026-07-03 00:21:49 CST ===
+Message TS: 1783009309.289939
+<@U01FYC7CZMH|Jess> <@U08R19137UL|Kurt> Refund?  received the items warm
+<https://appyhour.gorgias.com/app/views/238613/279824203|appyhour.gorgias.com/app/views/238613/279824203>
+<https://admin.shopify.com/store/504ac4/orders/7208644346136|#153151>
+Thread: 1 replies (latest: 2026-07-03 00:26:54 CST)
+Reactions: white_check_mark (1)
+Files: image.png (ID: F0BEX4Q2HSQ, image/png, 37.5 KB)
+
+=== Message at 2026-07-03 00:14:01 CST ===
+Message TS: 1783008841.954429
+<@U08R19137UL|Kurt> box was returned <https://admin.shopify.com/store/504ac4/orders/7214720254232|#154416> (Gourmet Bites)
+Delivery issues with LaserShip, they're thinking of cancelling if delivery service isn't changed.
+<https://appyhour.gorgias.com/app/views/238613/279816182|appyhour.gorgias.com/app/views/238613/279816182>
+Thread: 7 replies (latest: 2026-07-04 01:37:15 CST)
+Files: image.png (ID: F0BEX2QNRV2, image/png, 71.4 KB), image.png (ID: F0BEV8MLPQ9, image/png, 68.1 KB)
+
+=== Message at 2026-07-03 00:07:38 CST ===
+Message TS: 1783008458.911809
+<@U08R19137UL|Kurt> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7221010039064|#155746> (Gourmet Bites)
+Delivery issues with Veho. Can we use a different carrier for future shipments?
+<https://appyhour.gorgias.com/app/views/238613/279807103|appyhour.gorgias.com/app/views/238613/279807103>
+Thread: 3 replies (latest: 2026-07-03 00:10:00 CST)
+Files: image.png (ID: F0BET9E2GP4, image/png, 116.5 KB), image.png (ID: F0BEV7020M7, image/png, 61.5 KB)
+
+=== Message at 2026-07-02 23:36:05 CST ===
+Message TS: 1783006565.411589
+<@U08R19137UL|Kurt> one-time reship? <https://admin.shopify.com/store/504ac4/orders/7215727149336|#154527>
+<https://appyhour.gorgias.com/app/views/238613/279810499|appyhour.gorgias.com/app/views/238613/279810499>
+Thread: 3 replies (latest: 2026-07-04 03:35:53 CST)
+Files: image.png (ID: F0BET0WUQ2E, image/png, 26.4 KB)
+
+=== Message at 2026-07-02 23:11:42 CST ===
+Message TS: 1783005102.142009
+<@U08R19137UL|Kurt> what other cracker can we replace the Sourdough Flatbread with?
+<https://admin.shopify.com/store/504ac4/orders/7234136998168|#158787>
+<https://appyhour.gorgias.com/app/views/238613/279807568|appyhour.gorgias.com/app/views/238613/279807568>
+Thread: 1 replies (latest: 2026-07-02 23:15:13 CST)
+Files: image.png (ID: F0BEUMHJV41, image/png, 17.0 KB)
+
+=== Message at 2026-07-02 22:52:55 CST ===
+Message TS: 1783003975.452279
+<@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7222014443800|#156123>
+<https://appyhour.gorgias.com/app/views/238613/279801556|appyhour.gorgias.com/app/views/238613/279801556>
+Thread: 2 replies (latest: 2026-07-05 22:58:40 CST)
+Files: image.png (ID: F0BELAW9TJP, image/png, 29.8 KB)
+
+=== Message at 2026-07-02 22:45:54 CST ===
+Message TS: 1783003554.613999
+<@U01FYC7CZMH|Jess> <@U08R19137UL|Kurt> Arrived warm ( 1 ice inside the box) <https://appyhour.gorgias.com/app/views/238613/279800914|#156386>
+<https://appyhour.gorgias.com/app/views/238613/279800914|appyhour.gorgias.com/app/views/238613/279800914>
+Thread: 1 replies (latest: 2026-07-02 23:35:43 CST)
+Reactions: white_check_mark (1)
+Files: image.png (ID: F0BEL94E2LB, image/png, 44.6 KB)
+
+=== Message at 2026-07-02 22:43:55 CST ===
+Message TS: 1783003435.042499
+<@U01FYC7CZMH|Jess> <@U08R19137UL|Kurt> Arrived warm ( No Ice) <https://admin.shopify.com/store/504ac4/orders/7217389895960|#154799>
+<https://appyhour.gorgias.com/app/views/238613/279800732|appyhour.gorgias.com/app/views/238613/279800732>
+Thread: 1 replies (latest: 2026-07-02 23:35:32 CST)
+Reactions: white_check_mark (1)
+Files: image.png (ID: F0BEL8FL6H1, image/png, 12.8 KB)
+
+=== Message at 2026-07-02 22:41:05 CST ===
+Message TS: 1783003265.446449
+<@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7222008545560|#155975>
+<https://appyhour.gorgias.com/app/views/238613/279800882|appyhour.gorgias.com/app/views/238613/279800882>
+Thread: 2 replies (latest: 2026-07-04 03:29:07 CST)
+Files: image.png (ID: F0BEL7THMFV, image/png, 15.9 KB)
+
+=== Message at 2026-07-02 22:35:17 CST ===
+Message TS: 1783002917.957129
+<@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7217395040536|#154932>
+<https://appyhour.gorgias.com/app/views/238613/279800578|appyhour.gorgias.com/app/views/238613/279800578>
+Thread: 2 replies (latest: 2026-07-04 03:22:50 CST)
+Files: image.png (ID: F0BEUAURYAV, image/png, 105.7 KB)
+
+=== Message at 2026-07-02 22:23:32 CST ===
+Message TS: 1783002212.784599
+<@U08R19137UL|Kurt> One-time reship? (arrived in time)
+<https://admin.shopify.com/store/504ac4/orders/7217391763736|#154834>
+<https://appyhour.gorgias.com/app/views/238613/279800665|appyhour.gorgias.com/app/views/238613/279800665>
+Thread: 2 replies (latest: 2026-07-05 23:00:27 CST)
+Files: image.png (ID: F0BEAUV4ZE3, image/png, 20.8 KB)
+
+=== Message at 2026-07-02 22:14:39 CST ===
+Message TS: 1783001679.064249
+<@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7215729180952|#154577>
+<https://appyhour.gorgias.com/app/views/238613/279800646|appyhour.gorgias.com/app/views/238613/279800646>
+Thread: 2 replies (latest: 2026-07-05 23:21:01 CST)
+Files: image.png (ID: F0BEVV1JR1S, image/png, 26.9 KB)
+
+=== Message at 2026-07-02 22:08:30 CST ===
+Message TS: 1783001310.664759
+<@U01FYC7CZMH|Jess> Arrived warm, Veho <https://admin.shopify.com/store/504ac4/orders/7222013853976|#156109>
+<https://appyhour.gorgias.com/app/views/238613/279797888|appyhour.gorgias.com/app/views/238613/279797888>
+Thread: 1 replies (latest: 2026-07-02 22:30:09 CST)
+Files: image.png (ID: F0BFLG69H5E, image/png, 15.9 KB)
+
+=== Message at 2026-07-02 21:55:02 CST ===
+Message TS: 1783000502.432479
+<@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7224157995288|#156525>
+<https://appyhour.gorgias.com/app/views/238613/279792473|appyhour.gorgias.com/app/views/238613/279792473>
+Thread: 2 replies (latest: 2026-07-05 21:23:56 CST)
+Files: image.png (ID: F0BENNXKXPF, image/png, 20.1 KB)
+
+=== Message at 2026-07-02 21:51:28 CST ===
+Message TS: 1783000288.527999
+<@U08R19137UL|Kurt> Repeat box <https://admin.shopify.com/store/504ac4/orders/7224158093592|#156527>
+<https://appyhour.gorgias.com/app/views/238613/279790582|appyhour.gorgias.com/app/views/238613/279790582>
+Thread: 2 replies (latest: 2026-07-04 21:53:05 CST)
+Reactions: white_check_mark (1)
+Files: image.png (ID: F0BEKPHTSEP, image/png, 59.9 KB)
+
+=== Message at 2026-07-02 21:39:50 CST ===
+Message TS: 1782999590.153419
+<@U01FYC7CZMH|Jess> Items not cool to touch - Arrived in time <https://admin.shopify.com/store/504ac4/orders/7153430790424|#149237>
+<https://appyhour.gorgias.com/app/views/238613/279785758|appyhour.gorgias.com/app/views/238613/279785758>
+Thread: 1 replies (latest: 2026-07-02 22:25:49 CST)
+Reactions: white_check_mark (1)
+Files: image.png (ID: F0BEPTP9KCN, image/png, 37.3 KB)
+
+=== Message at 2026-07-02 21:37:28 CST ===
+Message TS: 1782999448.938309
+<@U01FYC7CZMH|Jess> Arrived warm, customer would like to cancel sub
+<https://admin.shopify.com/store/504ac4/orders/7224153211160|#156397>
+<https://appyhour.gorgias.com/app/views/238613/279781847|appyhour.gorgias.com/app/views/238613/279781847>
+Thread: 1 replies (latest: 2026-07-02 22:25:30 CST)
+Files: image.png (ID: F0BERT6TJ3C, image/png, 14.4 KB), image.png (ID: F0BENJC13V3, image/png, 92.5 KB)
+
+=== Message at 2026-07-02 21:34:10 CST ===
+Message TS: 1782999250.259809
+<@U01FYC7CZMH|Jess> Arrived warm
+<https://admin.shopify.com/store/504ac4/orders/7224157896984|#156516>
+<https://appyhour.gorgias.com/app/views/238613/279779065|appyhour.gorgias.com/app/views/238613/279779065>
+Thread: 1 replies (latest: 2026-07-02 22:25:09 CST)
+Files: image.png (ID: F0BEVJAQ37E, image/png, 36.7 KB)
+
+=== Message at 2026-07-02 21:20:02 CST ===
+Message TS: 1782998402.514199
+<@U08R19137UL|Kurt> One time reship? (arrived in time)
+<https://admin.shopify.com/store/504ac4/orders/7217392746776|#154865>
+<https://appyhour.gorgias.com/app/views/238613/279769889|appyhour.gorgias.com/app/views/238613/279769889>
+Thread: 1 replies (latest: 2026-07-02 21:44:30 CST)
+Reactions: white_check_mark (1)
+Files: image.png (ID: F0BFL35J0SC, image/png, 56.0 KB)
+
+=== Message at 2026-07-02 21:13:24 CST ===
+Message TS: 1782998004.887789
+<@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7212967526680|#154266>
+<https://appyhour.gorgias.com/app/views/238613/279769353|appyhour.gorgias.com/app/views/238613/279769353>
+Thread: 2 replies (latest: 2026-07-05 23:09:27 CST)
+Files: image.png (ID: F0BENBTN4CD, image/png, 23.9 KB)
+
+=== Message at 2026-07-02 21:10:39 CST ===
+Message TS: 1782997839.190349
+<@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7186756174104|#151974>
+<https://appyhour.gorgias.com/app/views/238613/279760807|appyhour.gorgias.com/app/views/238613/279760807>
+Thread: 2 replies (latest: 2026-07-05 22:57:47 CST)
+Files: image.png (ID: F0BEKD1QAHZ, image/png, 685.1 KB), image.png (ID: F0BERLLT7HQ, image/png, 530.9 KB)
+
+=== Message at 2026-07-02 04:37:15 CST ===
+Message TS: 1782938235.123569
+<@U01FYC7CZMH|Jess> <https://admin.shopify.com/store/504ac4/orders/7221433631000|#155772> <https://appyhour.gorgias.com/app/views/238613/279750924|appyhour.gorgias.com/app/views/238613/279750924>
+Damaged in transit
+Thread: 6 replies (latest: 2026-07-02 04:55:49 CST)
+Reactions: white_check_mark (1)
+Files: image.png (ID: F0BFE2DBG8Y, image/png, 68.2 KB), image.png (ID: F0BEGDAUH8D, image/png, 581.3 KB), image.png (ID: F0BE4BDFHE3, image/png, 407.4 KB)
+
+=== Message at 2026-07-02 03:26:32 CST ===
+Message TS: 1782933992.025669
+<@U01FYC7CZMH|Jess> Arrived warm, Veho <https://admin.shopify.com/store/504ac4/orders/7215727051032|#154526>
+<https://appyhour.gorgias.com/app/ticket/279762882|appyhour.gorgias.com/app/ticket/279762882>
+Thread: 2 replies (latest: 2026-07-04 02:58:39 CST)
+Files: image.png (ID: F0BED00QN4T, image/png, 13.3 KB)
+
+=== Message at 2026-07-02 00:37:14 CST ===
+Message TS: 1782923834.373249
+<@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7224150360344|#156324>
+<https://appyhour.gorgias.com/app/ticket/279723915|appyhour.gorgias.com/app/ticket/279723915>
+Thread: 2 replies (latest: 2026-07-04 02:50:46 CST)
+Files: image.png (ID: F0BEEJKM6BX, image/png, 23.3 KB)
+
+=== Message at 2026-07-02 00:33:26 CST ===
+Message TS: 1782923606.153299
+<@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7218930778392|#155360>
+<https://appyhour.gorgias.com/app/views/238613/279679422|appyhour.gorgias.com/app/views/238613/279679422>
+Thread: 2 replies (latest: 2026-07-05 23:27:46 CST)
+Files: image.png (ID: F0BEFSP8H3Q, image/png, 14.8 KB)
+
+=== Message at 2026-07-01 23:49:35 CST ===
+Message TS: 1782920975.773819
+<@U08R19137UL|Kurt> <@U01FYC7CZMH|Jess> Only 1 ice pack inside the box (Arrived in time) <https://admin.shopify.com/store/504ac4/orders/7218979176728|#155441>
+<https://appyhour.gorgias.com/app/views/238613/279608163|appyhour.gorgias.com/app/views/238613/279608163>
+Thread: 1 replies (latest: 2026-07-01 23:51:04 CST)
+Reactions: white_check_mark (1)
+Files: image.png (ID: F0BEKC0QTL1, image/png, 56.6 KB)
+
+=== Message at 2026-07-01 23:33:16 CST ===
+Message TS: 1782919996.049999
+<@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7215730196760|#154609>
+<https://appyhour.gorgias.com/app/views/238613/279597783|appyhour.gorgias.com/app/views/238613/279597783>
+Thread: 2 replies (latest: 2026-07-04 02:46:44 CST)
+Files: image.png (ID: F0BFBL5LMJL, image/png, 16.3 KB)
+
+=== Message at 2026-07-01 22:57:56 CST ===
+Message TS: 1782917876.870719
+<@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7220540571928|#155581>
+<https://appyhour.gorgias.com/app/views/238613/279581213|appyhour.gorgias.com/app/views/238613/279581213>
+Thread: 3 replies (latest: 2026-07-04 03:03:33 CST)
+Files: image.png (ID: F0BEDJYGD9T, image/png, 30.2 KB)
+
+=== Message at 2026-07-01 04:03:37 CST ===
+Message TS: 1782849817.046719
+<@U01FYC7CZMH|Jess> 1 item not cool to touch (arrived in time)
+<https://admin.shopify.com/store/504ac4/orders/7224167498008|#156760>
+<https://appyhour.gorgias.com/app/views/238613/279546602|appyhour.gorgias.com/app/views/238613/279546602>
+Thread: 4 replies (latest: 2026-07-01 04:15:30 CST)
+Reactions: white_check_mark (1)
+Files: image.png (ID: F0BED714P9A, image/png, 40.6 KB)
+
+=== Message at 2026-07-01 02:30:27 CST ===
+Message TS: 1782844227.684289
+<@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7209322053912|#153569>
+<https://appyhour.gorgias.com/app/views/980720/278714896|appyhour.gorgias.com/app/views/980720/278714896>
+Thread: 3 replies (latest: 2026-07-07 04:24:41 CST)
+Files: image.png (ID: F0BDTBHHWET, image/png, 67.9 KB)
+
+=== Message at 2026-07-01 01:44:26 CST ===
+Message TS: 1782841466.937629
+<@U01FYC7CZMH|Jess> Arrived warm #153980
+<https://appyhour.gorgias.com/app/views/238613/279532254>
+Thread: 2 replies (latest: 2026-07-01 04:06:51 CST)
+Files: image.png (ID: F0BF2MHUKJ4, image/png, 32.2 KB)
+
+=== Message at 2026-07-01 00:30:42 CST ===
+Message TS: 1782837042.805309
+<@U01FYC7CZMH|Jess> Arrived warm <https://admin.shopify.com/store/504ac4/orders/7190079897880|#152125>
+<https://appyhour.gorgias.com/app/views/238613/279388157>
+Thread: 1 replies (latest: 2026-07-01 04:06:22 CST)
+Files: image.png (ID: F0BE1DR85J7, image/png, 30.8 KB)
+
+=== Message at 2026-06-30 23:27:32 CST ===
+Message TS: 1782833252.050109
+<@U08R19137UL|Kurt> <@U01FYC7CZMH|Jess> Delayed in transit (replacement box) <https://admin.shopify.com/store/504ac4/orders/7214892351768|#154427>
+customer is requesting a refund, sub already inactive
+<https://appyhour.gorgias.com/app/views/238613/279372047|appyhour.gorgias.com/app/views/238613/279372047>
+Thread: 1 replies (latest: 2026-06-30 23:28:21 CST)
+Files: image.png (ID: F0BE0R74B0B, image/png, 24.1 KB)
+
+=== Message at 2026-06-30 18:48:05 CST ===
+Message TS: 1782816485.571699
+6/30/2026 order requests: <@U08R19137UL|Kurt>
+
+1. <https://admin.shopify.com/store/504ac4/orders/7231017517336?newlyCreated=true|157914> - ship today
+2. <https://admin.shopify.com/store/504ac4/orders/7231021252888?newlyCreated=true|157915> - ship today
+will add more until 7
+Thread: 6 replies (latest: 2026-06-30 18:49:38 CST)
+
+=== Message at 2026-06-30 04:46:58 CST ===
+Message TS: 1782766018.692809
+<@U08R19137UL|Kurt> PLS SHIP THIS WEEK. GIFT ORDER #157700 <https://admin.shopify.com/store/504ac4/orders/7230286266648|admin.shopify.com/store/504ac4/orders/7230286266648>
+Thread: 1 replies (latest: 2026-06-30 04:48:47 CST)
+
+=== Message at 2026-06-30 04:41:42 CST ===
+Message TS: 1782765702.743909
+<@U01FYC7CZMH|Jess> Delayed in transit <https://admin.shopify.com/store/504ac4/orders/7190090187032|#152319>
+<https://appyhour.gorgias.com/app/views/238613/279276933|appyhour.gorgias.com/app/views/238613/279276933>
+Thread: 2 replies (latest: 2026-07-02 04:27:00 CST)
+Files: image.png (ID: F0BDWH82MU5, image/png, 10.7 KB)
+
+=== Message at 2026-06-30 04:05:49 CST ===
+Message TS: 1782763549.049019
+<@U08R19137UL|Kurt> ship this week please, thank you
+<https://admin.shopify.com/store/504ac4/orders/7230235672856|#157692>
+<https://admin.shopify.com/store/504ac4/orders/7226303250712|#156916>
+Reactions: white_check_mark (1)
+
+=== Message at 2026-06-30 03:21:37 CST ===
+Message TS: 1782760897.226779
+<@U08R19137UL|Kurt> ship this week, thank you <https://admin.shopify.com/store/504ac4/orders/7229197222168|#157307>
+Reactions: white_check_mark (1)
+
+=== Message at 2026-06-30 03:06:08 CST ===
+Message TS: 1782759968.053189
+<@U08R19137UL|Kurt>, please ship this week. thanks <https://admin.shopify.com/store/504ac4/orders/7223231349016|156244>
+Reactions: white_check_mark (1)
+
+=== Message at 2026-06-30 03:04:39 CST ===
+Message TS: 1782759879.041649
+<@U08R19137UL|Kurt> request change, no nuts - allergic <https://admin.shopify.com/store/504ac4/orders/7230153949464|#157682>
+<https://appyhour.gorgias.com/app/ticket/279366210|appyhour.gorgias.com/app/ticket/279366210>
+Thread: 1 replies (latest: 2026-06-30 03:05:15 CST)
+Files: image.png (ID: F0BDX5SG39U, image/png, 11.9 KB)
+
+=== Message at 2026-06-30 02:51:02 CST ===
+Message TS: 1782759062.897339
+<@U08R19137UL|Kurt> pleas ship this week, thank you
+<https://admin.shopify.com/store/504ac4/orders/7229748314392|#157647>
+<https://admin.shopify.com/store/504ac4/orders/7230148673816|#157680>
+
+=== Message at 2026-06-30 02:41:33 CST ===
+Message TS: 1782758493.931649
+<@U08R19137UL|Kurt>, please ship this week. thanks! <https://admin.shopify.com/store/504ac4/orders/7230136385816|157679>
+
+=== Message at 2026-06-30 02:11:35 CST ===
+Message TS: 1782756695.071309
+<@U08R19137UL|Kurt> pls ship this week:  <https://admin.shopify.com/store/504ac4/orders/7229755326744?newlyCreated=true|#157648> and <https://admin.shopify.com/store/504ac4/orders/7225676923160|#156866> thank you!
+
+=== Message at 2026-06-30 02:08:32 CST ===
+Message TS: 1782756512.999479
+<@U01FYC7CZMH|Jess> Delay in transit <https://admin.shopify.com/store/504ac4/orders/7209321627928|#153557>
+<https://appyhour.gorgias.com/app/views/238613/279337872>
+Thread: 1 replies (latest: 2026-06-30 03:16:45 CST)
+Files: image.png (ID: F0BDHC18831, image/png, 10.6 KB)
+
+=== Message at 2026-06-30 02:05:46 CST ===
+Message TS: 1782756346.414789
+<@U08R19137UL|Kurt> can we ship this customer's order this week? <https://admin.shopify.com/store/504ac4/orders/7225676923160|#156866>
+<https://appyhour.gorgias.com/app/views/238613/279333686>
+Thread: 1 replies (latest: 2026-06-30 02:07:23 CST)
+Files: image.png (ID: F0BDWNR9XB8, image/png, 27.7 KB)
+
+=== Message at 2026-06-30 01:39:51 CST ===
+Message TS: 1782754791.736409
+Hi <@U08R19137UL|Kurt>, do we still have limited release father's day box available for reship?
+Thread: 1 replies (latest: 2026-06-30 01:40:39 CST)
+
+=== Message at 2026-06-30 01:23:30 CST ===
+Message TS: 1782753810.026379
+<@U01FYC7CZMH|Jess> <@U08R19137UL|Kurt> Delayed in transit <https://admin.shopify.com/store/504ac4/orders/7190079471896|#152119> (Gourmet-sub canceled)
+customer is requesting a refund as they will be out of town for a month
+<https://appyhour.gorgias.com/app/views/980720/279020138|appyhour.gorgias.com/app/views/980720/279020138>
+Thread: 1 replies (latest: 2026-06-30 01:31:20 CST)
+Files: image.png (ID: F0BDYFDRGR0, image/png, 24.6 KB), image.png (ID: F0BDH1T8LHM, image/png, 29.7 KB)
+
+=== Message at 2026-06-30 00:53:46 CST ===
+Message TS: 1782752026.677339
+<@U01FYC7CZMH|Jess> Delayed in transit <https://admin.shopify.com/store/504ac4/orders/7190082289944|#152178>
+<https://appyhour.gorgias.com/app/views/980720/279098468|appyhour.gorgias.com/app/views/980720/279098468>
+Thread: 1 replies (latest: 2026-06-30 01:21:29 CST)
+Files: image.png (ID: F0BE1TGR9B6, image/png, 26.4 KB)
+
+=== Message at 2026-06-29 23:54:52 CST ===
+Message TS: 1782748492.632239
+<@U08R19137UL|Kurt>
+1. Please ship via FedEx and include more ice packs. The last order only had two, and one ruptured.
+New order <https://admin.shopify.com/store/504ac4/orders/7229882237208?newlyCreated=true|#157661>
+2. ship this week, thank you <https://admin.shopify.com/store/504ac4/orders/7223231349016|#156244>
+Thread: 1 replies (latest: 2026-06-30 00:01:16 CST)
+
+=== Message at 2026-06-29 22:23:22 CST ===
+Message TS: 1782743002.655729
+<@U08R19137UL|Kurt> can we reship this? not sure why it was been shipped thru UPS <https://admin.shopify.com/store/504ac4/orders/7196949643544|#152560>
+<https://appyhour.gorgias.com/app/views/238613/279144106>
+<https://appyhourbox.com/apps/parcelpanel?nums=1ZC411H40307650155>
+Thread: 2 replies (latest: 2026-07-04 01:52:44 CST)
+Files: image.png (ID: F0BDUPX0FQW, image/png, 25.6 KB), image.png (ID: F0BDWSN7SEN, image/png, 177.3 KB)
+
+=== Message at 2026-06-29 22:20:38 CST ===
+Message TS: 1782742838.252259
+<@U01FYC7CZMH|Jess>
+
+<https://admin.shopify.com/store/504ac4/orders/7210620027160|#153661> - _*One-time courtesy?*_
+Gorgias: <https://appyhour.gorgias.com/app/views/238612/279004432|appyhour.gorgias.com/app/views/238612/279004432>
+Thread: 1 replies (latest: 2026-06-29 22:31:47 CST)
+Files: image.png (ID: F0BDFCHPB47, image/png, 77.6 KB), image.png (ID: F0BDQGB89CK, image/png, 41.4 KB)
+
+=== Message at 2026-06-29 22:09:36 CST ===
+Message TS: 1782742176.514119
+<@U08R19137UL|Kurt> pls ship this week:  <https://admin.shopify.com/store/504ac4/orders/7229755326744?newlyCreated=true|#157648> thanks!
+
+=== Message at 2026-06-29 21:45:11 CST ===
+Message TS: 1782740711.779159
+<@U01FYC7CZMH|Jess> customer insisted she cancelled her account 2 months ago. need help on this. <https://admin.shopify.com/store/504ac4/orders/7211547656472|#153843>
+<https://appyhour.gorgias.com/app/views/238612/278511544>
+Thread: 5 replies (latest: 2026-06-29 22:36:17 CST)
+Files: image.png (ID: F0BDF2CJMP1, image/png, 18.3 KB)
+
+=== Message at 2026-06-29 21:41:58 CST ===
+Message TS: 1782740518.591239
+<@U08R19137UL|Kurt> Is the July tasting guide available yet? The customer received the reminder email, but the link is still showing the Postcards from Spain tasting guide. Their next billing date isn't until July 1.
+<https://appyhour.gorgias.com/app/views/238613/279120746|appyhour.gorgias.com/app/views/238613/279120746>
+Thread: 8 replies (latest: 2026-07-01 03:30:06 CST)
+Files: image.png (ID: F0BDWFKGH0S, image/png, 68.3 KB)
