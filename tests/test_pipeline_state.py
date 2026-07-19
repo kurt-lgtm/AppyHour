@@ -193,14 +193,15 @@ def test_active_prefixes_pass1_returns_pr_cjam_only() -> None:
     assert result == ("PR-CJAM",)
 
 
-def test_active_prefixes_pass2_returns_five_prefixes() -> None:
+def test_active_prefixes_pass2_returns_pickable_prefixes() -> None:
+    # MR- (journal) added wk0720 alongside the sheet-column fix (MATRIX_RULES rule 19)
     result = _active_prefixes(2)
-    assert result == ("CH-", "MT-", "AC-", "PK-", "TR-")
+    assert result == ("CH-", "MT-", "AC-", "PK-", "TR-", "MR-")
 
 
 def test_active_prefixes_pass1_excludes_pass2_prefixes() -> None:
     result = _active_prefixes(1)
-    for prefix in ("CH-", "MT-", "AC-", "PK-", "TR-"):
+    for prefix in ("CH-", "MT-", "AC-", "PK-", "TR-", "MR-"):
         assert prefix not in result
 
 

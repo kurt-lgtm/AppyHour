@@ -65,7 +65,8 @@ def _active_prefixes(pass_number: int) -> tuple[str, ...]:
     """
     if pass_number == 1:
         return ("PR-CJAM",)
-    return ("CH-", "MT-", "AC-", "PK-", "TR-")
+    # MR- (journal, 0 DistVol) is pickable and must sync like PK-/TR- (wk0720 gap).
+    return ("CH-", "MT-", "AC-", "PK-", "TR-", "MR-")
 
 
 @dataclass
