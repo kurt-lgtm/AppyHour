@@ -73,6 +73,11 @@ NAME_TO_SKU: dict[str, str] = {
     "Sweet & Smoky Almonds": "AC-SMAL",
     "Tart Cherry with Cardamom & Port Mini Jam": "AC-TCP",
     "Valencian Mandarin Orange": "AC-VMOJ",
+    # Rule 15b (wk0720): RMFG translator uses the NO-COMMA walnut form; Shopify's
+    # title carries the comma. Both must resolve or the rule-15b-correct submitted
+    # sheet false-fails check_sku_mappings every week.
+    "Walnut Honey & Extra Virgin Olive Oil Crackers": "AC-FCWALN",
+    "Walnut, Honey & Extra Virgin Olive Oil Crackers": "AC-FCWALN",
     "Wasabi Peas": "AC-WASP",
     "Whole Colossal Pistachios, Roasted & Salted": "AC-PIST",
     # Cheese (CH-)

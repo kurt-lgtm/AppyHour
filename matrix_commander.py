@@ -404,6 +404,17 @@ def _normalize_name(name: str) -> str:
     return " ".join(name.casefold().split())
 
 
+def _normalize_rule15b_header(header: str) -> str:
+    """MATRIX_RULES 15b: submitted headers use the RMFG translator's exact name form.
+
+    The translator maps the walnut crackers WITHOUT a comma ("Walnut Honey & ...");
+    Shopify's title (and mfg_translations.csv) carry the comma. Left unnormalized,
+    a header-based column union treats them as two different products and AC-FCWALN
+    demand splits across two columns (wk0720).
+    """
+    return header.replace("Walnut, Honey", "Walnut Honey") if header else header
+
+
 _SHOPIFY_TITLE_TO_SKU: dict[str, str] | None = None
 
 
@@ -997,7 +1008,8 @@ def check_routing_and_ice(orders: list[OrderRow]) -> CheckResult:
     MATRIX_RULES rule 14: the export is the last artifact RMFG reads; on 2026-07-03 untagged orders,
     missing ice, HD pins and leaky fences all reached the sheet unchecked (caught manually near-deadline).
     Checks per order: tag grammar (5-form, ROUTING_RULES §12), untagged, positive Home-Delivery pins,
-    leaky single-hub fences, ice policy (MAX_ICE_NONTRAY env), Indy pin count (info — cap is enforced
+    leaky single-hub fences, ice policy (MAX_ICE_NONTRAY env), PO-box ship-to (HARD FAIL — no carrier
+    we use delivers to PO boxes; wk0720 #163659), Indy pin count (info — cap is enforced
     apply-side where box data lives). Trays = any TR-/TRAY SKU in assignments."""
     import sys as _sys
     _sr = r"C:\Users\Work\Claude Projects\ShipRouting"
@@ -1013,7 +1025,8 @@ def check_routing_and_ice(orders: list[OrderRow]) -> CheckResult:
         return any(s.upper().startswith("TR-") or "TRAY" in s.upper() for s in o.assignments)
 
     rows = [QCRow(o.order_id, *split_tags(o.tags), _is_tray(o),
-                  is_fixed="fixed_route" in (o.tags or "").lower()) for o in orders]
+                  is_fixed="fixed_route" in (o.tags or "").lower(),
+                  address=o.address, address2=o.address2) for o in orders]
     rep = run_qc(rows)
     details = [f"{chk}: {names[:8]}{'…' if len(names) > 8 else ''}" for chk, names in rep.hard_fails.items()]
     details += [f"(warn) {chk}: {len(names)}" for chk, names in rep.warnings.items()]
@@ -1673,7 +1686,7 @@ def sync_order_to_shopify(
     mode: str = "smart",
     limiter: LeakyBucketLimiter | None = None,
     guard: DryRunGuard | None = None,
-    active_prefixes: tuple[str, ...] = ("CH-", "MT-", "AC-", "PK-", "TR-"),
+    active_prefixes: tuple[str, ...] = ("CH-", "MT-", "AC-", "PK-", "TR-", "MR-"),
 ) -> SyncResult:
     """Sync one order: add $0 variants for matrix SKUs not yet on Shopify.
 
@@ -2111,8 +2124,11 @@ def generate_matrix_xlsx(
                 all_skus.add(sku)
 
     # Determine product columns from MFG translations
-    # Only include SKUs that actually appear in orders
-    food_pkg_prefixes = ("CH-", "MT-", "AC-", "PK-", "TR-")
+    # Only include SKUs that actually appear in orders.
+    # MR- (journal, 0 DistVol) MUST be here: wk0720 (RMFG_20260717) dropped MR-JRNL
+    # from the generated sheet for 38 orders because this tuple omitted it — every
+    # pickable prefix that can appear on an order needs a column (MATRIX_RULES rule 19).
+    food_pkg_prefixes = ("CH-", "MT-", "AC-", "PK-", "TR-", "MR-")
     relevant_skus = {s for s in all_skus if any(s.startswith(p) for p in food_pkg_prefixes)}
 
     # Build column headers: use MFG translation name, sorted alphabetically
@@ -2357,14 +2373,41 @@ def identify_gift_orders(orders: list[OrderRow]) -> tuple[list[OrderRow], list[O
 def merge_gift_xlsx(main_path: str | Path, gift_path: str | Path) -> str:
     """Merge a separate gift redemption XLSX into the main matrix.
 
-    Both files must have Access_LIVE tab with the same column layout.
-    Gift orders are appended to the main file. Returns path to merged file.
+    Both files must have an Access_LIVE tab. Gift rows are aligned by HEADER
+    (column union), not position — headers on BOTH sides are first normalized to
+    the rule-15b walnut form, otherwise "Walnut, Honey ..." vs "Walnut Honey ..."
+    become two columns and AC-FCWALN demand splits/undercounts (wk0720).
+    Gift-only columns are appended to the main sheet. Returns path to merged file.
     """
     main_wb = openpyxl.load_workbook(str(main_path))
     main_ws = main_wb["Access_LIVE"]
 
     gift_wb = openpyxl.load_workbook(str(gift_path), data_only=True, read_only=True)
     gift_ws = gift_wb["Access_LIVE"]
+    gift_rows = list(gift_ws.iter_rows(values_only=True))
+    gift_wb.close()
+
+    # Normalize main headers in place (rule 15b) and index them
+    main_headers: list[str] = []
+    for c in range(1, main_ws.max_column + 1):
+        h = _normalize_rule15b_header(str(main_ws.cell(1, c).value or ""))
+        if h != str(main_ws.cell(1, c).value or ""):
+            main_ws.cell(1, c).value = h
+        main_headers.append(h)
+    main_idx = {h: i for i, h in enumerate(main_headers)}
+
+    gift_headers = [
+        _normalize_rule15b_header(str(h or "")) for h in (gift_rows[0] if gift_rows else [])
+    ]
+
+    # Column union: append gift-only columns to the main sheet
+    for h in gift_headers:
+        if h and h not in main_idx:
+            main_idx[h] = len(main_headers)
+            main_headers.append(h)
+            main_ws.cell(1, len(main_headers)).value = h
+
+    gift_pos = [main_idx.get(h) if h else None for h in gift_headers]
 
     # Get existing order IDs to avoid duplicates
     existing_oids: set[str] = set()
@@ -2373,21 +2416,23 @@ def merge_gift_xlsx(main_path: str | Path, gift_path: str | Path) -> str:
         if oid:
             existing_oids.add(oid)
 
-    # Append gift rows
+    # Append gift rows, re-slotted into the union column order
     added = 0
     skipped = 0
-    for row in gift_ws.iter_rows(min_row=2, values_only=True):
+    for row in gift_rows[1:]:
         oid = str(row[0] or "").strip()
         if not oid:
             continue
         if oid in existing_oids:
             skipped += 1
             continue
-        main_ws.append(list(row))
+        out: list = [None] * len(main_headers)
+        for val, pos in zip(row, gift_pos):
+            if pos is not None:
+                out[pos] = val
+        main_ws.append(out)
         existing_oids.add(oid)
         added += 1
-
-    gift_wb.close()
 
     # Save merged file
     src = Path(main_path)
@@ -2878,18 +2923,23 @@ ALLOC_AUDIT = Path(r"C:\Users\Work\Claude Projects\_outputs\logs\inventory_alloc
 
 
 def _load_have_csv(path: str | Path) -> dict[str, float]:
-    """HAVE inventory CSV — accepts (SKU,HAVE) or (sku,available_qty) headers."""
+    """HAVE inventory CSV — header-optional. Parses positionally: col0 = SKU, col1 = qty.
+    A row counts as data only when col0 is non-empty AND col1 parses as a number, so header
+    rows (SKU,HAVE / SKU,'RMFG Delta <date>'), section labels (MEAT,), and blank rows are all
+    skipped automatically — no header line required (headerless Sheet exports load fine)."""
     have: dict[str, float] = {}
     with open(str(path), encoding="utf-8-sig", newline="") as f:
-        for row in csv.DictReader(f):
-            low = {(k or "").strip().lower(): v for k, v in row.items()}
-            sku = (low.get("sku") or "").strip()
-            raw = (low.get("have") or low.get("available_qty") or "0").strip()
-            if sku:
-                try:
-                    have[sku] = float(raw or 0)
-                except ValueError:
-                    have[sku] = 0.0
+        for row in csv.reader(f):
+            if not row:
+                continue
+            sku = (row[0] or "").strip()
+            raw = (row[1].strip() if len(row) > 1 else "")
+            if not sku:
+                continue
+            try:
+                have[sku] = float(raw)
+            except ValueError:
+                continue  # non-numeric col1 -> header / label / blank; not a data row
     return have
 
 

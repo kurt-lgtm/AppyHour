@@ -33,7 +33,7 @@ from tools.gorgias_sheets_sync import (  # noqa: E402
 )
 
 
-SHIPPING_DB = os.path.expandvars(r"%APPDATA%\AppyHour\shipping.db")
+SHIPPING_DB = (os.environ.get("APPYHOUR_DB_PATH") or (r"C:\AppyHourData\shipping.db" if os.path.exists(r"C:\AppyHourData\shipping.db") else os.path.expandvars(r"%APPDATA%\AppyHour\shipping.db")))
 DOWNLOADS = Path(os.path.expandvars(r"%USERPROFILE%\Downloads"))
 SHIPROUTING = Path(r"C:\Users\Work\Claude Projects\ShipRouting")
 REPORTS_DIR = Path(r"C:\Users\Work\Claude Projects\_outputs\reports")

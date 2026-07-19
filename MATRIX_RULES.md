@@ -121,6 +121,34 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
     The translator export (`meal-type-export-appy-hour-*.csv`, latest in Downloads) is the authority
     for header spelling; also mind its trailing-dot pairs (`Prairie Breeze.`=CH-PRBZ≠CH-BRZ,
     `…Sharp Cheddar.`=CH-V5CH≠CH-ACAC) — a period is a different product.
+    ✅ Implemented 2026-07-17 (wk0720 walnut-header pair): (a) `merge_gift_xlsx` now merges by
+    HEADER (column union), normalizing both sheets to the no-comma walnut form first
+    (`_normalize_rule15b_header`) — comma vs no-comma no longer splits AC-FCWALN demand across
+    two columns; (b) `constants.NAME_TO_SKU` maps BOTH walnut forms → AC-FCWALN so the
+    rule-15b-correct submitted sheet passes `check_sku_mappings` (was false-failing weekly).
+    Do NOT strip punctuation generally — the trailing-dot pairs above are DIFFERENT products;
+    only the walnut comma is normalized. Residual: `mfg_translations.csv` AC-FCWALN row still
+    carries the comma form, so generated sheets still EMIT the comma header (resolver + merge
+    normalize it downstream). Tests: `tests/test_gift_merge_walnut.py`.
+
+18. **Notes column ships EMPTY** (Kurt 2026-07-10): the vF export's Notes column must be blank on
+    the submitted sheet — whatever the generator or order data puts there, clear it before submit.
+
+19. **Every pickable prefix that can appear on an order needs a product column** (wk0720,
+    RMFG_20260717): `generate_matrix_xlsx`'s `food_pkg_prefixes` filter (matrix_commander.py) is the
+    ONLY thing that decides which SKUs become product columns. It shipped as
+    `("CH-","MT-","AC-","PK-","TR-")` and silently omitted `MR-` — 38 orders had `MR-JRNL`
+    ("Cheese Journal") and it was MISSING from the generated sheet until caught by hand and injected
+    post-hoc (`_outputs/artifacts/wk0720_rmfg_combine.py`). Rule 7 already declares all prefixes
+    pickable, but that doc line was never mirrored into the column filter — a doc-only "pickable"
+    claim does NOT create a column. Any pickable prefix a real order can carry (`CH-/MT-/AC-/PK-/TR-/MR-`)
+    MUST be in `food_pkg_prefixes` AND in `_active_prefixes(2)` / `sync_order_to_shopify`'s
+    `active_prefixes` default (the sync path that adds the $0 in-box variant), or the SKU is invisible
+    to both the sheet and Shopify. When a new pickable prefix is onboarded, add it to ALL THREE tuples
+    in the same change and add a regression test asserting its column appears
+    (`tests/test_generate_matrix.py::test_mr_jrnl_gets_column`). MR- carries 0 DistVol so it is never
+    inventory-capped (already handled at `matrix_commander.py:3004`, `("PK-","MR-")`) and its qty rides
+    into the col-D Total per rule 0.
 
 17. **One ice-target list per cohort, one canonical invocation** (Kurt 2026-07-10). Two agents ran
     `ice_distvol_workflow.py` the same evening with different tag args (`RMFG_20260710` vs
