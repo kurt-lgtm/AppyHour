@@ -38,7 +38,15 @@ def app_dir() -> Path:
 
 
 def db_path() -> Path:
-    return Path(os.environ.get("AH_DB_OVERRIDE", "") or app_dir() / "shipping.db")
+    # Canonical since 2026-07-08: C:\AppyHourData (outside MSIX-virtualized %APPDATA%,
+    # REBUILD-WITH-AI.md §5.1). Legacy %APPDATA% path = transition fallback only.
+    override = os.environ.get("AH_DB_OVERRIDE", "")
+    if override:
+        return Path(override)
+    canonical = Path(r"C:\AppyHourData\shipping.db")
+    if canonical.exists():
+        return canonical
+    return app_dir() / "shipping.db"
 
 
 def snapshot_sqlite(src: Path, dst: Path) -> None:
@@ -346,7 +354,7 @@ def _self_check_and_log(result: dict, day: date) -> None:
 
 def run(today: date | None = None) -> dict:
     day = today or date.today()
-    backup_dir = app_dir() / "backups"
+    backup_dir = db_path().parent / "backups"
     snapshot = backup_dir / f"shipping.weekly-{day:%Y-%m-%d}.db"
     artifacts = REPO_ROOT / "_outputs" / "artifacts"
     docs_zip = artifacts / f"coldchain-logic-backup-{day:%Y-%m-%d}.zip"
@@ -452,7 +460,7 @@ def snapshot_after_ingest(keep: int = 20, now: datetime | None = None) -> dict:
     Returns a status dict: status ∈ {"ok", "skipped-corrupt", "error"}.
     """
     src = db_path()
-    backup_dir = app_dir() / "backups"
+    backup_dir = src.parent / "backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Integrity gate — read-only so it never locks out the live writer.

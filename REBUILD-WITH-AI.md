@@ -1,7 +1,7 @@
 # REBUILD-WITH-AI — AppyHour Cold-Chain System Disaster Recovery
 
 **Audience:** a fresh Claude (or any AI agent) on a NEW machine, with Kurt present for logins.
-**Written:** 2026-06-11 (M1 cut-over day). **Updated:** 2026-07-01 (DB-location + corruption-recovery §5.1 — READ IT before restoring the DB). **You are reading this because Kurt's PC died.**
+**Written:** 2026-06-11 (M1 cut-over day). **Updated:** 2026-07-08 (DB moved to `C:\AppyHourData\shipping.db` — §5.1 v3, READ IT before restoring the DB). **You are reading this because Kurt's PC died.**
 Hand this whole file to the AI as the first prompt, with the backup zip extracted alongside.
 
 ---
@@ -67,14 +67,14 @@ cost-aware routing engine (shadow), exception-only escalation.
 | **Code: AppyHour monorepo** | github.com/kurt-lgtm/AppyHour (private) | ShippingReports, AppyHourMCP, appyhour_lib, scripts. GelPackCalculator is gitignored — separate repo below |
 | **Code: GelPackCalculator** | github.com/kurt-lgtm/GelPackCalculator (private) | THE production app: Kori (kori/), auto_import (sole importer), shipping_invoice_db (writer) |
 | **Code: ShipRouting** | github.com/kurt-lgtm/ShipRouting (private) | The routing engine (lib/engine.py, lib/optimizer.py) + build/apply pipeline |
-| **DB snapshot** | Google Drive: newest `shipping.weekly-<date>.db` (fallback `shipping.pre-cutover-2026-06-11.db` id 14Wjf8EOPnSqh_kwBPQSK9403AIAnq-4l) | ~130MB SQLite. RESTORE TO the **real live path** — see §5.1 (NOT plain `%APPDATA%` on the running box; it's the MSIX LocalCache). |
+| **DB snapshot** | Google Drive: newest `shipping.weekly-<date>.db` (fallback `shipping.pre-cutover-2026-06-11.db` id 14Wjf8EOPnSqh_kwBPQSK9403AIAnq-4l) | ~130MB SQLite. RESTORE TO `C:\AppyHourData\shipping.db` (canonical — see §5.1; NEVER `%APPDATA%` or the MSIX LocalCache shadow). |
 | **Logic/docs bundle** | Google Drive: `coldchain-logic-backup-<date>.zip` (2026-06-11 id 1HY0k9cXfbglFsYP1F8qcGEK3KcioEHSu) | SHIPPING_PIPELINE.md, ENGINE_GUIDE, handoffs, contract, audits, vault notes, this file |
 | **Vault + skills bundle** | Google Drive: `coldchain-knowledge-backup-<date>.zip` | `~/.knowledge/` (Obsidian vault) + key `~/.claude/skills/` |
 
 ## 2. Rebuild order (do in sequence)
 1. **Install:** Anaconda Python (system uses `C:\Users\Work\anaconda3\python.exe`), git, gh CLI, Claude Code. `pip install requests openpyxl pywebview` (Kori needs pywebview **netfx** backend — .NET Framework, NOT coreclr).
 2. **Clone** the three repos into `C:\Users\<user>\Claude Projects\` — AppyHour and ShipRouting side-by-side, GelPackCalculator INSIDE AppyHour/ (path-coupled: `kori/routing_v2.py` and ShipRouting lib hardcode `Claude Projects\AppyHour` + `Claude Projects\ShipRouting` on sys.path — keep these exact folder names or fix the sys.path blocks).
-3. **Restore DB** from Drive snapshot → the **real live path (see §5.1 — on the running box it's the MSIX LocalCache, NOT plain `%APPDATA%`)**. Then run the importers to catch up the gap since snapshot (sources: Gmail/IMAP carrier emails — history re-downloadable from carrier portals + RMFG emails). Verify with `_outputs/scripts/shipping_db_healthcheck.py --verbose` (should print OK).
+3. **Restore DB** from Drive snapshot → **`C:\AppyHourData\shipping.db` (canonical — see §5.1; NEVER `%APPDATA%` or the MSIX LocalCache shadow)**. Then run the importers to catch up the gap since snapshot (sources: Gmail/IMAP carrier emails — history re-downloadable from carrier portals + RMFG emails). Verify with `_outputs/scripts/shipping_db_healthcheck.py --verbose` (should print OK).
 4. **Restore vault + skills** from the knowledge zip → `~/.knowledge/`, `~/.claude/skills/`.
 5. **Recreate settings + creds** (NOT in any backup — Kurt re-enters):
    - `%APPDATA%/AppyHour/gel_calc_shopify_settings.json` — Shopify creds, OpenWeatherMap key, per-state transit config, zip overrides (a copy may exist in the knowledge zip; verify freshness).
@@ -89,18 +89,49 @@ cost-aware routing engine (shadow), exception-only escalation.
    - `appyhour-db-healthcheck` (daily ~noon) → `_outputs/scripts/shipping_db_healthcheck.py` (live-DB `quick_check`, Slack-on-fail; §5.1)
 7. **Verify:** `python AppyHour/scripts/validate_refactor_db.py --copy <restored>` vs expectations; run `GelPackCalculator/auto_import.py` (expect clean totals); launch Kori via `GelPackCalculator/kori/run_webview.bat`; run `ShipRouting/build.py` on the current `_SHIP_` cohort.
 
-## 5.1 🔴 DB LOCATION & CORRUPTION RECOVERY (updated 2026-07-02 — read before touching the DB)
+## 5.1 🔴 DB LOCATION & CORRUPTION RECOVERY (v3 2026-07-08 — read before touching the DB)
 
-**Where the live DB physically is.** The AppyHour MCP servers run inside the Claude **MSIX package**
-(family `Claude_pzs8sxrjxfjjc`), so their `%APPDATA%` is REDIRECTED. The real live `shipping.db` is:
+**Canonical location (approved by Kurt 2026-07-08):**
 ```
-C:\Users\<user>\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\AppyHour\shipping.db
+C:\AppyHourData\shipping.db          ← the ONE file. Restore here. Write here.
 ```
-A **bare/unpackaged terminal** resolves `%APPDATA%\AppyHour` to the real (empty) Roaming AppData and will
-report "shipping.db missing" — this is NOT loss, it's the wrong path. To run any DB tool/writer from a plain
-terminal, set `APPYHOUR_DB_PATH` to the LocalCache path above (canonical `appyhour_lib/paths.db_path()`
-honors it). Package family may differ on a fresh install — find the real file with:
-`Get-ChildItem "$env:LOCALAPPDATA\Packages" -Recurse -Filter shipping.db -EA SilentlyContinue`.
+`backups\`, the `.writelock`, and sqlite sidecars live beside it.
+
+**Why here (the failure this prevents):** the DB previously lived in `%APPDATA%\AppyHour` — a folder
+MSIX virtualizes. Packaged (Claude/MCP) processes saw a copy-on-write shadow; the 7/07 Claude app
+update deleted the shadow image and stranded a stale wal → false MISSING + "malformed" container
+reads + a near-miss destructive restore (7/08 incident). `C:\AppyHourData` is not in the MSIX VFS
+list: every context — packaged app, scheduled task, bare terminal — sees the one physical file. No
+shadow can exist.
+
+**Rules:**
+1. Resolution order everywhere: `APPYHOUR_DB_PATH` env → `C:\AppyHourData\shipping.db` if it
+   exists → legacy `%APPDATA%\AppyHour\shipping.db` (transition fallback only).
+2. NEVER hardcode a shipping.db path. AppyHour code → `appyhour_lib.paths.db_path()`. ShipRouting →
+   `lib.dbpath.shipping_db_path()`. Standalone scripts import one of those.
+3. NEVER symlink/hardlink/junction a legacy path to the new one — sqlite creates `-wal`/`-shm`
+   beside whichever NAME was opened; two names for one image = two wals = corruption machine.
+4. A `shipping.db` appearing at any legacy path (Roaming or LocalCache) while the canonical exists =
+   **split-brain**: healthcheck alarms CRITICAL → find and fix the straggler writer. Merge nothing
+   blindly.
+5. Settings JSONs stay in `%APPDATA%\AppyHour` (3-app shared surface, unchanged by this move).
+6. `C:\AppyHourData` is in the offsite-backup set + rescue list.
+
+**The MSIX LocalCache path is NOT the live DB** (belief held 7/01–7/08, now disproven):
+`...\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\AppyHour\shipping.db` is the Claude
+package's **copy-on-write shadow**. Packaged (Claude/MCP) processes get their `%APPDATA%` virtualized:
+reads fall through to the real Roaming file when no shadow copy exists, writes fork a diverging copy into
+LocalCache. The old "samefile=True / MSIX junction" verification was run from INSIDE the container, where
+the VFS makes both names hit one file — an illusion. On 2026-07-08 the shadow's db image vanished (app
+servicing) while the real Roaming file stayed live; the LocalCache-pinned healthcheck false-alarmed
+MISSING, a stale shadow `-wal` made container `connect_ro()` reads return "malformed", and a bogus restore
+handoff nearly overwrote 5 days of data.
+- **NEVER restore to, or point `APPYHOUR_DB_PATH` at, the LocalCache path** — that manufactures a
+  split-brain (two diverging DBs, packaged vs unpackaged writers).
+- If shipping.db exists at BOTH paths as separate files → split-brain: the healthcheck alerts CRITICAL;
+  reconcile before any write (the Roaming file + noon-sync freshness is the tiebreaker).
+- A stale frames-bearing `shipping.db-wal` in the LocalCache dir with no db image beside it breaks all
+  packaged/MCP reads — quarantine it from a real terminal (rename to `shipping.db-wal.orphan-<date>`).
 
 **Corruption cause (2026-06-27 + 2026-07-01):** two processes writing the WAL DB at once (e.g. a manual
 `weather_sync_cron.py` racing the live MCP servers) → a checkpoint folds bad pages in → `database disk image
@@ -109,7 +140,7 @@ independent checkpointers. **Rule: only one writer at a time; Claude/agents stay
 (`connect_ro`).** [[shipping-db-msix-wal-corruption]]
 
 **Enforcement (2026-07-02, commit 7d5e1a5):** `appyhour_lib/db.py` `connect()` now acquires an advisory
-single-writer lock — `<real_db>.writelock` beside the LocalCache DB (atomic `O_CREAT|O_EXCL`; JSON
+single-writer lock — `<real_db>.writelock` beside the canonical DB (atomic `O_CREAT|O_EXCL`; JSON
 `{pid, create_time, script, started_at, host}`). A 2nd writer waits `AH_WRITE_LOCK_WAIT` (default 90s)
 then raises **`DBWriterBusy`** naming the holder instead of racing a checkpoint. Crash-safe: dead-PID /
 reused-PID (create_time mismatch) / over-`AH_WRITE_LOCK_MAX_AGE` (default 1800s) locks auto-break; nested
@@ -127,9 +158,11 @@ manually: `rm <db>.writelock`. Tests: `AppyHour/tests/test_db_writelock.py` (tem
    success proves no live writer is attached). Then `cp <clean-backup> shipping.db; rm -f shipping.db-wal
    shipping.db-shm`. Verify `quick_check` = ok + row counts.
 
-**Recurring guard:** `_outputs/scripts/shipping_db_healthcheck.py` — read-only `quick_check` + core-table
-check **pinned to the LocalCache path** (a scheduled task runs unpackaged, so `db_path()` would open the
-wrong empty file), Slack-on-failure via `appyhour_lib/notify.py` (`AH_SLACK_WEBHOOK`). Schedule daily ~noon.
+**Recurring guard:** `_outputs/scripts/shipping_db_healthcheck.py` (rewritten 2026-07-08) — dual-path
+exactly-one-file rule (separate files at both Roaming + LocalCache = CRITICAL split-brain; neither =
+CRITICAL missing; frames-bearing orphan `-wal` beside the empty path = CRITICAL, it breaks packaged/MCP
+reads), then read-only immutable `quick_check` + core-table check. Slack-on-failure via
+`appyhour_lib/notify.py` (`AH_SLACK_WEBHOOK`). Schedule daily ~noon.
 
 ## 3. The documents that ARE the system (read order for the AI)
 1. `SHIPPING_PIPELINE.md` (AppyHour repo root) — system of record, plain-English §1-3.

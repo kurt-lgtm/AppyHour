@@ -35,7 +35,7 @@ from gel_pack_shopify import (  # noqa: E402
     calc_surface_area,
 )
 
-DB_PATH = Path.home() / "AppData/Roaming/AppyHour/shipping.db"
+DB_PATH = Path(r"C:\AppyHourData\shipping.db") if Path(r"C:\AppyHourData\shipping.db").exists() else Path.home() / "AppData/Roaming/AppyHour/shipping.db"
 OUT_DIR = Path(r"C:\Users\Work\Claude Projects\_outputs\postmortems")
 SETTINGS_PATH = Path.home() / "AppData/Roaming/AppyHour/gel_calc_shopify_settings.json"
 

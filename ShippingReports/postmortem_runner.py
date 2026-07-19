@@ -21,7 +21,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 # ── Config ────────────────────────────────────────────────────────────────
-DB_PATH = Path.home() / "AppData/Roaming/AppyHour/shipping.db"
+DB_PATH = Path(r"C:\AppyHourData\shipping.db") if Path(r"C:\AppyHourData\shipping.db").exists() else Path.home() / "AppData/Roaming/AppyHour/shipping.db"
 OUT_DIR = Path(r"C:\Users\Work\Claude Projects\_outputs\postmortems")
 LOOKBACK_DAYS = 21  # check ship_weeks up to 3 weeks back
 MIN_AGE_DAYS = 7    # only run postmortem for cohorts ≥7d old (delivery + ticket lag)

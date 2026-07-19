@@ -15,11 +15,17 @@ agent sessions.
 
 Canonical DB location
 =====================
-`%APPDATA%\\AppyHour\\shipping.db` — the Kori-owned DB containing all
-4 carriers + delivery_status (Parcel Panel) + feedback (Gorgias) +
-kori_snapshots + weather_history. As of 2026-05-14 this is the sole
-canonical DB; `ShippingReports/output/shipments.db` and
-`GelPackCalculator/shipping.db` (0-byte stub) are deprecated.
+`C:\\AppyHourData\\shipping.db` (as of 2026-07-08) — the Kori-owned DB
+containing all 4 carriers + delivery_status (Parcel Panel) + feedback
+(Gorgias) + kori_snapshots + weather_history. Moved OUT of
+`%APPDATA%\\AppyHour` because MSIX virtualizes AppData: packaged
+(Claude/MCP) processes saw a copy-on-write shadow that a 7/07 app update
+deleted, causing the 7/08 false-MISSING incident (REBUILD-WITH-AI.md
+§5.1). The legacy `%APPDATA%` path remains a TRANSITION fallback only —
+never symlink it to the new location (sqlite sidecars follow the opened
+name; two names = two wals = corruption).
+`ShippingReports/output/shipments.db` and `GelPackCalculator/shipping.db`
+(0-byte stub) are deprecated since 2026-05-14.
 
 Override
 ========
@@ -32,32 +38,52 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-__all__ = ["db_path", "db_dir", "appyhour_appdata", "invoices_dir"]
+__all__ = ["db_path", "db_dir", "appyhour_appdata", "data_root", "invoices_dir"]
+
+# Canonical data root — deliberately OUTSIDE %APPDATA% (MSIX-virtualized; see module docstring).
+DATA_ROOT = Path(r"C:\AppyHourData")
 
 
 def appyhour_appdata() -> Path:
-    """Return %APPDATA%\\AppyHour as a Path. Creates if missing."""
+    """Return %APPDATA%\\AppyHour as a Path. Creates if missing.
+
+    Settings JSONs and other 3-app shared config live here. The shipping.db
+    does NOT (as of 2026-07-08) — use db_path().
+    """
     base = Path(os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming")))
     p = base / "AppyHour"
     p.mkdir(parents=True, exist_ok=True)
     return p
 
 
+def data_root() -> Path:
+    """Return the canonical data root (C:\\AppyHourData). Does NOT create it —
+    the migration/restore step owns creation; a missing root means the legacy
+    location is still live."""
+    return DATA_ROOT
+
+
 def db_dir() -> Path:
-    """Return the directory containing shipping.db. Always exists."""
-    return appyhour_appdata()
+    """Return the directory containing shipping.db (backups/ + writelock live beside it)."""
+    return db_path().parent
 
 
 def db_path() -> Path:
     """Return the canonical shipping.db path.
 
-    Honors APPYHOUR_DB_PATH env override if the override file exists.
+    Resolution order (REBUILD-WITH-AI.md §5.1):
+      1. APPYHOUR_DB_PATH env override, if that file exists
+      2. C:\\AppyHourData\\shipping.db, if it exists (canonical)
+      3. legacy %APPDATA%\\AppyHour\\shipping.db (transition fallback)
     """
     override = os.environ.get("APPYHOUR_DB_PATH", "").strip()
     if override:
         p = Path(override)
         if p.exists():
             return p
+    canonical = DATA_ROOT / "shipping.db"
+    if canonical.exists():
+        return canonical
     return appyhour_appdata() / "shipping.db"
 
 

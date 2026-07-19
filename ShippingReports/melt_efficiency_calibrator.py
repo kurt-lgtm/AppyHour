@@ -39,7 +39,7 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "GelPackCalculator/kori"))
 
-DB_PATH = Path.home() / "AppData/Roaming/AppyHour/shipping.db"
+DB_PATH = Path(r"C:\AppyHourData\shipping.db") if Path(r"C:\AppyHourData\shipping.db").exists() else Path.home() / "AppData/Roaming/AppyHour/shipping.db"
 OUT_PATH = (
     Path(r"C:\Users\Work\Claude Projects\_outputs\postmortems")
     / "melt_efficiency_calibration.md"

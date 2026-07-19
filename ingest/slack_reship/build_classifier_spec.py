@@ -12,7 +12,7 @@ import sqlite3, os, sys, io
 from pathlib import Path
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
-DB = Path(os.environ["APPDATA"]) / "AppyHour" / "shipping.db"
+DB = Path(os.environ.get("APPYHOUR_DB_PATH") or (r"C:\AppyHourData\shipping.db" if os.path.exists(r"C:\AppyHourData\shipping.db") else str(Path(os.environ["APPDATA"]) / "AppyHour" / "shipping.db")))
 OUT = Path(r"C:\Users\Work\Claude Projects\_outputs\reports\2026-06-26-gorgias-classifier-spec-for-demi.md")
 
 # ---- canonical target taxonomy (the Gorgias Contact Reason values) ----------
