@@ -820,49 +820,74 @@ function writeTriage_(state, oldest, stamp) {
   Object.keys(state).forEach(function (k) {
     var o = String(state[k].original || '').replace(/^#/, ''); if (o) originals[o] = true;
   });
-  // preserve prior Decision (by key) AND resolved Gorgias id (by order#) so we
-  // don't re-hit Gorgias for the same order-only rows every hour
-  var prevDec = {}, gidByOrder = {};
+  // preserve Decision (key->G), Gorgias id (order->F), Ship Week (order->E) so we
+  // don't re-hit Shopify/Gorgias for the same rows every hour
+  var prevDec = {}, gidByOrder = {}, shipByOrder = {};
   try {
     var psh = SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName('Triage');
     if (psh && psh.getLastRow() >= 3) {
-      psh.getRange('A3:F' + psh.getLastRow()).getValues().forEach(function (row) {
-        if (row[0]) prevDec[String(row[0])] = row[5];
+      psh.getRange('A3:G' + psh.getLastRow()).getValues().forEach(function (row) {
+        if (row[0]) prevDec[String(row[0])] = row[6];
         var ord = String(row[3] || '').replace(/^#/, '');
-        if (ord && row[4]) gidByOrder[ord] = String(row[4]);
+        if (ord && row[4]) shipByOrder[ord] = String(row[4]);
+        if (ord && row[5]) gidByOrder[ord] = String(row[5]);
       });
     }
   } catch (e) {}
   var recs = fetchSlackReship_(Math.floor(new Date(oldest).getTime() / 1000));
-  var rows = [['REFRESHED ' + stamp,
-    'Slack #reship-and-order-requests posts w/o an entered reship order — NOT counted anywhere. Col F is YOURS: reship / refund / no action', '', '', '', 'Decision'],
-    ['Key', 'Posted', 'Issue', 'Order', 'Gorgias', 'Decision']];
   var TRIAGE_SINCE = '2026-06-29 11:53';  // Kurt 2026-07-20: don't list older posts
-  var lookups = 0, gLookups = 0;
+  var lookups = 0, gLookups = 0, entries = [];
   recs.forEach(function (r) {
     if ((r.created_ts || '') < TRIAGE_SINCE) return;      // before the start cutoff
     if (r.team === 'fulfillment') return;                 // Order::* = fulfillment, not shipping
     var onum = String(r.order_number || '');
     var gid = String(r.gorgias_id || '');
     if (!onum && gid && lookups < 40) { onum = orderFromGorgias_(gid).replace(/^#/, ''); lookups++; }
-    // a real reship ticket has an order OR a Gorgias link; no-order + no-ticket =
-    // policy/OOO/batch noise that tripped a keyword — drop it (Kurt 2026-07-20)
-    if (!onum && !gid) return;
+    if (!onum && !gid) return;             // no order + no ticket = noise, drop
     if (onum && originals[onum]) return;   // a reship already exists for THIS order
     // NOTE: a row whose order is ITSELF a reship stays if that reship hasn't been
-    // re-reshipped — legit "two-in-a-row" (the reship got messed up), pending a
-    // new reship. `originals` handles both: excluded only once a further reship
-    // (original == this order) is entered (Kurt 2026-07-20).
-    // fill missing Gorgias id from order# (cache first, then API — Kurt 2026-07-20)
+    // re-reshipped — legit "two-in-a-row" (reship got messed up), pending a new
+    // reship. `originals` excludes only once a further reship is entered.
     if (!gid && onum) {
       if (gidByOrder[onum]) gid = gidByOrder[onum];
       else if (gLookups < 15) { gid = gorgiasForOrder_(onum, r.created_ts); gLookups++; }
     }
     var key = String(gid || onum || (r.created_ts || ''));
-    rows.push([key, (r.created_ts || '').slice(0, 16), r.issue || '',
-               onum ? '#' + onum : '', gid, prevDec[key] || '']);
+    entries.push({ key: key, posted: (r.created_ts || '').slice(0, 16), issue: r.issue || '',
+                   onum: onum, gid: gid, dec: prevDec[key] || '' });
   });
-  writeTabTo_(PIVOT_SHEET_ID, 'Triage', rows, false);
+  // incoming ship week (the order's _SHIP_ cohort tag): cache first, then batch Shopify
+  var need = [];
+  entries.forEach(function (e) { if (e.onum && !shipByOrder[e.onum] && need.indexOf(e.onum) < 0) need.push(e.onum); });
+  for (var i = 0; i < need.length; i += 20) {
+    var batch = need.slice(i, i + 20);
+    var d = shopifyGql_('query($q:String!){ orders(first:20, query:$q){ edges{node{ name tags }}}}',
+                        { q: batch.map(function (n) { return 'name:' + n; }).join(' OR ') });
+    d.orders.edges.forEach(function (ed) { shipByOrder[ed.node.name.replace(/^#/, '')] = lastShipTag_(ed.node.tags); });
+  }
+  var byWeek = {};
+  entries.forEach(function (e) {
+    e.ship = (e.onum && shipByOrder[e.onum]) || '';
+    var w = e.ship || '(unknown)';
+    byWeek[w] = (byWeek[w] || 0) + 1;
+  });
+  var weeks = Object.keys(byWeek).sort();
+  // main table A-G + gap H + by-ship-week summary I-J (to the right)
+  var out = [
+    ['REFRESHED ' + stamp, 'Slack posts w/o an entered reship — Col G is YOURS: reship / refund / no action',
+     '', '', '', '', 'Decision', '', 'Unresolved reships by ship week', ''],
+    ['Key', 'Posted', 'Issue', 'Order', 'Ship Week', 'Gorgias', 'Decision', '', 'Ship Week', 'Count']];
+  var n = Math.max(entries.length, weeks.length);
+  for (var r2 = 0; r2 < n; r2++) {
+    var m = r2 < entries.length
+      ? [entries[r2].key, entries[r2].posted, entries[r2].issue, entries[r2].onum ? '#' + entries[r2].onum : '',
+         entries[r2].ship, entries[r2].gid, entries[r2].dec]
+      : ['', '', '', '', '', '', ''];
+    var s = r2 < weeks.length ? [weeks[r2], byWeek[weeks[r2]]] : ['', ''];
+    out.push(m.concat(['']).concat(s));
+  }
+  out.push(['', '', '', '', '', '', '', '', 'Total', entries.length]);
+  writeTabTo_(PIVOT_SHEET_ID, 'Triage', out, false);
 }
 
 // ---- Daily 92-day tab (Date / requested / created / ship week) ----
