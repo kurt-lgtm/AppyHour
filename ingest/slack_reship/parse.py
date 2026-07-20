@@ -44,6 +44,7 @@ OPS_HINTS = re.compile(
 )
 
 _ORDER_NUM = re.compile(r"#\s*(\d{5,6})\b")                     # 6-digit Shopify order_number
+_ORDER_LINK = re.compile(r"orders/\d+\|#?(\d{5,6})")           # Slack admin-link display "orders/<id>|160549"
 _ORDER_ID = re.compile(r"/orders/(\d{10,})")                    # long Shopify order_id (fallback)
 _GORGIAS = re.compile(r"gorgias\.com/app/(?:views/\d+/|ticket/)(\d+)")
 _MENTION = re.compile(r"<@(\w+)\|([^>]+)>")
@@ -87,7 +88,7 @@ def parse_record(raw: str, created_ts: Optional[str] = None) -> Optional[ReshipR
     if issue is None:
         # no failure keyword — drop if it's clearly an ops request, else skip
         return None
-    onum = _first(_ORDER_NUM, raw)
+    onum = _first(_ORDER_LINK, raw) or _first(_ORDER_NUM, raw)
     order_number = int(onum) if onum else None
     gid = _first(_GORGIAS, raw)
     if created_ts is None:

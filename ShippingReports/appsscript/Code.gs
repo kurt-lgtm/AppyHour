@@ -687,7 +687,8 @@ function classifyReship_(text) {
 function parseReshipMsg_(text, createdIso) {
   var c = classifyReship_(text);
   if (!c[0]) return null;
-  var onum = (String(text).match(/#\s*(\d{5,6})\b/) || [])[1] || null;
+  var onum = (String(text).match(/orders\/\d+\|#?(\d{5,6})/) || [])[1]
+          || (String(text).match(/#\s*(\d{5,6})\b/) || [])[1] || null;
   var gid = (String(text).match(/gorgias\.com\/app\/(?:views\/\d+\/|ticket\/)(\d+)/) || [])[1] || null;
   return { order_number: onum ? parseInt(onum, 10) : null, issue: c[0], team: c[1],
            gorgias_id: gid ? parseInt(gid, 10) : null, created_ts: createdIso };
