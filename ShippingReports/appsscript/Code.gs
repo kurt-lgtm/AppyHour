@@ -737,14 +737,22 @@ function fillRequestedFromSlack_(state, sinceDate) {
 function writeProductMix_(mondays, denoms, stamp) {
   var rows = [
     ['REFRESHED ' + stamp,
-     'sizes = live Shopify; reship counts = COUNTIFS over Raw Data (same rows as Count-of-incoming-week; honor Exclude); blank box-type = Regular'],
+     'sizes = live Shopify; reship counts = COUNTIFS over Raw Data (same rows as Count-of-incoming-week); blank box-type = Regular'],
     ['Cohort', 'Cohort size',
      'Regular Box', 'Regular Box Reship discrete', 'Regular Box Reship %',
      'Medium Tray', 'Medium Tray Reship discrete', 'Medium Tray Reship %',
      'Large Tray', 'Large Tray Reship discrete', 'Large Tray Reship %']];
   var RD = "'Raw Data'";  // E=incoming, I=box type
-  mondays.slice().sort(function (a, b) { return a - b; }).forEach(function (mon, i) {
-    var tag = '_SHIP_' + iso_(mon);
+  // WALK-FORWARD cohort list (Kurt 2026-07-20): every ship-week present in the Raw
+  // Data ledger, UNION the current window — accumulates, never drops old weeks.
+  var cohortSet = {};
+  mondays.forEach(function (m) { cohortSet['_SHIP_' + iso_(m)] = true; });
+  try {
+    SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName('Raw Data')
+      .getRange('E2:E' + Math.max(2, SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName('Raw Data').getLastRow()))
+      .getValues().forEach(function (r) { if (String(r[0]).indexOf('_SHIP_') === 0) cohortSet[r[0]] = true; });
+  } catch (e) {}
+  Object.keys(cohortSet).sort().forEach(function (tag, i) {
     var base = "tag:'" + tag + "' -status:cancelled -tag:'Reship'";
     var total = ordersCount_(base), med = ordersCount_(base + ' sku:AHB-MCUST-TRAY*'),
         lge = ordersCount_(base + ' sku:AHB-LCUST-TRAY*'), r = i + 3;
