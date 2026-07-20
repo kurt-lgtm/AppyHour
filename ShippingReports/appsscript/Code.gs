@@ -822,6 +822,9 @@ function writeTriage_(state, oldest, stamp) {
     if (!onum && r.gorgias_id && lookups < 40) {  // resolve via the Gorgias ticket
       onum = orderFromGorgias_(r.gorgias_id).replace(/^#/, ''); lookups++;
     }
+    // a real reship ticket has an order OR a Gorgias link; no-order + no-ticket =
+    // policy/OOO/batch noise that tripped a keyword — drop it (Kurt 2026-07-20)
+    if (!onum && !r.gorgias_id) return;
     if (onum && originals[onum]) return;  // already remediated
     var key = String(r.gorgias_id || onum || (r.created_ts || ''));
     rows.push([key, (r.created_ts || '').slice(0, 16), r.issue || '',
