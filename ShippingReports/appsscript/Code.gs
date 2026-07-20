@@ -848,8 +848,11 @@ function writeTriage_(state, oldest, stamp) {
     // a real reship ticket has an order OR a Gorgias link; no-order + no-ticket =
     // policy/OOO/batch noise that tripped a keyword — drop it (Kurt 2026-07-20)
     if (!onum && !gid) return;
-    if (onum && originals[onum]) return;   // its original already got a reship
-    if (onum && state['#' + onum]) return; // the order IS a reship (post linked the reship itself)
+    if (onum && originals[onum]) return;   // a reship already exists for THIS order
+    // NOTE: a row whose order is ITSELF a reship stays if that reship hasn't been
+    // re-reshipped — legit "two-in-a-row" (the reship got messed up), pending a
+    // new reship. `originals` handles both: excluded only once a further reship
+    // (original == this order) is entered (Kurt 2026-07-20).
     // fill missing Gorgias id from order# (cache first, then API — Kurt 2026-07-20)
     if (!gid && onum) {
       if (gidByOrder[onum]) gid = gidByOrder[onum];
