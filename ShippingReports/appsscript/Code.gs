@@ -797,18 +797,39 @@ function orderFromGorgias_(gid) {
   return cands[0][1];
 }
 
+// order # -> customer's most-recent Gorgias ticket on/before the post date
+function gorgiasForOrder_(orderName, postedIso) {
+  var nm = String(orderName).replace(/^#/, '');
+  var d = shopifyGql_('query($q:String!){ orders(first:1, query:$q){ edges{node{ email }}}}', { q: 'name:' + nm });
+  var e = d.orders.edges, email = e.length ? e[0].node.email : '';
+  if (!email) return '';
+  var c = gorgiasGet_('/customers', { email: email });
+  if (!c || !c.data || !c.data.length) return '';
+  var t = gorgiasGet_('/tickets', { customer_id: c.data[0].id, limit: 30, order_by: 'created_datetime:desc' });
+  if (!t || !t.data || !t.data.length) return '';
+  var p = String(postedIso || '').slice(0, 10);
+  for (var i = 0; i < t.data.length; i++) {
+    if ((t.data[i].created_datetime || '').slice(0, 10) <= p) return String(t.data[i].id);
+  }
+  return String(t.data[t.data.length - 1].id);
+}
+
 // ---- Triage (Slack-only feed, requested-not-entered) ----
 function writeTriage_(state, oldest, stamp) {
   var originals = {};
   Object.keys(state).forEach(function (k) {
     var o = String(state[k].original || '').replace(/^#/, ''); if (o) originals[o] = true;
   });
-  var prev = {};
+  // preserve prior Decision (by key) AND resolved Gorgias id (by order#) so we
+  // don't re-hit Gorgias for the same order-only rows every hour
+  var prevDec = {}, gidByOrder = {};
   try {
     var psh = SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName('Triage');
     if (psh && psh.getLastRow() >= 3) {
       psh.getRange('A3:F' + psh.getLastRow()).getValues().forEach(function (row) {
-        if (row[0]) prev[String(row[0])] = row[5];
+        if (row[0]) prevDec[String(row[0])] = row[5];
+        var ord = String(row[3] || '').replace(/^#/, '');
+        if (ord && row[4]) gidByOrder[ord] = String(row[4]);
       });
     }
   } catch (e) {}
@@ -816,19 +837,23 @@ function writeTriage_(state, oldest, stamp) {
   var rows = [['REFRESHED ' + stamp,
     'Slack #reship-and-order-requests posts w/o an entered reship order — NOT counted anywhere. Col F is YOURS: reship / refund / no action', '', '', '', 'Decision'],
     ['Key', 'Posted', 'Issue', 'Order', 'Gorgias', 'Decision']];
-  var lookups = 0;
+  var lookups = 0, gLookups = 0;
   recs.forEach(function (r) {
     var onum = String(r.order_number || '');
-    if (!onum && r.gorgias_id && lookups < 40) {  // resolve via the Gorgias ticket
-      onum = orderFromGorgias_(r.gorgias_id).replace(/^#/, ''); lookups++;
-    }
+    var gid = String(r.gorgias_id || '');
+    if (!onum && gid && lookups < 40) { onum = orderFromGorgias_(gid).replace(/^#/, ''); lookups++; }
     // a real reship ticket has an order OR a Gorgias link; no-order + no-ticket =
     // policy/OOO/batch noise that tripped a keyword — drop it (Kurt 2026-07-20)
-    if (!onum && !r.gorgias_id) return;
+    if (!onum && !gid) return;
     if (onum && originals[onum]) return;  // already remediated
-    var key = String(r.gorgias_id || onum || (r.created_ts || ''));
+    // fill missing Gorgias id from order# (cache first, then API — Kurt 2026-07-20)
+    if (!gid && onum) {
+      if (gidByOrder[onum]) gid = gidByOrder[onum];
+      else if (gLookups < 15) { gid = gorgiasForOrder_(onum, r.created_ts); gLookups++; }
+    }
+    var key = String(gid || onum || (r.created_ts || ''));
     rows.push([key, (r.created_ts || '').slice(0, 16), r.issue || '',
-               onum ? '#' + onum : '', String(r.gorgias_id || ''), prev[key] || '']);
+               onum ? '#' + onum : '', gid, prevDec[key] || '']);
   });
   writeTabTo_(PIVOT_SHEET_ID, 'Triage', rows, false);
 }
