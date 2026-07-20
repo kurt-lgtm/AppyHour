@@ -837,8 +837,11 @@ function writeTriage_(state, oldest, stamp) {
   var rows = [['REFRESHED ' + stamp,
     'Slack #reship-and-order-requests posts w/o an entered reship order — NOT counted anywhere. Col F is YOURS: reship / refund / no action', '', '', '', 'Decision'],
     ['Key', 'Posted', 'Issue', 'Order', 'Gorgias', 'Decision']];
+  var TRIAGE_SINCE = '2026-06-29 11:53';  // Kurt 2026-07-20: don't list older posts
   var lookups = 0, gLookups = 0;
   recs.forEach(function (r) {
+    if ((r.created_ts || '') < TRIAGE_SINCE) return;      // before the start cutoff
+    if (r.team === 'fulfillment') return;                 // Order::* = fulfillment, not shipping
     var onum = String(r.order_number || '');
     var gid = String(r.gorgias_id || '');
     if (!onum && gid && lookups < 40) { onum = orderFromGorgias_(gid).replace(/^#/, ''); lookups++; }
