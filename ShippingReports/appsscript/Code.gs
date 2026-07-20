@@ -771,6 +771,32 @@ function writeProductMix_(mondays, denoms, stamp) {
   writeTabTo_(PIVOT_SHEET_ID, 'Product Mix', rows, true);
 }
 
+// resolve the customer's most-recent NON-reship order from a Gorgias ticket's
+// Shopify side-panel (customer.integrations), pre-dating the ticket — same as
+// the old ops-sheet pipeline (Kurt 2026-07-20).
+function orderFromGorgias_(gid) {
+  if (!gid) return '';
+  var t = gorgiasGet_('/tickets/' + gid, {});
+  if (!t) return '';
+  var integ = (t.customer || {}).integrations || {};
+  if (typeof integ !== 'object') return '';
+  var tc = t.created_datetime || '', cands = [];
+  Object.keys(integ).forEach(function (k) {
+    var d = integ[k];
+    if (!d || typeof d !== 'object') return;
+    (d.orders || []).forEach(function (o) {
+      if (!o || !o.name) return;
+      if (String(o.tags || '').toLowerCase().indexOf('reship') >= 0) return;
+      var cr = o.created_at || '';
+      if (tc && cr && cr >= tc) return;
+      cands.push([cr, o.name]);
+    });
+  });
+  if (!cands.length) return '';
+  cands.sort(function (a, b) { return a[0] < b[0] ? 1 : -1; });
+  return cands[0][1];
+}
+
 // ---- Triage (Slack-only feed, requested-not-entered) ----
 function writeTriage_(state, oldest, stamp) {
   var originals = {};
@@ -790,8 +816,12 @@ function writeTriage_(state, oldest, stamp) {
   var rows = [['REFRESHED ' + stamp,
     'Slack #reship-and-order-requests posts w/o an entered reship order — NOT counted anywhere. Col F is YOURS: reship / refund / no action', '', '', '', 'Decision'],
     ['Key', 'Posted', 'Issue', 'Order', 'Gorgias', 'Decision']];
+  var lookups = 0;
   recs.forEach(function (r) {
     var onum = String(r.order_number || '');
+    if (!onum && r.gorgias_id && lookups < 40) {  // resolve via the Gorgias ticket
+      onum = orderFromGorgias_(r.gorgias_id).replace(/^#/, ''); lookups++;
+    }
     if (onum && originals[onum]) return;  // already remediated
     var key = String(r.gorgias_id || onum || (r.created_ts || ''));
     rows.push([key, (r.created_ts || '').slice(0, 16), r.issue || '',
