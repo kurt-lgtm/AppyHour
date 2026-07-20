@@ -748,9 +748,12 @@ function writeProductMix_(mondays, denoms, stamp) {
   var cohortSet = {};
   mondays.forEach(function (m) { cohortSet['_SHIP_' + iso_(m)] = true; });
   try {
-    SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName('Raw Data')
-      .getRange('E2:E' + Math.max(2, SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName('Raw Data').getLastRow()))
-      .getValues().forEach(function (r) { if (String(r[0]).indexOf('_SHIP_') === 0) cohortSet[r[0]] = true; });
+    var rdsh = SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName('Raw Data');
+    if (rdsh && rdsh.getLastRow() >= 2) {
+      rdsh.getRange('E2:E' + rdsh.getLastRow()).getValues().forEach(function (r) {
+        if (String(r[0]).indexOf('_SHIP_') === 0) cohortSet[r[0]] = true;
+      });
+    }
   } catch (e) {}
   Object.keys(cohortSet).sort().forEach(function (tag, i) {
     var base = "tag:'" + tag + "' -status:cancelled -tag:'Reship'";
