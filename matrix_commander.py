@@ -3004,7 +3004,12 @@ def _variant_catalog_prices(base: str, headers: dict, variant_ids: list[str]) ->
 
 def compute_allocation(rmfg_tag: str, have: dict[str, float],
                        base: str | None = None, headers: dict | None = None) -> dict:
-    """Compute ON_HAND$0 = max(0, HAVE - paid demand) per SKU for a cohort. Pure read.
+    """Compute AVAILABLE$0 = max(0, HAVE - week demand) per SKU for a cohort. Pure read.
+
+    MATRIX_RULES rule 12 (2026-07-21): avail = max(0, HAVE - NEED) where NEED = ALL
+    fulfillable units on the _SHIP_ cohort (paid + $0 in-box). Pushed as `available`
+    directly — never on_hand-derived (Shopify `committed` spans every ship week, so
+    netting a week-scoped HAVE against it drove CH-QOTA available to -99).
 
     Shared by the CLI (`allocate`) and the web UI — the single-HAVE-sheet pipeline
     function. PK-/MR- structural SKUs (made-to-order) are never capped.
@@ -3052,7 +3057,7 @@ def compute_allocation(rmfg_tag: str, have: dict[str, float],
         h = have.get(sku, 0)
         pd = paid.get(sku, 0)
         nd = need.get(sku, 0)
-        rows.append({"sku": sku, "have": h, "paid": pd, "avail": max(0, h - pd),
+        rows.append({"sku": sku, "have": h, "paid": pd, "avail": max(0, h - nd),
                      "need": nd, "delta": h - nd, "item": zv[sku]["item"]})
     rows.sort(key=lambda r: r["delta"])  # most-negative delta (shortage) first
     shorts = [r["sku"] for r in rows if r["delta"] < 0]
@@ -3073,11 +3078,13 @@ def compute_allocation(rmfg_tag: str, have: dict[str, float],
 def apply_allocation(rows: list[dict], location_name: str = "RMFG",
                      limit: int | None = None,
                      base: str | None = None, headers: dict | None = None) -> dict:
-    """COMMIT computed allocation rows to Shopify ON HAND (= HAVE - tagged paid).
+    """COMMIT computed allocation rows to Shopify AVAILABLE (= max(0, HAVE - week NEED)).
 
-    Sets on_hand, NOT available: Shopify derives available = on_hand - committed itself, so
-    paid + curation commitments come off correctly. Setting available directly inflates on_hand
-    (on_hand = available + committed) and the paid subtraction is lost. Audit-logged, scope-gated.
+    Sets `available` directly (MATRIX_RULES rule 12, 2026-07-21): the old on_hand form let
+    Shopify derive available = on_hand - committed, but committed spans ALL ship weeks, so a
+    week-scoped HAVE went deeply negative (CH-QOTA: on_hand 229 - committed 328 = -99). The
+    week's full demand (paid + $0) is already subtracted in rows["avail"]; the back-computed
+    on_hand inflation is accepted. Audit-logged, scope-gated.
     """
     if base is None or headers is None:
         base, headers = _get_shopify_auth()
@@ -3100,19 +3107,19 @@ def apply_allocation(rows: list[dict], location_name: str = "RMFG",
             _cur = _shopify_graphql_matrix(
                 base, headers,
                 "query($id:ID!,$loc:ID!){inventoryItem(id:$id){inventoryLevel(locationId:$loc){"
-                "quantities(names:[\"on_hand\"]){quantity}}}}",
+                "quantities(names:[\"available\"]){quantity}}}}",
                 {"id": r["item"], "loc": loc_gid},
             )
             _qs = (((_cur.get("inventoryItem") or {}).get("inventoryLevel") or {}).get("quantities")) or []
             _from = _qs[0]["quantity"] if _qs else 0
             # 2026-04 also requires the @idempotent(key:) directive on inventory-set mutations.
-            # Set ON_HAND (not available): value = HAVE - tagged paid. Shopify then derives
-            # available = on_hand - committed itself (paid + curation commitments come off correctly).
+            # Set AVAILABLE (rule 12, 2026-07-21): value = max(0, HAVE - week NEED). Never on_hand —
+            # Shopify's committed spans all ship weeks, so on_hand-derived available goes negative.
             res = _shopify_graphql(
                 base, headers,
                 "mutation($i:InventorySetQuantitiesInput!,$k:String!){inventorySetQuantities(input:$i)"
                 "@idempotent(key:$k){inventoryAdjustmentGroup{createdAt} userErrors{field message}}}",
-                {"i": {"name": "on_hand", "reason": "correction",
+                {"i": {"name": "available", "reason": "correction",
                        "quantities": [{"inventoryItemId": r["item"], "locationId": loc_gid,
                                        "quantity": int(r["avail"]), "changeFromQuantity": _from}]},
                  "k": f"alloc-{r['sku']}-{int(r['avail'])}-{_uuid.uuid4().hex[:12]}"},
@@ -3128,7 +3135,7 @@ def apply_allocation(rows: list[dict], location_name: str = "RMFG",
 
 def cmd_allocate(rmfg_tag: str, inventory_csv: str, corrections: dict | None = None,
                  location_name: str = "RMFG", commit: bool = False, limit: int | None = None) -> bool:
-    """Set $0-variant Available at RMFG = max(0, HAVE - paid demand). DRY-RUN unless commit."""
+    """Set $0-variant Available at RMFG = max(0, HAVE - week demand paid+$0). DRY-RUN unless commit."""
     have = _load_have_csv(inventory_csv)
     if corrections:
         have.update(corrections)
