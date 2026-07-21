@@ -259,6 +259,37 @@ NAME_TO_SKU: dict[str, str] = {
     "Extra 24oz Gel Pack": "EX-ICE",
     # Aliases (alternate spellings in older matrix files)
     "Triple Cream Brie": "CH-EBRIE",
+    # vF display-name aliases — Shopify/Matrixify-confirmed (single active SKU) 2026-07-21
+    # (closed a depletion gap where these vF production-query names had no NAME_TO_SKU entry)
+    "Wooly Wooly Honey & Oregano": "CH-WWHO",
+    "Cheese Journal": "MR-JRNL",
+    "Asiago Stravecchio": "CH-ASST",
+    "Cacio di Roma": "CH-CARO",
+    "All Natural Wasabi Peas": "AC-WASP2",
+    "Farmstead Cumin Gouda": "CH-UMIN",
+    "Blueberry Cardamom Jam": "AC-BLUCAR",
+    "Parmesan & Pepper Salami": "MT-PARM",
+    "Belgian Style Quad Ale Salami": "MT-CCBS",
+    "Salami Chianti": "MT-SCHI",
+    "Montasio": "CH-MONT",
+    "Young Farmdal": "CH-YFARM",
+    "OG Kristal": "CH-OGK",
+    "Bresaola Italiana": "MT-IBRES",
+    "Raw Marcona Almonds": "AC-MARC3",
+    "Pecorino Crotonese": "CH-PCROT",
+    "Extra Virgin Olive Oil & Sea Salt Crackers": "AC-FCEVOO",
+    "Spicy Pecan Smoked Chorizo Iberico": "MT-TICH",
+    "Beefsteak and Goathorn Pepper Salami": "MT-BSS",
+    "Etxegarai": "CH-ETX",
+    "Caramelized Onion Cheddar": "CH-CONI",
+    "Queen of the Alps": "CH-QOTA",  # Matrixify-confirmed (NOT CH-QUEEN — two SKUs share this name)
+    "Roasted Edamame": "AC-MAME",
+    "Dried Pineapple Rings": "AC-PINA",
+    "Ramp Cheese": "CH-RAMP",
+    "Black Truffle Prosciutto": "MT-PTUF",  # active product; NOTE MT-TRPR also carries this name (verify if it recurs)
+    # STILL UNMAPPED (flagged 2026-07-21, no confident single SKU — add when confirmed):
+    #   Blackcurrant Mini Jam, Caramelized Onions, Mitica Toketti Onion,
+    #   Alma Vorarlberge, Red White & Blue Kettle Corn
 }
 
 FOOD_PREFIXES: tuple[str, ...] = ("CH-", "MT-", "AC-", "CEX-")
