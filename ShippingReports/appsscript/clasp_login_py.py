@@ -23,16 +23,14 @@ RC = os.path.expanduser("~/.clasprc.json")
 SCRIPT_ID = "15K0MrUssFqacWybQAToz6CeHTouRU4IeNY4-DzZ4NeE1rBCCNGpGjAjv"
 PORT = 53535
 REDIRECT = f"http://localhost:{PORT}"
+# MINIMAL scopes only — the Apps Script REST push needs script.projects, nothing
+# more. Deliberately EXCLUDES cloud-platform / service.management / logging.read:
+# those are the "sensitive GCP" scopes that Workspace's reauthentication policy
+# force-expires (invalid_rapt) ~weekly. A token holding only script.projects is not
+# GCP-admin access, so the reauth policy should leave it alone (Kurt 2026-07-21).
 SCOPES = [
     "https://www.googleapis.com/auth/script.projects",
     "https://www.googleapis.com/auth/script.deployments",
-    "https://www.googleapis.com/auth/drive.file",
-    "https://www.googleapis.com/auth/service.management",
-    "https://www.googleapis.com/auth/logging.read",
-    "https://www.googleapis.com/auth/cloud-platform",
-    "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/userinfo.profile",
-    "openid",
 ]
 
 oc = json.load(open(RC))["oauth2ClientSettings"]
