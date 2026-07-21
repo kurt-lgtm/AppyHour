@@ -286,7 +286,7 @@ NAME_TO_SKU: dict[str, str] = {
     "Roasted Edamame": "AC-MAME",
     "Dried Pineapple Rings": "AC-PINA",
     "Ramp Cheese": "CH-RAMP",
-    "Black Truffle Prosciutto": "MT-PTUF",  # active product; NOTE MT-TRPR also carries this name (verify if it recurs)
+    "Black Truffle Prosciutto": "MT-PTUF",
     # STILL UNMAPPED (flagged 2026-07-21, no confident single SKU — add when confirmed):
     #   Blackcurrant Mini Jam, Caramelized Onions, Mitica Toketti Onion,
     #   Alma Vorarlberge, Red White & Blue Kettle Corn
