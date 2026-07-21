@@ -335,7 +335,7 @@ def allocate_preview():
     body = request.get_json(silent=True) or {}
     tag = (body.get("tag") or "").strip()
     if not tag:
-        return jsonify({"error": "RMFG tag required (paid demand comes from the cohort's orders)"}), 400
+        return jsonify({"error": "ship-week `_SHIP_<Mon>` tag required (captures ALL sub-cohorts; an RMFG sub-tag under-scopes available)"}), 400
 
     try:
         alloc = compute_allocation(tag, SESSION_STATE["inventory"])

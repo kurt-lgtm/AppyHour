@@ -3022,6 +3022,16 @@ def compute_allocation(rmfg_tag: str, have: dict[str, float],
     if base is None or headers is None:
         base, headers = _get_shopify_auth()
 
+    # ALL-SUB-COHORTS GUARD (Kurt 2026-07-21): available must subtract EVERY sub-cohort's demand in
+    # the ship week, or Shopify over-promises. All sub-cohorts (RMFG_<Fri>, _b, _c, a Tuesday tag…)
+    # share the ONE `_SHIP_<Mon>` ship-week tag — so allocate MUST scope on that, never a single
+    # RMFG_ sub-tag (which counts one batch and inflates available). MATRIX_RULES rule 12(c).
+    if not rmfg_tag.startswith("_SHIP_"):
+        print(f"  ⚠️  allocate tag '{rmfg_tag}' is NOT a ship-week `_SHIP_<Mon>` tag — available will "
+              f"count ONLY this sub-cohort's demand, missing sibling sub-cohorts in the same ship "
+              f"week (over-promises inventory). Use the `_SHIP_<Mon>` tag (= cohort ship_week) so the "
+              f"push subtracts the WHOLE week's paid+$0 demand.")
+
     orders = _fetch_orders_by_tag(base, headers, rmfg_tag)
     vunits: dict[str, int] = {}
     vsku: dict[str, str] = {}
@@ -3245,7 +3255,7 @@ def main() -> None:
     p_full.add_argument("--inventory", "-i", help="Inventory CSV (sku,available_qty) or JSON path")
 
     p_alloc = sub.add_parser("allocate", help="Set $0-variant Available at RMFG = HAVE - paid demand (dry-run default)")
-    p_alloc.add_argument("tag", help="RMFG tag (e.g. RMFG_20260626)")
+    p_alloc.add_argument("tag", help="ship-week `_SHIP_<Mon>` tag (captures ALL sub-cohorts) — NOT an RMFG sub-tag (that under-scopes available)")
     p_alloc.add_argument("--inventory", "-i", required=True, help="HAVE CSV (SKU,HAVE)")
     p_alloc.add_argument("--corrections", "-c", default="", help="HAVE overrides, e.g. CH-BBLUE=180,AC-FLH=1044")
     p_alloc.add_argument("--location", "-L", default="RMFG", help="Fulfillment location name substring (default RMFG)")
