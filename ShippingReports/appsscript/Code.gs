@@ -790,12 +790,62 @@ function writeProductMix_(mondays, denoms, stamp) {
     var pm = SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName('Product Mix');
     var grid = pm.getRange(2, 1, rows.length - 1, 21).getDisplayValues();  // A2:U{last}
     var hdr = grid[0], data = grid.slice(1);
-    var tp = [['Metric'].concat(data.map(function (r) { return r[0]; }))];
+    var cohortCols = data.map(function (r) { return r[0]; });
+    var tp = [['Metric'].concat(cohortCols)];
     for (var ci = 1; ci < hdr.length; ci++) {
       tp.push([hdr[ci]].concat(data.map(function (r) { return r[ci]; })));
     }
+    tp = tp.concat(productMixBreakdown_(cohortCols));  // By Issue / Warm+Delayed by State
     writeTabTo_(PIVOT_SHEET_ID, 'Product Mix (T)', tp, false);
   }
+}
+
+// grouped breakdown rows for Product Mix (T): By Issue, then Arrived Warm / Delayed
+// by ship-to State. Counts come from Raw Data (Issue + Incoming week); State is
+// enriched from Shopify province of the original order. Carrier intentionally
+// skipped (Kurt 2026-07-21 — attribution unreliable). cohortCols = column order.
+function productMixBreakdown_(cohortCols) {
+  var rd = SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName('Raw Data');
+  if (!rd || rd.getLastRow() < 2) return [];
+  var vals = rd.getRange('A2:I' + rd.getLastRow()).getValues();  // A Order..I Box; D Issue, E Incoming, H Original
+  var recs = [], need = {};
+  vals.forEach(function (v) {
+    if (!v[4]) return;                                    // no incoming week
+    var ord = String(v[7] || v[0] || '').replace(/^#/, '');   // Original, else Order
+    recs.push({ order: ord, issue: String(v[3] || 'Unknown'), cohort: String(v[4]) });
+    if (ord) need[ord] = true;
+  });
+  var orders = Object.keys(need), stateOf = {};
+  for (var i = 0; i < orders.length; i += 20) {
+    var batch = orders.slice(i, i + 20);
+    var d = shopifyGql_('query($q:String!){ orders(first:20, query:$q){ edges{node{ name shippingAddress{ provinceCode } }}}}',
+                        { q: batch.map(function (n) { return 'name:' + n; }).join(' OR ') });
+    d.orders.edges.forEach(function (e) {
+      var sa = e.node.shippingAddress || {};
+      stateOf[e.node.name.replace(/^#/, '')] = sa.provinceCode || '??';
+    });
+  }
+  var byIssue = {}, warm = {}, delay = {};
+  function bump(tbl, key, cohort) { (tbl[key] = tbl[key] || {})[cohort] = (tbl[key][cohort] || 0) + 1; }
+  recs.forEach(function (x) {
+    bump(byIssue, x.issue, x.cohort);
+    var st = stateOf[x.order] || '??';
+    if (x.issue === 'Arrived Warm') bump(warm, st, x.cohort);
+    else if (x.issue === 'Delayed in Transit') bump(delay, st, x.cohort);
+  });
+  function group(title, tbl) {
+    var out = [new Array(cohortCols.length + 1).fill('')];
+    out.push(['── ' + title + ' ──'].concat(new Array(cohortCols.length).fill('')));
+    Object.keys(tbl).sort(function (a, b) {
+      var sa = 0, sb = 0; for (var k in tbl[a]) sa += tbl[a][k]; for (var k2 in tbl[b]) sb += tbl[b][k2];
+      return sb - sa;
+    }).forEach(function (key) {
+      out.push([key].concat(cohortCols.map(function (c) { return tbl[key][c] || 0; })));
+    });
+    return out;
+  }
+  return group('By Issue', byIssue).concat(group('Arrived Warm by State', warm))
+         .concat(group('Delayed by State', delay));
 }
 
 // resolve the customer's most-recent NON-reship order from a Gorgias ticket's
