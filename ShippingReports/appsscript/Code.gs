@@ -743,7 +743,8 @@ function writeProductMix_(mondays, denoms, stamp) {
      'Regular Box', 'Regular Box Reship', 'Regular Box Reship %', 'Regular Box Unresolved', 'Regular Box Unresolved %',
      'Medium Tray', 'Medium Tray Reship', 'Medium Tray Reship %', 'Medium Tray Unresolved', 'Medium Tray Unresolved %',
      'Large Tray', 'Large Tray Reship', 'Large Tray Reship %', 'Large Tray Unresolved', 'Large Tray Unresolved %',
-     'Potential Reship', 'Potential %']];  // Potential = all Reship + all Unresolved (actual + still-open); % over cohort size
+     'Potential Reship', 'Potential %',
+     'Total Potential Reship', 'Total Potential %']];  // Potential = all Reship + all Unresolved; Total = grand sum / blended % over all cohorts
   var RD = "'Raw Data'";  // E=incoming, I=box type
   var TR = "'Triage'";    // E=ship week, F=box type
   // WALK-FORWARD cohort list (Kurt 2026-07-20): every ship-week present in the Raw
@@ -780,6 +781,12 @@ function writeProductMix_(mondays, denoms, stamp) {
       lge, lgeC, pct('N', 'M'), lgeU, pct('P', 'M'),
       potl, pct('R', 'B')]);
   });
+  // grand total (T/U on the first cohort row): sum Potential Reship, blended % over total size
+  if (rows.length > 2) {
+    var last = rows.length;  // rows[0],[1] are the 2 header rows; data ends at rows.length-1 -> sheet row = rows.length
+    rows[2].push('=SUM(R3:R' + last + ')',
+                 '=IF(SUM(B3:B' + last + ')>0,TEXT(SUM(R3:R' + last + ')/SUM(B3:B' + last + '),"0.00%"),"n/a")');
+  }
   writeTabTo_(PIVOT_SHEET_ID, 'Product Mix', rows, true);
 }
 
