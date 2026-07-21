@@ -738,12 +738,13 @@ function fillRequestedFromSlack_(state, sinceDate) {
 function writeProductMix_(mondays, denoms, stamp) {
   var rows = [
     ['REFRESHED ' + stamp,
-     'sizes = live Shopify; reship counts = COUNTIFS over Raw Data (same rows as Count-of-incoming-week); blank box-type = Regular'],
+     'sizes = live Shopify; Reship = COUNTIFS over Raw Data; Unresolved = COUNTIFS over Triage (open, no reship entered); blank box-type = Regular'],
     ['Cohort', 'Cohort size',
-     'Regular Box', 'Regular Box Reship discrete', 'Regular Box Reship %',
-     'Medium Tray', 'Medium Tray Reship discrete', 'Medium Tray Reship %',
-     'Large Tray', 'Large Tray Reship discrete', 'Large Tray Reship %']];
+     'Regular Box', 'Regular Box Reship', 'Regular Box Reship %', 'Regular Box Unresolved', 'Regular Box Unresolved %',
+     'Medium Tray', 'Medium Tray Reship', 'Medium Tray Reship %', 'Medium Tray Unresolved', 'Medium Tray Unresolved %',
+     'Large Tray', 'Large Tray Reship', 'Large Tray Reship %', 'Large Tray Unresolved', 'Large Tray Unresolved %']];
   var RD = "'Raw Data'";  // E=incoming, I=box type
+  var TR = "'Triage'";    // E=ship week, F=box type
   // WALK-FORWARD cohort list (Kurt 2026-07-20): every ship-week present in the Raw
   // Data ledger, UNION the current window — accumulates, never drops old weeks.
   var cohortSet = {};
@@ -760,13 +761,21 @@ function writeProductMix_(mondays, denoms, stamp) {
     var base = "tag:'" + tag + "' -status:cancelled -tag:'Reship'";
     var total = ordersCount_(base), med = ordersCount_(base + ' sku:AHB-MCUST-TRAY*'),
         lge = ordersCount_(base + ' sku:AHB-LCUST-TRAY*'), r = i + 3;
+    // reship (Raw Data) counts — Medium=I, Large=N; Regular = all minus those two
     var medC = '=COUNTIFS(' + RD + '!$E:$E,$A' + r + ',' + RD + '!$I:$I,"Medium Tray")';
     var lgeC = '=COUNTIFS(' + RD + '!$E:$E,$A' + r + ',' + RD + '!$I:$I,"Large Tray")';
-    var regC = '=COUNTIFS(' + RD + '!$E:$E,$A' + r + ')-G' + r + '-J' + r;
+    var regC = '=COUNTIFS(' + RD + '!$E:$E,$A' + r + ')-I' + r + '-N' + r;
+    // unresolved (Triage) counts by box type
+    var regU = '=COUNTIFS(' + TR + '!$E:$E,$A' + r + ',' + TR + '!$F:$F,"Regular Box")';
+    var medU = '=COUNTIFS(' + TR + '!$E:$E,$A' + r + ',' + TR + '!$F:$F,"Medium Tray")';
+    var lgeU = '=COUNTIFS(' + TR + '!$E:$E,$A' + r + ',' + TR + '!$F:$F,"Large Tray")';
+    var pct = function (numCol, denCol) {
+      return '=IF(' + denCol + r + '>0,TEXT(' + numCol + r + '/' + denCol + r + ',"0.00%"),"n/a")';
+    };
     rows.push([tag, total,
-      total - med - lge, regC, '=IF(C' + r + '>0,TEXT(D' + r + '/C' + r + ',"0.00%"),"n/a")',
-      med, medC, '=IF(F' + r + '>0,TEXT(G' + r + '/F' + r + ',"0.00%"),"n/a")',
-      lge, lgeC, '=IF(I' + r + '>0,TEXT(J' + r + '/I' + r + ',"0.00%"),"n/a")']);
+      total - med - lge, regC, pct('D', 'C'), regU, pct('F', 'C'),
+      med, medC, pct('I', 'H'), medU, pct('K', 'H'),
+      lge, lgeC, pct('N', 'M'), lgeU, pct('P', 'M')]);
   });
   writeTabTo_(PIVOT_SHEET_ID, 'Product Mix', rows, true);
 }
@@ -820,17 +829,18 @@ function writeTriage_(state, oldest, stamp) {
   Object.keys(state).forEach(function (k) {
     var o = String(state[k].original || '').replace(/^#/, ''); if (o) originals[o] = true;
   });
-  // preserve Decision (key->G), Gorgias id (order->F), Ship Week (order->E) so we
-  // don't re-hit Shopify/Gorgias for the same rows every hour
-  var prevDec = {}, gidByOrder = {}, shipByOrder = {};
+  // preserve Decision (key->H), Gorgias id (order->G), Box Type (order->F),
+  // Ship Week (order->E) so we don't re-hit Shopify/Gorgias for same rows hourly
+  var prevDec = {}, gidByOrder = {}, shipByOrder = {}, boxByOrder = {};
   try {
     var psh = SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName('Triage');
     if (psh && psh.getLastRow() >= 3) {
-      psh.getRange('A3:G' + psh.getLastRow()).getValues().forEach(function (row) {
-        if (row[0]) prevDec[String(row[0])] = row[6];
+      psh.getRange('A3:H' + psh.getLastRow()).getValues().forEach(function (row) {
+        if (row[0]) prevDec[String(row[0])] = row[7];
         var ord = String(row[3] || '').replace(/^#/, '');
         if (ord && row[4]) shipByOrder[ord] = String(row[4]);
-        if (ord && row[5]) gidByOrder[ord] = String(row[5]);
+        if (ord && row[5]) boxByOrder[ord] = String(row[5]);
+        if (ord && row[6]) gidByOrder[ord] = String(row[6]);
       });
     }
   } catch (e) {}
@@ -856,37 +866,44 @@ function writeTriage_(state, oldest, stamp) {
     entries.push({ key: key, posted: (r.created_ts || '').slice(0, 16), issue: r.issue || '',
                    onum: onum, gid: gid, dec: prevDec[key] || '' });
   });
-  // incoming ship week (the order's _SHIP_ cohort tag): cache first, then batch Shopify
+  // incoming ship week + box type (order's _SHIP_ tag / line-item SKUs): cache first, batch Shopify
   var need = [];
-  entries.forEach(function (e) { if (e.onum && !shipByOrder[e.onum] && need.indexOf(e.onum) < 0) need.push(e.onum); });
+  entries.forEach(function (e) {
+    if (e.onum && (!shipByOrder[e.onum] || !boxByOrder[e.onum]) && need.indexOf(e.onum) < 0) need.push(e.onum);
+  });
   for (var i = 0; i < need.length; i += 20) {
     var batch = need.slice(i, i + 20);
-    var d = shopifyGql_('query($q:String!){ orders(first:20, query:$q){ edges{node{ name tags }}}}',
+    var d = shopifyGql_('query($q:String!){ orders(first:20, query:$q){ edges{node{ name tags lineItems(first:50){edges{node{ sku }}} }}}}',
                         { q: batch.map(function (n) { return 'name:' + n; }).join(' OR ') });
-    d.orders.edges.forEach(function (ed) { shipByOrder[ed.node.name.replace(/^#/, '')] = lastShipTag_(ed.node.tags); });
+    d.orders.edges.forEach(function (ed) {
+      var nm = ed.node.name.replace(/^#/, '');
+      shipByOrder[nm] = lastShipTag_(ed.node.tags);
+      boxByOrder[nm] = boxTypeOf_(ed.node.lineItems.edges.map(function (le) { return le.node.sku; }));
+    });
   }
   var byWeek = {};
   entries.forEach(function (e) {
     e.ship = (e.onum && shipByOrder[e.onum]) || '';
+    e.box = (e.onum && boxByOrder[e.onum]) || '';
     var w = e.ship || '(unknown)';
     byWeek[w] = (byWeek[w] || 0) + 1;
   });
   var weeks = Object.keys(byWeek).sort();
-  // main table A-G + gap H + by-ship-week summary I-J (to the right)
+  // main table A-H + gap I + by-ship-week summary J-K (to the right)
   var out = [
-    ['REFRESHED ' + stamp, 'Slack posts w/o an entered reship — Col G is YOURS: reship / refund / no action',
-     '', '', '', '', 'Decision', '', 'Unresolved reships by ship week', ''],
-    ['Key', 'Posted', 'Issue', 'Order', 'Ship Week', 'Gorgias', 'Decision', '', 'Ship Week', 'Count']];
+    ['REFRESHED ' + stamp, 'Slack posts w/o an entered reship — Col H is YOURS: reship / refund / no action',
+     '', '', '', '', '', 'Decision', '', 'Unresolved reships by ship week', ''],
+    ['Key', 'Posted', 'Issue', 'Order', 'Ship Week', 'Box Type', 'Gorgias', 'Decision', '', 'Ship Week', 'Count']];
   var n = Math.max(entries.length, weeks.length);
   for (var r2 = 0; r2 < n; r2++) {
     var m = r2 < entries.length
       ? [entries[r2].key, entries[r2].posted, entries[r2].issue, entries[r2].onum ? '#' + entries[r2].onum : '',
-         entries[r2].ship, entries[r2].gid, entries[r2].dec]
-      : ['', '', '', '', '', '', ''];
+         entries[r2].ship, entries[r2].box, entries[r2].gid, entries[r2].dec]
+      : ['', '', '', '', '', '', '', ''];
     var s = r2 < weeks.length ? [weeks[r2], byWeek[weeks[r2]]] : ['', ''];
     out.push(m.concat(['']).concat(s));
   }
-  out.push(['', '', '', '', '', '', '', '', 'Total', entries.length]);
+  out.push(['', '', '', '', '', '', '', '', '', 'Total', entries.length]);
   writeTabTo_(PIVOT_SHEET_ID, 'Triage', out, false);
 }
 
