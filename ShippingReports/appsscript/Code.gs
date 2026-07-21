@@ -743,8 +743,7 @@ function writeProductMix_(mondays, denoms, stamp) {
      'Regular Box', 'Regular Box Reship', 'Regular Box Reship %', 'Regular Box Unresolved', 'Regular Box Unresolved %',
      'Medium Tray', 'Medium Tray Reship', 'Medium Tray Reship %', 'Medium Tray Unresolved', 'Medium Tray Unresolved %',
      'Large Tray', 'Large Tray Reship', 'Large Tray Reship %', 'Large Tray Unresolved', 'Large Tray Unresolved %',
-     'Potential Reship', 'Potential %',
-     'Total Potential Reship', 'Total Potential %']];  // Potential = all Reship + all Unresolved; Total = grand sum / blended % over all cohorts
+     'Potential Reship', 'Potential %']];  // Potential = all Reship + all Unresolved (actual + still-open); % over cohort size
   var RD = "'Raw Data'";  // E=incoming, I=box type
   var TR = "'Triage'";    // E=ship week, F=box type
   // WALK-FORWARD cohort list (Kurt 2026-07-20): every ship-week present in the Raw
@@ -781,12 +780,6 @@ function writeProductMix_(mondays, denoms, stamp) {
       lge, lgeC, pct('N', 'M'), lgeU, pct('P', 'M'),
       potl, pct('R', 'B')]);
   });
-  // grand total (T/U on the first cohort row): sum Potential Reship, blended % over total size
-  if (rows.length > 2) {
-    var last = rows.length;  // rows[0],[1] are the 2 header rows; data ends at rows.length-1 -> sheet row = rows.length
-    rows[2].push('=SUM(R3:R' + last + ')',
-                 '=IF(SUM(B3:B' + last + ')>0,TEXT(SUM(R3:R' + last + ')/SUM(B3:B' + last + '),"0.00%"),"n/a")');
-  }
   writeTabTo_(PIVOT_SHEET_ID, 'Product Mix', rows, true);
 }
 
@@ -841,7 +834,7 @@ function writeTriage_(state, oldest, stamp) {
   });
   // preserve Decision (key->H), Gorgias id (order->G), Box Type (order->F),
   // Ship Week (order->E) so we don't re-hit Shopify/Gorgias for same rows hourly
-  var prevDec = {}, gidByOrder = {}, shipByOrder = {}, boxByOrder = {};
+  var prevDec = {}, gidByOrder = {}, shipByOrder = {}, boxByOrder = {}, orderByGid = {};
   try {
     var psh = SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName('Triage');
     if (psh && psh.getLastRow() >= 3) {
@@ -851,6 +844,10 @@ function writeTriage_(state, oldest, stamp) {
         if (ord && row[4]) shipByOrder[ord] = String(row[4]);
         if (ord && row[5]) boxByOrder[ord] = String(row[5]);
         if (ord && row[6]) gidByOrder[ord] = String(row[6]);
+        // once a gid-only row's order is resolved (auto OR hand-corrected), keep it —
+        // orderFromGorgias_ can mis-pick (skips reship-tagged orders, so it misses a
+        // two-in-a-row where the FAILED order is itself a reship). Kurt 2026-07-21.
+        var g = String(row[6] || ''); if (g && ord) orderByGid[g] = ord;
       });
     }
   } catch (e) {}
@@ -862,6 +859,7 @@ function writeTriage_(state, oldest, stamp) {
     if (r.team === 'fulfillment') return;                 // Order::* = fulfillment, not shipping
     var onum = String(r.order_number || '');
     var gid = String(r.gorgias_id || '');
+    if (!onum && gid && orderByGid[gid]) { onum = orderByGid[gid]; }   // keep an already-resolved order
     if (!onum && gid && lookups < 40) { onum = orderFromGorgias_(gid).replace(/^#/, ''); lookups++; }
     if (!onum && !gid) return;             // no order + no ticket = noise, drop
     if (onum && originals[onum]) return;   // a reship already exists for THIS order
