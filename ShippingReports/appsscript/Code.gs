@@ -743,7 +743,8 @@ function writeProductMix_(mondays, denoms, stamp) {
      'Regular Box', 'Regular Box Reship', 'Regular Box Reship %', 'Regular Box Unresolved', 'Regular Box Unresolved %',
      'Medium Tray', 'Medium Tray Reship', 'Medium Tray Reship %', 'Medium Tray Unresolved', 'Medium Tray Unresolved %',
      'Large Tray', 'Large Tray Reship', 'Large Tray Reship %', 'Large Tray Unresolved', 'Large Tray Unresolved %',
-     'Potential Reship', 'Potential %']];  // Potential = all Reship + all Unresolved (actual + still-open); % over cohort size
+     'Potential Reship', 'Potential %',
+     'Actual Reship', 'Actual %']];  // Potential = reships + open Unresolved; Actual = reships only (D+I+N); % over cohort size
   var RD = "'Raw Data'";  // E=incoming, I=box type
   var TR = "'Triage'";    // E=ship week, F=box type
   // WALK-FORWARD cohort list (Kurt 2026-07-20): every ship-week present in the Raw
@@ -774,13 +775,27 @@ function writeProductMix_(mondays, denoms, stamp) {
       return '=IF(' + denCol + r + '>0,TEXT(' + numCol + r + '/' + denCol + r + ',"0.00%"),"n/a")';
     };
     var potl = '=D' + r + '+I' + r + '+N' + r + '+F' + r + '+K' + r + '+P' + r;  // all reship + all unresolved
+    var actl = '=N' + r + '+I' + r + '+D' + r;  // reships only (no unresolved)
     rows.push([tag, total,
       total - med - lge, regC, pct('D', 'C'), regU, pct('F', 'C'),
       med, medC, pct('I', 'H'), medU, pct('K', 'H'),
       lge, lgeC, pct('N', 'M'), lgeU, pct('P', 'M'),
-      potl, pct('R', 'B')]);
+      potl, pct('R', 'B'),
+      actl, '=T' + r + '/B' + r]);
   });
   writeTabTo_(PIVOT_SHEET_ID, 'Product Mix', rows, true);
+  // transposed view: metrics as rows, cohorts as columns. Read back DISPLAY values
+  // (so "1.70%" etc. carry over, not the raw ratio) and flip.
+  if (rows.length > 2) {
+    var pm = SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName('Product Mix');
+    var grid = pm.getRange(2, 1, rows.length - 1, 21).getDisplayValues();  // A2:U{last}
+    var hdr = grid[0], data = grid.slice(1);
+    var tp = [['Metric'].concat(data.map(function (r) { return r[0]; }))];
+    for (var ci = 1; ci < hdr.length; ci++) {
+      tp.push([hdr[ci]].concat(data.map(function (r) { return r[ci]; })));
+    }
+    writeTabTo_(PIVOT_SHEET_ID, 'Product Mix (T)', tp, false);
+  }
 }
 
 // resolve the customer's most-recent NON-reship order from a Gorgias ticket's
