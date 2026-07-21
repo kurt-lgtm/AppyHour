@@ -742,7 +742,8 @@ function writeProductMix_(mondays, denoms, stamp) {
     ['Cohort', 'Cohort size',
      'Regular Box', 'Regular Box Reship', 'Regular Box Reship %', 'Regular Box Unresolved', 'Regular Box Unresolved %',
      'Medium Tray', 'Medium Tray Reship', 'Medium Tray Reship %', 'Medium Tray Unresolved', 'Medium Tray Unresolved %',
-     'Large Tray', 'Large Tray Reship', 'Large Tray Reship %', 'Large Tray Unresolved', 'Large Tray Unresolved %']];
+     'Large Tray', 'Large Tray Reship', 'Large Tray Reship %', 'Large Tray Unresolved', 'Large Tray Unresolved %',
+     'Potential Reship', 'Potential %']];  // Potential = all Reship + all Unresolved (actual + still-open); % over cohort size
   var RD = "'Raw Data'";  // E=incoming, I=box type
   var TR = "'Triage'";    // E=ship week, F=box type
   // WALK-FORWARD cohort list (Kurt 2026-07-20): every ship-week present in the Raw
@@ -772,10 +773,12 @@ function writeProductMix_(mondays, denoms, stamp) {
     var pct = function (numCol, denCol) {
       return '=IF(' + denCol + r + '>0,TEXT(' + numCol + r + '/' + denCol + r + ',"0.00%"),"n/a")';
     };
+    var potl = '=D' + r + '+I' + r + '+N' + r + '+F' + r + '+K' + r + '+P' + r;  // all reship + all unresolved
     rows.push([tag, total,
       total - med - lge, regC, pct('D', 'C'), regU, pct('F', 'C'),
       med, medC, pct('I', 'H'), medU, pct('K', 'H'),
-      lge, lgeC, pct('N', 'M'), lgeU, pct('P', 'M')]);
+      lge, lgeC, pct('N', 'M'), lgeU, pct('P', 'M'),
+      potl, pct('R', 'B')]);
   });
   writeTabTo_(PIVOT_SHEET_ID, 'Product Mix', rows, true);
 }
