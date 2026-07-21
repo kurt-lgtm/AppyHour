@@ -1393,9 +1393,12 @@ def main() -> str:
     # Reorder tabs: Cut Order first
     wb.move_sheet("Cut Order", offset=-1)
 
-    # Save
+    # Save. Prefix the run day so the Monday (1st run) and Tuesday (final) builds
+    # for the same ship week don't overwrite each other (Kurt 2026-07-21).
     ship_date = SHIP_WEEK_MONDAY.isoformat()
-    out_path = os.path.join(BASE, f"cut_order_v2_{ship_date}.xlsx")
+    _wd = datetime.now().weekday()
+    _day = {0: "MON", 1: "TUES"}.get(_wd, ["MON", "TUES", "WED", "THU", "FRI", "SAT", "SUN"][_wd])
+    out_path = os.path.join(BASE, f"{_day}_cut_order_v2_{ship_date}.xlsx")
     wb.save(out_path)
 
     # Recalc formulas via Excel COM (Windows) so cached values are baked into the file.
