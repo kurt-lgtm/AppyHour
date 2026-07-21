@@ -815,20 +815,26 @@ function productMixBreakdown_(cohortCols) {
     recs.push({ order: ord, issue: String(v[3] || 'Unknown'), cohort: String(v[4]) });
     if (ord) need[ord] = true;
   });
-  var orders = Object.keys(need), stateOf = {};
+  var orders = Object.keys(need), stateOf = {}, carrierOf = {};
   for (var i = 0; i < orders.length; i += 20) {
     var batch = orders.slice(i, i + 20);
-    var d = shopifyGql_('query($q:String!){ orders(first:20, query:$q){ edges{node{ name shippingAddress{ provinceCode } }}}}',
+    var d = shopifyGql_('query($q:String!){ orders(first:20, query:$q){ edges{node{ name shippingAddress{ provinceCode } fulfillments(first:10){ trackingInfo{ company } } }}}}',
                         { q: batch.map(function (n) { return 'name:' + n; }).join(' OR ') });
     d.orders.edges.forEach(function (e) {
-      var sa = e.node.shippingAddress || {};
-      stateOf[e.node.name.replace(/^#/, '')] = sa.provinceCode || '??';
+      var nm = e.node.name.replace(/^#/, ''), sa = e.node.shippingAddress || {};
+      stateOf[nm] = sa.provinceCode || '??';
+      var car = '';
+      (e.node.fulfillments || []).forEach(function (f) {
+        (f.trackingInfo || []).forEach(function (ti) { if (!car && ti.company) car = ti.company; });
+      });
+      carrierOf[nm] = car || 'Unknown';
     });
   }
-  var byIssue = {}, warm = {}, delay = {};
+  var byIssue = {}, byCarrier = {}, warm = {}, delay = {};
   function bump(tbl, key, cohort) { (tbl[key] = tbl[key] || {})[cohort] = (tbl[key][cohort] || 0) + 1; }
   recs.forEach(function (x) {
     bump(byIssue, x.issue, x.cohort);
+    bump(byCarrier, carrierOf[x.order] || 'Unknown', x.cohort);
     var st = stateOf[x.order] || '??';
     if (x.issue === 'Arrived Warm') bump(warm, st, x.cohort);
     else if (x.issue === 'Delayed in Transit') bump(delay, st, x.cohort);
@@ -844,7 +850,8 @@ function productMixBreakdown_(cohortCols) {
     });
     return out;
   }
-  return group('By Issue', byIssue).concat(group('Arrived Warm by State', warm))
+  return group('By Issue', byIssue).concat(group('By Carrier', byCarrier))
+         .concat(group('Arrived Warm by State', warm))
          .concat(group('Delayed by State', delay));
 }
 
