@@ -79,6 +79,7 @@ function menuRefreshProductMix() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   ss.toast('Rebuilding Product Mix + (T)…', 'Reship Report', -1);
   writeProductMix_(menuMondays_(), {}, menuStamp_());
+  writeProductMixT_();
   ss.toast('Done.', 'Reship Report', 5);
 }
 
@@ -87,6 +88,7 @@ function menuRefreshTriage() {
   ss.toast('Rebuilding Triage (resolves orders/Gorgias)…', 'Reship Report', -1);
   var mondays = menuMondays_();
   writeTriage_(loadState_(), mondays[mondays.length - 1], menuStamp_());
+  writeProductMixT_();  // (T) unresolved/potential depend on Triage — refresh it too
   ss.toast('Done.', 'Reship Report', 5);
 }
 
@@ -137,7 +139,7 @@ function build_() {
 
   refreshPivotSheet_(state, mondays);
   writeProductMix_(mondays, denoms, stamp);
-  try { writeTriage_(state, oldest, stamp); }
+  try { writeTriage_(state, oldest, stamp); writeProductMixT_(); }
   catch (e) { Logger.log('triage failed (non-fatal): ' + e); }
   writeDaily_(state, stamp);
 }
@@ -851,20 +853,24 @@ function writeProductMix_(mondays, denoms, stamp) {
       actl, '=T' + r + '/B' + r]);
   });
   writeTabTo_(PIVOT_SHEET_ID, 'Product Mix', rows, true);
-  // transposed view: metrics as rows, cohorts as columns. Read back DISPLAY values
-  // (so "1.70%" etc. carry over, not the raw ratio) and flip.
-  if (rows.length > 2) {
-    var pm = SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName('Product Mix');
-    var grid = pm.getRange(2, 1, rows.length - 1, 21).getDisplayValues();  // A2:U{last}
-    var hdr = grid[0], data = grid.slice(1);
-    var cohortCols = data.map(function (r) { return r[0]; });
-    var tp = [['Metric'].concat(cohortCols)];
-    for (var ci = 1; ci < hdr.length; ci++) {
-      tp.push([hdr[ci]].concat(data.map(function (r) { return r[ci]; })));
-    }
-    tp = tp.concat(productMixBreakdown_(cohortCols));  // By Issue / Warm+Delayed by State
-    writeTabTo_(PIVOT_SHEET_ID, 'Product Mix (T)', tp, false);
+}
+
+// Transposed view (metrics as rows, cohorts as columns). MUST run AFTER writeTriage_
+// so the Unresolved/Potential COUNTIFS (which reference the Triage tab) have re-
+// evaluated — otherwise (T) lags Triage by one cycle. flush() forces recalc first.
+function writeProductMixT_() {
+  var pm = SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName('Product Mix');
+  if (!pm || pm.getLastRow() < 3) return;
+  SpreadsheetApp.flush();  // ensure Triage-dependent formulas are recomputed
+  var grid = pm.getRange(2, 1, pm.getLastRow() - 1, 21).getDisplayValues();  // A2:U{last}
+  var hdr = grid[0], data = grid.slice(1);
+  var cohortCols = data.map(function (r) { return r[0]; });
+  var tp = [['Metric'].concat(cohortCols)];
+  for (var ci = 1; ci < hdr.length; ci++) {
+    tp.push([hdr[ci]].concat(data.map(function (r) { return r[ci]; })));
   }
+  tp = tp.concat(productMixBreakdown_(cohortCols));  // By Issue / Carrier / Warm+Delayed by State
+  writeTabTo_(PIVOT_SHEET_ID, 'Product Mix (T)', tp, false);
 }
 
 // grouped breakdown rows for Product Mix (T): By Issue, then Arrived Warm / Delayed
