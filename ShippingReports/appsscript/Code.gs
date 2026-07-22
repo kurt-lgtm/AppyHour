@@ -43,6 +43,33 @@ function refresh() {
   }
 }
 
+// Custom menu (like LTF v2). onOpen fires when the sheet is opened and draws the
+// menu; each item runs a function by name. Reload the sheet after deploy to see it.
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('Reship Report')
+    .addItem('Refresh now (full)', 'menuRefreshNow')
+    .addItem('Refresh Product Mix + (T) only', 'menuRefreshProductMix')
+    .addToUi();
+}
+
+function menuRefreshNow() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  ss.toast('Refreshing all tabs… (~1–2 min)', 'Reship Report', -1);
+  build_();
+  ss.toast('Done.', 'Reship Report', 5);
+}
+
+function menuRefreshProductMix() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  ss.toast('Rebuilding Product Mix + (T)…', 'Reship Report', -1);
+  var today = new Date(), mondays = [];
+  for (var i = 0; i <= WEEKS_BACK; i++) mondays.push(mondayOf_(addDays_(today, -7 * i)));
+  var stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss");
+  writeProductMix_(mondays, {}, stamp);
+  ss.toast('Done.', 'Reship Report', 5);
+}
+
 function build_() {
   var today = new Date();
   var mondays = [];
