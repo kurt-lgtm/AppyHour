@@ -49,8 +49,23 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Reship Report')
     .addItem('Refresh now (full)', 'menuRefreshNow')
+    .addSeparator()
     .addItem('Refresh Product Mix + (T) only', 'menuRefreshProductMix')
+    .addItem('Refresh Triage only', 'menuRefreshTriage')
+    .addItem('Refresh Daily counts only', 'menuRefreshDaily')
+    .addSeparator()
+    .addItem('Backfill Gorgias + enrich reships', 'menuBackfillGorgias')
     .addToUi();
+}
+
+// shared helpers for the menu items
+function menuMondays_() {
+  var today = new Date(), mondays = [];
+  for (var i = 0; i <= WEEKS_BACK; i++) mondays.push(mondayOf_(addDays_(today, -7 * i)));
+  return mondays;
+}
+function menuStamp_() {
+  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss");
 }
 
 function menuRefreshNow() {
@@ -63,11 +78,36 @@ function menuRefreshNow() {
 function menuRefreshProductMix() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   ss.toast('Rebuilding Product Mix + (T)…', 'Reship Report', -1);
-  var today = new Date(), mondays = [];
-  for (var i = 0; i <= WEEKS_BACK; i++) mondays.push(mondayOf_(addDays_(today, -7 * i)));
-  var stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss");
-  writeProductMix_(mondays, {}, stamp);
+  writeProductMix_(menuMondays_(), {}, menuStamp_());
   ss.toast('Done.', 'Reship Report', 5);
+}
+
+function menuRefreshTriage() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  ss.toast('Rebuilding Triage (resolves orders/Gorgias)…', 'Reship Report', -1);
+  var mondays = menuMondays_();
+  writeTriage_(loadState_(), mondays[mondays.length - 1], menuStamp_());
+  ss.toast('Done.', 'Reship Report', 5);
+}
+
+function menuRefreshDaily() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  ss.toast('Rebuilding Daily counts…', 'Reship Report', -1);
+  writeDaily_(loadState_(), menuStamp_());
+  ss.toast('Done.', 'Reship Report', 5);
+}
+
+function menuBackfillGorgias() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  ss.toast('Sweeping reships + backfilling Gorgias… (~1–2 min)', 'Reship Report', -1);
+  var mondays = menuMondays_(), oldest = mondays[mondays.length - 1];
+  var state = loadState_();
+  sweepAndEnrich_(state, oldest);
+  enrichBoxTypes_(state, mondays);
+  fillRequestedFromSlack_(state, oldest);
+  saveState_(state);
+  refreshPivotSheet_(state, mondays);
+  ss.toast('Done — Raw Data re-rendered.', 'Reship Report', 5);
 }
 
 function build_() {
