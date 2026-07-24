@@ -150,6 +150,37 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
     inventory-capped (already handled at `matrix_commander.py:3004`, `("PK-","MR-")`) and its qty rides
     into the col-D Total per rule 0.
 
+20. **Gift redemption vFGR = REPLACE, never skip-as-duplicate** (Kurt 2026-07-24, wk0727 done by
+    hand — this rule automates it). **Failure mode:** gift redemption orders are UNEDITABLE in
+    Shopify, so the matrix rows generated from Shopify carry stale/too-few items for them; the old
+    `merge_gift_xlsx` skipped any gift OrderID already in the matrix as a "duplicate" — which kept
+    exactly the stale rows the weekly `*_vFGR.xlsx` (Access_LIVE format, Downloads) exists to fix.
+    Semantics, in order:
+    (a) **A-suffix twin fold FIRST** (Simple Bundles "Associated Order", e.g. `164878A`): when the
+        vFGR lists parent AND twin as separate rows, SUM both rows' product cells onto the parent
+        OrderID and DROP the A row — the twin is FULFILLED in Shopify, never ships separately, and
+        must not appear on the sheet or count in reconciles. **Double-count guard:** a vFGR can
+        arrive pre-combined (parent already carries the twin's items, `remove=1` flag, NO A row —
+        wk0727 shipped this way): then fold NOTHING; never sum twice. An A row whose parent is
+        absent from the vFGR = loud error, never a standalone row.
+    (b) **REPLACE by OrderID:** for each vFGR OrderID present in the matrix, overwrite the row's
+        recipient/meta cells and WIPE-then-REFILL all product cells from the vFGR (item-truth).
+        **PRESERVE the matrix row's `Tags` (engine col L — routing/gel/identity; gift rows carry no
+        routing) and `ProductionDay`; `Notes` ships EMPTY (rule 18); `Total` is RECOMPUTED** as the
+        sum of the row's product cells (rule 0) — never trusted from either side.
+    (c) **vFGR OrderID missing from the matrix = LOUD `GiftMergeError`** (e.g. a `_HOLD` order —
+        wk0727 #165505), listing the OIDs — surface for Kurt's release/drop decision, NEVER
+        silently include or exclude. Release = retag into the cohort + re-run; drop = the explicit
+        `--gift-drop OID[,OID]` flag (generate/finalize/weekly_flow), which excludes the row and
+        prints it. No silent-append of unknown orders.
+    (d) **Items map by registered MFG name** — header-based column union with rule-15b
+        normalization (never positional); gift-only PRODUCT columns (`AHB (…`) are appended,
+        gift-side bookkeeping columns (`remove` etc.) are NOT unioned into the matrix.
+    Chokepoint: `merge_gift_xlsx` — cmd_generate, cmd_finalize, and weekly_flow stage 1 all route
+    through it; never fork a second gift-merge path. Post-apply, `check_routing_and_ice` /
+    gen_rmfg self-QC still gate that every gift row got a routing tag.
+    Tests: `tests/test_gift_replace.py` (+ updated `tests/test_gift_merge_walnut.py`).
+
 17. **One ice-target list per cohort, one canonical invocation** (Kurt 2026-07-10). Two agents ran
     `ice_distvol_workflow.py` the same evening with different tag args (`RMFG_20260710` vs
     `_SHIP_2026-07-13`) and got 293 vs 725 targets — the tag silently changes the cohort fetch AND

@@ -39,6 +39,7 @@ def _load_rows(path):
 
 
 def test_merge_keeps_single_walnut_column_with_full_demand(tmp_path):
+    # Rule 20: gift rows REPLACE matrix rows by OrderID — 1002's stale walnut 1 becomes 3.
     main = _write_xlsx(
         tmp_path / "main.xlsx",
         ["OrderID", "Name", WALNUT_COMMA],
@@ -47,7 +48,7 @@ def test_merge_keeps_single_walnut_column_with_full_demand(tmp_path):
     gift = _write_xlsx(
         tmp_path / "gift.xlsx",
         ["OrderID", "Name", WALNUT_15B],
-        [[2001, "G", 3]],
+        [[1002, "B", 3]],
     )
 
     merged = mc.merge_gift_xlsx(main, gift)
@@ -58,8 +59,8 @@ def test_merge_keeps_single_walnut_column_with_full_demand(tmp_path):
 
     wi = headers.index(WALNUT_15B)
     total = sum(int(r[wi] or 0) for r in rows)
-    assert total == 6, f"walnut demand split/undercounted: {total} != 6"
-    assert len(rows) == 3
+    assert total == 5, f"walnut demand split/undercounted: {total} != 5"
+    assert len(rows) == 2
 
 
 def test_merge_aligns_gift_rows_by_header_not_position(tmp_path):
@@ -72,27 +73,18 @@ def test_merge_aligns_gift_rows_by_header_not_position(tmp_path):
     gift = _write_xlsx(
         tmp_path / "gift.xlsx",
         ["OrderID", WALNUT_15B, "Name", "AHB (S_REG): Glazed Walnuts"],
-        [[2001, 5, "G", 1]],
+        [[1001, 5, "G", 1]],
     )
 
     merged = mc.merge_gift_xlsx(main, gift)
     headers, rows = _load_rows(merged)
 
     assert headers.index(WALNUT_15B) == 2  # normalized main column, unioned
-    assert "AHB (S_REG): Glazed Walnuts" in headers  # gift-only column appended
-    gift_row = next(r for r in rows if r[0] == 2001)
+    assert "AHB (S_REG): Glazed Walnuts" in headers  # gift-only PRODUCT column appended
+    gift_row = next(r for r in rows if r[0] == 1001)
     assert gift_row[headers.index(WALNUT_15B)] == 5
     assert gift_row[headers.index("Name")] == "G"
     assert gift_row[headers.index("AHB (S_REG): Glazed Walnuts")] == 1
-
-
-def test_merge_still_dedupes_order_ids(tmp_path):
-    main = _write_xlsx(tmp_path / "main.xlsx", ["OrderID", WALNUT_COMMA], [[1001, 2]])
-    gift = _write_xlsx(tmp_path / "gift.xlsx", ["OrderID", WALNUT_15B], [[1001, 9], [2001, 3]])
-
-    merged = mc.merge_gift_xlsx(main, gift)
-    _, rows = _load_rows(merged)
-    assert [r[0] for r in rows] == [1001, 2001]
 
 
 def test_name_to_sku_maps_both_walnut_forms():

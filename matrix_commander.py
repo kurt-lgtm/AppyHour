@@ -19,6 +19,7 @@ import argparse
 import csv
 import io
 import json
+import re
 import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -1003,7 +1004,7 @@ def check_parent_fill(orders: list[OrderRow]) -> CheckResult:
     )
 
 
-def check_routing_and_ice(orders: list[OrderRow]) -> CheckResult:
+def check_routing_and_ice(orders: list[OrderRow], fixed_ids: set | None = None) -> CheckResult:
     """Col-L routing + ice QC — the shared ShipRouting gate (lib/qc_gate) run at EXPORT time.
     MATRIX_RULES rule 14: the export is the last artifact RMFG reads; on 2026-07-03 untagged orders,
     missing ice, HD pins and leaky fences all reached the sheet unchecked (caught manually near-deadline).
@@ -1024,8 +1025,14 @@ def check_routing_and_ice(orders: list[OrderRow]) -> CheckResult:
     def _is_tray(o: OrderRow) -> bool:
         return any(s.upper().startswith("TR-") or "TRAY" in s.upper() for s in o.assignments)
 
+    # is_fixed: col L strips business tags (MATRIX_RULES 15), so Fixed_Route is INVISIBLE in the export —
+    # a Fixed_Route customer's deliberate HD-Indy pin false-FAILED hd_pin at export self-QC (#164618,
+    # 2026-07-24). Callers with live-tag knowledge pass fixed_ids (bare order numbers, no '#'); the
+    # in-file tag check stays as fallback for callers without it.
+    _fixed = {str(x).lstrip("#") for x in (fixed_ids or set())}
     rows = [QCRow(o.order_id, *split_tags(o.tags), _is_tray(o),
-                  is_fixed="fixed_route" in (o.tags or "").lower(),
+                  is_fixed=("fixed_route" in (o.tags or "").lower()
+                            or str(o.order_id).lstrip("#") in _fixed),
                   address=o.address, address2=o.address2) for o in orders]
     rep = run_qc(rows)
     details = [f"{chk}: {names[:8]}{'…' if len(names) > 8 else ''}" for chk, names in rep.hard_fails.items()]
@@ -2307,11 +2314,16 @@ def generate_matrix_xlsx(
     return str(out_path)
 
 
+def _parse_gift_drop(raw: str) -> set[str]:
+    return {o.strip().lstrip("#") for o in (raw or "").split(",") if o.strip()}
+
+
 def cmd_generate(
     rmfg_tag: str,
     ship_day: str = "SAT",
     ship_date: str = "",
     gift_path: Optional[str] = None,
+    gift_drop: Optional[set[str]] = None,
     output_dir: Optional[str] = None,
 ) -> bool:
     """Generate RMFG matrix XLSX directly from Shopify orders."""
@@ -2330,10 +2342,14 @@ def cmd_generate(
     if not out_path:
         return False
 
-    # Merge gift sheet if provided
+    # Merge gift sheet if provided (rule 20: REPLACE gift rows from vFGR)
     if gift_path:
         print(f"\n  Merging gift sheet: {Path(gift_path).name}")
-        out_path = merge_gift_xlsx(out_path, gift_path)
+        try:
+            out_path = merge_gift_xlsx(out_path, gift_path, drop_oids=gift_drop)
+        except GiftMergeError as e:
+            print(f"\n  {_RED}GIFT MERGE BLOCKED: {e}{_RESET}")
+            return False
 
     # MFG validation
     mfg_translations = load_mfg_translations()
@@ -2370,22 +2386,102 @@ def identify_gift_orders(orders: list[OrderRow]) -> tuple[list[OrderRow], list[O
     return regular, gift
 
 
-def merge_gift_xlsx(main_path: str | Path, gift_path: str | Path) -> str:
-    """Merge a separate gift redemption XLSX into the main matrix.
+class GiftMergeError(RuntimeError):
+    """vFGR gift merge cannot proceed safely — surface for Kurt's decision (MATRIX_RULES rule 20)."""
 
-    Both files must have an Access_LIVE tab. Gift rows are aligned by HEADER
-    (column union), not position — headers on BOTH sides are first normalized to
-    the rule-15b walnut form, otherwise "Walnut, Honey ..." vs "Walnut Honey ..."
-    become two columns and AC-FCWALN demand splits/undercounts (wk0720).
-    Gift-only columns are appended to the main sheet. Returns path to merged file.
+
+def _is_product_header(h: str) -> bool:
+    return str(h or "").startswith("AHB (")
+
+
+_GIFT_TWIN_RE = re.compile(r"^(\d+)([A-Za-z]+)$")
+
+
+def _fold_gift_twins(
+    gift_headers: list[str], gift_rows: list[list]
+) -> tuple[list[list], list[str], list[str]]:
+    """Fold A-suffix twin rows (Simple Bundles "Associated Order") onto their parent row.
+
+    MATRIX_RULES rule 20a: the twin is FULFILLED in Shopify and never ships separately —
+    sum its product cells onto the parent, drop the A row. Double-count guard: a vFGR that
+    arrives pre-combined (parent carries the fold, `remove=1`, no A row) folds NOTHING.
+    An A row with no parent row in the file is a loud error, never a standalone row.
+    Returns (folded_rows, folded_oids, precombined_oids).
     """
+    prod_idx = [i for i, h in enumerate(gift_headers) if _is_product_header(h)]
+    remove_idx = next(
+        (i for i, h in enumerate(gift_headers) if str(h or "").strip().lower() == "remove"), None
+    )
+    by_oid = {str(r[0] or "").strip(): r for r in gift_rows if str(r[0] or "").strip()}
+
+    folded: list[str] = []
+    orphans: list[str] = []
+    twin_oids: set[str] = set()
+    for oid, row in by_oid.items():
+        m = _GIFT_TWIN_RE.match(oid)
+        if not m:
+            continue
+        parent = by_oid.get(m.group(1))
+        if parent is None:
+            orphans.append(oid)
+            continue
+        for i in prod_idx:
+            v = row[i] if i < len(row) else None
+            if isinstance(v, (int, float)) and v > 0:
+                base = parent[i] if isinstance(parent[i], (int, float)) else 0
+                parent[i] = int(base) + int(v)
+        twin_oids.add(oid)
+        folded.append(f"{oid} -> {m.group(1)}")
+    if orphans:
+        raise GiftMergeError(
+            f"A-suffix twin row(s) with no parent row in the vFGR: {sorted(orphans)} — "
+            "a twin never ships standalone; fix the vFGR export"
+        )
+
+    precombined = [
+        oid
+        for oid, r in by_oid.items()
+        if remove_idx is not None
+        and str(r[remove_idx] if remove_idx < len(r) else "").strip() in ("1", "1.0")
+        and oid not in twin_oids
+        and not _GIFT_TWIN_RE.match(oid)
+    ]
+    out = [r for r in gift_rows if str(r[0] or "").strip() not in twin_oids]
+    return out, folded, precombined
+
+
+def merge_gift_xlsx(
+    main_path: str | Path,
+    gift_path: str | Path,
+    drop_oids: Optional[set[str]] = None,
+) -> str:
+    """REPLACE gift redemption rows in the main matrix from the weekly vFGR (rule 20).
+
+    Gift redemption orders are UNEDITABLE in Shopify, so the matrix rows generated from
+    Shopify carry stale/too-few items for them — the vFGR is the ITEM-TRUTH. For each vFGR
+    OrderID present in the matrix: overwrite recipient/meta cells, wipe-then-refill ALL
+    product cells, PRESERVE the matrix row's Tags (engine col L) + ProductionDay, blank
+    Notes (rule 18), recompute Total (rule 0). Alignment is by HEADER with rule-15b
+    normalization (wk0720 walnut); gift-side bookkeeping columns (`remove`) are not unioned.
+    A-suffix twins are folded onto their parent first (rule 20a).
+
+    A vFGR OrderID missing from the matrix (e.g. a _HOLD order) raises GiftMergeError —
+    release it into the cohort and re-run, or pass its OID in drop_oids to explicitly
+    exclude it. Never silently include/exclude. Returns path to merged file.
+    """
+    drop_oids = {str(o).strip().lstrip("#") for o in (drop_oids or set())}
     main_wb = openpyxl.load_workbook(str(main_path))
     main_ws = main_wb["Access_LIVE"]
 
     gift_wb = openpyxl.load_workbook(str(gift_path), data_only=True, read_only=True)
     gift_ws = gift_wb["Access_LIVE"]
-    gift_rows = list(gift_ws.iter_rows(values_only=True))
+    raw = [list(r) for r in gift_ws.iter_rows(values_only=True)]
     gift_wb.close()
+    if not raw:
+        raise GiftMergeError(f"empty gift sheet: {gift_path}")
+
+    gift_headers = [_normalize_rule15b_header(str(h or "")) for h in raw[0]]
+    gift_rows, folded, precombined = _fold_gift_twins(gift_headers, raw[1:])
 
     # Normalize main headers in place (rule 15b) and index them
     main_headers: list[str] = []
@@ -2396,43 +2492,82 @@ def merge_gift_xlsx(main_path: str | Path, gift_path: str | Path) -> str:
         main_headers.append(h)
     main_idx = {h: i for i, h in enumerate(main_headers)}
 
-    gift_headers = [
-        _normalize_rule15b_header(str(h or "")) for h in (gift_rows[0] if gift_rows else [])
-    ]
-
-    # Column union: append gift-only columns to the main sheet
+    # Column union: append gift-only PRODUCT columns; never union gift bookkeeping cols
+    skipped_cols: list[str] = []
     for h in gift_headers:
-        if h and h not in main_idx:
-            main_idx[h] = len(main_headers)
-            main_headers.append(h)
-            main_ws.cell(1, len(main_headers)).value = h
+        if not h or h in main_idx:
+            continue
+        if not _is_product_header(h):
+            skipped_cols.append(h)
+            continue
+        main_idx[h] = len(main_headers)
+        main_headers.append(h)
+        main_ws.cell(1, len(main_headers)).value = h
 
     gift_pos = [main_idx.get(h) if h else None for h in gift_headers]
+    prod_cols = {i for i, h in enumerate(main_headers) if _is_product_header(h)}  # 0-indexed
+    preserve = {
+        main_idx[h] for h in ("Tags", "ProductionDay") if h in main_idx
+    }  # engine col L + prod day stay (rule 20b)
+    notes_i = main_idx.get("Notes")
+    total_i = main_idx.get("Total")
 
-    # Get existing order IDs to avoid duplicates
-    existing_oids: set[str] = set()
-    for row in main_ws.iter_rows(min_row=2, max_col=1, values_only=True):
-        oid = str(row[0] or "").strip()
+    # Index main rows by OrderID (sheet row number)
+    main_rownum: dict[str, int] = {}
+    for r in range(2, main_ws.max_row + 1):
+        oid = str(main_ws.cell(r, 1).value or "").strip().lstrip("#")
         if oid:
-            existing_oids.add(oid)
+            main_rownum[oid] = r
 
-    # Append gift rows, re-slotted into the union column order
-    added = 0
-    skipped = 0
-    for row in gift_rows[1:]:
-        oid = str(row[0] or "").strip()
+    replaced = 0
+    dropped: list[str] = []
+    missing: list[str] = []
+    for row in gift_rows:
+        oid = str(row[0] or "").strip().lstrip("#")
         if not oid:
             continue
-        if oid in existing_oids:
-            skipped += 1
+        if oid in drop_oids:
+            dropped.append(oid)
             continue
+        r = main_rownum.get(oid)
+        if r is None:
+            missing.append(oid)
+            continue
+        # Re-slot gift row into union column order
         out: list = [None] * len(main_headers)
         for val, pos in zip(row, gift_pos):
             if pos is not None:
                 out[pos] = val
-        main_ws.append(out)
-        existing_oids.add(oid)
-        added += 1
+        gift_mapped = {pos for pos in gift_pos if pos is not None}
+        for c0 in range(len(main_headers)):
+            if c0 in preserve:
+                continue  # keep matrix Tags (engine col L) + ProductionDay
+            if c0 == notes_i:
+                main_ws.cell(r, c0 + 1).value = None  # Notes ships EMPTY (rule 18)
+            elif c0 in prod_cols:
+                main_ws.cell(r, c0 + 1).value = out[c0]  # item-truth: wipe-then-refill
+            elif c0 in gift_mapped:
+                main_ws.cell(r, c0 + 1).value = out[c0]  # recipient/meta from vFGR
+        # Total = recomputed sum of the row's product cells (rule 0) — never trusted
+        if total_i is not None:
+            tot = 0
+            for c0 in prod_cols:
+                v = main_ws.cell(r, c0 + 1).value
+                if isinstance(v, (int, float)):
+                    tot += int(v)
+            main_ws.cell(r, total_i + 1).value = tot
+        replaced += 1
+
+    if missing:
+        main_wb.close()
+        raise GiftMergeError(
+            f"vFGR OrderID(s) NOT in the matrix (e.g. _HOLD): {sorted(missing)} — "
+            "release into the cohort + re-run, or exclude explicitly with --gift-drop. "
+            "Never silently included/excluded (rule 20c)."
+        )
+    unknown_drops = drop_oids - set(dropped)
+    if unknown_drops:
+        print(f"  {_YELLOW}--gift-drop OID(s) not in the vFGR (no-op): {sorted(unknown_drops)}{_RESET}")
 
     # Save merged file
     src = Path(main_path)
@@ -2440,7 +2575,15 @@ def merge_gift_xlsx(main_path: str | Path, gift_path: str | Path) -> str:
     main_wb.save(str(out_path))
     main_wb.close()
 
-    print(f"  Gift merge: {added} orders added, {skipped} duplicates skipped")
+    print(f"  Gift merge (rule 20): {replaced} row(s) REPLACED from vFGR (col L preserved)")
+    if folded:
+        print(f"  A-twin fold: {', '.join(folded)}")
+    if precombined:
+        print(f"  pre-combined (remove=1, no A row — NOT re-summed): {', '.join(precombined)}")
+    if dropped:
+        print(f"  {_YELLOW}explicitly dropped via --gift-drop: {', '.join(dropped)}{_RESET}")
+    if skipped_cols:
+        print(f"  gift bookkeeping column(s) not unioned: {skipped_cols}")
     print(f"  Saved: {_GREEN}{out_path.name}{_RESET}")
 
     return str(out_path)
@@ -2687,6 +2830,7 @@ def finalize_xlsx(
 def cmd_finalize(
     xlsx_path: str,
     gift_path: Optional[str] = None,
+    gift_drop: Optional[set[str]] = None,
     ship_day: str = "SAT",
     ship_date: str = "",
 ) -> bool:
@@ -2695,10 +2839,14 @@ def cmd_finalize(
 
     working_path = xlsx_path
 
-    # Merge separate gift sheet if provided
+    # Merge separate gift sheet if provided (rule 20: REPLACE gift rows from vFGR)
     if gift_path:
         print(f"\n  Merging gift sheet: {Path(gift_path).name}")
-        working_path = merge_gift_xlsx(working_path, gift_path)
+        try:
+            working_path = merge_gift_xlsx(working_path, gift_path, drop_oids=gift_drop)
+        except GiftMergeError as e:
+            print(f"\n  {_RED}GIFT MERGE BLOCKED: {e}{_RESET}")
+            return False
 
     # MFG validation on final file
     mfg_translations = load_mfg_translations()
@@ -3239,13 +3387,17 @@ def main() -> None:
     p_gen.add_argument("tag", help="RMFG tag (e.g. RMFG_20260328)")
     p_gen.add_argument("--day", "-d", choices=["SAT", "TUE"], default="SAT", help="Ship day (default: SAT)")
     p_gen.add_argument("--date", help="Ship date for filename (Mon or Tue date, e.g. 2026-03-30)")
-    p_gen.add_argument("--gift", "-g", help="Gift redemption XLSX to merge")
+    p_gen.add_argument("--gift", "-g", help="Gift redemption vFGR XLSX to REPLACE gift rows from (rule 20)")
+    p_gen.add_argument("--gift-drop", dest="gift_drop", default="",
+                       help="Comma-separated vFGR OrderIDs to explicitly EXCLUDE (Kurt's drop decision, rule 20c)")
     p_gen.add_argument("--output", "-o", dest="output_dir", help="Directory for generated XLSX")
 
     # finalize
     p_fin = sub.add_parser("finalize", help="Merge gift orders + format fixes + MFG validation")
     p_fin.add_argument("xlsx", help="Path to RMFG download or production XLSX file")
-    p_fin.add_argument("--gift", "-g", help="Separate gift redemption XLSX to merge")
+    p_fin.add_argument("--gift", "-g", help="Gift redemption vFGR XLSX to REPLACE gift rows from (rule 20)")
+    p_fin.add_argument("--gift-drop", dest="gift_drop", default="",
+                       help="Comma-separated vFGR OrderIDs to explicitly EXCLUDE (Kurt's drop decision, rule 20c)")
     p_fin.add_argument("--day", "-d", choices=["SAT", "TUE"], default="SAT", help="Production day (default: SAT)")
     p_fin.add_argument("--date", help="Ship date for filename (e.g. 2026-03-24 or 03-24-26)")
 
@@ -3285,12 +3437,14 @@ def main() -> None:
             ship_day=args.day,
             ship_date=getattr(args, "date", "") or "",
             gift_path=getattr(args, "gift", None),
+            gift_drop=_parse_gift_drop(getattr(args, "gift_drop", "")),
             output_dir=getattr(args, "output_dir", None),
         )
     elif args.command == "finalize":
         ok = cmd_finalize(
             args.xlsx,
             gift_path=getattr(args, "gift", None),
+            gift_drop=_parse_gift_drop(getattr(args, "gift_drop", "")),
             ship_day=args.day,
             ship_date=getattr(args, "date", "") or "",
         )
