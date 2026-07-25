@@ -850,7 +850,7 @@ function writeProductMix_(mondays, denoms, stamp) {
       med, medC, pct('I', 'H'), medU, pct('K', 'H'),
       lge, lgeC, pct('N', 'M'), lgeU, pct('P', 'M'),
       potl, pct('R', 'B'),
-      actl, '=T' + r + '/B' + r]);
+      actl, pct('T', 'B')]);  // TEXT-% so it always renders, even on new cohort rows
   });
   writeTabTo_(PIVOT_SHEET_ID, 'Product Mix', rows, true);
 }
@@ -869,15 +869,17 @@ function writeProductMixT_() {
   for (var ci = 1; ci < hdr.length; ci++) {
     tp.push([hdr[ci]].concat(data.map(function (r) { return r[ci]; })));
   }
-  tp = tp.concat(productMixBreakdown_(cohortCols));  // By Issue / Carrier / Warm+Delayed by State
+  var sizeByCohort = {};
+  data.forEach(function (r) { sizeByCohort[r[0]] = parseInt(String(r[1]).replace(/[^0-9]/g, ''), 10) || 0; });
+  tp = tp.concat(productMixBreakdown_(cohortCols, sizeByCohort));
   writeTabTo_(PIVOT_SHEET_ID, 'Product Mix (T)', tp, false);
 }
 
-// grouped breakdown rows for Product Mix (T): By Issue, then Arrived Warm / Delayed
-// by ship-to State. Counts come from Raw Data (Issue + Incoming week); State is
-// enriched from Shopify province of the original order. Carrier intentionally
-// skipped (Kurt 2026-07-21 — attribution unreliable). cohortCols = column order.
-function productMixBreakdown_(cohortCols) {
+// grouped breakdown rows for Product Mix (T): By Issue, By Carrier, Arrived Warm /
+// Delayed by ship-to State — emitted twice, a % (÷ cohort size) section then a
+// discrete-count section. Counts from Raw Data (Issue + Incoming week); State +
+// Carrier enriched from the original order's Shopify province / tracking_company.
+function productMixBreakdown_(cohortCols, sizeByCohort) {
   var rd = SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName('Raw Data');
   if (!rd || rd.getLastRow() < 2) return [];
   var vals = rd.getRange('A2:I' + rd.getLastRow()).getValues();  // A Order..I Box; D Issue, E Incoming, H Original
@@ -912,20 +914,29 @@ function productMixBreakdown_(cohortCols) {
     if (x.issue === 'Arrived Warm') bump(warm, st, x.cohort);
     else if (x.issue === 'Delayed in Transit') bump(delay, st, x.cohort);
   });
-  function group(title, tbl) {
+  function group(title, tbl, pct) {
     var out = [new Array(cohortCols.length + 1).fill('')];
-    out.push(['── ' + title + ' ──'].concat(new Array(cohortCols.length).fill('')));
+    out.push(['── ' + title + (pct ? ' (%)' : '') + ' ──'].concat(new Array(cohortCols.length).fill('')));
     Object.keys(tbl).sort(function (a, b) {
       var sa = 0, sb = 0; for (var k in tbl[a]) sa += tbl[a][k]; for (var k2 in tbl[b]) sb += tbl[b][k2];
       return sb - sa;
     }).forEach(function (key) {
-      out.push([key].concat(cohortCols.map(function (c) { return tbl[key][c] || 0; })));
+      out.push([key].concat(cohortCols.map(function (c) {
+        var n = tbl[key][c] || 0;
+        if (!pct) return n;
+        var sz = (sizeByCohort || {})[c] || 0;
+        return sz ? (n / sz * 100).toFixed(2) + '%' : '';
+      })));
     });
     return out;
   }
-  return group('By Issue', byIssue).concat(group('By Carrier', byCarrier))
-         .concat(group('Arrived Warm by State', warm))
-         .concat(group('Delayed by State', delay));
+  var GROUPS = [['By Issue', byIssue], ['By Carrier', byCarrier],
+                ['Arrived Warm by State', warm], ['Delayed by State', delay]];
+  var out = [];
+  GROUPS.forEach(function (g) { out = out.concat(group(g[0], g[1], true)); });   // % (÷ cohort size) on top
+  out.push(new Array(cohortCols.length + 1).fill(''));
+  GROUPS.forEach(function (g) { out = out.concat(group(g[0], g[1], false)); });  // discrete below
+  return out;
 }
 
 // resolve the customer's most-recent NON-reship order from a Gorgias ticket's
