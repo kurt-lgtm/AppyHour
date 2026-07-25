@@ -879,6 +879,11 @@ function writeProductMixT_() {
 // Delayed by ship-to State — emitted twice, a % (÷ cohort size) section then a
 // discrete-count section. Counts from Raw Data (Issue + Incoming week); State +
 // Carrier enriched from the original order's Shopify province / tracking_company.
+function normCarrier_(name) {
+  var m = { lasership: 'LaserShip', veho: 'Veho', ontrac: 'OnTrac', fedex: 'FedEx', ups: 'UPS' };
+  return m[String(name).toLowerCase()] || String(name);
+}
+
 function productMixBreakdown_(cohortCols, sizeByCohort) {
   var rd = SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName('Raw Data');
   if (!rd || rd.getLastRow() < 2) return [];
@@ -891,19 +896,38 @@ function productMixBreakdown_(cohortCols, sizeByCohort) {
     if (ord) need[ord] = true;
   });
   var orders = Object.keys(need), stateOf = {}, carrierOf = {};
+  // state from Shopify ship-to province
   for (var i = 0; i < orders.length; i += 20) {
     var batch = orders.slice(i, i + 20);
-    var d = shopifyGql_('query($q:String!){ orders(first:20, query:$q){ edges{node{ name shippingAddress{ provinceCode } fulfillments(first:10){ trackingInfo{ company } } }}}}',
+    var d = shopifyGql_('query($q:String!){ orders(first:20, query:$q){ edges{node{ name shippingAddress{ provinceCode } }}}}',
                         { q: batch.map(function (n) { return 'name:' + n; }).join(' OR ') });
     d.orders.edges.forEach(function (e) {
-      var nm = e.node.name.replace(/^#/, ''), sa = e.node.shippingAddress || {};
-      stateOf[nm] = sa.provinceCode || '??';
-      var car = '';
-      (e.node.fulfillments || []).forEach(function (f) {
-        (f.trackingInfo || []).forEach(function (ti) { if (!car && ti.company) car = ti.company; });
-      });
-      carrierOf[nm] = car || 'Unknown';
+      stateOf[e.node.name.replace(/^#/, '')] = (e.node.shippingAddress || {}).provinceCode || '??';
     });
+  }
+  // carrier from Parcel Panel API (Kurt 2026-07-22 — Shopify orders + Parcel Panel,
+  // NOT Shopify's fulfillment field). Key in Script Property PARCELPANEL_API_KEY.
+  var ppKey = PropertiesService.getScriptProperties().getProperty('PARCELPANEL_API_KEY');
+  if (ppKey) {
+    var reqs = orders.map(function (n) {
+      return { url: 'https://open.parcelwill.com/api/v2/tracking/order?order_number=' + encodeURIComponent(n),
+               headers: { 'x-parcelpanel-api-key': ppKey }, muteHttpExceptions: true };
+    });
+    for (var j = 0; j < reqs.length; j += 50) {
+      var resp = UrlFetchApp.fetchAll(reqs.slice(j, j + 50));
+      resp.forEach(function (r, k) {
+        if (r.getResponseCode() !== 200) return;
+        try {
+          var o = JSON.parse(r.getContentText());
+          var ships = ((o.order || {}).shipments) || ((o.data || {}).shipments) || o.shipments || [];
+          if (ships.length) {
+            var c = ships[0].carrier;
+            var nm = (c && c.name) || (c && c.code) || c || '';
+            if (nm) carrierOf[orders[j + k]] = normCarrier_(nm);
+          }
+        } catch (e) {}
+      });
+    }
   }
   var byIssue = {}, byCarrier = {}, warm = {}, delay = {};
   function bump(tbl, key, cohort) { (tbl[key] = tbl[key] || {})[cohort] = (tbl[key][cohort] || 0) + 1; }
