@@ -106,6 +106,7 @@ function menuBackfillGorgias() {
   var state = loadState_();
   sweepAndEnrich_(state, oldest);
   enrichBoxTypes_(state, mondays);
+  enrichTransitOverride_(state, mondays);  // late (>2d transit) supersedes warm
   fillRequestedFromSlack_(state, oldest);
   saveState_(state);
   refreshPivotSheet_(state, mondays);
@@ -134,6 +135,7 @@ function build_() {
   var sweepFrom = histSince < iso_(oldest) ? new Date(histSince) : oldest;
   sweepAndEnrich_(state, sweepFrom);
   enrichBoxTypes_(state, mondays);
+  enrichTransitOverride_(state, mondays);  // late (>2d transit) supersedes warm
   fillRequestedFromSlack_(state, histSince);
   saveState_(state);
 
@@ -564,7 +566,8 @@ function buildTabs_(work, state, overrides, mondays, denoms, cdf, today, stamp) 
 // ---------- state (_state hidden tab) ----------
 
 var STATE_COLS = ['key', 'entered', 'requested', 'ticket', 'issue', 'outbound', 'status',
-                  'total', 'original', 'original_cohort', 'original_total', 'lifetime_orders', 'original_boxtype'];
+                  'total', 'original', 'original_cohort', 'original_total', 'lifetime_orders', 'original_boxtype',
+                  'transit_days'];
 
 function loadState_() {
   var sh = mainSS_().getSheetByName(STATE_TAB);
@@ -730,6 +733,63 @@ function enrichBoxTypes_(state, mondays) {
   Object.keys(state).forEach(function (k) {
     var nm = String(state[k].original || '').replace(/^#/, '');
     if (nm && map[nm]) state[k].original_boxtype = map[nm];
+  });
+}
+
+// ---- Parcel Panel lookup (carrier + transit_days) — centralized, Kurt 2026-07-27.
+// One GET /tracking/order per order (fetchAll, 50/batch). transit_days = delivery -
+// pickup (calendar days), set ONLY when delivered with both dates known.
+function ppDateStr_(s) { var m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? m[0] : null; }
+function ppDayDiff_(a, b) {
+  return Math.round((new Date(b + 'T00:00:00Z') - new Date(a + 'T00:00:00Z')) / 86400000);
+}
+function ppLookup_(orderNums) {
+  var out = {}, key = PropertiesService.getScriptProperties().getProperty('PARCELPANEL_API_KEY');
+  if (!key || !orderNums || !orderNums.length) return out;
+  var uniq = orderNums.filter(function (n, i) { return n && orderNums.indexOf(n) === i; });
+  var reqs = uniq.map(function (n) {
+    return { url: 'https://open.parcelwill.com/api/v2/tracking/order?order_number=' + encodeURIComponent(n),
+             headers: { 'x-parcelpanel-api-key': key }, muteHttpExceptions: true };
+  });
+  for (var i = 0; i < reqs.length; i += 50) {
+    var resp = UrlFetchApp.fetchAll(reqs.slice(i, i + 50));
+    resp.forEach(function (r, k) {
+      if (r.getResponseCode() !== 200) return;
+      try {
+        var o = JSON.parse(r.getContentText());
+        var ships = ((o.order || {}).shipments) || ((o.data || {}).shipments) || o.shipments || [];
+        if (!ships.length) return;
+        var s = ships[0], c = s.carrier, cname = (c && c.name) || (c && c.code) || c || '';
+        var rec = { carrier: cname ? normCarrier_(cname) : '', transit: null };
+        var status = String(s.delivery_status || s.status || '').toUpperCase();
+        var pk = ppDateStr_(s.pickup_date), dl = ppDateStr_(s.delivery_date);
+        if (pk && dl && status.indexOf('DELIVER') >= 0) {
+          var td = ppDayDiff_(pk, dl); if (td >= 0) rec.transit = td;
+        }
+        out[uniq[i + k]] = rec;
+      } catch (e) {}
+    });
+  }
+  return out;
+}
+// "late supersedes warm": a box >2 transit days arrived warm BECAUSE it was delayed —
+// the delay is root cause. Applied post-classification (the Slack text can't see transit).
+function isWarmShort_(iss) { return /arrived\s+warm/i.test(String(iss)); }        // Raw Data label
+function isWarmCanon_(iss) { return String(iss).indexOf('Arrived Warm') >= 0; }    // Triage canonical
+function enrichTransitOverride_(state, mondays) {
+  var tags = cohortTags_(mondays), need = [];
+  Object.keys(state).forEach(function (k) {
+    var r = state[k];
+    if (r.original && tags[r.original_cohort] && r.transit_days == null) {
+      var nm = String(r.original).replace(/^#/, ''); if (nm && need.indexOf(nm) < 0) need.push(nm);
+    }
+  });
+  var pp = ppLookup_(need);
+  Object.keys(state).forEach(function (k) {
+    var r = state[k], nm = String(r.original || '').replace(/^#/, '');
+    if (nm && pp[nm] && pp[nm].transit != null) r.transit_days = pp[nm].transit;
+    // sweepAndEnrich_ re-derives r.issue (warm) every run, so re-apply the flip here
+    if (r.transit_days != null && r.transit_days > 2 && isWarmShort_(r.issue)) r.issue = 'Delayed in Transit';
   });
 }
 
@@ -912,30 +972,10 @@ function productMixBreakdown_(cohortCols, sizeByCohort) {
       stateOf[e.node.name.replace(/^#/, '')] = (e.node.shippingAddress || {}).provinceCode || '??';
     });
   }
-  // carrier from Parcel Panel API (Kurt 2026-07-22 — Shopify orders + Parcel Panel,
-  // NOT Shopify's fulfillment field). Key in Script Property PARCELPANEL_API_KEY.
-  var ppKey = PropertiesService.getScriptProperties().getProperty('PARCELPANEL_API_KEY');
-  if (ppKey) {
-    var reqs = orders.map(function (n) {
-      return { url: 'https://open.parcelwill.com/api/v2/tracking/order?order_number=' + encodeURIComponent(n),
-               headers: { 'x-parcelpanel-api-key': ppKey }, muteHttpExceptions: true };
-    });
-    for (var j = 0; j < reqs.length; j += 50) {
-      var resp = UrlFetchApp.fetchAll(reqs.slice(j, j + 50));
-      resp.forEach(function (r, k) {
-        if (r.getResponseCode() !== 200) return;
-        try {
-          var o = JSON.parse(r.getContentText());
-          var ships = ((o.order || {}).shipments) || ((o.data || {}).shipments) || o.shipments || [];
-          if (ships.length) {
-            var c = ships[0].carrier;
-            var nm = (c && c.name) || (c && c.code) || c || '';
-            if (nm) carrierOf[orders[j + k]] = normCarrier_(nm);
-          }
-        } catch (e) {}
-      });
-    }
-  }
+  // carrier from Parcel Panel (Kurt 2026-07-22) — centralized in ppLookup_ (also
+  // returns transit; the transit->Delayed override already ran into Raw Data col D).
+  var pp = ppLookup_(orders);
+  Object.keys(pp).forEach(function (o) { if (pp[o].carrier) carrierOf[o] = pp[o].carrier; });
   var byIssue = {}, byCarrier = {}, warm = {}, delay = {};
   function bump(tbl, key, cohort) { (tbl[key] = tbl[key] || {})[cohort] = (tbl[key][cohort] || 0) + 1; }
   recs.forEach(function (x) {
@@ -1021,12 +1061,24 @@ function writeTriage_(state, oldest, stamp) {
   });
   // preserve Decision (key->H), Gorgias id (order->G), Box Type (order->F),
   // Ship Week (order->E) so we don't re-hit Shopify/Gorgias for same rows hourly
-  var prevDec = {}, gidByOrder = {}, shipByOrder = {}, boxByOrder = {}, orderByGid = {};
+  var prevDec = {}, gidByOrder = {}, shipByOrder = {}, boxByOrder = {}, orderByGid = {}, decided = {};
+  // persisted decisions (hidden _triage_decisions tab): a row with ANY Decision is
+  // "handled" and drops off the active list — Triage regenerates from Slack each run,
+  // so the decision must live off-list or the row would just reappear (Kurt 2026-07-27).
+  try {
+    var dsh = SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName('_triage_decisions');
+    if (dsh && dsh.getLastRow() >= 1) {
+      dsh.getRange('A1:B' + dsh.getLastRow()).getValues().forEach(function (r) {
+        if (r[0]) decided[String(r[0])] = String(r[1] || 'x');
+      });
+    }
+  } catch (e) {}
   try {
     var psh = SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName('Triage');
     if (psh && psh.getLastRow() >= 3) {
       psh.getRange('A3:H' + psh.getLastRow()).getValues().forEach(function (row) {
         if (row[0]) prevDec[String(row[0])] = row[7];
+        if (row[0] && String(row[7] || '').trim()) decided[String(row[0])] = String(row[7]).trim();  // newly-typed Decision → suppress
         var ord = String(row[3] || '').replace(/^#/, '');
         if (ord && row[4]) shipByOrder[ord] = String(row[4]);
         if (ord && row[5]) boxByOrder[ord] = String(row[5]);
@@ -1058,6 +1110,7 @@ function writeTriage_(state, oldest, stamp) {
       else if (gLookups < 15) { gid = gorgiasForOrder_(onum, r.created_ts); gLookups++; }
     }
     var key = String(gid || onum || (r.created_ts || ''));
+    if (decided[key]) return;              // a Decision was entered → handled, drop from active list
     entries.push({ key: key, posted: (r.created_ts || '').slice(0, 16), issue: r.issue || '',
                    onum: onum, gid: gid, dec: prevDec[key] || '' });
   });
@@ -1076,6 +1129,13 @@ function writeTriage_(state, oldest, stamp) {
       boxByOrder[nm] = boxTypeOf_(ed.node.lineItems.edges.map(function (le) { return le.node.sku; }));
     });
   }
+  // late supersedes warm: >2 transit days (Parcel Panel) reclassifies Arrived Warm -> Delayed
+  var ppT = ppLookup_(entries.map(function (e) { return e.onum; }).filter(Boolean));
+  entries.forEach(function (e) {
+    if (e.onum && ppT[e.onum] && ppT[e.onum].transit != null && ppT[e.onum].transit > 2 && isWarmCanon_(e.issue)) {
+      e.issue = 'Shipping::Delayed in transit';
+    }
+  });
   var byWeek = {};
   entries.forEach(function (e) {
     e.ship = (e.onum && shipByOrder[e.onum]) || '';
@@ -1086,7 +1146,7 @@ function writeTriage_(state, oldest, stamp) {
   var weeks = Object.keys(byWeek).sort();
   // main table A-H + gap I + by-ship-week summary J-K (to the right)
   var out = [
-    ['REFRESHED ' + stamp, 'Slack posts w/o an entered reship — Col H is YOURS: reship / refund / no action',
+    ['REFRESHED ' + stamp, 'Slack posts w/o an entered reship — Col H is YOURS: type reship / refund / no action to REMOVE the row (persists)',
      '', '', '', '', '', 'Decision', '', 'Unresolved reships by ship week', ''],
     ['Key', 'Posted', 'Issue', 'Order', 'Ship Week', 'Box Type', 'Gorgias', 'Decision', '', 'Ship Week', 'Count']];
   var n = Math.max(entries.length, weeks.length);
@@ -1100,6 +1160,12 @@ function writeTriage_(state, oldest, stamp) {
   }
   out.push(['', '', '', '', '', '', '', '', '', 'Total', entries.length]);
   writeTabTo_(PIVOT_SHEET_ID, 'Triage', out, false);
+  // persist the suppressed decisions so they survive the next Slack-fed rebuild
+  var decRows = Object.keys(decided).map(function (k) { return [k, decided[k]]; });
+  if (decRows.length) {
+    writeTabTo_(PIVOT_SHEET_ID, '_triage_decisions', decRows, false);
+    try { SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName('_triage_decisions').hideSheet(); } catch (e) {}
+  }
 }
 
 // ---- Daily 92-day tab (Date / requested / created / ship week) ----
