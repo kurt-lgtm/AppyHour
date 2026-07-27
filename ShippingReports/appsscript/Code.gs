@@ -932,7 +932,7 @@ function writeProductMixT_() {
   var grid = pm.getRange(2, 1, pm.getLastRow() - 1, 21).getDisplayValues();  // A2:U{last}
   var hdr = grid[0], data = grid.slice(1);
   var cohortCols = data.map(function (r) { return r[0]; });
-  var tp = [['Metric'].concat(cohortCols)];
+  var tp = [['Ship Week'].concat(cohortCols)];  // top-left label (Kurt 2026-07-27)
   for (var ci = 1; ci < hdr.length; ci++) {
     tp.push([hdr[ci]].concat(data.map(function (r) { return r[ci]; })));
   }
