@@ -746,10 +746,17 @@ var ISSUE_RULES_ = [
   [/missing\s+\d*\s*item|missing\s+\w+\s+item/, 'Order::Missing item', 'fulfillment'],
   [/wrong\s+order|wrong\s+item/, 'Order::Wrong item', 'fulfillment']
 ];
+// "can't/cannot/don't/without/avoid delay" and "delay it further" are expedite
+// REQUESTS about a not-yet-failed order, NOT a transit-delay failure — Kurt 2026-07-27
+// (#165420 shipped fine but the post "we can't delay it further" tripped the delay rule).
+var NEG_DELAY_ = /can'?t\s+(?:\w+\s+){0,3}delay|can\s?not\s+(?:\w+\s+){0,3}delay|do\s?n'?t\s+(?:\w+\s+){0,3}delay|do\s+not\s+(?:\w+\s+){0,3}delay|wo\s?n'?t\s+(?:\w+\s+){0,3}delay|will\s+not\s+(?:\w+\s+){0,3}delay|without\s+delay|no\s+(?:further\s+)?delay|avoid\s+(?:\w+\s+){0,2}delay|delay\w*\s+(?:it|this|them|the\s+\w+)\s+further|further\s+delay/;
 function classifyReship_(text) {
   var t = String(text).toLowerCase();
   for (var i = 0; i < ISSUE_RULES_.length; i++) {
-    if (ISSUE_RULES_[i][0].test(t)) return [ISSUE_RULES_[i][1], ISSUE_RULES_[i][2]];
+    if (ISSUE_RULES_[i][0].test(t)) {
+      if (ISSUE_RULES_[i][1] === 'Shipping::Delayed in transit' && NEG_DELAY_.test(t)) continue;  // expedite request, not a failure
+      return [ISSUE_RULES_[i][1], ISSUE_RULES_[i][2]];
+    }
   }
   return [null, null];
 }

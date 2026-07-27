@@ -63,11 +63,24 @@ class ReshipRecord:
     raw: str
 
 
+# "can't/cannot/don't/without/avoid delay" and "delay it further" are expedite
+# REQUESTS about a not-yet-failed order, NOT a transit-delay failure (Kurt 2026-07-27,
+# #165420 shipped fine but "we can't delay it further" tripped the delay rule).
+_NEG_DELAY = re.compile(
+    r"can'?t\s+(?:\w+\s+){0,3}delay|can\s?not\s+(?:\w+\s+){0,3}delay|do\s?n'?t\s+(?:\w+\s+){0,3}delay"
+    r"|do\s+not\s+(?:\w+\s+){0,3}delay|wo\s?n'?t\s+(?:\w+\s+){0,3}delay|will\s+not\s+(?:\w+\s+){0,3}delay"
+    r"|without\s+delay|no\s+(?:further\s+)?delay|avoid\s+(?:\w+\s+){0,2}delay"
+    r"|delay\w*\s+(?:it|this|them|the\s+\w+)\s+further|further\s+delay"
+)
+
+
 def classify(text: str) -> tuple[Optional[str], Optional[str]]:
     """Return (canonical_issue, team). (None, None) for ops requests / no match."""
     t = text.lower()
     for pat, issue, team in ISSUE_RULES:
         if re.search(pat, t):
+            if issue == "Shipping::Delayed in transit" and _NEG_DELAY.search(t):
+                continue  # expedite request, not a delay failure
             return issue, team
     return None, None
 
