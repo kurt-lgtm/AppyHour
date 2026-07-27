@@ -27,6 +27,13 @@ import time
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 
+# Canonical Shopify line-item netting (shopify-line-items rule) — single source
+# of truth for "NEVER count removed/refunded items" across ALL builds.
+_MCP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "AppyHourMCP")
+if _MCP_DIR not in sys.path:
+    sys.path.insert(0, _MCP_DIR)
+from utils import active_line_items  # noqa: E402
+
 # -- Paths --
 BASE = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PATH = os.path.join(BASE, "dist", "inventory_reorder_settings.json")
@@ -655,8 +662,19 @@ def fetch_shopify_orders(settings, out_specialty=None):
         else:
             wk2_count += 1
 
-        # Extract line items
-        line_items = order.get("line_items", [])
+        # Extract line items — NEVER count removed items.
+        # MANDATORY rule (shopify-line-items skill): net removed/refunded lines
+        # via the canonical active_line_items() helper — do NOT read raw
+        # order["line_items"], Shopify keeps refunded/edited-out lines at their
+        # ORIGINAL quantity so raw counting phantom-counts food taken off the
+        # order (burned us on MT-FS-BRAS #165907, swapped to MT-IBRES 7/24).
+        # Belt-and-suspenders: also drop fulfillable_quantity==0 for the rare
+        # order-edit removal that emits no refund_line_item. Orders here are
+        # status=unfulfilled, so fulfillable_quantity is the true remaining qty.
+        line_items = [
+            it for it in active_line_items(order)
+            if it.get("fulfillable_quantity") != 0
+        ]
         item_skus = {}
         # Collect all AHB-* SKUs then pick primary box (not addon like AHB-CUR-MS / AHB-BVAL)
         ahb_skus = []

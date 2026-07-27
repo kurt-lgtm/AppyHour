@@ -27,6 +27,12 @@ Demand forecasting + cut order generation + fulfillment web dashboard. Single-fi
 - **PAR=30** for all items in v2 cut order
 - **Avail = corrected_inventory_path** — update BEFORE running cut order
 - **Calibri everywhere** in `build_cut_order_xlsx_v2.py` output
+- **NEVER count removed items** — any Shopify order read in the demand pipeline MUST net removed/refunded
+  lines via the canonical `active_line_items()` (AppyHourMCP/utils.py, `shopify-line-items` skill). Shopify
+  keeps refunded/edited-out lines at their ORIGINAL `quantity`, so reading raw `order["line_items"]`
+  phantom-counts food taken off the order. Burned us: MT-FS-BRAS on reship #165907 (removed 7/24, swapped
+  to MT-IBRES) still landed on the cut. Fixed at `inventory_demand_report.py` (fetch loop routes through
+  `active_line_items()` + drops `fulfillable_quantity==0`). Do NOT hand-roll a raw line-item read anywhere.
 
 ## Architecture
 
