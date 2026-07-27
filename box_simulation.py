@@ -6,6 +6,7 @@ Default SHIP_TAG: _SHIP_2026-04-27
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from datetime import date
@@ -17,7 +18,12 @@ from utils import get_shopify_auth, shopify_graphql  # noqa: E402
 
 from openpyxl import Workbook, load_workbook  # noqa: E402
 
-XLSX_LOOKUP = Path(r"C:\Users\Work\Desktop\Onboarded Items with DistVol - Updated.xlsx")
+# DISTVOL_XLSX env override (P7 portability 2026-07-27) — unset resolves to the same Desktop literal,
+# so Windows behavior is byte-identical. 🔴 This file is the DistVol source of truth AND a single copy
+# on the Desktop; the env hook is what lets a non-Windows host (the DO droplet) point at its own copy
+# until the `distvol` table replaces it.
+XLSX_LOOKUP = Path(os.environ.get("DISTVOL_XLSX")
+                   or r"C:\Users\Work\Desktop\Onboarded Items with DistVol - Updated.xlsx")
 OUT_DIR = Path(r"C:\Users\Work\Desktop")
 
 SMALL_MAX = 2.99
