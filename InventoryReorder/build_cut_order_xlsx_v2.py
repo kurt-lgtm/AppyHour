@@ -1127,16 +1127,17 @@ def _build_cut_order_tab(
             10: 10, # J After
             11: 9,  # K Cut (slices)
             12: 9,  # L Good?
-            13: 9,  # M Wheel lb
-            14: 9,  # N Slice oz
-            15: 9,  # O Wheels
-            16: 8,  # P Safety (hidden)
-            17: 34, # Q Notes (input)
+            13: 9,  # M NET (After + Cut) — Kurt 2026-07-28
+            14: 9,  # N Wheel lb
+            15: 9,  # O Slice oz
+            16: 9,  # P Wheels
+            17: 8,  # Q Safety (hidden)
+            18: 34, # R Notes (input)
         },
     )
-    LAST_COL = 15
-    NOTES_COL = 17
-    ws.column_dimensions["P"].hidden = True
+    LAST_COL = 16
+    NOTES_COL = 18
+    ws.column_dimensions["Q"].hidden = True
 
     # ── Title bar ──
     _merge_title_bar(ws, 1, f"CUT ORDER \u2014 Ship Week of {SHIP_WEEK_MONDAY}", NOTES_COL)
@@ -1162,6 +1163,7 @@ def _build_cut_order_tab(
         "After",
         "Cut",
         "Good?",
+        "NET",
         "Wheel lb",
         "Slice oz",
         "Wheels",
@@ -1188,6 +1190,13 @@ def _build_cut_order_tab(
     jam_sku_range = f"$AH$3:$AH${jam_last_row}"
     jam_w1_range = f"$AI$3:$AI${jam_last_row}"
     jam_w2_range = f"$AJ$3:$AJ${jam_last_row}"
+    # Bundle EXTRA boxes: hidden helper cols written by the bundles section at the
+    # bottom of this sheet — S = bare component SKU, T = extra units (= Add boxes x
+    # per-box). Deliberately a wide fixed span: the bundles section starts below the
+    # SKU table, whose length isn't known when these formulas are written. S/T are
+    # used by nothing else on this sheet.
+    BUNDLE_SKU_RANGE = "$S$1:$S$600"
+    BUNDLE_EXTRA_RANGE = "$T$1:$T$600"
 
     # ── Pre-compute urgency for each SKU ──
     # We need to calculate actual numeric values for sorting, not just formulas
@@ -1294,16 +1303,18 @@ def _build_cut_order_tab(
         ws_.cell(row=row_num, column=6).fill = FILL_INPUT
         ws_.cell(row=row_num, column=6).alignment = A_RIGHT
         # G: +Assign W1 = SUMIF(PR-CJAM+MONTHLY) + SUMIF(CEX-EC) + SUMIF(PR-CJAM JAM)
+        #                + SUMIF(bundle EXTRA boxes typed in the Add column below)
         ws_[f"G{row_num}"] = (
             f"=SUMIF({prcjam_sku_range},A{row_num},{prcjam_w1_range})"
             f"+SUMIF({cexec_sku_range},A{row_num},{cexec_w1_range})"
             f"+SUMIF({jam_sku_range},A{row_num},{jam_w1_range})"
+            f"+SUMIF({BUNDLE_SKU_RANGE},A{row_num},{BUNDLE_EXTRA_RANGE})"
         )
         ws_.cell(row=row_num, column=7).font = F_NUM
         ws_.cell(row=row_num, column=7).alignment = A_RIGHT
         # H: spacer
-        # I: Final Demand = Recharge (D) + Shopify (E) + First Order (F) + Assign (G) + Safety (P)
-        ws_[f"I{row_num}"] = f"=D{row_num}+E{row_num}+F{row_num}+G{row_num}+P{row_num}"
+        # I: Final Demand = Recharge (D) + Shopify (E) + First Order (F) + Assign (G) + Safety (Q)
+        ws_[f"I{row_num}"] = f"=D{row_num}+E{row_num}+F{row_num}+G{row_num}+Q{row_num}"
         ws_.cell(row=row_num, column=9).font = F_NUM_BOLD
         ws_.cell(row=row_num, column=9).alignment = A_RIGHT
         # J: After = Avail (C) - Final Demand (I)
@@ -1320,27 +1331,31 @@ def _build_cut_order_tab(
         )
         ws_.cell(row=row_num, column=12).font = F_GOOD
         ws_.cell(row=row_num, column=12).alignment = A_CENTER
-        # M: Wheel lb (input — weight of one raw wheel, lbs). Pre-filled from snapshot.
-        ws_.cell(row=row_num, column=13, value=_spec.get("wheel_lb") or None).font = F_INPUT
-        ws_.cell(row=row_num, column=13).fill = FILL_INPUT
+        # M: NET = After (J) + Cut (K) — what's left once this cut is produced (Kurt 2026-07-28)
+        ws_[f"M{row_num}"] = f"=J{row_num}+K{row_num}"
+        ws_.cell(row=row_num, column=13).font = F_NUM_BOLD
         ws_.cell(row=row_num, column=13).alignment = A_RIGHT
-        # N: Slice oz (input — finished slice weight, oz). Pre-filled from snapshot.
-        ws_.cell(row=row_num, column=14, value=_spec.get("slice_oz") or None).font = F_INPUT
+        # N: Wheel lb (input — weight of one raw wheel, lbs). Pre-filled from snapshot.
+        ws_.cell(row=row_num, column=14, value=_spec.get("wheel_lb") or None).font = F_INPUT
         ws_.cell(row=row_num, column=14).fill = FILL_INPUT
         ws_.cell(row=row_num, column=14).alignment = A_RIGHT
-        # O: Wheels (computed) = ROUNDUP(Cut slices * Slice oz / (Wheel lb * 16)) — whole wheels
-        ws_[f"O{row_num}"] = (
-            f'=IF(OR(K{row_num}=0,M{row_num}=0,N{row_num}=0),"",'
-            f"ROUNDUP(K{row_num}*N{row_num}/(M{row_num}*16),0))"
-        )
-        ws_.cell(row=row_num, column=15).font = F_NUM_BOLD
+        # O: Slice oz (input — finished slice weight, oz). Pre-filled from snapshot.
+        ws_.cell(row=row_num, column=15, value=_spec.get("slice_oz") or None).font = F_INPUT
+        ws_.cell(row=row_num, column=15).fill = FILL_INPUT
         ws_.cell(row=row_num, column=15).alignment = A_RIGHT
-        # P: Safety (hidden) — flat 25 if raw demand (D+E+F+G) > 25 else 0; avoids circular ref with I
-        ws_[f"P{row_num}"] = f"=IF((D{row_num}+E{row_num}+F{row_num}+G{row_num})>25,25,0)"
-        ws_.cell(row=row_num, column=16).font = F_NUM
+        # P: Wheels (computed) = ROUNDUP(Cut slices * Slice oz / (Wheel lb * 16)) — whole wheels
+        ws_[f"P{row_num}"] = (
+            f'=IF(OR(K{row_num}=0,N{row_num}=0,O{row_num}=0),"",'
+            f"ROUNDUP(K{row_num}*O{row_num}/(N{row_num}*16),0))"
+        )
+        ws_.cell(row=row_num, column=16).font = F_NUM_BOLD
         ws_.cell(row=row_num, column=16).alignment = A_RIGHT
-        # Q: Notes (input — free text). Pre-filled from snapshot; editable.
-        _nc = ws_.cell(row=row_num, column=17, value=_spec.get("notes") or None)
+        # Q: Safety (hidden) — flat 25 if raw demand (D+E+F+G) > 25 else 0; avoids circular ref with I
+        ws_[f"Q{row_num}"] = f"=IF((D{row_num}+E{row_num}+F{row_num}+G{row_num})>25,25,0)"
+        ws_.cell(row=row_num, column=17).font = F_NUM
+        ws_.cell(row=row_num, column=17).alignment = A_RIGHT
+        # R: Notes (input — free text). Pre-filled from snapshot; editable.
+        _nc = ws_.cell(row=row_num, column=18, value=_spec.get("notes") or None)
         _nc.font = F_INPUT
         _nc.fill = FILL_INPUT
         _nc.alignment = A_LEFT
@@ -1433,8 +1448,15 @@ def _build_cut_order_tab(
         ),
     )
 
-    # Input column highlights: First Order (F), Cut (K), Wheel lb (M), Slice oz (N)
-    for _col in ("F", "K", "M", "N"):
+    # NET (M) = After + Cut: red if still short, green once covered
+    ws.conditional_formatting.add(
+        f"M{data_start}:M{last_row}",
+        CellIsRule(operator="lessThan", formula=["0"],
+                   fill=PatternFill("solid", fgColor=SHORTAGE_BG), font=Font(color=SHORTAGE_FG)),
+    )
+
+    # Input column highlights: First Order (F), Cut (K), Wheel lb (N), Slice oz (O)
+    for _col in ("F", "K", "N", "O"):
         ws.conditional_formatting.add(
             f"{_col}{data_start}:{_col}{last_row}",
             CellIsRule(
@@ -1446,20 +1468,29 @@ def _build_cut_order_tab(
         )
 
     # ── Bundles & Limited-Release section (below the main table) ──
-    _write_bundles_on_cut_order(ws, data, last_row + 2)
+    _write_bundles_on_cut_order(ws, data, settings, last_row + 2)
 
     # Freeze panes: row 4 header + columns A:B
     ws.freeze_panes = "C5"
 
 
-def _write_bundles_on_cut_order(ws: Worksheet, data: dict, start_row: int) -> int:
+def _write_bundles_on_cut_order(ws: Worksheet, data: dict, settings: dict, start_row: int) -> int:
     """List each bundle / limited-release box with its component SKUs indented
-    beneath it. Components were already exploded into the demand columns above
-    (added only where a container didn't already list them); this section shows
-    the breakdown so the floor sees what each box contributes.
+    beneath it, and let the user PRODUCE EXTRA boxes beyond what orders show.
+
+    "In orders" surfaces what the cohort already carries (those components are
+    already counted in Recharge/Shopify demand above). "Add boxes" is a blue
+    INPUT: type N and each component gets N x per-box added to its +Assign, so
+    Final Demand moves live. Purely additive — it never re-counts detected
+    boxes, so it cannot double-count (Kurt 2026-07-28: "the demand should
+    surface what's there and let me add more").
+
+    Extras reach the main table through hidden helper cols S (bare component
+    SKU) and T (extra units), which the +Assign SUMIF reads.
     """
     bundles = data.get("bundles") or {"WK1": {}, "WK2": {}}
     sku_name_fn = data["sku_name"]
+    add_cfg = settings.get("bundle_add_boxes", {})
 
     # Merge WK1 + WK2 per parent bundle.
     merged: dict = {}
@@ -1480,11 +1511,13 @@ def _write_bundles_on_cut_order(ws: Worksheet, data: dict, start_row: int) -> in
 
     row = start_row
     _section_header(ws, row,
-                    "BUNDLES & LIMITED-RELEASE  (components already added into demand above)",
-                    "1E293B", "FFFFFF", 15)
+                    "BUNDLES & LIMITED-RELEASE  —  type in 'Add boxes' to produce EXTRA "
+                    "beyond what orders already carry (feeds +Assign / Final Demand)",
+                    "1E293B", "FFFFFF", 16)
     row += 1
-    for col, label in ((1, "Box / Component"), (2, "Name"), (3, "Boxes"),
-                       (4, "Per box"), (5, "Added to cut"), (6, "Already in orders")):
+    for col, label in ((1, "Box / Component"), (2, "Name"), (3, "In orders"),
+                       (4, "Add boxes"), (5, "Total"), (6, "Per box"),
+                       (7, "Extra to cut"), (8, "Already in orders")):
         c = ws.cell(row=row, column=col, value=label)
         c.font = Font(name="Calibri", size=9, bold=True, color="FFFFFF")
         c.fill = PatternFill("solid", fgColor="475569")
@@ -1493,6 +1526,7 @@ def _write_bundles_on_cut_order(ws: Worksheet, data: dict, start_row: int) -> in
 
     for parent in sorted(merged):
         m = merged[parent]
+        prow = row  # the Add cell every component of this bundle multiplies
         pc = ws.cell(row=row, column=1, value=parent)
         pc.font = Font(name="Calibri", size=11, bold=True)
         ws.cell(row=row, column=2, value=sku_name_fn(parent) or "").font = Font(
@@ -1500,10 +1534,20 @@ def _write_bundles_on_cut_order(ws: Worksheet, data: dict, start_row: int) -> in
         cc = ws.cell(row=row, column=3, value=m["count"])
         cc.font = Font(name="Calibri", size=11, bold=True)
         cc.alignment = A_RIGHT
+        # Add boxes — INPUT. Pre-filled from the last snapshot (--ingest).
+        ac = ws.cell(row=row, column=4, value=add_cfg.get(parent) or None)
+        ac.font = F_INPUT
+        ac.fill = FILL_INPUT
+        ac.alignment = A_RIGHT
+        tc = ws.cell(row=row, column=5)
+        tc.value = f"=C{row}+D{row}"
+        tc.font = Font(name="Calibri", size=11, bold=True)
+        tc.alignment = A_RIGHT
         row += 1
         if m["no_recipe"]:
             note = ws.cell(row=row, column=2,
-                           value="recipe unavailable in Simple Bundles — NOT exploded")
+                           value="recipe unavailable in Simple Bundles — NOT exploded, "
+                                 "Add boxes will not compute")
             note.font = Font(name="Calibri", size=9, italic=True, color="B45309")
             row += 1
             continue
@@ -1515,12 +1559,28 @@ def _write_bundles_on_cut_order(ws: Worksheet, data: dict, start_row: int) -> in
             if not cd["pickable"]:
                 nm = (nm + "  (not cut)").strip()
             ws.cell(row=row, column=2, value=nm).font = F_NAME
-            for col, val in ((4, cd["per"]), (5, cd["added"]), (6, cd["already"])):
-                cell = ws.cell(row=row, column=col, value=val)
-                cell.font = F_NUM if col == 5 and val else F_NUM_MUTED
-                cell.alignment = A_RIGHT
+            per = cd["per"]
+            pcell = ws.cell(row=row, column=6, value=per)
+            pcell.font = F_NUM_MUTED
+            pcell.alignment = A_RIGHT
+            # Extra to cut = Add boxes x per-box (blank Add reads as 0)
+            ecell = ws.cell(row=row, column=7)
+            ecell.value = f"=$D${prow}*{per}"
+            ecell.font = F_NUM
+            ecell.alignment = A_RIGHT
+            acell = ws.cell(row=row, column=8, value=cd["already"])
+            acell.font = F_NUM_MUTED
+            acell.alignment = A_RIGHT
+            # Hidden helper pair the main table's +Assign SUMIF reads. Only pickable
+            # components can be cut, so only those feed demand.
+            if cd["pickable"]:
+                ws.cell(row=row, column=19, value=cs).font = F_NUM_MUTED
+                ws.cell(row=row, column=20).value = f"=G{row}"
             row += 1
         row += 1  # spacer between bundles
+
+    ws.column_dimensions["S"].hidden = True
+    ws.column_dimensions["T"].hidden = True
     return row
 
 
@@ -1667,6 +1727,7 @@ def _ingest_tommy_inputs(path: str) -> None:
             hdr_row, hcol = r, labels
             break
     specs: dict = {}
+    seen_skus: set = set()   # SKU rows present in the sheet → their spec is REPLACED
     if hdr_row:
         c_sku = hcol["sku"]
         c_f = hcol.get("first order")
@@ -1674,11 +1735,23 @@ def _ingest_tommy_inputs(path: str) -> None:
         c_n = hcol.get("slice oz")
         c_k = hcol.get("cut")
         c_notes = hcol.get("notes")
+        import re as _re0
+        _BARE_SKU = _re0.compile(r"^[A-Z]{2,5}-[A-Z0-9][A-Z0-9-]*$")
         for r in range(hdr_row + 1, ws.max_row + 1):
             sku = ws.cell(r, c_sku).value
             if not sku or not isinstance(sku, str) or not sku.strip():
                 continue
             sku = sku.strip()
+            # STOP at the bundles section — its component rows sit in the same
+            # columns as the main table and would otherwise be ingested as SKU
+            # specs ("   -> AC-LFOLIVE" with the bundle's own numbers).
+            if sku.upper().startswith("BUNDLES"):
+                break
+            # Only bare SKUs: skips indented bundle components, section headers
+            # and "CATEGORY SUBTOTAL" rows.
+            if not _BARE_SKU.match(sku.upper()):
+                continue
+            seen_skus.add(sku)
             rec = {}
             for key, col in (("first_order", c_f), ("wheel_lb", c_m),
                              ("slice_oz", c_n), ("cut", c_k)):
@@ -1758,6 +1831,28 @@ def _ingest_tommy_inputs(path: str) -> None:
                 rr += 1
             if rows:
                 monthly_recipes.setdefault(month, {})[bt] = rows
+
+    # -- Bundle "Add boxes" (extra boxes to produce beyond what orders carry) --
+    bundle_adds: dict = {}
+    for r in range(1, ws.max_row + 1):
+        if not _norm(ws.cell(r, 1).value).startswith("bundles"):
+            continue
+        sub = r + 1
+        add_col = next((cc for cc in range(1, 12)
+                        if "add boxes" in _norm(ws.cell(sub, cc).value)), None)
+        if not add_col:
+            break
+        for rr in range(sub + 1, ws.max_row + 1):
+            name = ws.cell(rr, 1).value
+            if not name or not str(name).strip():
+                continue
+            name = str(name).strip()
+            if name.startswith("→") or name.startswith("->"):
+                continue  # component row
+            v = ws.cell(rr, add_col).value
+            if isinstance(v, (int, float)) and v:
+                bundle_adds[name] = v
+        break
     wb.close()
 
     # -- Merge into settings (dist + APPDATA copies) --
@@ -1772,9 +1867,17 @@ def _ingest_tommy_inputs(path: str) -> None:
             continue
         with open(tgt, encoding="utf-8") as f:
             st = _json.load(f)
+        # REPLACE (not merge) for every SKU row present in the sheet, so a value
+        # the user deliberately CLEARED actually clears instead of resurrecting
+        # from the last snapshot. SKUs absent from the sheet keep what's stored.
         cos = st.setdefault("cut_order_specs", {})
-        for sku, rec in specs.items():
-            cos.setdefault(sku, {}).update(rec)
+        for sku in seen_skus:
+            rec = specs.get(sku)
+            if rec:
+                cos[sku] = rec
+            else:
+                cos.pop(sku, None)
+        st["bundle_add_boxes"] = bundle_adds
         pr = st.setdefault("pr_cjam", {})
         for cur, chz in prcjam_cheese.items():
             entry = pr.setdefault(cur, {})
@@ -1803,6 +1906,11 @@ def _ingest_tommy_inputs(path: str) -> None:
     _mslots = sum(sum(1 for row in b if row[1]) for bts in monthly_recipes.values() for b in bts.values())
     print(f"  monthly slots: {_mslots} filled across "
           f"{sum(len(b) for b in monthly_recipes.values())} box-month blocks")
+    print(f"  bundle 'Add boxes': {bundle_adds or 'none'}")
+    _cleared = sorted(s for s in seen_skus if s not in specs)
+    if _cleared:
+        print(f"  cleared specs for {len(_cleared)} SKU(s) blanked in the sheet: "
+              f"{', '.join(_cleared[:8])}{' …' if len(_cleared) > 8 else ''}")
     print(f"  wrote {written} settings file(s) (.bak backup kept). Next build pre-fills these.")
 
 
