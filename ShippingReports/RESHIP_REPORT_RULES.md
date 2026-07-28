@@ -17,6 +17,59 @@ One tab per ship week (`_SHIP_<Monday>`), refreshed daily by a scheduled task; a
 **Inputs:** Gorgias tickets (bodies, not tags), Slack `#reship-and-order-requests` (corroboration), Shopify orders (GraphQL, live), `shipping.db` fulfillments (cohort tags, read-only via `connect_ro()`).
 **Output:** sheet tabs above + Slack DM to Kurt ONLY on parameter breach (anomaly-first, no daily noise).
 
+## ✅ Current shipped state (2026-07-27) — canonical sheet, tabs, tool menu, overrides
+
+🔴 **The report you actually touch is the PIVOT sheet `1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU`**
+(the old `1JgyYknIxJ3-…` "Reship Sheet" above is RETIRED — engine no longer writes it). Bound Apps
+Script project **"Running Reship"**, scriptId `15K0MrUssFqacWybQAToz6CeHTouRU4IeNY4-DzZ4NeE1rBCCNGpGjAjv`,
+hourly time-trigger on Kurt's account. Deploy = REST `updateContent` (or `clasp push -f`); source of
+truth = `ShippingReports/appsscript/Code.gs`. Local `scratchpad/rebuild_mix_triage.py` = the immediate
+manual mirror (reads `shipments.db` for carrier/transit); GAS is authoritative, the two stay in PARITY.
+
+**Tabs (all self-maintaining):**
+- **Raw Data** — walk-forward append-only ledger (R17), the entered reships. Issue in col D (SHORT label).
+- **Triage** — Slack posts with NO reship entered yet (candidates). Cols: Key·Posted·Issue·Order·Ship
+  Week·Box Type·Gorgias·Decision, + a by-ship-week "Unresolved" summary table to the right. Issue is
+  CANONICAL (`Shipping::…`). A row with any Decision typed is dropped + remembered in hidden
+  `_triage_decisions` so it doesn't reappear.
+- **Product Mix** — per cohort: size, and per box type (Regular/Medium Tray/Large Tray) Reship count/%
+  (COUNTIFS over Raw Data) + Unresolved count/% (COUNTIFS over Triage). Then **Potential** (=all Reship
+  + all Unresolved) and **Actual** (=reships only), both %-over-cohort-size. **All % cells are
+  TEXT-formatted strings** (`"1.70%"`) so new cohort columns render without manual formatting.
+- **Product Mix (T)** — transpose (metrics as rows, cohorts as columns; A1 = "Ship Week"). Below the
+  metrics, grouped breakdowns **By Issue · By Carrier · Arrived Warm by State · Delayed by State**, each
+  emitted TWICE: a `── … (%) ──` section (÷ cohort size) then a discrete-count section. Built AFTER
+  writeTriage_ (with `flush()`) so its Unresolved/Potential reflect the current Triage, not last cycle.
+- **Daily** — separate sheet `1VHzlyvFabVYUGpR71tgJfYDglI85KnCQOCYJFyZvGsI`.
+
+**Tool menu (this is the "tool"):** `onOpen` builds a **Reship Report** custom menu on the sheet →
+*Refresh now (full)* · *Refresh Product Mix + (T)* · *Refresh Triage only* · *Refresh Daily* ·
+*Backfill Gorgias + enrich*. Each runs the matching GAS function; first click asks Kurt to authorize.
+
+**🔴 Carrier = Parcel Panel, NOT Shopify's fulfillment `tracking_company`** (that mislabels
+OnTrac↔LaserShip/Veho). GAS fetches it per order from the PP API
+(`open.parcelwill.com/api/v2/tracking/order`, header `x-parcelpanel-api-key` from **Script Property
+`PARCELPANEL_API_KEY`** — name has NO underscores inside PARCELPANEL; value = `.env`
+`PARCEL_PANEL_API_KEY`). Local rebuild reads `delivery_status.carrier`. UrlFetchApp's UA is accepted;
+Python-urllib's default UA is Cloudflare-403'd. Without the Script Property, GAS carrier = `Unknown`.
+
+**🔴 Two classification overrides — post-classification at build time, `parse.py` text classifier
+UNTOUCHED (it has no transit):**
+1. **Expedite-request guard** (`c495842`): "can't delay / do not delay / delay it further / avoid
+   delay / no further delay" is a REQUEST, not a `Delayed in transit` failure — do NOT let the bare
+   word "delay" classify it. Real delays ("delayed in transit", "it was delayed 5 days") still count.
+2. **Late supersedes warm** (`a20950c`): a reship whose ORIGINAL order was delivered in **>2 transit
+   days** (Parcel Panel; `delivery_date − pickup_date`, delivered only) reclassifies `Arrived Warm` →
+   `Delayed in transit` — the delay is root cause. Applied to Raw Data (short label) via
+   `enrichTransitOverride_` (re-applied every run because sweepAndEnrich_ re-derives issue) and to
+   Triage (canonical) in `writeTriage_`; the (T) breakdown auto-follows Raw Data. `transit_days`
+   cached in `_state`. Threshold strictly `> 2` (2-day = on-time).
+
+**Deploy gotcha:** clasp refresh token dies ~weekly with `invalid_rapt` (Workspace reauth policy, NOT
+Testing mode — consent screen is Internal, do NOT "publish"). Fix = run
+`ShippingReports/appsscript/clasp_login_py.py` (narrowed to script.projects scope to dodge the policy).
+[[clasp-invalid-rapt-workspace-reauth]] · [[clasp-node24-premature-close]]
+
 ## 🔴 Counting rules — the failures these prevent, negatives first
 
 1. **NEVER count Gorgias tags as reships.** Rule 81603 keyword-spams `Reship req` onto cancels, ads, reviews, skip requests — 34 tagged vs ~5 real on 7/06–08 → phantom CEO panic. Tag counts may not appear anywhere in the report. ([[gorgias-tag-counts-invalid-rule-81603]])
@@ -134,3 +187,9 @@ Four blocks over the swept window, unit = deduped reship orders:
 ## Change log
 
 - 2026-07-09 — initial draft (Claude, from Kurt/Dan/Jessa Slack thread C0A6185SY0Z + 7/08 session findings). Awaiting Kurt approval.
+- 2026-07-13 — headless port to the pivot sheet (R15–R17); local schtask disabled.
+- 2026-07-27 — added "Current shipped state" section: canonical = pivot sheet, Product Mix
+  (Reship/Unresolved/Potential/Actual), Product Mix (T) transpose + By Issue/Carrier/State breakdowns
+  (%+discrete), Parcel Panel carrier (Script Property `PARCELPANEL_API_KEY`), Reship Report custom
+  menu, and the two post-classification overrides (expedite-request guard `c495842`, late-supersedes-
+  warm `a20950c`). SSOT now matches the live `Code.gs` + `scratchpad/rebuild_mix_triage.py`.

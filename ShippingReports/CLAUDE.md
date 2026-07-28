@@ -2,8 +2,11 @@
 
 Analytics pipeline for subscription box shipping. Ingests carrier invoices (OnTrac, UPS, FedEx, Veho), Gorgias issues, Parcel Panel tracking → routing recommendations, cost analysis, performance reports.
 
-> 🔴 **Reship report:** any change to the daily reship tracking report / Reship Sheet reads
-> [`RESHIP_REPORT_RULES.md`](RESHIP_REPORT_RULES.md) FIRST (constraints SSOT — DRAFT, pending Kurt approval).
+> 🔴 **Reship report** (HEADLESS, live): any change to it reads [`RESHIP_REPORT_RULES.md`](RESHIP_REPORT_RULES.md)
+> FIRST (constraints SSOT, APPROVED). Canonical = PIVOT sheet `1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU`,
+> bound Apps Script `appsscript/Code.gs` (hourly). Tabs: Raw Data · Triage · Product Mix · Product Mix (T)
+> · Daily; a **Reship Report** custom menu drives manual refreshes. Carrier = Parcel Panel (Script Property
+> `PARCELPANEL_API_KEY`). Local mirror = `scratchpad/rebuild_mix_triage.py`.
 
 ## Task Routing
 
