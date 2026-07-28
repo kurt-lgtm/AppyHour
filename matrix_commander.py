@@ -2548,6 +2548,21 @@ def merge_gift_xlsx(
         main_headers.append(h)
         main_ws.cell(1, len(main_headers)).value = h
 
+    # 🔴 UNMAPPED META HEADER = a RENAME, and renames fail SILENTLY (QC pass 2026-07-28). Alignment is
+    # by header NAME: if the generator renames a meta column (`Zip` -> `ZIP`, `Address 2` -> `Address2`)
+    # it drops out of `gift_mapped` and the merge quietly LEAVES THE MATRIX'S STALE VALUE — no error,
+    # no log line. A rename of a PRODUCT column is visible (it unions in); a meta rename is invisible.
+    # Evidence for the strictness: across 8 weekly vFGRs the ONLY non-product header absent from the
+    # matrix was the `remove` placeholder, so anything else unmapped is a real deviation, not routine.
+    # `skipped_cols` was already computing exactly this set and merely PRINTING it at the end.
+    if skipped_cols:
+        raise GiftMergeError(
+            f"vFGR non-product column(s) not present in the matrix: {skipped_cols}. The merge aligns "
+            f"by header name, so a RENAMED meta column would silently stop being overwritten and the "
+            f"matrix's stale recipient data would ship. Fix the vFGR export header(s), or — if this is "
+            f"a disposable placeholder column — name it exactly one of {sorted(_GIFT_PLACEHOLDER_HEADERS)}."
+        )
+
     gift_pos = [main_idx.get(h) if h else None for h in gift_headers]
     prod_cols = {i for i, h in enumerate(main_headers) if _is_product_header(h)}  # 0-indexed
     preserve = {
@@ -2555,6 +2570,7 @@ def merge_gift_xlsx(
     }  # engine col L + prod day stay (rule 20b)
     notes_i = main_idx.get("Notes")
     total_i = main_idx.get("Total")
+    _zip_i = next((i for i, h in enumerate(gift_headers) if h == "Zip"), None)   # index into GIFT row
 
     # Index main rows by OrderID (sheet row number)
     main_rownum: dict[str, int] = {}
@@ -2577,6 +2593,25 @@ def merge_gift_xlsx(
         if r is None:
             missing.append(oid)
             continue
+        # 🔴 ZIP VALIDATION before the overwrite (QC pass 2026-07-28). The matrix zip comes from
+        # Shopify and is correct; this merge REPLACES it from the vFGR with no check. A zip stored as
+        # a NUMBER loses its leading zero (07627 -> 7627) — the exact class `check_zip_leading_zeroes`
+        # exists for on the matrix path, with no equivalent here. The routing engine then rates and
+        # labels off the broken zip: a mis-routed or undeliverable cold-chain box, found after it
+        # ships. 8 weeks of vFGRs are clean, so this is a guard, not a fix — keep it loud.
+        if _zip_i is not None and _zip_i < len(row):
+            _z = row[_zip_i]
+            if isinstance(_z, (int, float)):
+                raise GiftMergeError(
+                    f"vFGR zip for #{oid} is NUMERIC ({_z!r}) — a leading zero is already lost "
+                    f"(e.g. 07627 reads as 7627). Re-export with Zip as TEXT; refusing to overwrite "
+                    f"the matrix's Shopify zip with it."
+                )
+            if _z is not None and not re.fullmatch(r"\d{5}(-\d{4})?", str(_z).strip()):
+                raise GiftMergeError(
+                    f"vFGR zip for #{oid} is malformed ({_z!r}) — refusing to overwrite the matrix's "
+                    f"Shopify zip with it."
+                )
         # Re-slot gift row into union column order
         out: list = [None] * len(main_headers)
         for val, pos in zip(row, gift_pos):
@@ -2627,8 +2662,6 @@ def merge_gift_xlsx(
               f"'remove'): {placeholder_cols}{_RESET}")
     if dropped:
         print(f"  {_YELLOW}explicitly dropped via --gift-drop: {', '.join(dropped)}{_RESET}")
-    if skipped_cols:
-        print(f"  gift bookkeeping column(s) not unioned: {skipped_cols}")
     print(f"  Saved: {_GREEN}{out_path.name}{_RESET}")
 
     return str(out_path)

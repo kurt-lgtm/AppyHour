@@ -140,6 +140,51 @@ def test_placeholder_column_dropped_even_if_shaped_like_a_product(tmp_path):
     assert not mc._is_placeholder_header("AHB (S_REG): Removable Rind Brie")
 
 
+def test_trailing_all_blank_row_is_ignored(tmp_path):
+    """The generator appends an all-None row in 5 of 8 weekly vFGRs (QC pass 2026-07-28).
+
+    Both paths drop it on the empty OrderID. Pinned because it was previously untested — a refactor
+    that iterates rows without the OID check would silently process a blank order.
+    """
+    gift = _write_xlsx(
+        tmp_path / "gift.xlsx",
+        META + [P1],
+        [
+            [164878, "Parent", 0, "92026", "", None, "SAT", 3],
+            [None] * 8,
+        ],
+    )
+    headers, rows = _load(mc.merge_gift_xlsx(_main(tmp_path), gift))
+    assert rows["164878"][headers.index(P1)] == 3
+    assert "" not in rows and "None" not in rows
+
+
+def test_numeric_zip_is_refused(tmp_path):
+    """A zip stored as a NUMBER has already lost its leading zero — never overwrite Shopify's with it.
+
+    07627 -> 7627 mis-routes a cold-chain box and is only found after it ships.
+    """
+    gift = _write_xlsx(
+        tmp_path / "gift.xlsx",
+        META + [P1],
+        [[164878, "Parent", 0, 7627, "", None, "SAT", 3]],
+    )
+    with pytest.raises(GiftMergeError, match="NUMERIC"):
+        mc.merge_gift_xlsx(_main(tmp_path), gift)
+
+
+def test_renamed_meta_header_is_loud_not_silent(tmp_path):
+    """Alignment is by header name: a renamed meta column would silently stop being overwritten."""
+    meta_renamed = [h if h != "Zip" else "ZIP " for h in META]
+    gift = _write_xlsx(
+        tmp_path / "gift.xlsx",
+        meta_renamed + [P1],
+        [[164878, "Parent", 0, "92026", "", None, "SAT", 3]],
+    )
+    with pytest.raises(GiftMergeError, match="not present in the matrix"):
+        mc.merge_gift_xlsx(_main(tmp_path), gift)
+
+
 def test_orphan_twin_row_is_loud_error(tmp_path):
     gift = _write_xlsx(
         tmp_path / "gift.xlsx", META + [P1], [["164878A", "Twin", 0, "92026", "", None, "SAT", 2]]

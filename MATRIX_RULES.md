@@ -196,6 +196,20 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
         `BL-` is in `SKIP_PREFIXES` — not fulfillable, never a pick line — so `remove=1` is a
         QUANTITY of a bulk SKU and says nothing about twin folding. The flag was print-only, so no
         merge was ever wrong; but a log line asserting a false fact is how the false fact spreads.
+    (a3) **The vFGR's `Zip` is VALIDATED before it overwrites Shopify's** (QC pass 2026-07-28): a zip
+        arriving as a NUMBER has already lost its leading zero (`07627` → `7627`) — the exact class
+        `check_zip_leading_zeroes` guards on the matrix path, which the gift path had no equivalent
+        for. The matrix zip comes from Shopify and is correct; replacing it with a broken one gets
+        rated and labelled by the engine, and surfaces as a mis-routed cold-chain box AFTER it ships.
+        Numeric or non-5-digit → `GiftMergeError` naming the OrderID. 8 weeks of vFGRs are clean, so
+        this is a guard, not a fix — keep it loud rather than coercing the value.
+    (a4) **An unmapped non-product gift column is a LOUD error, because a rename fails silently.**
+        Alignment is by header NAME. A renamed meta column (`Zip` → `ZIP`) simply stops being
+        overwritten and the matrix's STALE recipient data ships — no error, no log. (A renamed
+        PRODUCT column is visible: it unions in.) Across 8 weekly vFGRs the only non-product header
+        absent from the matrix was the `remove` placeholder, so anything else unmapped is a real
+        deviation. This replaced a `print("gift bookkeeping column(s) not unioned: …")` that nobody
+        would read on a Friday afternoon. Verified: all 8 historical vFGRs still pass.
     (a2) **Placeholder-named gift columns are DROPPED** (`remove` / `delete` / `ignore`, exact match,
         case-insensitive): the generating app is unreliable, so the merge does not depend on that
         column merely lacking the `AHB (` product shape — it is dropped BY NAME, before the shape
