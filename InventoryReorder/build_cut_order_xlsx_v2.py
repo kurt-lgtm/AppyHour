@@ -1699,13 +1699,18 @@ def _ingest_tommy_inputs(path: str) -> None:
             for c in range(1, ws.max_column + 1):
                 if title_substr in _norm(ws.cell(r, c).value):
                     sub = r + 1  # sub-header row (Curation | Cheese/Jam SKU | ...)
+                    # Find THIS block's Curation col, then the FIRST sku col at/after
+                    # it, and STOP. Blocks sit only ~5 cols apart, so a wide scan
+                    # overshoots into the next block and grabs its columns instead
+                    # (2026-07-28: PR-CJAM cheese got filled from CEX-EC this way).
                     cur_col = chz_col = None
-                    for cc in range(c, c + 8):
+                    for cc in range(c, c + 5):
                         lbl = _norm(ws.cell(sub, cc).value)
-                        if lbl == "curation":
+                        if cur_col is None and lbl == "curation":
                             cur_col = cc
-                        elif sku_label in lbl:
+                        elif cur_col is not None and sku_label in lbl:
                             chz_col = cc
+                            break
                     if not (cur_col and chz_col):
                         return {}
                     out = {}
