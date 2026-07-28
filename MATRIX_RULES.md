@@ -146,9 +146,34 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
     `active_prefixes` default (the sync path that adds the $0 in-box variant), or the SKU is invisible
     to both the sheet and Shopify. When a new pickable prefix is onboarded, add it to ALL THREE tuples
     in the same change and add a regression test asserting its column appears
-    (`tests/test_generate_matrix.py::test_mr_jrnl_gets_column`). MR- carries 0 DistVol so it is never
+    (`tests/test_generate_matrix.py::test_mr_jrnl_gets_column`).
+    **19-bis (2026-07-28):** there was a FOURTH copy — `check_mfg_onboarding` collected demand SKUs
+    from its own `("CH-","MT-","AC-","PK-")` literal, omitting TR-/MR- that the column builder
+    included. A tray or journal SKU with no MFG name was therefore INVISIBLE to the onboarding gate
+    while still becoming a column: the rule-19a phantom-column failure, one prefix over. The column
+    builder and the gate now share ONE constant, `matrix_commander.PICKABLE_PREFIXES`; duplicating it
+    as a literal is the regression (`test_mfg_gate_and_column_builder_share_one_prefix_set` asserts the
+    old 4-prefix literal appears nowhere in the module). MR- carries 0 DistVol so it is never
     inventory-capped (already handled at `matrix_commander.py:3004`, `("PK-","MR-")`) and its qty rides
     into the col-D Total per rule 0.
+
+19a. 🔴 **NEVER fabricate an MFG name — an un-onboarded SKU is an IMMEDIATE REJECT, not a warning**
+    (Kurt 2026-07-28, wk0728 TUE). **Failure mode:** `AC-QUIC` ("Quicos", 1 unit, order #165739) was
+    live in Shopify but absent from `mfg_translations.csv`. `generate_matrix_xlsx` emitted
+    `AHB (S_REG): {SKU_TO_NAME.get(sku, sku)}` — and with no local mapping either, that resolves to the
+    **BARE SKU wrapped in the real header format**: a phantom column that looks legitimate on the sheet
+    but names a product RMFG has never seen and cannot pick. THREE layers failed open at once:
+    (a) the column builder invented the name and only printed a yellow warning; (b) `cmd_generate`'s
+    `check_mfg_onboarding` correctly returned False, printed it, then `return True`d anyway and went on
+    to "Ready to email to RMFG" (rule 5 — GATE, don't report); (c) `gen_rmfg_export.run_step` swallows
+    child stdout unless the step exits non-zero, so the warning never reached the log. Nothing crashed;
+    Kurt caught it by eye on the finished sheet. **Rules:** only `mfg_translations.csv` (the RMFG
+    translator-portal export) may name a column — never Shopify titles, never `SKU_TO_NAME`, never the
+    bare SKU. Missing name → `ValueError` at column-build time, BEFORE any xlsx is written (this also
+    closes rule 5's known gap where a failed run left a legit-looking file in Downloads). Never
+    hand-edit a header to get past it — onboard at https://translator.robbinsmfginc.com/ and re-export.
+    A `mfg_translations.csv` refresh is NOT proof of coverage: the 07-27 refresh (283 rows) ran the day
+    before and still lacked AC-QUIC.
 
 20. **Gift redemption vFGR = REPLACE, never skip-as-duplicate** (Kurt 2026-07-24, wk0727 done by
     hand — this rule automates it). **Failure mode:** gift redemption orders are UNEDITABLE in

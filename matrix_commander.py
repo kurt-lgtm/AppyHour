@@ -346,6 +346,14 @@ SETTINGS_PATH = Path(__file__).parent / "InventoryReorder" / "dist" / "inventory
 # MFG translations CSV (exported from RMFG Translator portal)
 MFG_TRANSLATIONS_PATH = Path(__file__).parent / "mfg_translations.csv"
 
+# 🔴 ONE definition of "pickable" (MATRIX_RULES rule 19). These prefixes decide which SKUs become
+# product columns AND which the MFG-onboarding gate inspects — the two MUST agree. They were separate
+# literals and drifted twice: wk0720 dropped MR-JRNL from 38 orders' sheet, and the gate's copy still
+# omitted TR-/MR- while the column builder included them (found 2026-07-28 alongside rule 19a). A SKU
+# that can become a column but is invisible to the gate is a phantom column waiting to happen.
+# `sync_order_to_shopify(active_prefixes=)` carries the same set for the $0 in-box variant path.
+PICKABLE_PREFIXES = ("CH-", "MT-", "AC-", "PK-", "TR-", "MR-")
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Data structures
 # ═══════════════════════════════════════════════════════════════════════════
@@ -792,7 +800,11 @@ def check_mfg_onboarding(
     demand_skus: set[str] = set()
     for o in orders:
         for sku in o.assignments:
-            if any(sku.startswith(p) for p in ("CH-", "MT-", "AC-", "PK-")):
+            # 🔴 FOURTH prefix tuple (rule 19) — must match `food_pkg_prefixes` in
+            # generate_matrix_xlsx. It shipped omitting TR- and MR-, so a tray or journal SKU with no
+            # MFG name was INVISIBLE to this gate while still becoming a product column: the exact
+            # blind spot AC-QUIC exploited, one prefix over (rule 19a, wk0728 TUE).
+            if any(sku.startswith(p) for p in PICKABLE_PREFIXES):
                 demand_skus.add(sku)
 
     mfg_skus = set(mfg_translations.keys())
@@ -2135,7 +2147,7 @@ def generate_matrix_xlsx(
     # MR- (journal, 0 DistVol) MUST be here: wk0720 (RMFG_20260717) dropped MR-JRNL
     # from the generated sheet for 38 orders because this tuple omitted it — every
     # pickable prefix that can appear on an order needs a column (MATRIX_RULES rule 19).
-    food_pkg_prefixes = ("CH-", "MT-", "AC-", "PK-", "TR-", "MR-")
+    food_pkg_prefixes = PICKABLE_PREFIXES          # rule 19: one definition, shared with the MFG gate
     relevant_skus = {s for s in all_skus if any(s.startswith(p) for p in food_pkg_prefixes)}
 
     # Build column headers: use MFG translation name, sorted alphabetically
@@ -2146,13 +2158,21 @@ def generate_matrix_xlsx(
         if mfg_name:
             product_columns.append((sku, mfg_name))
         else:
-            # Fallback: use NAME_TO_SKU reverse
-            name = SKU_TO_NAME.get(sku, sku)
-            product_columns.append((sku, f"AHB (S_REG): {name}"))
             unmapped_skus.append(sku)
 
     if unmapped_skus:
-        print(f"  {_YELLOW}Warning: {len(unmapped_skus)} SKUs not in MFG translations: {unmapped_skus[:10]}{_RESET}")
+        # HARD REJECT (Kurt 2026-07-28) — NEVER fabricate an MFG name. This branch used to emit
+        # `AHB (S_REG): {SKU_TO_NAME.get(sku, sku)}`, which for an un-onboarded SKU falls through to
+        # the BARE SKU wrapped in the real header format — a PHANTOM COLUMN that looks legitimate
+        # but names a product RMFG has never seen and cannot pick (AC-QUIC "Quicos", wk0728 TUE).
+        # Only mfg_translations.csv (the RMFG translator-portal export) may name a column. Failing
+        # HERE means no xlsx is written at all — the earlier gate fired only after the file existed.
+        raise ValueError(
+            f"MFG onboarding REJECT: {len(unmapped_skus)} SKU(s) have no MFG name and would render "
+            f"as phantom columns: {unmapped_skus}. Onboard them at "
+            f"https://translator.robbinsmfginc.com/, re-export mfg_translations.csv, then re-run. "
+            f"Never hand-edit a column header to get past this."
+        )
 
     # Build the workbook
     wb = openpyxl.Workbook()
@@ -2361,6 +2381,14 @@ def cmd_generate(
         if not result.passed:
             for d in result.details:
                 print(f"       {d}")
+            # HARD REJECT (Kurt 2026-07-28): a SKU with no MFG name renders as a PHANTOM COLUMN
+            # ("AHB (S_REG): AC-QUIC") that RMFG cannot pick. This gate used to print and then
+            # `return True` — the export continued to "Ready to email to RMFG" and the wrapper
+            # swallowed the warning. Never report-and-continue here; the sheet must not be built.
+            print(f"\n  {_RED}REJECTED: not onboarded at RMFG — export NOT written.{_RESET}")
+            print(f"  {_RED}Fix: onboard the SKU(s) at https://translator.robbinsmfginc.com/, "
+                  f"re-export mfg_translations.csv, then re-run.{_RESET}")
+            return False
 
     print(f"\n{_BOLD}{'#' * 60}{_RESET}")
     print(f"  {_GREEN}Ready to email to RMFG: {Path(out_path).name}{_RESET}")
