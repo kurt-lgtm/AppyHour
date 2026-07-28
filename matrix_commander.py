@@ -2422,6 +2422,18 @@ def _is_product_header(h: str) -> bool:
     return str(h or "").startswith("AHB (")
 
 
+# 🔴 Placeholder MFG names typed into the RMFG translator portal for NON-FULFILLABLE SKUs (Kurt
+# 2026-07-28): `remove` is the name he gave a BL- (bulk) SKU precisely so the column is obviously
+# disposable. BL- is in SKIP_PREFIXES — it never ships as a pick line. Any column named like this is
+# DROPPED from the gift merge, whatever the generating app emits. Match is exact + case-insensitive:
+# a fuzzy "contains remove" would eat a real product someday.
+_GIFT_PLACEHOLDER_HEADERS = {"remove", "delete", "ignore"}
+
+
+def _is_placeholder_header(h: str) -> bool:
+    return str(h or "").strip().lower() in _GIFT_PLACEHOLDER_HEADERS
+
+
 _GIFT_TWIN_RE = re.compile(r"^(\d+)([A-Za-z]+)$")
 
 
@@ -2431,15 +2443,18 @@ def _fold_gift_twins(
     """Fold A-suffix twin rows (Simple Bundles "Associated Order") onto their parent row.
 
     MATRIX_RULES rule 20a: the twin is FULFILLED in Shopify and never ships separately —
-    sum its product cells onto the parent, drop the A row. Double-count guard: a vFGR that
-    arrives pre-combined (parent carries the fold, `remove=1`, no A row) folds NOTHING.
-    An A row with no parent row in the file is a loud error, never a standalone row.
-    Returns (folded_rows, folded_oids, precombined_oids).
+    sum its product cells onto the parent, drop the A row. A vFGR that arrives pre-combined
+    (parent carries the fold, no A row) folds NOTHING — that falls out of there being no A row
+    to fold, so it needs no flag. An A row with no parent row is a loud error, never a standalone row.
+    Returns (folded_rows, folded_oids).
+
+    🔴 This used to read the `remove` column as a "pre-combined" flag and report `remove=1` rows as
+    such. That semantic was INVENTED: `remove` is a placeholder MFG NAME Kurt typed into the RMFG
+    translator portal for a BL- (bulk, non-fulfillable) SKU, so `remove=1` is a QUANTITY of that
+    bulk SKU — it says nothing about twin folding (Kurt 2026-07-28). The flag never affected the
+    merge (print-only), but a log line asserting a false fact is how the false fact spreads.
     """
     prod_idx = [i for i, h in enumerate(gift_headers) if _is_product_header(h)]
-    remove_idx = next(
-        (i for i, h in enumerate(gift_headers) if str(h or "").strip().lower() == "remove"), None
-    )
     by_oid = {str(r[0] or "").strip(): r for r in gift_rows if str(r[0] or "").strip()}
 
     folded: list[str] = []
@@ -2466,16 +2481,8 @@ def _fold_gift_twins(
             "a twin never ships standalone; fix the vFGR export"
         )
 
-    precombined = [
-        oid
-        for oid, r in by_oid.items()
-        if remove_idx is not None
-        and str(r[remove_idx] if remove_idx < len(r) else "").strip() in ("1", "1.0")
-        and oid not in twin_oids
-        and not _GIFT_TWIN_RE.match(oid)
-    ]
     out = [r for r in gift_rows if str(r[0] or "").strip() not in twin_oids]
-    return out, folded, precombined
+    return out, folded
 
 
 def merge_gift_xlsx(
@@ -2509,7 +2516,7 @@ def merge_gift_xlsx(
         raise GiftMergeError(f"empty gift sheet: {gift_path}")
 
     gift_headers = [_normalize_rule15b_header(str(h or "")) for h in raw[0]]
-    gift_rows, folded, precombined = _fold_gift_twins(gift_headers, raw[1:])
+    gift_rows, folded = _fold_gift_twins(gift_headers, raw[1:])
 
     # Normalize main headers in place (rule 15b) and index them
     main_headers: list[str] = []
@@ -2520,10 +2527,19 @@ def merge_gift_xlsx(
         main_headers.append(h)
     main_idx = {h: i for i, h in enumerate(main_headers)}
 
-    # Column union: append gift-only PRODUCT columns; never union gift bookkeeping cols
+    # Column union: append gift-only PRODUCT columns; never union gift bookkeeping cols.
+    # 🔴 A PLACEHOLDER-named column ("remove" — Kurt's stand-in MFG name for a BL- bulk SKU) is
+    # dropped FIRST and unconditionally, even if it were to arrive shaped like a product header.
+    # Today it lacks the "AHB (" prefix so it falls out anyway; that is an accident of the broken
+    # generator, not a guarantee. Name the intent so onboarding that BL- SKU properly can't
+    # silently push an unfulfillable column onto the sheet RMFG picks from.
+    placeholder_cols: list[str] = []
     skipped_cols: list[str] = []
     for h in gift_headers:
         if not h or h in main_idx:
+            continue
+        if _is_placeholder_header(h):
+            placeholder_cols.append(h)
             continue
         if not _is_product_header(h):
             skipped_cols.append(h)
@@ -2606,8 +2622,9 @@ def merge_gift_xlsx(
     print(f"  Gift merge (rule 20): {replaced} row(s) REPLACED from vFGR (col L preserved)")
     if folded:
         print(f"  A-twin fold: {', '.join(folded)}")
-    if precombined:
-        print(f"  pre-combined (remove=1, no A row — NOT re-summed): {', '.join(precombined)}")
+    if placeholder_cols:
+        print(f"  {_YELLOW}placeholder gift column(s) DROPPED (non-fulfillable, e.g. a BL- SKU named "
+              f"'remove'): {placeholder_cols}{_RESET}")
     if dropped:
         print(f"  {_YELLOW}explicitly dropped via --gift-drop: {', '.join(dropped)}{_RESET}")
     if skipped_cols:

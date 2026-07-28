@@ -93,8 +93,14 @@ def test_twin_fold_sums_onto_parent_and_drops_a_row(tmp_path):
     assert "remove" not in headers                                   # bookkeeping col not unioned
 
 
-def test_precombined_remove_flag_never_sums_twice(tmp_path):
-    # wk0727 shape: parent already carries the fold, remove=1, NO A row
+def test_no_a_row_means_nothing_is_folded(tmp_path):
+    """wk0727 shape: a single parent row, no A row — nothing to fold, so nothing doubles.
+
+    This used to be called `test_precombined_remove_flag_never_sums_twice` and the `remove=1` cell
+    was believed to be a "pre-combined" flag. It is not: `remove` is a placeholder MFG name for a
+    BL- (bulk, non-fulfillable) SKU, so that 1 is a QUANTITY (Kurt 2026-07-28). The no-double
+    guarantee comes from there being no A row, never from the flag.
+    """
     gift = _write_xlsx(
         tmp_path / "gift.xlsx",
         META + [P1, "remove"],
@@ -103,6 +109,35 @@ def test_precombined_remove_flag_never_sums_twice(tmp_path):
     headers, rows = _load(mc.merge_gift_xlsx(_main(tmp_path), gift))
     assert rows["164878"][headers.index(P1)] == 3                    # untouched, not doubled
     assert rows["164878"][headers.index("Total")] == 3
+
+
+def test_placeholder_column_is_dropped_and_never_counted(tmp_path):
+    """A column named `remove` is a placeholder for a BL- SKU RMFG cannot pick — drop it.
+
+    Its quantity must not reach the sheet OR the col-D Total (rule 0): a bulk SKU counted as a
+    pick line inflates the box and misstates demand.
+    """
+    gift = _write_xlsx(
+        tmp_path / "gift.xlsx",
+        META + [P1, "remove"],
+        [[164878, "Parent", 99, "92026", "", None, "SAT", 3, 1]],
+    )
+    headers, rows = _load(mc.merge_gift_xlsx(_main(tmp_path), gift))
+    assert "remove" not in headers
+    assert not any(str(h).strip().lower() in {"remove", "delete", "ignore"} for h in headers)
+    assert rows["164878"][headers.index("Total")] == 3               # the BL- 1 is NOT in the total
+
+
+def test_placeholder_column_dropped_even_if_shaped_like_a_product(tmp_path):
+    """Onboarding that BL- SKU properly must not sneak an unfulfillable column onto the sheet.
+
+    Today `remove` lacks the "AHB (" prefix so it falls out anyway — an accident of the broken
+    generator, not a guarantee. The drop is by NAME and runs before the product-shape check.
+    """
+    assert mc._is_placeholder_header("remove")
+    assert mc._is_placeholder_header("  REMOVE ")
+    # exact match only — a fuzzy "contains" would eat a real product name someday
+    assert not mc._is_placeholder_header("AHB (S_REG): Removable Rind Brie")
 
 
 def test_orphan_twin_row_is_loud_error(tmp_path):

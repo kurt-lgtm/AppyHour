@@ -185,9 +185,23 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
         vFGR lists parent AND twin as separate rows, SUM both rows' product cells onto the parent
         OrderID and DROP the A row — the twin is FULFILLED in Shopify, never ships separately, and
         must not appear on the sheet or count in reconciles. **Double-count guard:** a vFGR can
-        arrive pre-combined (parent already carries the twin's items, `remove=1` flag, NO A row —
-        wk0727 shipped this way): then fold NOTHING; never sum twice. An A row whose parent is
-        absent from the vFGR = loud error, never a standalone row.
+        arrive pre-combined (parent already carries the twin's items, NO A row — wk0727 shipped this
+        way): then fold NOTHING; never sum twice. That falls out of there being no A row to fold, so
+        it needs no flag. An A row whose parent is absent from the vFGR = loud error, never a
+        standalone row.
+        🔴 **CORRECTION (Kurt 2026-07-28) — `remove` is NOT a flag.** This rule and the code both
+        read the vFGR's `remove` column as a "pre-combined" marker and logged `remove=1` rows as
+        such. Invented semantics: **`remove` is a placeholder MFG NAME Kurt typed into the RMFG
+        translator portal for a `BL-` (bulk) SKU**, chosen so the column is obviously disposable.
+        `BL-` is in `SKIP_PREFIXES` — not fulfillable, never a pick line — so `remove=1` is a
+        QUANTITY of a bulk SKU and says nothing about twin folding. The flag was print-only, so no
+        merge was ever wrong; but a log line asserting a false fact is how the false fact spreads.
+    (a2) **Placeholder-named gift columns are DROPPED** (`remove` / `delete` / `ignore`, exact match,
+        case-insensitive): the generating app is unreliable, so the merge does not depend on that
+        column merely lacking the `AHB (` product shape — it is dropped BY NAME, before the shape
+        check, and its qty never reaches the sheet or the col-D Total. Onboarding that `BL-` SKU with
+        a real-looking MFG name must not be able to push an unfulfillable column onto the sheet RMFG
+        picks from. Match is exact — a fuzzy "contains remove" would eat a real product eventually.
     (b) **REPLACE by OrderID:** for each vFGR OrderID present in the matrix, overwrite the row's
         recipient/meta cells and WIPE-then-REFILL all product cells from the vFGR (item-truth).
         **PRESERVE the matrix row's `Tags` (engine col L — routing/gel/identity; gift rows carry no
