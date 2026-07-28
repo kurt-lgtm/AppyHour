@@ -499,8 +499,13 @@ def _fetch_all_data(settings: dict) -> dict:
     wk1_lge["MONTHLY"] = wk1_lge.get("MONTHLY", 0) + rc_wk1_lge_monthly
     wk2_lge["MONTHLY"] = wk2_lge.get("MONTHLY", 0) + rc_wk2_lge_monthly
 
-    # Active pickable SKUs
-    report_skus: set[str] = set()
+    # Active pickable SKUs. Also ALWAYS include any SKU carrying an ingested
+    # spec (Cut / Notes / wheel / slice / first-order) — Tommy's notes like
+    # "Bundle Remove", "IBRES", "Kurt investigate" must render even when the SKU
+    # has 0 avail and 0 demand this week, or the annotation silently vanishes
+    # (bit us 2026-07-28: CH-ALMA/CH-CCC/MT-BRAS/AC-WASP notes dropped).
+    spec_skus = set(settings.get("cut_order_specs", {}).keys())
+    report_skus: set[str] = set(spec_skus)
     for d in (available, rc_wk1, rc_wk2, sh_wk1_addon, sh_wk2_addon):
         report_skus.update(d.keys())
     active_skus = sorted(
@@ -508,7 +513,8 @@ def _fetch_all_data(settings: dict) -> dict:
         for sku in report_skus
         if any(sku.startswith(p) for p in PICKABLE_PREFIXES)
         and (
-            available.get(sku, 0) != 0
+            sku in spec_skus
+            or available.get(sku, 0) != 0
             or rc_wk1.get(sku, 0) > 0
             or rc_wk2.get(sku, 0) > 0
             or sh_wk1_addon.get(sku, 0) > 0
@@ -795,7 +801,9 @@ def _write_assignments_on_cut_order(ws: Worksheet, data: dict, settings: dict) -
         w1_count: int,
         w2_count: int,
         col_start: int,
+        slot_skus: dict | None = None,
     ) -> int:
+        slot_skus = slot_skus or {}
         ws_.merge_cells(
             start_row=start_row,
             start_column=col_start,
@@ -811,7 +819,7 @@ def _write_assignments_on_cut_order(ws: Worksheet, data: dict, settings: dict) -
         for slot_name, _prefix in slots:
             r += 1
             ws_.cell(row=r, column=col_start, value=slot_name).font = F_NAME
-            c_sku = ws_.cell(row=r, column=col_start + 1)
+            c_sku = ws_.cell(row=r, column=col_start + 1, value=slot_skus.get(slot_name) or None)
             c_sku.font = F_EDIT
             c_sku.fill = FILL_INPUT
             ws_.cell(row=r, column=col_start + 2, value=w1_count).font = F_NUM
@@ -819,6 +827,15 @@ def _write_assignments_on_cut_order(ws: Worksheet, data: dict, settings: dict) -
             ws_.cell(row=r, column=col_start + 3, value=w2_count).font = F_NUM
             ws_.cell(row=r, column=col_start + 3).alignment = A_RIGHT
         return r
+
+    # Persisted monthly slot SKUs (snapshotted from Tommy via --ingest). Keyed
+    # month → box-type label → {slot_name: sku}. Pre-fills the slot cells so
+    # they survive regeneration AND the SUMIF counts the monthly components.
+    mbr = settings.get("monthly_box_recipes", {})
+
+    def _slot_skus_for(month, label_prefix):
+        rows = mbr.get(month, {}).get(label_prefix, [])
+        return {r[0]: r[1] for r in rows if len(r) >= 2 and r[1]}
 
     for month in sorted(month_counts.keys()):
         mc = month_counts[month]
@@ -836,6 +853,7 @@ def _write_assignments_on_cut_order(ws: Worksheet, data: dict, settings: dict) -
                     mc[box_type]["wk1"],
                     mc[box_type]["wk2"],
                     col_start=COL_W,
+                    slot_skus=_slot_skus_for(month, label_prefix),
                 )
                 slot_row += 1  # next table starts on the row after last slot row
                 # Note: no extra gap — keep contiguous for SUMIF
@@ -1710,6 +1728,31 @@ def _ingest_tommy_inputs(path: str) -> None:
     prcjam_cheese = _read_assignment("pr-cjam assignments")
     cexec_cheese = _read_assignment("cex-ec assignments")
     prcjam_jam = _read_assignment("pr-cjam jam assignments", sku_label="jam sku")
+
+    # -- Monthly-box slot fill-ins (AHB-MED/CMED/LGE (YYYY-MM)) --
+    # Slot name in the title's column, SKU in the next column. Persist so the
+    # regen keeps Tommy's monthly recipe AND the SUMIF counts the components.
+    import re as _re
+    monthly_recipes: dict = {}
+    for r in range(1, ws.max_row + 1):
+        for c in range(1, ws.max_column + 1):
+            m = _re.match(r"ahb-(med|cmed|lge)\s*\((\d{4}-\d{2})\)", _norm(ws.cell(r, c).value))
+            if not m:
+                continue
+            bt, month = "AHB-" + m.group(1).upper(), m.group(2)
+            rows = []
+            rr = r + 1
+            while rr <= ws.max_row:
+                slot = ws.cell(rr, c).value
+                if not slot or not str(slot).strip():
+                    break
+                if _re.match(r"ahb-(med|cmed|lge)\s*\(", _norm(slot)):
+                    break
+                sku = ws.cell(rr, c + 1).value
+                rows.append([str(slot).strip(), str(sku).strip() if sku else "", 1])
+                rr += 1
+            if rows:
+                monthly_recipes.setdefault(month, {})[bt] = rows
     wb.close()
 
     # -- Merge into settings (dist + APPDATA copies) --
@@ -1739,6 +1782,9 @@ def _ingest_tommy_inputs(path: str) -> None:
         cx = st.setdefault("cex_ec", {})
         for cur, chz in cexec_cheese.items():
             cx[cur] = chz
+        mrec = st.setdefault("monthly_box_recipes", {})
+        for month, bts in monthly_recipes.items():
+            mrec.setdefault(month, {}).update(bts)
         import shutil as _sh
         _sh.copy2(tgt, tgt + ".bak")
         with open(tgt, "w", encoding="utf-8") as f:
@@ -1749,6 +1795,9 @@ def _ingest_tommy_inputs(path: str) -> None:
     print(f"  {len(specs)} SKUs with First Order/Wheel lb/Slice oz/Cut/Notes specs")
     print(f"  {len(prcjam_cheese)} PR-CJAM cheese, {sum(1 for v in prcjam_jam.values() if v)} PR-CJAM jam, "
           f"{len(cexec_cheese)} CEX-EC assignments")
+    _mslots = sum(sum(1 for row in b if row[1]) for bts in monthly_recipes.values() for b in bts.values())
+    print(f"  monthly slots: {_mslots} filled across "
+          f"{sum(len(b) for b in monthly_recipes.values())} box-month blocks")
     print(f"  wrote {written} settings file(s) (.bak backup kept). Next build pre-fills these.")
 
 

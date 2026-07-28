@@ -44,6 +44,14 @@ Demand forecasting + cut order generation + fulfillment web dashboard. Single-fi
   never auto-snapshots, so it can't silently re-populate a deliberately-cleared rotation table. Reads BY
   HEADER (robust to column shifts). Notes is a free-text per-SKU column at Q (17), past the hidden Safety
   col P.
+- **Monthly-box slot fill-ins persist** — the AHB-MED/CMED/LGE (YYYY-MM) slot SKUs Tommy fills live in
+  `settings.monthly_box_recipes[month][box_type]`; `--ingest` captures them and builds pre-fill them.
+  🔴 If a monthly slot SKU is blank, that component is UNCOUNTED (the contiguous X-col SUMIF finds
+  nothing) — monthly box demand silently under-counts. Persisting Tommy's fills is what makes monthly
+  components appear in +Assign (bit us 2026-07-28: blank slots → CH-MONT/MT-CCBS/AC-FCWALN monthly demand = 0).
+- **Annotated 0-demand SKUs still render** — any SKU with a `cut_order_specs` entry (Notes/Cut/etc.) is
+  force-included in `active_skus` even at 0 avail + 0 demand, so operational notes ("Bundle Remove",
+  "IBRES", "Kurt investigate") don't silently vanish from the sheet.
 - **PR-CJAM jam pair** — PR-CJAM ships cheese + jam; the "PR-CJAM JAM ASSIGNMENTS" block (cols AG-AJ)
   carries the jam SKU with the SAME W1/W2 count as the cheese, and jam demand rolls into `+Assign`
   (SUMIF over the jam range). Generic jam = AC-BCM across curations (Kurt 2026-07-28; monthly PR-CJAM-GEN
