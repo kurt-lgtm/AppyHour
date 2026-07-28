@@ -37,6 +37,15 @@ Demand forecasting + cut order generation + fulfillment web dashboard. Single-fi
   missing ones. Invariant `Added + Already = Boxes × Per` must hold per component. Recipes are shown in the
   "Bundles & Limited-Release" section at the bottom of the Cut Order tab.
 - **PICKABLE_PREFIXES = CH-, MT-, AC-, MR-, PK-** (Kurt 2026-07-28) — journals/guides/inserts count in demand.
+- **Tommy input persistence (`--ingest`)** — `build_cut_order_xlsx_v2.py --ingest <filled.xlsx>` snapshots
+  Tommy's First Order (F), Wheel lb (M), Slice oz (N) per SKU → `settings.cut_order_specs[sku]`, and the
+  PR-CJAM cheese (T) / CEX-EC cheese (Y) / PR-CJAM jam per curation → `pr_cjam`/`cex_ec`. Next build
+  pre-fills them (same value → same SKU/curation). 🔴 EXPLICIT-only — never auto-snapshots, so it can't
+  silently re-populate a deliberately-cleared rotation table. Reads BY HEADER (robust to column shifts).
+- **PR-CJAM jam pair** — PR-CJAM ships cheese + jam; the "PR-CJAM JAM ASSIGNMENTS" block (cols AG-AJ)
+  carries the jam SKU with the SAME W1/W2 count as the cheese, and jam demand rolls into `+Assign`
+  (SUMIF over the jam range). Generic jam = AC-BCM across curations (Kurt 2026-07-28; monthly PR-CJAM-GEN
+  Jam also = AC-BCM). Never fabricate a per-curation jam — set via ingest or settings.
 - **NEVER count removed items** — any Shopify order read in the demand pipeline MUST net removed/refunded
   lines via the canonical `active_line_items()` (AppyHourMCP/utils.py, `shopify-line-items` skill). Shopify
   keeps refunded/edited-out lines at their ORIGINAL `quantity`, so reading raw `order["line_items"]`

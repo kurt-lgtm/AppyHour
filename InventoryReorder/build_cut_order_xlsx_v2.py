@@ -51,6 +51,7 @@ from inventory_demand_report import (
     load_inventory_csv,
     load_settings,
     parse_depletion_xlsx,
+    SETTINGS_PATH,
 )
 from fulfillment_web.invoice_processor import extract_bulk_weights
 
@@ -741,6 +742,33 @@ def _write_assignments_on_cut_order(ws: Worksheet, data: dict, settings: dict) -
 
     cexec_end = cexec_data_start + len(prcjam_curations) - 1
 
+    # ── PR-CJAM JAM Section (AG-AJ) ──
+    # PR-CJAM ships as a cheese + jam PAIR, so the jam count == the cheese count
+    # per curation. The cheese block (X) already feeds +Assign; this parallel
+    # block feeds the jam SKU with the SAME W1/W2 counts (Kurt 2026-07-28).
+    COL_AF = 32  # spacer
+    COL_AG = 33  # JAM: Curation
+    COL_AH = 34  # JAM: Jam SKU (SUMIF lookup)
+    COL_AI = 35  # JAM: W1 Count
+    COL_AJ = 36  # JAM: W2 Count
+    _set_col_widths(ws, {COL_AF: 2, COL_AG: 14, COL_AH: 18, COL_AI: 10, COL_AJ: 10})
+    _dark_header_row(ws, 1, ["PR-CJAM JAM ASSIGNMENTS", "", "", ""], col_start=COL_AG)
+    _dark_header_row(ws, 2, ["Curation", "Jam SKU", "W1 Count", "W2 Count"], col_start=COL_AG)
+    jam_data_start = 3
+    for i, cur in enumerate(prcjam_curations):
+        r = jam_data_start + i
+        cfg = pr_cjam_cfg.get(cur)
+        jam = cfg.get("jam", "") if isinstance(cfg, dict) else ""
+        ws.cell(row=r, column=COL_AG, value=cur).font = F_NAME
+        c_jam = ws.cell(row=r, column=COL_AH, value=jam)
+        c_jam.font = F_EDIT
+        c_jam.fill = FILL_INPUT
+        ws.cell(row=r, column=COL_AI, value=wk1_curations.get(cur, 0)).font = F_NUM
+        ws.cell(row=r, column=COL_AI).alignment = A_RIGHT
+        ws.cell(row=r, column=COL_AJ, value=wk2_curations.get(cur, 0)).font = F_NUM
+        ws.cell(row=r, column=COL_AJ).alignment = A_RIGHT
+    jam_end = jam_data_start + len(prcjam_curations) - 1
+
     # ── MONTHLY Box Slot Tables (below PR-CJAM in W-Z columns) ──
     # These go right after PR-CJAM rows so the SKU column (X) is contiguous
     # with PR-CJAM cheese SKUs for a single SUMIF range.
@@ -837,7 +865,8 @@ def _write_assignments_on_cut_order(ws: Worksheet, data: dict, settings: dict) -
     # Return info needed for SUMIF references:
     # prcjam_monthly_last_row = last row of contiguous PR-CJAM + MONTHLY slot SKU data in col X
     # cexec_end = last row of CEX-EC data in col AC
-    return prcjam_monthly_last_row, cexec_end
+    # jam_end = last row of PR-CJAM JAM data in col AH
+    return prcjam_monthly_last_row, cexec_end, jam_end
 
 
 # ── Tab 3: Raw Materials ─────────────────────────────────────────────
@@ -1040,6 +1069,7 @@ def _build_cut_order_tab(
     settings: dict,
     prcjam_monthly_last_row: int,
     cexec_last_row: int,
+    jam_last_row: int,
 ) -> None:
     """Build the main Cut Order tab with urgency-grouped rows and inline assignments."""
     ws = wb.active
@@ -1049,6 +1079,10 @@ def _build_cut_order_tab(
     inv_settings = settings.get("inventory", {})
     pr_cjam_cfg = settings.get("pr_cjam", {})
     cex_ec_cfg = settings.get("cex_ec", {})
+    # Per-SKU inputs Tommy filled last time, snapshotted via --ingest. Pre-fills
+    # First Order (F), Wheel lb (M), Slice oz (N) so he doesn't re-enter the same
+    # values every week. Same value → same SKU. Still input-styled → editable.
+    cut_specs = settings.get("cut_order_specs", {})
 
     available = data["available"]
     rc_wk1 = data["rc_wk1"]
@@ -1125,6 +1159,10 @@ def _build_cut_order_tab(
     cexec_sku_range = f"$AC$3:$AC${cexec_last_row}"
     cexec_w1_range = f"$AD$3:$AD${cexec_last_row}"
     cexec_w2_range = f"$AE$3:$AE${cexec_last_row}"
+    # PR-CJAM jam pair (col AH sku, AI/AJ counts) — same counts as the cheese.
+    jam_sku_range = f"$AH$3:$AH${jam_last_row}"
+    jam_w1_range = f"$AI$3:$AI${jam_last_row}"
+    jam_w2_range = f"$AJ$3:$AJ${jam_last_row}"
 
     # ── Pre-compute urgency for each SKU ──
     # We need to calculate actual numeric values for sorting, not just formulas
@@ -1133,8 +1171,11 @@ def _build_cut_order_tab(
         total = 0
         for cur, ct in curations.items():
             cfg = pr_cfg.get(cur)
-            if isinstance(cfg, dict) and cfg.get("cheese") == sku:
-                total += ct
+            if isinstance(cfg, dict):
+                if cfg.get("cheese") == sku:
+                    total += ct
+                if cfg.get("jam") == sku:  # PR-CJAM pair — jam same count as cheese
+                    total += ct
         for cur, ct in large.items():
             if cex_cfg.get(cur) == sku:
                 total += ct
@@ -1221,14 +1262,17 @@ def _build_cut_order_tab(
         c_sh = ws_.cell(row=row_num, column=5, value=sr["sh1"])
         c_sh.font = F_NUM
         c_sh.alignment = A_RIGHT
-        # F: First Order (input — projected new-subscriber first-order demand, filled manually)
-        ws_.cell(row=row_num, column=6).font = F_INPUT
+        # F: First Order (input — projected new-subscriber first-order demand).
+        # Pre-filled from the last snapshot (--ingest); still editable.
+        _spec = cut_specs.get(sku, {})
+        ws_.cell(row=row_num, column=6, value=_spec.get("first_order") or None).font = F_INPUT
         ws_.cell(row=row_num, column=6).fill = FILL_INPUT
         ws_.cell(row=row_num, column=6).alignment = A_RIGHT
-        # G: +Assign W1 = SUMIF(PR-CJAM+MONTHLY) + SUMIF(CEX-EC)
+        # G: +Assign W1 = SUMIF(PR-CJAM+MONTHLY) + SUMIF(CEX-EC) + SUMIF(PR-CJAM JAM)
         ws_[f"G{row_num}"] = (
             f"=SUMIF({prcjam_sku_range},A{row_num},{prcjam_w1_range})"
             f"+SUMIF({cexec_sku_range},A{row_num},{cexec_w1_range})"
+            f"+SUMIF({jam_sku_range},A{row_num},{jam_w1_range})"
         )
         ws_.cell(row=row_num, column=7).font = F_NUM
         ws_.cell(row=row_num, column=7).alignment = A_RIGHT
@@ -1251,12 +1295,12 @@ def _build_cut_order_tab(
         )
         ws_.cell(row=row_num, column=12).font = F_GOOD
         ws_.cell(row=row_num, column=12).alignment = A_CENTER
-        # M: Wheel lb (input — weight of one raw wheel, lbs)
-        ws_.cell(row=row_num, column=13).font = F_INPUT
+        # M: Wheel lb (input — weight of one raw wheel, lbs). Pre-filled from snapshot.
+        ws_.cell(row=row_num, column=13, value=_spec.get("wheel_lb") or None).font = F_INPUT
         ws_.cell(row=row_num, column=13).fill = FILL_INPUT
         ws_.cell(row=row_num, column=13).alignment = A_RIGHT
-        # N: Slice oz (input — finished slice weight, oz)
-        ws_.cell(row=row_num, column=14).font = F_INPUT
+        # N: Slice oz (input — finished slice weight, oz). Pre-filled from snapshot.
+        ws_.cell(row=row_num, column=14, value=_spec.get("slice_oz") or None).font = F_INPUT
         ws_.cell(row=row_num, column=14).fill = FILL_INPUT
         ws_.cell(row=row_num, column=14).alignment = A_RIGHT
         # O: Wheels (computed) = ROUNDUP(Cut slices * Slice oz / (Wheel lb * 16)) — whole wheels
@@ -1468,11 +1512,12 @@ def main() -> str:
     ws_cut = wb.active
     ws_cut.title = "Cut Order"
 
-    # Write assignments onto the Cut Order sheet (columns W-AE)
-    prcjam_monthly_last_row, cexec_last_row = _write_assignments_on_cut_order(ws_cut, data, settings)
+    # Write assignments onto the Cut Order sheet (columns W-AJ)
+    prcjam_monthly_last_row, cexec_last_row, jam_last_row = _write_assignments_on_cut_order(
+        ws_cut, data, settings)
 
     # Build the main cut order content (columns A-U) using same-sheet SUMIF refs
-    _build_cut_order_tab(wb, data, settings, prcjam_monthly_last_row, cexec_last_row)
+    _build_cut_order_tab(wb, data, settings, prcjam_monthly_last_row, cexec_last_row, jam_last_row)
 
     # Reorder tabs: Cut Order first
     wb.move_sheet("Cut Order", offset=-1)
@@ -1565,10 +1610,139 @@ def upload_to_drive(file_path: str) -> str:
     return link
 
 
+def _ingest_tommy_inputs(path: str) -> None:
+    """Snapshot Tommy's filled cut-order inputs into settings so the next build
+    pre-fills them (same value → same SKU / curation).
+
+    Reads BY HEADER (robust to column shifts):
+      - Main table: First Order (F), Wheel lb (M), Slice oz (N) per SKU
+        → settings['cut_order_specs'][sku] = {first_order, wheel_lb, slice_oz}
+      - PR-CJAM ASSIGNMENTS 'Cheese SKU' per curation → settings['pr_cjam'][cur]['cheese']
+      - CEX-EC ASSIGNMENTS 'Cheese SKU' per curation  → settings['cex_ec'][cur]
+
+    Explicit-only (never runs on a normal build) so it can't silently re-populate
+    a deliberately-cleared rotation table.
+    """
+    wb = openpyxl.load_workbook(path, data_only=True)
+    ws = wb["Cut Order"] if "Cut Order" in wb.sheetnames else wb.active
+
+    def _norm(v):
+        return str(v).strip().lower() if v is not None else ""
+
+    # -- Locate the main-table header row (has SKU + First Order) --
+    hdr_row, hcol = None, {}
+    for r in range(1, 8):
+        labels = {_norm(ws.cell(r, c).value): c for c in range(1, 20) if ws.cell(r, c).value}
+        if "sku" in labels and "first order" in labels:
+            hdr_row, hcol = r, labels
+            break
+    specs: dict = {}
+    if hdr_row:
+        c_sku = hcol["sku"]
+        c_f = hcol.get("first order")
+        c_m = hcol.get("wheel lb")
+        c_n = hcol.get("slice oz")
+        for r in range(hdr_row + 1, ws.max_row + 1):
+            sku = ws.cell(r, c_sku).value
+            if not sku or not isinstance(sku, str) or not sku.strip():
+                continue
+            sku = sku.strip()
+            rec = {}
+            for key, col in (("first_order", c_f), ("wheel_lb", c_m), ("slice_oz", c_n)):
+                if col:
+                    v = ws.cell(r, col).value
+                    if isinstance(v, (int, float)) and v:
+                        rec[key] = v
+            if rec:
+                specs[sku] = rec
+
+    # -- Locate assignment blocks by their title cells --
+    def _read_assignment(title_substr, sku_label="cheese sku"):
+        for r in range(1, ws.max_row + 1):
+            for c in range(1, ws.max_column + 1):
+                if title_substr in _norm(ws.cell(r, c).value):
+                    sub = r + 1  # sub-header row (Curation | Cheese/Jam SKU | ...)
+                    cur_col = chz_col = None
+                    for cc in range(c, c + 8):
+                        lbl = _norm(ws.cell(sub, cc).value)
+                        if lbl == "curation":
+                            cur_col = cc
+                        elif sku_label in lbl:
+                            chz_col = cc
+                    if not (cur_col and chz_col):
+                        return {}
+                    out = {}
+                    rr = sub + 1
+                    while True:
+                        cur = ws.cell(rr, cur_col).value
+                        if not cur or not str(cur).strip():
+                            break
+                        cur = str(cur).strip()
+                        # stop if we've wandered into a MONTHLY slot table ("AHB-…")
+                        if cur.upper().startswith("AHB-"):
+                            break
+                        chz = ws.cell(rr, chz_col).value
+                        if chz and str(chz).strip():
+                            out[cur] = str(chz).strip()
+                        rr += 1
+                    return out
+        return {}
+
+    prcjam_cheese = _read_assignment("pr-cjam assignments")
+    cexec_cheese = _read_assignment("cex-ec assignments")
+    prcjam_jam = _read_assignment("pr-cjam jam assignments", sku_label="jam sku")
+    wb.close()
+
+    # -- Merge into settings (dist + APPDATA copies) --
+    import json as _json
+    targets = [
+        SETTINGS_PATH,
+        os.path.join(os.environ.get("APPDATA", ""), "AppyHour", "inventory_reorder_settings.json"),
+    ]
+    written = 0
+    for tgt in targets:
+        if not tgt or not os.path.exists(tgt):
+            continue
+        with open(tgt, encoding="utf-8") as f:
+            st = _json.load(f)
+        cos = st.setdefault("cut_order_specs", {})
+        for sku, rec in specs.items():
+            cos.setdefault(sku, {}).update(rec)
+        pr = st.setdefault("pr_cjam", {})
+        for cur, chz in prcjam_cheese.items():
+            entry = pr.setdefault(cur, {})
+            if isinstance(entry, dict):
+                entry["cheese"] = chz
+        for cur, jam in prcjam_jam.items():
+            entry = pr.setdefault(cur, {})
+            if isinstance(entry, dict):
+                entry["jam"] = jam
+        cx = st.setdefault("cex_ec", {})
+        for cur, chz in cexec_cheese.items():
+            cx[cur] = chz
+        import shutil as _sh
+        _sh.copy2(tgt, tgt + ".bak")
+        with open(tgt, "w", encoding="utf-8") as f:
+            _json.dump(st, f, indent=2)
+        written += 1
+
+    print(f"Ingested Tommy inputs from: {path}")
+    print(f"  {len(specs)} SKUs with First Order/Wheel lb/Slice oz specs")
+    print(f"  {len(prcjam_cheese)} PR-CJAM cheese, {sum(1 for v in prcjam_jam.values() if v)} PR-CJAM jam, "
+          f"{len(cexec_cheese)} CEX-EC assignments")
+    print(f"  wrote {written} settings file(s) (.bak backup kept). Next build pre-fills these.")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate cut order XLSX v2")
     parser.add_argument("--local", action="store_true", help="Generate locally, don't upload")
+    parser.add_argument("--ingest", metavar="XLSX",
+                        help="Snapshot Tommy's filled F/M/N + T/Y from a cut order xlsx into settings")
     args = parser.parse_args()
+
+    if args.ingest:
+        _ingest_tommy_inputs(args.ingest)
+        sys.exit(0)
 
     out_path = main()
     if not args.local:
