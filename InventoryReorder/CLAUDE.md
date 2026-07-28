@@ -25,6 +25,12 @@ Demand forecasting + cut order generation + fulfillment web dashboard. Single-fi
 - **CH-MAFT never assigned** (ASSIGNMENT_EXCLUDE)
 - **PR-CJAM-GEN only** — curation-specific variants made by Shopify post-charge
 - **PAR=30** for all items in v2 cut order
+- **Wheels include 10% cut waste** (`CUT_WASTE_PCT`, override `settings["cut_waste_pct"]`) — a wheel loses
+  rind/ends/trim, so only 90% of its weight is sliceable:
+  `Wheels = ROUNDUP(Cut × Slice oz / (Wheel lb × 16 × 0.9), 0)`. 🔴 Waste is applied to the usable weight
+  BEFORE the ROUNDUP — rounding first then padding under-orders wheels. Same model as the vault's
+  `RAWINVCONVERSIONS` (raw → processed at a yield %). The rate is printed in the sheet subtitle so it's
+  never a silent assumption.
 - **Avail = corrected_inventory_path** — update BEFORE running cut order
 - **Calibri everywhere** in `build_cut_order_xlsx_v2.py` output
 - **Bundle/limited-release explosion (BL-*, AHB-X*)** — recipes come LIVE from Shopify Simple Bundles

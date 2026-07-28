@@ -60,6 +60,12 @@ from fulfillment_web.invoice_processor import extract_bulk_weights
 # (the upcoming Saturday, which is only the Recharge billing boundary). (Kurt 2026-07-06)
 SHIP_WEEK_MONDAY = date.fromisoformat(WK1_SHIP_TAGS[-1].replace("_SHIP_", ""))
 
+# Cut waste — the share of a wheel lost to rind, ends and trim, so only
+# (1 - CUT_WASTE_PCT) of its weight becomes sliceable cheese. Applied inside the
+# Wheels formula BEFORE the ROUNDUP, so wheel counts are never short (Kurt
+# 2026-07-28). Override per-install with settings["cut_waste_pct"].
+CUT_WASTE_PCT = 0.10
+
 # ── Design Tokens ────────────────────────────────────────────────────
 
 HEADER_BG = "1E293B"
@@ -1161,6 +1167,11 @@ def _build_cut_order_tab(
     # First Order (F), Wheel lb (M), Slice oz (N) so he doesn't re-enter the same
     # values every week. Same value → same SKU. Still input-styled → editable.
     cut_specs = settings.get("cut_order_specs", {})
+    # Cut waste: share of a wheel lost to rind/ends/trim, so it never yields its
+    # full weight in sliceable cheese. Tunable via settings["cut_waste_pct"].
+    # Same model the vault's RAWINVCONVERSIONS uses (raw -> processed at a yield %).
+    _WASTE = float(settings.get("cut_waste_pct", CUT_WASTE_PCT))
+    _USABLE = 1.0 - _WASTE
 
     available = data["available"]
     rc_wk1 = data["rc_wk1"]
@@ -1205,7 +1216,12 @@ def _build_cut_order_tab(
     rc_total = data["rc_wk1_curs"]
     sh_total = data["sh_wk1_total"]
     gen_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-    _merge_subtitle(ws, 2, f"Generated {gen_time}  |  RC: {rc_total} charges  |  SH: {sh_total} orders", NOTES_COL)
+    _merge_subtitle(
+        ws, 2,
+        f"Generated {gen_time}  |  RC: {rc_total} charges  |  SH: {sh_total} orders"
+        f"  |  Wheels include {_WASTE:.0%} cut waste",
+        NOTES_COL,
+    )
 
     # Row 3: blank
     # Row 4: column headers
@@ -1403,10 +1419,15 @@ def _build_cut_order_tab(
         ws_.cell(row=row_num, column=15, value=_spec.get("slice_oz") or None).font = F_INPUT
         ws_.cell(row=row_num, column=15).fill = FILL_INPUT
         ws_.cell(row=row_num, column=15).alignment = A_RIGHT
-        # P: Wheels (computed) = ROUNDUP(Cut slices * Slice oz / (Wheel lb * 16)) — whole wheels
+        # P: Wheels (computed) — whole wheels needed to yield the Cut slices.
+        # A wheel does NOT yield its full weight in usable slices: rind/ends/trim
+        # are lost, so only (1 - waste) of it is sliceable. Waste is applied to the
+        # usable weight BEFORE the ROUNDUP (Kurt 2026-07-28: "factor that in with
+        # the round up") — rounding first would under-order wheels.
+        #   Wheels = ROUNDUP(Cut x Slice oz / (Wheel lb x 16 x usable), 0)
         ws_[f"P{row_num}"] = (
             f'=IF(OR(K{row_num}=0,N{row_num}=0,O{row_num}=0),"",'
-            f"ROUNDUP(K{row_num}*O{row_num}/(N{row_num}*16),0))"
+            f"ROUNDUP(K{row_num}*O{row_num}/(N{row_num}*16*{_USABLE:.4g}),0))"
         )
         ws_.cell(row=row_num, column=16).font = F_NUM_BOLD
         ws_.cell(row=row_num, column=16).alignment = A_RIGHT
