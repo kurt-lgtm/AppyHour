@@ -101,7 +101,116 @@ def _assert_window_invariants():
 
 _assert_window_invariants()
 
-PICKABLE_PREFIXES = ("CH-", "MT-", "AC-")
+PICKABLE_PREFIXES = ("CH-", "MT-", "AC-", "MR-", "PK-")
+
+# ── Bundle / limited-release recipes ────────────────────────────────
+# A "bundle" (BL-*) or limited-release box (AHB-X*) ships several component
+# SKUs. The recipe (component -> qty per box) lives in Shopify's Simple Bundles
+# variant metafield `simple_bundles.bundled_variants`. Recharge-native bundles
+# (no Simple Bundles metafield) are supplied via BUNDLE_RECIPE_OVERRIDES.
+#
+# DOUBLE-COUNT RULE (Kurt 2026-07-28): a component is added to demand ONLY when
+# it is NOT already a line item in the SAME container (order/charge). Shopify
+# orders — and some Recharge charges (e.g. BL-BLR4 charge 1816643580) — already
+# carry the components as their own lines, which the pickable loop counts; the
+# explosion adds only the components that are genuinely missing. Never re-add
+# what a container already lists.
+BUNDLE_RECIPE_OVERRIDES = {
+    # Recharge-native bundle, absent from Simple Bundles. Confirmed live from
+    # Recharge charge 1816643580 + Kurt 2026-07-28: 4 Baked Lemon Ricotta +
+    # 2 Blackberry Balsamic jam.
+    "BL-BLR4": {"CH-BLR": 4, "AC-BLBALS": 2},
+}
+_BUNDLE_RECIPE_CACHE: dict = {}
+
+
+def _is_bundle_sku(sku: str) -> bool:
+    u = (sku or "").upper()
+    return u.startswith("BL-") or u.startswith("AHB-X")
+
+
+def _get_bundle_recipe(store: str, token: str, sku: str, _seen=None) -> dict:
+    """Return {component_sku: qty_per_box} for a bundle/limited-release SKU.
+
+    Source: Shopify Simple Bundles variant metafield, then overrides. Nested
+    bundles (a component that is itself BL-/AHB-X) are expanded recursively.
+    Cached per run. Returns {} when no recipe is found (caller must not fabricate).
+    """
+    import requests
+
+    key = (sku or "").upper()
+    if key in _BUNDLE_RECIPE_CACHE:
+        return _BUNDLE_RECIPE_CACHE[key]
+    _seen = _seen or set()
+    if key in _seen:  # cycle guard for nested bundles
+        return {}
+    _seen.add(key)
+
+    raw = dict(BUNDLE_RECIPE_OVERRIDES.get(key, {}))
+    if not raw and store and token:
+        try:
+            gql = f"{store}/admin/api/2026-04/graphql.json"
+            q = ('query($q:String!){productVariants(first:1,query:$q){edges{node{'
+                 'metafield(namespace:"simple_bundles",key:"bundled_variants"){value}}}}}')
+            r = requests.post(
+                gql,
+                headers={"X-Shopify-Access-Token": token, "Content-Type": "application/json"},
+                json={"query": q, "variables": {"q": f"sku:{sku}"}},
+                timeout=30,
+            )
+            edges = r.json().get("data", {}).get("productVariants", {}).get("edges", [])
+            mf = edges[0]["node"].get("metafield") if edges else None
+            if mf:
+                for c in json.loads(mf["value"]):
+                    cs = c.get("sku")
+                    if cs:
+                        raw[cs] = raw.get(cs, 0) + int(c.get("quantity_in_bundle") or 1)
+        except Exception as e:
+            print(f"  WARN: bundle recipe fetch failed for {sku}: {e}")
+
+    recipe: dict = {}
+    for cs, qty in raw.items():
+        if _is_bundle_sku(cs):  # nested bundle → expand
+            for ss, sq in _get_bundle_recipe(store, token, cs, _seen).items():
+                recipe[ss] = recipe.get(ss, 0) + sq * qty
+        else:
+            recipe[cs] = recipe.get(cs, 0) + qty
+    _BUNDLE_RECIPE_CACHE[key] = recipe
+    return recipe
+
+
+def _explode_bundles(present_qty: dict, store: str, token: str,
+                     target_demand: dict, out_bundles, week_key: str) -> None:
+    """Add missing bundle components to demand for one container.
+
+    present_qty: {sku: qty} of line items actually in this order/charge.
+    For each bundle parent present, add each recipe component × parent_qty to
+    target_demand ONLY if that component is absent from present_qty (else it's
+    already counted). Records per-bundle breakdown into out_bundles for display.
+    """
+    present = set(present_qty)
+    for sku in list(present):
+        if not _is_bundle_sku(sku):
+            continue
+        n = present_qty.get(sku, 1)
+        recipe = _get_bundle_recipe(store, token, sku)
+        rec = None
+        if out_bundles is not None:
+            rec = out_bundles.setdefault(week_key, {}).setdefault(
+                sku, {"count": 0, "components": {}, "no_recipe": not recipe})
+            rec["count"] += n
+        for cs, per in recipe.items():
+            pickable = any(cs.startswith(p) for p in PICKABLE_PREFIXES)
+            already = cs in present
+            if not already and pickable:
+                target_demand[cs] = target_demand.get(cs, 0) + n * per
+            if rec is not None:
+                comp = rec["components"].setdefault(
+                    cs, {"per": per, "added": 0, "already": 0, "pickable": pickable})
+                if already:
+                    comp["already"] += n * per
+                elif pickable:
+                    comp["added"] += n * per
 
 # Curation resolution
 KNOWN_CURATIONS = {
@@ -348,7 +457,7 @@ def _warn_charge_count_drift(total, threshold_pct=40):
         print(f"  (charge-count ledger skipped: {type(e).__name__}: {e})")
 
 
-def fetch_recharge_api(api_token, out_specialty=None):
+def fetch_recharge_api(api_token, out_specialty=None, out_bundles=None, shop_creds=None):
     """Fetch queued charges. Returns pickable SKU demand + curation counts per week.
 
     If `out_specialty` is provided as a dict like {"WK1": {}, "WK2": {}}, it is
@@ -359,6 +468,9 @@ def fetch_recharge_api(api_token, out_specialty=None):
     (admin export is authoritative; API has been observed to truncate).
     """
     import requests
+
+    # Shopify creds for live bundle-recipe lookup (Simple Bundles metafield).
+    _bundle_store, _bundle_token = shop_creds if shop_creds else (None, None)
 
     csv_path = os.environ.get("RECHARGE_CSV_PATH", "").strip()
     if csv_path and os.path.exists(csv_path):
@@ -529,6 +641,22 @@ def fetch_recharge_api(api_token, out_specialty=None):
             else:
                 wk2_skus[sku] += qty
 
+        # Explode bundle/limited-release boxes present in this charge → add ONLY
+        # components missing from the charge's own lines. Some charges already
+        # list them (BL-BLR4 charge 1816643580 carries CH-BLR×4 + AC-BLBALS×2);
+        # those are not re-added. Same double-count rule as the Shopify side.
+        if _bundle_store:
+            present_qty: dict = {}
+            for item in charge.get("line_items", []):
+                s = (item.get("sku") or "").strip()
+                if s:
+                    present_qty[s] = present_qty.get(s, 0) + int(float(item.get("quantity", 1)))
+            _explode_bundles(
+                present_qty, _bundle_store, _bundle_token,
+                wk1_skus if is_wk1 else wk2_skus,
+                out_bundles, "WK1" if is_wk1 else "WK2",
+            )
+
     return (
         dict(wk1_skus),
         dict(wk2_skus),
@@ -578,7 +706,7 @@ def _wk1_ship_tags(today=None):
 WK1_SHIP_TAGS = _wk1_ship_tags()
 
 
-def fetch_shopify_orders(settings, out_specialty=None):
+def fetch_shopify_orders(settings, out_specialty=None, out_bundles=None):
     """Fetch open Shopify orders for WK1/WK2 ship tags.
 
     Returns per-week:
@@ -772,6 +900,15 @@ def fetch_shopify_orders(settings, out_specialty=None):
                 upper = sku.upper()
                 if any(upper.startswith(p) for p in PICKABLE_PREFIXES):
                     target[sku] += qty
+
+        # Explode bundle/limited-release boxes → add ONLY components missing from
+        # this order's own lines (Shopify orders already list them, so nothing
+        # double-counts). Records the per-bundle breakdown for the Cut Order tab.
+        _explode_bundles(
+            item_skus, store, token,
+            wk1_addon if is_wk1 else wk2_addon,
+            out_bundles, "WK1" if is_wk1 else "WK2",
+        )
 
     print(
         f"  Shopify WK1: {wk1_count} orders ({sum(wk1_curations.values())} subs, "

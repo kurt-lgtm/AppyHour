@@ -27,6 +27,16 @@ Demand forecasting + cut order generation + fulfillment web dashboard. Single-fi
 - **PAR=30** for all items in v2 cut order
 - **Avail = corrected_inventory_path** — update BEFORE running cut order
 - **Calibri everywhere** in `build_cut_order_xlsx_v2.py` output
+- **Bundle/limited-release explosion (BL-*, AHB-X*)** — recipes come LIVE from Shopify Simple Bundles
+  variant metafield `simple_bundles.bundled_variants` (`quantity_in_bundle` = per-box qty; nested bundles
+  expand recursively). Recharge-native bundles absent from Simple Bundles go in `BUNDLE_RECIPE_OVERRIDES`
+  (`inventory_demand_report.py`) — e.g. BL-BLR4 = CH-BLR×4 + AC-BLBALS×2 (confirmed vs Recharge charge
+  1816643580; NEVER fabricate a recipe, elicit from Kurt). 🔴 **Double-count rule:** a component is added
+  to demand ONLY when it is NOT already a line item in the SAME order/charge. Shopify orders — and some
+  Recharge charges — already list the components (the pickable loop counts them); explosion adds only the
+  missing ones. Invariant `Added + Already = Boxes × Per` must hold per component. Recipes are shown in the
+  "Bundles & Limited-Release" section at the bottom of the Cut Order tab.
+- **PICKABLE_PREFIXES = CH-, MT-, AC-, MR-, PK-** (Kurt 2026-07-28) — journals/guides/inserts count in demand.
 - **NEVER count removed items** — any Shopify order read in the demand pipeline MUST net removed/refunded
   lines via the canonical `active_line_items()` (AppyHourMCP/utils.py, `shopify-line-items` skill). Shopify
   keeps refunded/edited-out lines at their ORIGINAL `quantity`, so reading raw `order["line_items"]`

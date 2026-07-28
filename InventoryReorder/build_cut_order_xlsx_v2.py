@@ -297,6 +297,14 @@ def _fetch_all_data(settings: dict) -> dict:
     print("Fetching Recharge charges...")
     # Specialty/bundle accumulator (AHB-X*, BL-*) — populated by both fetchers
     specialty: dict = {"WK1": {}, "WK2": {}}
+    # Bundle explosion breakdown (per-box components) for the Cut Order tab.
+    bundles: dict = {"WK1": {}, "WK2": {}}
+
+    # Shopify creds for live bundle-recipe lookups from the Recharge fetcher.
+    _bstore = settings.get("shopify_store_url", "").strip()
+    if _bstore and not _bstore.startswith("http"):
+        _bstore = f"https://{_bstore}.myshopify.com"
+    _bundle_creds = (_bstore, settings.get("shopify_access_token", "").strip())
 
     (
         rc_wk1,
@@ -316,7 +324,8 @@ def _fetch_all_data(settings: dict) -> dict:
         monthly_by_week_month,
         rc_wk1_custom,
         rc_wk2_custom,
-    ) = fetch_recharge_api(recharge_token, out_specialty=specialty)
+    ) = fetch_recharge_api(recharge_token, out_specialty=specialty,
+                           out_bundles=bundles, shop_creds=_bundle_creds)
 
     # -- Shopify --
     print("Fetching Shopify orders...")
@@ -331,7 +340,7 @@ def _fetch_all_data(settings: dict) -> dict:
         sh_wk2_med,
         sh_wk1_lge,
         sh_wk2_lge,
-    ) = fetch_shopify_orders(settings, out_specialty=specialty)
+    ) = fetch_shopify_orders(settings, out_specialty=specialty, out_bundles=bundles)
 
     # -- Normalize aliased SKUs across all demand dicts --
     if SKU_ALIASES:
@@ -584,6 +593,7 @@ def _fetch_all_data(settings: dict) -> dict:
         "sh_wk1_total": sum(sh_wk1_curations.values()),
         "sh_wk2_total": sum(sh_wk2_curations.values()),
         "specialty": specialty,
+        "bundles": bundles,
     }
 
 
@@ -1361,8 +1371,83 @@ def _build_cut_order_tab(
             ),
         )
 
+    # ── Bundles & Limited-Release section (below the main table) ──
+    _write_bundles_on_cut_order(ws, data, last_row + 2)
+
     # Freeze panes: row 4 header + columns A:B
     ws.freeze_panes = "C5"
+
+
+def _write_bundles_on_cut_order(ws: Worksheet, data: dict, start_row: int) -> int:
+    """List each bundle / limited-release box with its component SKUs indented
+    beneath it. Components were already exploded into the demand columns above
+    (added only where a container didn't already list them); this section shows
+    the breakdown so the floor sees what each box contributes.
+    """
+    bundles = data.get("bundles") or {"WK1": {}, "WK2": {}}
+    sku_name_fn = data["sku_name"]
+
+    # Merge WK1 + WK2 per parent bundle.
+    merged: dict = {}
+    for wk in ("WK1", "WK2"):
+        for parent, rec in (bundles.get(wk) or {}).items():
+            m = merged.setdefault(parent, {"count": 0, "no_recipe": rec.get("no_recipe", False),
+                                           "components": {}})
+            m["count"] += rec.get("count", 0)
+            m["no_recipe"] = m["no_recipe"] or rec.get("no_recipe", False)
+            for cs, cd in rec.get("components", {}).items():
+                c = m["components"].setdefault(cs, {"per": cd["per"], "added": 0, "already": 0,
+                                                    "pickable": cd.get("pickable", True)})
+                c["added"] += cd.get("added", 0)
+                c["already"] += cd.get("already", 0)
+
+    if not merged:
+        return start_row
+
+    row = start_row
+    _section_header(ws, row,
+                    "BUNDLES & LIMITED-RELEASE  (components already added into demand above)",
+                    "1E293B", "FFFFFF", 15)
+    row += 1
+    for col, label in ((1, "Box / Component"), (2, "Name"), (3, "Boxes"),
+                       (4, "Per box"), (5, "Added to cut"), (6, "Already in orders")):
+        c = ws.cell(row=row, column=col, value=label)
+        c.font = Font(name="Calibri", size=9, bold=True, color="FFFFFF")
+        c.fill = PatternFill("solid", fgColor="475569")
+        c.alignment = A_RIGHT if col >= 3 else A_LEFT
+    row += 1
+
+    for parent in sorted(merged):
+        m = merged[parent]
+        pc = ws.cell(row=row, column=1, value=parent)
+        pc.font = Font(name="Calibri", size=11, bold=True)
+        ws.cell(row=row, column=2, value=sku_name_fn(parent) or "").font = Font(
+            name="Calibri", size=10, bold=True)
+        cc = ws.cell(row=row, column=3, value=m["count"])
+        cc.font = Font(name="Calibri", size=11, bold=True)
+        cc.alignment = A_RIGHT
+        row += 1
+        if m["no_recipe"]:
+            note = ws.cell(row=row, column=2,
+                           value="recipe unavailable in Simple Bundles — NOT exploded")
+            note.font = Font(name="Calibri", size=9, italic=True, color="B45309")
+            row += 1
+            continue
+        for cs in sorted(m["components"]):
+            cd = m["components"][cs]
+            ws.cell(row=row, column=1, value=f"   → {cs}").font = Font(
+                name="Calibri", size=9, color="475569")
+            nm = sku_name_fn(cs) or ""
+            if not cd["pickable"]:
+                nm = (nm + "  (not cut)").strip()
+            ws.cell(row=row, column=2, value=nm).font = F_NAME
+            for col, val in ((4, cd["per"]), (5, cd["added"]), (6, cd["already"])):
+                cell = ws.cell(row=row, column=col, value=val)
+                cell.font = F_NUM if col == 5 and val else F_NUM_MUTED
+                cell.alignment = A_RIGHT
+            row += 1
+        row += 1  # spacer between bundles
+    return row
 
 
 # ── Main ─────────────────────────────────────────────────────────────
@@ -1374,10 +1459,9 @@ def main() -> str:
 
     wb = openpyxl.Workbook()
 
-    # Tab 2: Raw Materials
-    _build_raw_materials_tab(wb, data, settings)
+    # Raw Materials tab removed 2026-07-28 (Kurt) — not used on the floor.
 
-    # Tab 3: Checklist (pre-cut sanity)
+    # Checklist (pre-cut sanity)
     _build_checklist_tab(wb, data, settings)
 
     # Tab 1: Cut Order (main) — build the sheet structure first
@@ -1423,7 +1507,6 @@ def main() -> str:
     print(f"\nExcel written to: {out_path}")
     print(f"  {len(data['active_skus'])} active SKUs")
     print(f"  Tab 1: Cut Order (alpha by category, single-cohort, assignments at cols W-AE)")
-    print(f"  Tab 2: Raw Materials (wheels + bulk accompaniments)")
     print(f"  Blue cells = editable input")
 
     return out_path
