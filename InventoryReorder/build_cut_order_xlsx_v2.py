@@ -380,6 +380,11 @@ def _fetch_all_data(settings: dict) -> dict:
     store_url = settings.get("shopify_store_url", "")
     shop_token = settings.get("shopify_access_token", "")
     fo_count = 0
+    # Surfaced on the Checklist tab ("subscription first orders?"). Projection is
+    # NOT fed into demand (see the DISABLED note below) — it's a sanity signal.
+    _projected = 0
+    _mong_projected = 0
+    _window_label = ""
     if store_url and shop_token:
         if not store_url.startswith("http"):
             store_url = f"https://{store_url}.myshopify.com"
@@ -601,6 +606,12 @@ def _fetch_all_data(settings: dict) -> dict:
         "sh_wk2_total": sum(sh_wk2_curations.values()),
         "specialty": specialty,
         "bundles": bundles,
+        "first_orders": {
+            "observed": fo_count,
+            "window": _window_label,
+            "projected": _projected,
+            "mong": _mong_projected,
+        },
     }
 
 
@@ -1028,53 +1039,102 @@ def _build_raw_materials_tab(wb: openpyxl.Workbook, data: dict, settings: dict) 
 
 
 def _build_checklist_tab(wb: openpyxl.Workbook, data: dict, settings: dict) -> None:
-    """General pre-cut sanity checks. Section 1: bundles & specialty (AHB-X*, BL-*).
+    """Pre-cut checklist — the questions to answer before releasing the cut.
 
-    Add new sections below by following the same _section_header + table pattern.
+    The old "Bundles & Specialty" listing lived here; it moved to the Cut Order
+    tab (with editable Add boxes), so this tab is now the actual checklist
+    (Kurt 2026-07-28). Each row carries a SIGNAL computed from this build where
+    the data genuinely exists, and a blue OK?/Notes pair to sign off. Items we
+    cannot compute say "manual" rather than guessing.
     """
     ws = wb.create_sheet("Checklist")
-    sku_name_fn = data["sku_name"]
-    specialty = data.get("specialty") or {"WK1": {}, "WK2": {}}
+    available = data["available"]
+    active_skus = data["active_skus"]
+    bundles = data.get("bundles") or {"WK1": {}, "WK2": {}}
+    fo = data.get("first_orders") or {}
+    specs = settings.get("cut_order_specs", {})
 
-    _set_col_widths(ws, {1: 28, 2: 38, 3: 12, 4: 12, 5: 14})
+    _set_col_widths(ws, {1: 6, 2: 46, 3: 60, 4: 8, 5: 34})
 
     row = 1
     _merge_title_bar(ws, row, "PRE-CUT CHECKLIST", 5)
     row += 1
-    _merge_subtitle(ws, row, "General sanity checks before cutting", 5)
+    _merge_subtitle(ws, row, f"Answer each before releasing the cut  |  Ship week of {SHIP_WEEK_MONDAY}", 5)
     row += 2
 
-    # ── Section 1: Bundles & Specialty (AHB-X*, BL-*) ──
-    _section_header(ws, row, "Bundles & Specialty (AHB-X*, BL-*)", "1E293B", "FFFFFF", 5)
-    row += 1
-    _dark_header_row(ws, row, ["SKU", "Name", "WK1 Qty", "WK2 Qty", "Total"])
+    _dark_header_row(ws, row, ["#", "Check", "Signal from this build", "OK?", "Notes"])
+    header_row = row
     row += 1
 
-    wk1 = specialty.get("WK1", {})
-    wk2 = specialty.get("WK2", {})
-    all_skus = sorted(set(wk1) | set(wk2))
-
-    if not all_skus:
-        ws.cell(row=row, column=1, value="No AHB-X* or BL-* SKUs in queued charges or open orders").font = F_NUM_MUTED
-        row += 1
+    # ── Signals (only computed where the data actually exists) ──
+    # 1. Bundles / limited-release
+    merged_bundles: dict = {}
+    for wk in ("WK1", "WK2"):
+        for parent, rec in (bundles.get(wk) or {}).items():
+            merged_bundles[parent] = merged_bundles.get(parent, 0) + rec.get("count", 0)
+    no_recipe = sorted(p for wk in ("WK1", "WK2")
+                       for p, r in (bundles.get(wk) or {}).items() if r.get("no_recipe"))
+    if merged_bundles:
+        sig_bundles = (f"{len(merged_bundles)} box type(s), {sum(merged_bundles.values())} boxes detected: "
+                       + ", ".join(f"{p}×{n}" for p, n in sorted(merged_bundles.items())))
+        if no_recipe:
+            sig_bundles += f"  |  NO RECIPE (not exploded): {', '.join(no_recipe)}"
     else:
-        for sku in all_skus:
-            q1 = int(wk1.get(sku, 0))
-            q2 = int(wk2.get(sku, 0))
-            ws.cell(row=row, column=1, value=sku).font = F_SKU
-            ws.cell(row=row, column=2, value=sku_name_fn(sku) or "").font = F_NAME
-            c1 = ws.cell(row=row, column=3, value=q1)
-            c1.font = F_NUM
-            c1.alignment = A_RIGHT
-            c2 = ws.cell(row=row, column=4, value=q2)
-            c2.font = F_NUM
-            c2.alignment = A_RIGHT
-            ct = ws.cell(row=row, column=5, value=q1 + q2)
-            ct.font = Font(name="Calibri", size=12, bold=True)
-            ct.alignment = A_RIGHT
-            row += 1
+        sig_bundles = "none detected in orders or queued charges"
 
-    ws.freeze_panes = "A5"
+    # 2. Subscription first orders — projection is a signal only, never fed into demand
+    if fo.get("observed"):
+        sig_first = (f"{fo['observed']} observed in {fo['window']} → {fo['projected']} projected "
+                     f"({fo['mong']} MONG).  NOT in demand — add via the First Order column.")
+    else:
+        sig_first = "no first-order data pulled this run"
+
+    # 3. New SKUs cut — a decision, not data. Manual.
+    sig_new_cut = "manual — confirm with Tommy which new SKUs are being cut this week"
+
+    # 4. New SKUs onboarded — demand exists but the SKU has no row in the HAVE inventory
+    not_onboarded = sorted(s for s in active_skus if s not in available)
+    sig_onboard = (f"{len(not_onboarded)} SKU(s) in demand with NO row in the HAVE inventory: "
+                   + ", ".join(not_onboarded[:12]) + (" …" if len(not_onboarded) > 12 else "")
+                   ) if not_onboarded else "every SKU in demand has a HAVE row"
+
+    # 5. Raw materials — cheeses we plan to cut but can't size (no wheel lb / slice oz)
+    missing_spec = sorted(
+        s for s in active_skus
+        if s.startswith("CH-") and (specs.get(s, {}).get("cut"))
+        and not (specs.get(s, {}).get("wheel_lb") and specs.get(s, {}).get("slice_oz"))
+    )
+    sig_raw = (f"{len(missing_spec)} cheese SKU(s) have a Cut but no Wheel lb / Slice oz, so Wheels "
+               f"can't compute: " + ", ".join(missing_spec[:12]) + (" …" if len(missing_spec) > 12 else "")
+               ) if missing_spec else "every cheese with a Cut has Wheel lb + Slice oz"
+
+    items = [
+        ("Bundles and limited-release boxes?", sig_bundles),
+        ("Subscription first orders?", sig_first),
+        ("New SKUs cut?", sig_new_cut),
+        ("New SKUs onboarded?", sig_onboard),
+        ("Do we have raw materials for cut?", sig_raw),
+    ]
+
+    for i, (label, signal) in enumerate(items, 1):
+        n = ws.cell(row=row, column=1, value=i)
+        n.font = F_NUM_MUTED
+        n.alignment = A_CENTER
+        lc = ws.cell(row=row, column=2, value=label)
+        lc.font = Font(name="Calibri", size=11, bold=True)
+        lc.alignment = A_LEFT
+        sc = ws.cell(row=row, column=3, value=signal)
+        sc.font = F_NUM_MUTED
+        sc.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        for col in (4, 5):  # OK? + Notes are inputs
+            c = ws.cell(row=row, column=col)
+            c.font = F_INPUT
+            c.fill = FILL_INPUT
+            c.alignment = A_CENTER if col == 4 else A_LEFT
+        ws.row_dimensions[row].height = 30
+        row += 1
+
+    ws.freeze_panes = f"A{header_row + 1}"
     ws.sheet_properties.tabColor = "F59E0B"
 
 
