@@ -39,9 +39,11 @@ Demand forecasting + cut order generation + fulfillment web dashboard. Single-fi
 - **PICKABLE_PREFIXES = CH-, MT-, AC-, MR-, PK-** (Kurt 2026-07-28) — journals/guides/inserts count in demand.
 - **Tommy input persistence (`--ingest`)** — `build_cut_order_xlsx_v2.py --ingest <filled.xlsx>` snapshots
   Tommy's First Order (F), Wheel lb (M), Slice oz (N) per SKU → `settings.cut_order_specs[sku]`, and the
-  PR-CJAM cheese (T) / CEX-EC cheese (Y) / PR-CJAM jam per curation → `pr_cjam`/`cex_ec`. Next build
-  pre-fills them (same value → same SKU/curation). 🔴 EXPLICIT-only — never auto-snapshots, so it can't
-  silently re-populate a deliberately-cleared rotation table. Reads BY HEADER (robust to column shifts).
+  Cut (K), Notes (Q), and the PR-CJAM cheese (T) / CEX-EC cheese (Y) / PR-CJAM jam per curation →
+  `pr_cjam`/`cex_ec`. Next build pre-fills them (same value → same SKU/curation). 🔴 EXPLICIT-only —
+  never auto-snapshots, so it can't silently re-populate a deliberately-cleared rotation table. Reads BY
+  HEADER (robust to column shifts). Notes is a free-text per-SKU column at Q (17), past the hidden Safety
+  col P.
 - **PR-CJAM jam pair** — PR-CJAM ships cheese + jam; the "PR-CJAM JAM ASSIGNMENTS" block (cols AG-AJ)
   carries the jam SKU with the SAME W1/W2 count as the cheese, and jam demand rolls into `+Assign`
   (SUMIF over the jam range). Generic jam = AC-BCM across curations (Kurt 2026-07-28; monthly PR-CJAM-GEN

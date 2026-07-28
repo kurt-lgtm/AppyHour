@@ -1113,18 +1113,20 @@ def _build_cut_order_tab(
             14: 9,  # N Slice oz
             15: 9,  # O Wheels
             16: 8,  # P Safety (hidden)
+            17: 34, # Q Notes (input)
         },
     )
     LAST_COL = 15
+    NOTES_COL = 17
     ws.column_dimensions["P"].hidden = True
 
     # ── Title bar ──
-    _merge_title_bar(ws, 1, f"CUT ORDER \u2014 Ship Week of {SHIP_WEEK_MONDAY}", LAST_COL)
+    _merge_title_bar(ws, 1, f"CUT ORDER \u2014 Ship Week of {SHIP_WEEK_MONDAY}", NOTES_COL)
 
     rc_total = data["rc_wk1_curs"]
     sh_total = data["sh_wk1_total"]
     gen_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-    _merge_subtitle(ws, 2, f"Generated {gen_time}  |  RC: {rc_total} charges  |  SH: {sh_total} orders", LAST_COL)
+    _merge_subtitle(ws, 2, f"Generated {gen_time}  |  RC: {rc_total} charges  |  SH: {sh_total} orders", NOTES_COL)
 
     # Row 3: blank
     # Row 4: column headers
@@ -1148,6 +1150,11 @@ def _build_cut_order_tab(
         "Safety",
     ]
     _dark_header_row(ws, HDR_ROW, headers)
+    # Notes header (col Q/17) — written separately since it sits past the hidden
+    # Safety column (P/16). Free-text per-SKU, persisted via cut_order_specs.
+    _nh = ws.cell(HDR_ROW, NOTES_COL, "Notes")
+    _nh.font = Font(name="Calibri", size=10, bold=True, color=HEADER_FG)
+    _nh.fill = PatternFill("solid", fgColor=HEADER_BG)
 
     # SUMIF references — same sheet, two ranges:
     # 1) PR-CJAM + MONTHLY slots: col X (SKU), Y (W1 count), Z (W2 count) rows 3..prcjam_monthly_last_row
@@ -1285,8 +1292,8 @@ def _build_cut_order_tab(
         ws_[f"J{row_num}"] = f"=C{row_num}-I{row_num}"
         ws_.cell(row=row_num, column=10).font = F_NUM_BOLD
         ws_.cell(row=row_num, column=10).alignment = A_RIGHT
-        # K: Cut (input — number of slices to cut)
-        ws_.cell(row=row_num, column=11).font = F_INPUT
+        # K: Cut (input — number of slices to cut). Pre-filled from snapshot.
+        ws_.cell(row=row_num, column=11, value=_spec.get("cut") or None).font = F_INPUT
         ws_.cell(row=row_num, column=11).fill = FILL_INPUT
         ws_.cell(row=row_num, column=11).alignment = A_RIGHT
         # L: Good?
@@ -1314,6 +1321,11 @@ def _build_cut_order_tab(
         ws_[f"P{row_num}"] = f"=IF((D{row_num}+E{row_num}+F{row_num}+G{row_num})>25,25,0)"
         ws_.cell(row=row_num, column=16).font = F_NUM
         ws_.cell(row=row_num, column=16).alignment = A_RIGHT
+        # Q: Notes (input — free text). Pre-filled from snapshot; editable.
+        _nc = ws_.cell(row=row_num, column=17, value=_spec.get("notes") or None)
+        _nc.font = F_INPUT
+        _nc.fill = FILL_INPUT
+        _nc.alignment = A_LEFT
 
     def _write_section(ws_: Worksheet, start_row: int, label: str, bg: str, fg: str, rows_: list[dict]) -> int:
         """Write a section header + sub-grouped rows. Returns next available row."""
@@ -1642,17 +1654,24 @@ def _ingest_tommy_inputs(path: str) -> None:
         c_f = hcol.get("first order")
         c_m = hcol.get("wheel lb")
         c_n = hcol.get("slice oz")
+        c_k = hcol.get("cut")
+        c_notes = hcol.get("notes")
         for r in range(hdr_row + 1, ws.max_row + 1):
             sku = ws.cell(r, c_sku).value
             if not sku or not isinstance(sku, str) or not sku.strip():
                 continue
             sku = sku.strip()
             rec = {}
-            for key, col in (("first_order", c_f), ("wheel_lb", c_m), ("slice_oz", c_n)):
+            for key, col in (("first_order", c_f), ("wheel_lb", c_m),
+                             ("slice_oz", c_n), ("cut", c_k)):
                 if col:
                     v = ws.cell(r, col).value
                     if isinstance(v, (int, float)) and v:
                         rec[key] = v
+            if c_notes:
+                nv = ws.cell(r, c_notes).value
+                if nv is not None and str(nv).strip():
+                    rec["notes"] = str(nv).strip()
             if rec:
                 specs[sku] = rec
 
@@ -1727,7 +1746,7 @@ def _ingest_tommy_inputs(path: str) -> None:
         written += 1
 
     print(f"Ingested Tommy inputs from: {path}")
-    print(f"  {len(specs)} SKUs with First Order/Wheel lb/Slice oz specs")
+    print(f"  {len(specs)} SKUs with First Order/Wheel lb/Slice oz/Cut/Notes specs")
     print(f"  {len(prcjam_cheese)} PR-CJAM cheese, {sum(1 for v in prcjam_jam.values() if v)} PR-CJAM jam, "
           f"{len(cexec_cheese)} CEX-EC assignments")
     print(f"  wrote {written} settings file(s) (.bak backup kept). Next build pre-fills these.")
