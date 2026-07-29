@@ -118,7 +118,7 @@ Canonical pipeline: `build.py` (I/O driver) → `lib/engine.compute_routing` (th
 | Full-cohort dry-run review sheet (no writes) | `scripts/full_cohort_dryrun.py --ship _SHIP_<date>` | 🔒 | per-order calls (miss Indy cap) |
 | Indianapolis 6-pallet gate | `lib/engine._indy_pallet_gate` (runs inside `compute_routing`) | 🔒 | there is NO `pallet_gate.py` |
 
-> ⚠️ The recovered **feasible-hub-fence/ice-floor** line (`lib/zone_floor.py`, `fedex_tnt.py`, `invariants.py`) is **EXPERIMENTAL — pending port-vs-archive** (`.claude/plans/2026-06-25-icefloor-port-vs-archive-handoff.md`). NOT canonical yet.
+> ✅ RESOLVED (2026-07-29): the **feasible-hub-fence/ice-floor** line (`lib/zone_floor.py`, `fedex_tnt.py`, `invariants.py`) was **ARCHIVED 2026-06-25** (`ShipRouting/_archive/shiprouting-feasible-hub-fence-2026-06/`); the static FedEx map's vouch role is replaced by live ShipStation committed quotes (`SHIPSTATION_LANE_VOUCH`, ROUTING_RULES §2 source 4). Do not port.
 
 ---
 

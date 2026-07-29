@@ -62,7 +62,7 @@ To do that, for each order our system (called **Kori**) picks two things:
 **Carrier cost order (use the cheapest that still arrives in ≤2 days):**
 > **Veho (~$6) → OnTrac (~$8) → FedEx Home Delivery (~$15) / UPS Ground (~$11) → LAST RESORT: FedEx 2Day Express (~$25)**
 
-That's the **North Star**: more Veho/OnTrac, FedEx Home Delivery or UPS Ground next, and only fall back to expensive FedEx 2Day Express when nothing else delivers on time.
+That's the **North Star (updated + Kurt-signed 2026-07-29 — see AppyHour/CLAUDE.md)**: lowest EXPECTED TOTAL cost — cheap proven ground first (OnTrac, then FedEx Home Delivery / UPS Ground; **Veho SUSPENDED all hubs 2026-07-29**, restore = config toggle), late risk PRICED into every comparison (`cost_per_late` lever), and FedEx 2Day Express only when nothing proven-or-vouched delivers ≤2. Two floors never for sale: the 2-day promise and cold arrival.
 
 ---
 
