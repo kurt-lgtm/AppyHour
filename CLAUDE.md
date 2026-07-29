@@ -4,9 +4,15 @@ Desktop analytics for Elevate Foods (subscription cheese/charcuterie). Python + 
 
 > 🧭 **NORTH STAR** (read before ANY change — every change must serve this): run the cold-chain
 > subscription operation end-to-end with **minimal manual intervention** — every box arrives **≤2 days,
-> cold, at the lowest cost** (ROUTING_RULES §0); every routine decision automated with **loud failures,
-> never silent ones** (HEARTBEAT_RULES); fast, efficient, secure, autonomous (Kurt 2026-07-02). A change
-> that satisfies every constraint but adds manual steps or silent failure modes moves AWAY from this — flag it.
+> cold, at the lowest *expected total* cost** (ROUTING_RULES §0; Kurt-signed 2026-07-29): label PLUS the
+> measured price of failure risk (reships at measured conversion, CS handling, customer loss when the
+> data shows it). **Late risk is priced, not forbidden** — a cheaper lane may carry more late risk when
+> the math wins, bounded by two floors never for sale: the **2-day promise** and **cold arrival** (warm
+> risk is a safety constraint, not a line item). Ground by default, air only when proven necessary; every
+> tradeoff constant is a measured, inspectable lever (LEVER_RULES.md). Every routine decision automated
+> with **loud failures, never silent ones** (HEARTBEAT_RULES); fast, efficient, secure, autonomous
+> (Kurt 2026-07-02). A change that satisfies every constraint but adds manual steps, silent failure
+> modes, or unpriced cost moves AWAY from this — flag it.
 
 ## 🛠 Tool dispatch — READ FIRST
 
