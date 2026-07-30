@@ -962,14 +962,20 @@ function productMixBreakdown_(cohortCols, sizeByCohort) {
     recs.push({ order: ord, issue: String(v[3] || 'Unknown'), cohort: String(v[4]) });
     if (ord) need[ord] = true;
   });
-  var orders = Object.keys(need), stateOf = {}, carrierOf = {};
-  // state from Shopify ship-to province
+  var orders = Object.keys(need), stateOf = {}, carrierOf = {}, shopCarrierOf = {};
+  // state (province) + fallback carrier (Shopify fulfillment tracking_company) in one query
   for (var i = 0; i < orders.length; i += 20) {
     var batch = orders.slice(i, i + 20);
-    var d = shopifyGql_('query($q:String!){ orders(first:20, query:$q){ edges{node{ name shippingAddress{ provinceCode } }}}}',
+    var d = shopifyGql_('query($q:String!){ orders(first:20, query:$q){ edges{node{ name shippingAddress{ provinceCode } fulfillments(first:10){ trackingInfo{ company } } }}}}',
                         { q: batch.map(function (n) { return 'name:' + n; }).join(' OR ') });
     d.orders.edges.forEach(function (e) {
-      stateOf[e.node.name.replace(/^#/, '')] = (e.node.shippingAddress || {}).provinceCode || '??';
+      var nm = e.node.name.replace(/^#/, '');
+      stateOf[nm] = (e.node.shippingAddress || {}).provinceCode || '??';
+      var car = '';
+      (e.node.fulfillments || []).forEach(function (f) {
+        (f.trackingInfo || []).forEach(function (ti) { if (!car && ti.company) car = ti.company; });
+      });
+      if (car) shopCarrierOf[nm] = normCarrier_(car);
     });
   }
   // carrier from Parcel Panel (Kurt 2026-07-22) — centralized in ppLookup_ (also
@@ -980,7 +986,8 @@ function productMixBreakdown_(cohortCols, sizeByCohort) {
   function bump(tbl, key, cohort) { (tbl[key] = tbl[key] || {})[cohort] = (tbl[key][cohort] || 0) + 1; }
   recs.forEach(function (x) {
     bump(byIssue, x.issue, x.cohort);
-    bump(byCarrier, carrierOf[x.order] || 'Unknown', x.cohort);
+    // PP first, Shopify tracking_company fallback — there should NEVER be Unknown (Kurt 2026-07-30)
+    bump(byCarrier, carrierOf[x.order] || shopCarrierOf[x.order] || 'Unknown', x.cohort);
     var st = stateOf[x.order] || '??';
     if (x.issue === 'Arrived Warm') bump(warm, st, x.cohort);
     else if (x.issue === 'Delayed in Transit') bump(delay, st, x.cohort);
