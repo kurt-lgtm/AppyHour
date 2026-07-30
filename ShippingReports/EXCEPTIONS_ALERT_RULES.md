@@ -84,8 +84,17 @@ real issues… sometimes you get a notification and they just changed the label.
 | in-network scans | "Arrived at Veho facility", "On FedEx vehicle for delivery" — normal movement. |
 | any (order, class) already alerted | dedup, constraint 3 |
 
-Expected volume: **~6–7 pings/week** (raw exceptions run ~7/week, 0.30% of cohort; the 07-06 spike
-hit 17 = 0.70%, concentrated in Veho with 4 boxes frozen at one facility, Avenel NJ).
+**Measured volume (replay of the 71 real 6/29–7/20 boxes, 2026-07-30): 40 PING / 31 SUPPRESS
+across 4 ship weeks ≈ 10 pings/week.** Higher than the 6–7 first estimated, because the replay
+surfaced carrier phrasings the first pass missed (below). Class split: UNDELIVERABLE 16 ·
+DAMAGED 8 · RETURNED 7 · LOST 3 · NEVER_PICKED_UP 3 · ADDRESS_ISSUE 2 · ATTEMPT_FAILED 1.
+
+🔴 **Carrier phrasing varies far more than it looks — always replay before trusting a bucket.**
+The first pass suppressed **5 genuine failures (14% of the suppressed set)** because the patterns
+were written from one sample each: "returned to the **seller**" (not sender), "unable to
+**deliver**" (not "to be delivered"), "unable to **locate** your package", and a bare
+"Delivery exception, **Damaged**, handling per shipper instructions". Adding a carrier, or seeing
+a new phrasing, means re-running the replay — not eyeballing the regex.
 
 ---
 
@@ -106,12 +115,33 @@ One Slack message per (order, class). Must carry: order #, customer name, carrie
 state, the class, the **verbatim PP `detail` text**, and a Shopify order link. Verbatim text is
 non-negotiable — it's what lets Dan judge in 2 seconds whether it's real without opening anything.
 
-## Verification before this is called done
+## Verification
 
-- Replay the 71 known 6/29–7/20 boxes through the classifier: expect 36 PING / 35 SUPPRESS,
-  and specifically **0** of the 23 already-delivered in the PING set.
-- Confirm a test post lands in `C0BLKKPAW8P` and nothing lands in #reships.
-- Confirm two consecutive runs on the same open box produce exactly one message.
+Done (2026-07-30, `Exceptions.gs` replayed under node against live PP payloads):
+- ✅ `excSelfTest()` — 20/20 cases.
+- ✅ Replay of the 71 real 6/29–7/20 boxes: **40 PING / 31 SUPPRESS**, and **0** of the 23
+  already-delivered boxes in the PING set.
+- ✅ Audit of the suppressed set for missed failures: **0 remaining leaks** (was 5 before the
+  phrasing widening).
+- 🔴 **Ordering trap, caught by the self-test:** `/\bdelivered\b/` matches "unable to be
+  **delivered**". Testing the delivered-suppress before the failure classes silently swallowed
+  UNDELIVERABLE — the largest ping class. Failure classes are tested FIRST; do not reorder.
+
+Still to verify on the live host:
+- A test post lands in `C0BLKKPAW8P` and nothing lands in #reships.
+- Two consecutive runs on the same open box produce exactly one message.
+- The host sheet's `SLACK_BOT_TOKEN` is `appyhouropsreader` (`U0BG153RTNW`) — verified in the
+  channel with `chat:write` + `groups:read` + `groups:history`. The Apps Script property has NOT
+  been confirmed to be that same app.
+
+## Known gaps (v1)
+
+- **Returned-to-origin reads as delivered.** Order 154810 (FedEx, dest AL) shows
+  "Delivered, Lebanon TN" — delivered back at the origin hub, not to the customer. v1 suppresses
+  it. Catching this needs the event location compared against the destination state.
+- **Mid-transit exceptions that later deliver are still invisible** — that's the `delivery_status`
+  schema gap tracked in `.claude/plans/2026-07-30-delivery-exception-visibility.md` (item 2),
+  not something this alerter can fix.
 
 ## Owner
 
