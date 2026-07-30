@@ -3283,11 +3283,14 @@ def compute_allocation(rmfg_tag: str, have: dict[str, float],
 
     zv = _zero_variant_items(base, headers, set(have))
 
-    # PK-/MR- = 0-DistVol structural inserts/journal (made-to-order) — NEVER cap their inventory to 0.
+    # PK-/MR- = 0-DistVol structural inserts/journal, TR- = trays assembled from bulk — all
+    # made-to-order, so no meaningful per-SKU HAVE row exists. NEVER cap their inventory.
+    # TR- was omitted here until 2026-07-29 and 84 tray pushes landed live (MATRIX_RULES rule 13).
+    # Pickable ≠ inventory-capped: TR- still gets matrix columns (PICKABLE_PREFIXES, rule 19a).
     rows = []
     skipped_structural = []
     for sku in zv:
-        if sku.startswith(("PK-", "MR-")):
+        if sku.startswith(("PK-", "MR-", "TR-")):
             skipped_structural.append(sku)
             continue
         h = have.get(sku, 0)

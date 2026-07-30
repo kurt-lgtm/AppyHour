@@ -73,7 +73,7 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
     re-implement the AVAIL$0 math in the web layer). Gotchas: **a tag matching 0 orders is
     REFUSED** (paid=0 → push would set Available to raw HAVE and let parents over-allocate into
     paid units — the exact failure allocate exists to prevent); commit requires a fresh preview and
-    invalidates it after push (re-preview after swaps); PK-/MR- structural SKUs stay uncapped;
+    invalidates it after push (re-preview after swaps); PK-/MR-/TR- structural SKUs stay uncapped;
     Available push remains manual-confirm — never auto-commit (inventorySetQuantities is
     effectively last-writer-wins even with changeFromQuantity read-then-write).
     **REGRESSION (2026-07-07):** `apply_allocation` read the `changeFromQuantity` (current on_hand,
@@ -83,6 +83,16 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
     on CH-MONT, failed twice, only succeeded via an uncached read). Rule 12 already mandates the
     uncached path — the optimistic-lock read MUST use `_shopify_graphql_matrix`, never the cached
     `_shopify_graphql`. Do not revert this read to the cached path.
+    **REGRESSION (Kurt 2026-07-29): allocate was capping TRAYS.** The structural-skip literal in
+    `compute_allocation` was `("PK-", "MR-")` only, so every `TR-` SKU with a $0 variant fell through
+    and got `available = max(0, HAVE − week NEED)` pushed to Shopify — **84 TR- pushes** landed in
+    `_outputs/logs/inventory_alloc_audit.jsonl` through 2026-07-28 04:44 (`TR-TRUFF`=104, `TR-AAB`=72,
+    `TR-APRES`=52, `TR-ICTRY`=39 …). Trays are **made-to-order from bulk** — there is no meaningful
+    per-tray HAVE row, so the cap is fiction and can drive a sellable tray's available to 0 (or
+    over-promise it). `TR-` is now structural alongside `PK-`/`MR-`: allocate must NEVER push a TR-
+    SKU's available. Do not "complete" the prefix list by adding TR- back to the capped set — TR- is
+    pickable and gets matrix COLUMNS (rule 19a), but pickable ≠ inventory-capped; those two prefix
+    lists are deliberately different. Test: `tests/test_allocate_structural.py`.
 
 14. **Col L (Tags) is QC-GATED for routing + ice at validation time** (`check_routing_and_ice`, 2026-07-03).
     The export is the LAST artifact RMFG reads; on 2026-07-03 untagged CS drift-ins, 1522 missing-ice
