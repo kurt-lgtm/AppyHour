@@ -354,6 +354,59 @@ MFG_TRANSLATIONS_PATH = Path(__file__).parent / "mfg_translations.csv"
 # `sync_order_to_shopify(active_prefixes=)` carries the same set for the $0 in-box variant path.
 PICKABLE_PREFIXES = ("CH-", "MT-", "AC-", "PK-", "TR-", "MR-")
 
+class MfgOnboardingError(ValueError):
+    """One or more pickable SKUs have no RMFG translator name, so the sheet cannot be built.
+
+    🔴 Subclasses ValueError DELIBERATELY — this used to be a bare `raise ValueError(...)` and every
+    existing `except ValueError` around matrix generation must keep catching it. The subclass only
+    ADDS the ability to tell this failure apart from every other matrix failure.
+
+    Carries `.skus` so a caller can render the list without parsing the message. The console blocks
+    only the SHEET stages on this and still runs routing (ROUTING_RULES §13.5); it identifies the
+    error BY TYPE, because a message-prefix match silently stops working when someone rewords the
+    string and the flow would quietly go back to failing whole jobs.
+    """
+
+    URL = "https://translator.robbinsmfginc.com/"
+
+    def __init__(self, skus, reason="have no MFG name"):
+        self.skus = list(skus)
+        super().__init__(
+            f"MFG onboarding REJECT: {len(self.skus)} SKU(s) {reason} and would render "
+            f"as phantom columns: {self.skus}. Onboard them at {self.URL}, re-export "
+            f"mfg_translations.csv, then re-run. Never hand-edit a column header to get past this."
+        )
+
+
+# Authoritative RMFG name list (meal-type export, 285 rows as of 2026-07-31). A translation whose
+# NAME is not in this list is as un-pickable as a missing translation — wk0803 an invented header
+# ("Cheese Slice, Frumage L'Ottavio" vs RMFG's "Frumage LOttavio") reached a sent vF on 234 rows.
+# Refresh by replacing this file with a fresh meal-type export; absent file = validation skipped
+# (loud warning), never a hard stop on a machine that lacks the snapshot.
+MFG_AUTHORITATIVE_PATH = Path(__file__).parent / "mfg_names_authoritative.csv"
+
+
+def validate_mfg_names(translations: dict[str, str]) -> None:
+    """Raise MfgOnboardingError for any translation whose NAME isn't in the authoritative export.
+
+    MATRIX_RULES rule 21: mfg_translations.csv maps SKU -> name, but nothing stops a hand-added
+    row from inventing a name RMFG's floor has never seen. The meal-type export is the authority;
+    a name outside it = same hard reject as a missing translation (caught BY TYPE per §13.5).
+    """
+    if not MFG_AUTHORITATIVE_PATH.exists():
+        print(f"  WARNING: {MFG_AUTHORITATIVE_PATH.name} missing - MFG name validation SKIPPED "
+              f"(refresh it from a meal-type export)")
+        return
+    authoritative = set(load_mfg_translations(MFG_AUTHORITATIVE_PATH).values())
+    if not authoritative:
+        print(f"  WARNING: {MFG_AUTHORITATIVE_PATH.name} empty - MFG name validation SKIPPED")
+        return
+    bad = sorted(sku for sku, name in translations.items() if name not in authoritative)
+    if bad:
+        raise MfgOnboardingError(bad, reason="carry a translation NAME not in the authoritative "
+                                             "meal-type export (invented/mistyped header)")
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Data structures
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2115,6 +2168,7 @@ def generate_matrix_xlsx(
     if not mfg_translations:
         print(f"  {_RED}No MFG translations file — cannot generate matrix{_RESET}")
         return ""
+    validate_mfg_names(mfg_translations)   # rule 21: no invented/mistyped header ever becomes a column
 
     # Build reverse: we need all unique product column headers
     # Collect all food/packaging SKUs across all orders
@@ -2167,12 +2221,13 @@ def generate_matrix_xlsx(
         # but names a product RMFG has never seen and cannot pick (AC-QUIC "Quicos", wk0728 TUE).
         # Only mfg_translations.csv (the RMFG translator-portal export) may name a column. Failing
         # HERE means no xlsx is written at all — the earlier gate fired only after the file existed.
-        raise ValueError(
-            f"MFG onboarding REJECT: {len(unmapped_skus)} SKU(s) have no MFG name and would render "
-            f"as phantom columns: {unmapped_skus}. Onboard them at "
-            f"https://translator.robbinsmfginc.com/, re-export mfg_translations.csv, then re-run. "
-            f"Never hand-edit a column header to get past this."
-        )
+        #
+        # 🔴 TYPED, and a subclass of ValueError so every existing `except ValueError` still catches
+        # it. Callers that need to tell THIS failure apart from any other matrix failure must catch
+        # the type and read `.skus` — never match on the message text. The console degrades the
+        # SHEET stages on this error while still running routing (ROUTING_RULES §13.5), and a
+        # message-prefix check would silently stop degrading the day someone rewords the string.
+        raise MfgOnboardingError(unmapped_skus)
 
     # Build the workbook
     wb = openpyxl.Workbook()

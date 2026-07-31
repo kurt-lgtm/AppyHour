@@ -260,5 +260,18 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
     file before overwriting; file is now a dict with a `policy`/`tag`/`ship_date` header
     (`read_override()` still accepts legacy bare lists). Summary-tab policy note stays manual.
 
+21. **A translation NAME outside the authoritative meal-type export is a HARD REJECT — an invented
+    header must never become a vF column** (wk0803, 2026-07-31). **Failure mode:** `mfg_translations.csv`
+    maps SKU → name but nothing checked the NAME was real; a hand-added row took a label off a
+    screenshot ("Cheese Slice, Frumage L'Ottavio" vs RMFG's actual "Frumage LOttavio") and the
+    invented header reached a SENT vF on 234 count rows — un-pickable on RMFG's floor, caught only
+    by Kurt's review. **Rule:** `validate_mfg_names()` runs at matrix generate; any translation name
+    not in `mfg_names_authoritative.csv` (a committed snapshot of the meal-type export) raises
+    `MfgOnboardingError` (BY TYPE, §13.5 semantics — sheet blocked, routing unaffected). MFG names
+    are sourced ONLY from the meal-type export, never from sheet labels, screenshots, or memory.
+    Refresh the snapshot by replacing the file with a fresh export; snapshot absent = loud
+    validation-skipped warning (not a hard stop on machines without it).
+    ✅ Enforced 2026-07-31: `matrix_commander.validate_mfg_names` + `tests/test_mfg_name_validation.py`.
+
 Linked from `AppyHour/CLAUDE.md`. Audit that produced this doc:
 `_outputs/reports/2026-07-02-matrix-tool-audit.md`.
