@@ -313,7 +313,10 @@ function hourlyExceptionSweep() {
 
 // ---------------------------------------------------------------- host cleanup (manual)
 
-function onOpenExceptions() {
+// Named onOpen so the menu installs on the host copy, where Code.gs (which owned the reship
+// onOpen) is deleted. If Code.gs is ever restored alongside this file, rename one of them —
+// two onOpen definitions in one project means the later one silently wins.
+function onOpen() {
   SpreadsheetApp.getUi().createMenu('Exceptions')
     .addItem('Run sweep now', 'hourlyExceptionSweep')
     .addItem('Replay classifier self-test', 'excSelfTest')
