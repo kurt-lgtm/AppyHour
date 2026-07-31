@@ -102,8 +102,23 @@ a new phrasing, means re-running the replay — not eyeballing the regex.
 
 - **Hourly**, on the host sheet's existing time trigger (Dan accepted hourly as the fallback;
   Kurt: *"I'll look into that, if not, fallback to hourly status checks"*).
-- **Open item:** whether ParcelPanel supports outbound webhooks for true push-on-status-change.
-  If it does, upgrade and keep hourly as the backstop. Not a blocker for v1.
+- **Webhooks: investigated 2026-07-31, NOT adopted as the primary mechanism.** ParcelPanel does
+  support outbound webhooks v2 (HMAC-SHA256 signed with the API key, topics incl.
+  `shipment_status/exception` and `/failed_attempt`, 5 retries with backoff).
+  🔴 **Subscribing to the exception topics would miss 38% of real failures.** Measured on the 71
+  real boxes: **15 of the 40 ping-worthy failures carry `substatus = InTransit_001`** — 11
+  undeliverable, 3 damaged, 1 lost — i.e. the carrier posted a failure event while PP's status
+  still reads "in transit". No exception topic ever fires for those.
+- 🔴 **PP `substatus` is unusable as a classifier for our carrier mix — the detail TEXT is the
+  authority.** `Exception_007` alone spans 22 already-delivered, 4 returned, 3 undeliverable and
+  1 lost. `Exception_004` is documented as "Address issue" but carries damaged and lost in our
+  data. Do not "simplify" the classifier to substatus codes; this was tried and measured.
+- The webhook body also carries **no `checkpoints` array**, so even a webhook-driven design needs
+  a follow-up `GET /tracking/order` per event to obtain the text it must classify on.
+- **Therefore hourly polling stays primary.** A webhook on exception/failed_attempt may be added
+  later as a low-latency supplement for the subset it does catch, but it can never be the only
+  path. The alternative — subscribing to `any_update` — fires on every scan of every box
+  (~2,100 boxes/cohort), which no Apps Script endpoint should absorb for ~10 real events a week.
 - **Poll set = OPEN boxes only.** An order leaves the poll set once it is delivered or has been
   alerted. Seeded from the current `_SHIP_` cohort; by mid-week the open set is small.
 - Apps Script, not a local Python job, **because Kurt's machine sleeps 06:00–08:00** and an hourly
