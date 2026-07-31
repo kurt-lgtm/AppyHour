@@ -47,11 +47,23 @@ real issues… sometimes you get a notification and they just changed the label.
    the same open box every hour; without dedup one stuck box posts 24×/day and the channel dies.
 4. **NEVER auto-create a reship.** Notify only (Kurt 2026-07-30). A false positive ships a free box,
    and the false-positive rate on raw exceptions is ~32%. Reship stays a human call.
-5. **NEVER point this job at the live reship sheet.** Host sheet is `1kk1Qld-7QDIkhIKL93EIc6NGmOhnD_PZcJdTNX9m8Pg`
-   (Kurt's copy). Dan's live pivot report is `1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU`.
-   ⚠️ **A Sheets copy also copies the bound script**, so the copy ships with `PIVOT_SHEET_ID` still
-   aimed at Dan's live report. Triggers do NOT copy, so nothing runs by default — but adding a
-   trigger before repointing that constant would clobber the live report. **Repoint first.**
+5. **NEVER point this job at the live reship sheet.** Data surface is
+   `1kk1Qld-7QDIkhIKL93EIc6NGmOhnD_PZcJdTNX9m8Pg` (Kurt's sheet, reached via `openById`).
+   Dan's live pivot report is `1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU` and this job never
+   writes to it.
+5b. **The code lives in the EXISTING "Running Reship" script project** (scriptId
+   `15K0MrUssFqacWybQAToz6CeHTouRU4IeNY4-DzZ4NeE1rBCCNGpGjAjv`), not a project of its own
+   (Kurt 2026-07-31). It has to: `excSeedCohort_` depends on `Code.gs`'s `shopifyGql_()`, so a
+   standalone copy throws "shopifyGql_ is not defined" on its first run. Sharing also reuses the
+   already-set properties, OAuth grant and Slack bot.
+   🔴 **Price of sharing: a syntax error here takes the hourly reship report down too.** Run
+   `excSelfTest()` after every edit. And `hourlyExceptionSweep` must **NEVER** be called from
+   `refresh()` — it throws on failure by design, which would abort Dan's report. Separate trigger,
+   so the two fail independently.
+   🔴 **No duplicate top-level names.** Two `onOpen` definitions in one project do not merge — the
+   later silently wins and the other menu disappears. That is why the menu installer here is
+   `onOpenExceptions`, not `onOpen`. Verified 2026-07-31: 0 collisions between this file's 22
+   globals and the 79 in `Code.gs`/`PivotSheet.gs`.
 6. **NEVER post to `SLACK_WEBHOOK`.** That property is bound to public **#reships**. #exceptions is
    **private, `C0BLKKPAW8P`** — requires `SLACK_BOT_TOKEN` + the bot invited to the channel.
    Posting a customer-name-bearing failure into a public channel is a privacy regression.

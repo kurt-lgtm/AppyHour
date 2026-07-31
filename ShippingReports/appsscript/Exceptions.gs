@@ -3,18 +3,28 @@
  * Constraints SSOT: ShippingReports/EXCEPTIONS_ALERT_RULES.md (repo). Read it before
  * changing anything here; the rules are authored there first.
  *
- * HOST: Kurt's copy of the reship sheet, 1kk1Qld-7QDIkhIKL93EIc6NGmOhnD_PZcJdTNX9m8Pg.
- * 🔴 That copy still ships with Code.gs's PIVOT_SHEET_ID aimed at Dan's LIVE reship report
- * (1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU). Triggers do not copy, so nothing runs by
- * default — but do NOT add a trigger for anything in Code.gs on this copy. The only trigger
- * this host should carry is hourlyExceptionSweep below.
+ * LIVES IN: the existing "Running Reship" script project, scriptId
+ * 15K0MrUssFqacWybQAToz6CeHTouRU4IeNY4-DzZ4NeE1rBCCNGpGjAjv — alongside Code.gs, NOT a project
+ * of its own (Kurt 2026-07-31). Reasons: the four Script Properties, the OAuth grant and the
+ * Slack bot are already there, and this file DEPENDS on Code.gs's shopifyGql_() for the cohort
+ * seed. A standalone copy would throw "shopifyGql_ is not defined" on its first run.
+ *
+ * Data surface is a DIFFERENT spreadsheet from the one the project is bound to: the sweep writes
+ * its log + state to EXC_HOST_SHEET_ID via openById, and never touches Dan's pivot report.
+ *
+ * 🔴 COUPLING RISK, the price of sharing a project: a syntax error in THIS file breaks the whole
+ * project, taking the hourly reship report down with it. Run excSelfTest() after any edit here.
+ * And hourlyExceptionSweep must NEVER be called from refresh() — it throws on failure by design,
+ * which would abort the reship run. It gets its OWN trigger so the two fail independently.
  *
  * SETUP (one-time):
- *  1. Script Properties already needed by Code.gs are reused: SHOPIFY_STORE, SHOPIFY_TOKEN,
- *     PARCELPANEL_API_KEY, SLACK_BOT_TOKEN.
- *  2. Run cleanupHostSheet() once from the Exceptions menu to drop the inherited reship tabs.
- *  3. Run hourlyExceptionSweep() once manually to authorize scopes and seed the cohort.
- *  4. Triggers -> time-driven, hourly, hourlyExceptionSweep.
+ *  1. Add this file to the Running Reship project. Properties are already set and shared:
+ *     SHOPIFY_STORE, SHOPIFY_TOKEN, PARCELPANEL_API_KEY, SLACK_BOT_TOKEN.
+ *     SLACK_BOT_TOKEN confirmed = appyhouropsreader (U0BG153RTNW), in #exceptions with
+ *     chat:write + groups:read + groups:history (Kurt verified 2026-07-31).
+ *  2. Run excSelfTest() — expect "PASS: 20 cases".
+ *  3. Run hourlyExceptionSweep() once manually to authorize and seed the cohort.
+ *  4. Triggers -> time-driven, hourly, hourlyExceptionSweep. SEPARATE from refresh's trigger.
  */
 
 var EXC_HOST_SHEET_ID = '1kk1Qld-7QDIkhIKL93EIc6NGmOhnD_PZcJdTNX9m8Pg';
@@ -313,10 +323,11 @@ function hourlyExceptionSweep() {
 
 // ---------------------------------------------------------------- host cleanup (manual)
 
-// Named onOpen so the menu installs on the host copy, where Code.gs (which owned the reship
-// onOpen) is deleted. If Code.gs is ever restored alongside this file, rename one of them —
-// two onOpen definitions in one project means the later one silently wins.
-function onOpen() {
+// 🔴 NOT named onOpen — this file lives in the SAME project as Code.gs, which already defines
+// onOpen. Two onOpen definitions in one Apps Script project do not merge: the later one silently
+// wins and the other menu vanishes. Call this from Code.gs's onOpen if the menu is wanted;
+// otherwise run the functions from the editor or the trigger.
+function onOpenExceptions() {
   SpreadsheetApp.getUi().createMenu('Exceptions')
     .addItem('Run sweep now', 'hourlyExceptionSweep')
     .addItem('Replay classifier self-test', 'excSelfTest')
