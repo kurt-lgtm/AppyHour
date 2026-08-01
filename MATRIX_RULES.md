@@ -273,5 +273,15 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
     validation-skipped warning (not a hard stop on machines without it).
     ✅ Enforced 2026-07-31: `matrix_commander.validate_mfg_names` + `tests/test_mfg_name_validation.py`.
 
+22. **Zips and tracking numbers are TEXT everywhere — leading-zero loss recurred FOUR times**
+    (07-03 matrix, 07-17 second writer, 07-29 Kurt caught it in a report, 07-31 vFGR + FedEx
+    tracking in auto_import). **Failure mode:** an int cast anywhere in a pipeline silently turns
+    `07627` into `7627` (undeliverable NE zips) and strips tracking leading zeros (repair-matching
+    breaks); each writer re-fixed it locally instead of the rule existing. **Rule:** every writer
+    and reader treats zip/tracking as strings (`zfill(5)` at ingest); every xlsx export sets
+    `number_format='@'` on order#/zip/tracking columns; `check_zip_leading_zeroes` runs on BOTH the
+    matrix and gift (vFGR) paths. Engine-side twin: ROUTING_RULES "ZIP INTEGRITY"; consolidated
+    ledger in memory `zip-integrity-family`.
+
 Linked from `AppyHour/CLAUDE.md`. Audit that produced this doc:
 `_outputs/reports/2026-07-02-matrix-tool-audit.md`.
