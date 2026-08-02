@@ -36,10 +36,10 @@
 - Uses `openpyxl` for XLSX generation
 
 ### Demand Flow
-1. Fetches Recharge charges via `fetch_recharge_api(recharge_token)` -> returns (rc_wk1, rc_wk2, rc_wk1_curations, rc_wk2_curations, rc_wk1_large, rc_wk2_large, _, _, rc_wk1_med_monthly, rc_wk2_med_monthly, rc_wk1_cmed_monthly, rc_wk2_cmed_monthly, rc_wk1_lge_monthly, rc_wk2_lge_monthly)
-2. Fetches Shopify orders via `fetch_shopify_orders(settings)` -> returns (sh_wk1_addon, sh_wk2_addon, sh_wk1_curations, sh_wk2_curations, sh_wk1_large, sh_wk2_large, sh_wk1_med, sh_wk2_med, sh_wk1_lge, sh_wk2_lge)
+1. Fetches Recharge charges via `fetch_recharge_api(recharge_token)` -> returns (rc_wk1, rc_wk2, rc_wk1_curations, rc_wk2_curations, rc_wk1_cexec, rc_wk2_cexec, _, _, rc_wk1_med_monthly, rc_wk2_med_monthly, rc_wk1_cmed_monthly, rc_wk2_cmed_monthly, rc_wk1_lge_monthly, rc_wk2_lge_monthly)
+2. Fetches Shopify orders via `fetch_shopify_orders(settings)` -> returns (sh_wk1_addon, sh_wk2_addon, sh_wk1_curations, sh_wk2_curations, sh_wk1_cexec, sh_wk2_cexec, sh_wk1_med, sh_wk2_med, sh_wk1_lge, sh_wk2_lge)
 3. First-order projection: counts "Subscription First Order" tagged Shopify orders from last 3 days, projects MONG-only demand forward, adds to sh_wk1_addon
-4. Merges curation counts: Recharge + Shopify into wk1_curations, wk2_curations, wk1_large, wk2_large
+4. Merges curation counts: Recharge + Shopify into wk1_curations, wk2_curations, wk1_cexec, wk2_cexec (CEX-EC line-item counts, NOT box size)
 5. MONTHLY boxes: adds Recharge monthly counts to wk1_med/wk2_med/wk1_lge/wk2_lge (Shopify MONTHLY/CMED already included in sh_wk*_med)
 6. Writes slot tables for AHB-MED, AHB-CMED, AHB-LGE with editable SKU assignment cells and SUMIF demand formulas
 

@@ -318,8 +318,8 @@ def _fetch_all_data(settings: dict) -> dict:
         rc_wk2,
         rc_wk1_curations,
         rc_wk2_curations,
-        rc_wk1_large,
-        rc_wk2_large,
+        rc_wk1_cexec,
+        rc_wk2_cexec,
         _,
         _,
         rc_wk1_med_monthly,
@@ -341,8 +341,8 @@ def _fetch_all_data(settings: dict) -> dict:
         sh_wk2_addon,
         sh_wk1_curations,
         sh_wk2_curations,
-        sh_wk1_large,
-        sh_wk2_large,
+        sh_wk1_cexec,
+        sh_wk2_cexec,
         sh_wk1_med,
         sh_wk2_med,
         sh_wk1_lge,
@@ -475,13 +475,13 @@ def _fetch_all_data(settings: dict) -> dict:
     # -- Merge curation counts --
     wk1_curations: dict[str, int] = defaultdict(int)
     wk2_curations: dict[str, int] = defaultdict(int)
-    wk1_large: dict[str, int] = defaultdict(int)
-    wk2_large: dict[str, int] = defaultdict(int)
+    wk1_cexec: dict[str, int] = defaultdict(int)
+    wk2_cexec: dict[str, int] = defaultdict(int)
     for d_rc, d_sh, d_out in [
         (rc_wk1_curations, sh_wk1_curations, wk1_curations),
         (rc_wk2_curations, sh_wk2_curations, wk2_curations),
-        (rc_wk1_large, sh_wk1_large, wk1_large),
-        (rc_wk2_large, sh_wk2_large, wk2_large),
+        (rc_wk1_cexec, sh_wk1_cexec, wk1_cexec),
+        (rc_wk2_cexec, sh_wk2_cexec, wk2_cexec),
     ]:
         for k, v in d_rc.items():
             d_out[k] += v
@@ -494,11 +494,11 @@ def _fetch_all_data(settings: dict) -> dict:
     wk1_lge: dict[str, int] = defaultdict(int, sh_wk1_lge)
     wk2_lge: dict[str, int] = defaultdict(int, sh_wk2_lge)
     for cur, ct in rc_wk1_curations.items():
-        lg = rc_wk1_large.get(cur, 0)
+        lg = rc_wk1_cexec.get(cur, 0)
         wk1_med[cur] += ct - lg
         wk1_lge[cur] += lg
     for cur, ct in rc_wk2_curations.items():
-        lg = rc_wk2_large.get(cur, 0)
+        lg = rc_wk2_cexec.get(cur, 0)
         wk2_med[cur] += ct - lg
         wk2_lge[cur] += lg
 
@@ -537,8 +537,8 @@ def _fetch_all_data(settings: dict) -> dict:
         set(
             list(wk1_curations.keys())
             + list(wk2_curations.keys())
-            + list(wk1_large.keys())
-            + list(wk2_large.keys())
+            + list(wk1_cexec.keys())
+            + list(wk2_cexec.keys())
             + list(wk1_med.keys())
             + list(wk2_med.keys())
             + list(wk1_lge.keys())
@@ -580,7 +580,7 @@ def _fetch_all_data(settings: dict) -> dict:
     rc_wk2 = {}
     sh_wk2_addon = {}
     wk2_curations = defaultdict(int)
-    wk2_large = defaultdict(int)
+    wk2_cexec = defaultdict(int)
     wk2_med = defaultdict(int)
     for cur, ct in wk2_lge.items():
         wk1_lge[cur] += ct
@@ -594,8 +594,8 @@ def _fetch_all_data(settings: dict) -> dict:
         "sh_wk2_addon": sh_wk2_addon,
         "wk1_curations": dict(wk1_curations),
         "wk2_curations": dict(wk2_curations),
-        "wk1_large": dict(wk1_large),
-        "wk2_large": dict(wk2_large),
+        "wk1_cexec": dict(wk1_cexec),
+        "wk2_cexec": dict(wk2_cexec),
         "wk1_med": dict(wk1_med),
         "wk2_med": dict(wk2_med),
         "wk1_lge": dict(wk1_lge),
@@ -668,7 +668,7 @@ def _write_assignments_on_cut_order(ws: Worksheet, data: dict, settings: dict) -
       V (22) = spacer
       W-Z (23-26) = PR-CJAM table (Curation, Cheese SKU, W1 Count, W2 Count)
       AA (27) = spacer
-      AB-AE (28-31) = CEX-EC table (Curation, Cheese SKU, W1 Lg Count, W2 Lg Count)
+      AB-AE (28-31) = CEX-EC table (Curation, Cheese SKU, W1 CEX Count, W2 CEX Count)
       MONTHLY slot tables below PR-CJAM/CEX-EC (whichever is taller), in W-Z area.
 
     PR-CJAM cheese SKU col = X (24), counts = Y (25), Z (26)
@@ -686,8 +686,8 @@ def _write_assignments_on_cut_order(ws: Worksheet, data: dict, settings: dict) -
     all_curations = data["all_curations"]
     wk1_curations = data["wk1_curations"]
     wk2_curations = data["wk2_curations"]
-    wk1_large = data["wk1_large"]
-    wk2_large = data["wk2_large"]
+    wk1_cexec = data["wk1_cexec"]
+    wk2_cexec = data["wk2_cexec"]
     monthly_by_week_month = data["monthly_by_week_month"]
 
     # Column constants
@@ -699,8 +699,8 @@ def _write_assignments_on_cut_order(ws: Worksheet, data: dict, settings: dict) -
     COL_AA = 27  # spacer
     COL_AB = 28  # CEX-EC: Curation
     COL_AC = 29  # CEX-EC: Cheese SKU (SUMIF lookup)
-    COL_AD = 30  # CEX-EC: W1 Lg Count
-    COL_AE = 31  # CEX-EC: W2 Lg Count
+    COL_AD = 30  # CEX-EC: W1 CEX Count
+    COL_AE = 31  # CEX-EC: W2 CEX Count
 
     # Column widths for assignment area
     _set_col_widths(
@@ -758,9 +758,9 @@ def _write_assignments_on_cut_order(ws: Worksheet, data: dict, settings: dict) -
         c_cheese = ws.cell(row=r, column=COL_AC, value=cheese)
         c_cheese.font = F_EDIT
         c_cheese.fill = FILL_INPUT
-        ws.cell(row=r, column=COL_AD, value=wk1_large.get(cur, 0)).font = F_NUM
+        ws.cell(row=r, column=COL_AD, value=wk1_cexec.get(cur, 0)).font = F_NUM
         ws.cell(row=r, column=COL_AD).alignment = A_RIGHT
-        ws.cell(row=r, column=COL_AE, value=wk2_large.get(cur, 0)).font = F_NUM
+        ws.cell(row=r, column=COL_AE, value=wk2_cexec.get(cur, 0)).font = F_NUM
         ws.cell(row=r, column=COL_AE).alignment = A_RIGHT
 
     cexec_end = cexec_data_start + len(prcjam_curations) - 1
@@ -1277,7 +1277,7 @@ def _build_cut_order_tab(
     # ── Pre-compute urgency for each SKU ──
     # We need to calculate actual numeric values for sorting, not just formulas
     # For sorting: estimate assignment demand from settings (won't match SUMIF exactly but close enough)
-    def _estimate_assign_demand(sku: str, curations: dict, large: dict, pr_cfg: dict, cex_cfg: dict) -> int:
+    def _estimate_assign_demand(sku: str, curations: dict, cexec: dict, pr_cfg: dict, cex_cfg: dict) -> int:
         total = 0
         for cur, ct in curations.items():
             cfg = pr_cfg.get(cur)
@@ -1286,15 +1286,15 @@ def _build_cut_order_tab(
                     total += ct
                 if cfg.get("jam") == sku:  # PR-CJAM pair — jam same count as cheese
                     total += ct
-        for cur, ct in large.items():
+        for cur, ct in cexec.items():
             if cex_cfg.get(cur) == sku:
                 total += ct
         return total
 
     wk1_curs = data["wk1_curations"]
     wk2_curs = data["wk2_curations"]
-    wk1_lg = data["wk1_large"]
-    wk2_lg = data["wk2_large"]
+    wk1_cexec = data["wk1_cexec"]
+    wk2_cexec = data["wk2_cexec"]
 
     sku_rows: list[dict] = []
     for sku in active_skus:
@@ -1302,14 +1302,14 @@ def _build_cut_order_tab(
 
         rc1 = rc_wk1.get(sku, 0)
         sh1 = sh_wk1_addon.get(sku, 0)
-        assign1 = _estimate_assign_demand(sku, wk1_curs, wk1_lg, pr_cjam_cfg, cex_ec_cfg)
+        assign1 = _estimate_assign_demand(sku, wk1_curs, wk1_cexec, pr_cjam_cfg, cex_ec_cfg)
         # Demand = Recharge (queued, not yet charged) + Shopify (already charged).
         # Recharge charges convert to Shopify orders on charge date — no overlap.
         demand1 = rc1 + sh1 + assign1
 
         rc2 = rc_wk2.get(sku, 0)
         sh2 = sh_wk2_addon.get(sku, 0)
-        assign2 = _estimate_assign_demand(sku, wk2_curs, wk2_lg, pr_cjam_cfg, cex_ec_cfg)
+        assign2 = _estimate_assign_demand(sku, wk2_curs, wk2_cexec, pr_cjam_cfg, cex_ec_cfg)
         demand2 = rc2 + sh2 + assign2
 
         after1 = avail - demand1

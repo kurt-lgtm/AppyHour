@@ -532,8 +532,8 @@ def fetch_recharge_api(api_token, out_specialty=None, out_bundles=None, shop_cre
     wk2_skus = defaultdict(int)
     wk1_curations = defaultdict(int)  # {curation: charge_count}
     wk2_curations = defaultdict(int)
-    wk1_large = defaultdict(int)  # {curation: large_box_count}
-    wk2_large = defaultdict(int)
+    wk1_cexec = defaultdict(int)  # {curation: cexec_line_item_count}
+    wk2_cexec = defaultdict(int)
     wk1_med_total = 0  # total AHB-MED/MCUST boxes (excludes CMED)
     wk2_med_total = 0
     wk1_cmed_total = 0  # total AHB-CMED boxes
@@ -607,11 +607,11 @@ def fetch_recharge_api(api_token, out_specialty=None, out_bundles=None, shop_cre
                 if is_wk1:
                     wk1_curations[cur] += 1
                     if cex_cur:
-                        wk1_large[cex_cur] += 1
+                        wk1_cexec[cex_cur] += 1
                 else:
                     wk2_curations[cur] += 1
                     if cex_cur:
-                        wk2_large[cex_cur] += 1
+                        wk2_cexec[cex_cur] += 1
 
             # Custom boxes (AHB-MCUST-TRAY / AHB-LCUST-TRAY) — no curation/MONTHLY match
             if cur is None:
@@ -662,8 +662,8 @@ def fetch_recharge_api(api_token, out_specialty=None, out_bundles=None, shop_cre
         dict(wk2_skus),
         dict(wk1_curations),
         dict(wk2_curations),
-        dict(wk1_large),
-        dict(wk2_large),
+        dict(wk1_cexec),
+        dict(wk2_cexec),
         len(all_charges),
         dict(charges_per_date),
         wk1_med_total,
@@ -768,8 +768,8 @@ def fetch_shopify_orders(settings, out_specialty=None, out_bundles=None):
     wk2_addon = defaultdict(int)
     wk1_curations = defaultdict(int)
     wk2_curations = defaultdict(int)
-    wk1_large = defaultdict(int)
-    wk2_large = defaultdict(int)
+    wk1_cexec = defaultdict(int)
+    wk2_cexec = defaultdict(int)
     wk1_med = defaultdict(int)
     wk2_med = defaultdict(int)
     wk1_lge = defaultdict(int)
@@ -874,8 +874,8 @@ def fetch_shopify_orders(settings, out_specialty=None, out_bundles=None):
                         wk2_med["MONTHLY"] = wk2_med.get("MONTHLY", 0) + 1
             elif cur:
                 # Custom curation — count in per-curation tables.
-                # Box size (_lge/_med) and CEX-EC (_large) are INDEPENDENT:
-                # _lge/_med = physical box size; _large = CEX-EC line-item presence.
+                # Box size (_lge/_med) and CEX-EC (_cexec) are INDEPENDENT:
+                # _lge/_med = physical box size; _cexec = CEX-EC line-item presence.
                 cex_cur = cexec_curation(line_items, cur)
                 if is_wk1:
                     wk1_curations[cur] += 1
@@ -884,7 +884,7 @@ def fetch_shopify_orders(settings, out_specialty=None, out_bundles=None):
                     else:
                         wk1_med[cur] += 1
                     if cex_cur:
-                        wk1_large[cex_cur] += 1
+                        wk1_cexec[cex_cur] += 1
                 else:
                     wk2_curations[cur] += 1
                     if is_lg:
@@ -892,7 +892,7 @@ def fetch_shopify_orders(settings, out_specialty=None, out_bundles=None):
                     else:
                         wk2_med[cur] += 1
                     if cex_cur:
-                        wk2_large[cex_cur] += 1
+                        wk2_cexec[cex_cur] += 1
         else:
             # Non-subscription order — count pickable SKUs as addon demand
             target = wk1_addon if is_wk1 else wk2_addon
@@ -924,8 +924,8 @@ def fetch_shopify_orders(settings, out_specialty=None, out_bundles=None):
         dict(wk2_addon),
         dict(wk1_curations),
         dict(wk2_curations),
-        dict(wk1_large),
-        dict(wk2_large),
+        dict(wk1_cexec),
+        dict(wk2_cexec),
         dict(wk1_med),
         dict(wk2_med),
         dict(wk1_lge),
@@ -986,8 +986,8 @@ def main():
         rc_wk2,
         wk1_curations,
         wk2_curations,
-        wk1_large,
-        wk2_large,
+        wk1_cexec,
+        wk2_cexec,
         total_charges,
         charges_per_date,
         wk1_med_monthly,
@@ -1123,12 +1123,12 @@ def main():
     cexec_wk1_totals = defaultdict(int)
     cexec_wk2_totals = defaultdict(int)
 
-    for cur in sorted(set(list(wk1_large.keys()) + list(wk2_large.keys()))):
+    for cur in sorted(set(list(wk1_cexec.keys()) + list(wk2_cexec.keys()))):
         cheese = cex_ec.get(cur, "")
         if not cheese:
             continue
-        w1 = wk1_large.get(cur, 0)
-        w2 = wk2_large.get(cur, 0)
+        w1 = wk1_cexec.get(cur, 0)
+        w2 = wk2_cexec.get(cur, 0)
         cexec_wk1_totals[cheese] += w1
         cexec_wk2_totals[cheese] += w2
         name = sku_name(cheese)[:35]
@@ -1186,10 +1186,10 @@ def main():
         # CEX-EC section
         writer.writerow([])
         writer.writerow(["CEX-EC", "Curation", "Cheese", "Wk1", "Wk2"])
-        for cur in sorted(set(list(wk1_large.keys()) + list(wk2_large.keys()))):
+        for cur in sorted(set(list(wk1_cexec.keys()) + list(wk2_cexec.keys()))):
             cheese = cex_ec.get(cur, "")
             if cheese:
-                writer.writerow(["", cur, cheese, wk1_large.get(cur, 0), wk2_large.get(cur, 0)])
+                writer.writerow(["", cur, cheese, wk1_cexec.get(cur, 0), wk2_cexec.get(cur, 0)])
         writer.writerow(["CEX-EC TOTALS"])
         for cheese in sorted(set(list(cexec_wk1_totals.keys()) + list(cexec_wk2_totals.keys()))):
             writer.writerow(["", "", cheese, cexec_wk1_totals[cheese], cexec_wk2_totals[cheese]])
