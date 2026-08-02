@@ -260,7 +260,8 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
     file before overwriting; file is now a dict with a `policy`/`tag`/`ship_date` header
     (`read_override()` still accepts legacy bare lists). Summary-tab policy note stays manual.
 
-21. **A translation NAME outside the authoritative meal-type export is a HARD REJECT — an invented
+21. **"We never make up MFG names" (Kurt 2026-08-02 — ABSOLUTE). A translation NAME outside the
+    authoritative meal-type export is a HARD REJECT — an invented
     header must never become a vF column** (wk0803, 2026-07-31). **Failure mode:** `mfg_translations.csv`
     maps SKU → name but nothing checked the NAME was real; a hand-added row took a label off a
     screenshot ("Cheese Slice, Frumage L'Ottavio" vs RMFG's actual "Frumage LOttavio") and the
