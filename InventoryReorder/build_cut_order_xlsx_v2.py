@@ -1172,6 +1172,12 @@ def _build_cut_order_tab(
     # Same model the vault's RAWINVCONVERSIONS uses (raw -> processed at a yield %).
     _WASTE = float(settings.get("cut_waste_pct", CUT_WASTE_PCT))
     _USABLE = 1.0 - _WASTE
+    # Cut (K) is a PER-WEEK decision, unlike wheel lb / slice oz / notes which are
+    # intrinsic to the SKU. Only pre-fill it when the snapshot belongs to THIS ship
+    # week — rebuilding the same week keeps Tommy's numbers, a new week starts
+    # blank. Carrying it across weeks would re-cut what was already produced
+    # (2026-08-03: CH-MONT demand 51 vs last week's Cut 875). Kurt 2026-07-28.
+    _cut_week_ok = settings.get("cut_order_cut_week") == SHIP_WEEK_MONDAY.isoformat()
 
     available = data["available"]
     rc_wk1 = data["rc_wk1"]
@@ -1397,8 +1403,10 @@ def _build_cut_order_tab(
         ws_[f"J{row_num}"] = f"=C{row_num}-I{row_num}"
         ws_.cell(row=row_num, column=10).font = F_NUM_BOLD
         ws_.cell(row=row_num, column=10).alignment = A_RIGHT
-        # K: Cut (input — number of slices to cut). Pre-filled from snapshot.
-        ws_.cell(row=row_num, column=11, value=_spec.get("cut") or None).font = F_INPUT
+        # K: Cut (input — number of slices to cut). Pre-filled ONLY when the
+        # snapshot is for this same ship week (see _cut_week_ok above).
+        ws_.cell(row=row_num, column=11,
+                 value=(_spec.get("cut") if _cut_week_ok else None) or None).font = F_INPUT
         ws_.cell(row=row_num, column=11).fill = FILL_INPUT
         ws_.cell(row=row_num, column=11).alignment = A_RIGHT
         # L: Good?
@@ -1800,6 +1808,17 @@ def _ingest_tommy_inputs(path: str) -> None:
     def _norm(v):
         return str(v).strip().lower() if v is not None else ""
 
+    # Which ship week these Cut values belong to — read from the sheet's own title
+    # bar ("CUT ORDER - Ship Week of YYYY-MM-DD"), so a Cut typed for one week is
+    # never pre-filled into another. Falls back to this run's ship week.
+    import re as _rew
+    cut_week = SHIP_WEEK_MONDAY.isoformat()
+    for _r in range(1, 4):
+        _m = _rew.search(r"ship week of\s*(\d{4}-\d{2}-\d{2})", _norm(ws.cell(_r, 1).value))
+        if _m:
+            cut_week = _m.group(1)
+            break
+
     # -- Locate the main-table header row (has SKU + First Order) --
     hdr_row, hcol = None, {}
     for r in range(1, 8):
@@ -1959,6 +1978,7 @@ def _ingest_tommy_inputs(path: str) -> None:
             else:
                 cos.pop(sku, None)
         st["bundle_add_boxes"] = bundle_adds
+        st["cut_order_cut_week"] = cut_week
         pr = st.setdefault("pr_cjam", {})
         for cur, chz in prcjam_cheese.items():
             entry = pr.setdefault(cur, {})
