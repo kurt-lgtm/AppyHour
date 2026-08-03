@@ -1172,12 +1172,15 @@ def _build_cut_order_tab(
     # Same model the vault's RAWINVCONVERSIONS uses (raw -> processed at a yield %).
     _WASTE = float(settings.get("cut_waste_pct", CUT_WASTE_PCT))
     _USABLE = 1.0 - _WASTE
-    # Cut (K) is a PER-WEEK decision, unlike wheel lb / slice oz / notes which are
-    # intrinsic to the SKU. Only pre-fill it when the snapshot belongs to THIS ship
-    # week — rebuilding the same week keeps Tommy's numbers, a new week starts
-    # blank. Carrying it across weeks would re-cut what was already produced
-    # (2026-08-03: CH-MONT demand 51 vs last week's Cut 875). Kurt 2026-07-28.
-    _cut_week_ok = settings.get("cut_order_cut_week") == SHIP_WEEK_MONDAY.isoformat()
+    # A NEW ship week starts from ZERO on everything Tommy types for that week —
+    # First Order (F), Cut (K) and Notes (R). Only Wheel lb / Slice oz carry, since
+    # those are physical constants of the cheese, not decisions about this week.
+    # Rebuilding the SAME week still restores his inputs.
+    # Why (Kurt 2026-08-03, "it's a new week so I have to start from zero"):
+    #   - Cut 875 for CH-MONT was already produced (Avail 816, demand 51) -> re-cut
+    #   - First Order 200s were last week's allocation
+    #   - Notes are week-scoped, e.g. "SWITCH TOPR DEMAND FROM MDT TO WWBC THIS WEEK"
+    _same_week = settings.get("cut_order_cut_week") == SHIP_WEEK_MONDAY.isoformat()
 
     available = data["available"]
     rc_wk1 = data["rc_wk1"]
@@ -1381,7 +1384,8 @@ def _build_cut_order_tab(
         # F: First Order (input — projected new-subscriber first-order demand).
         # Pre-filled from the last snapshot (--ingest); still editable.
         _spec = cut_specs.get(sku, {})
-        ws_.cell(row=row_num, column=6, value=_spec.get("first_order") or None).font = F_INPUT
+        ws_.cell(row=row_num, column=6,
+                 value=(_spec.get("first_order") if _same_week else None) or None).font = F_INPUT
         ws_.cell(row=row_num, column=6).fill = FILL_INPUT
         ws_.cell(row=row_num, column=6).alignment = A_RIGHT
         # G: +Assign W1 = SUMIF(PR-CJAM+MONTHLY) + SUMIF(CEX-EC) + SUMIF(PR-CJAM JAM)
@@ -1404,9 +1408,9 @@ def _build_cut_order_tab(
         ws_.cell(row=row_num, column=10).font = F_NUM_BOLD
         ws_.cell(row=row_num, column=10).alignment = A_RIGHT
         # K: Cut (input — number of slices to cut). Pre-filled ONLY when the
-        # snapshot is for this same ship week (see _cut_week_ok above).
+        # snapshot is for this same ship week (see _same_week above).
         ws_.cell(row=row_num, column=11,
-                 value=(_spec.get("cut") if _cut_week_ok else None) or None).font = F_INPUT
+                 value=(_spec.get("cut") if _same_week else None) or None).font = F_INPUT
         ws_.cell(row=row_num, column=11).fill = FILL_INPUT
         ws_.cell(row=row_num, column=11).alignment = A_RIGHT
         # L: Good?
@@ -1444,7 +1448,8 @@ def _build_cut_order_tab(
         ws_.cell(row=row_num, column=17).font = F_NUM
         ws_.cell(row=row_num, column=17).alignment = A_RIGHT
         # R: Notes (input — free text). Pre-filled from snapshot; editable.
-        _nc = ws_.cell(row=row_num, column=18, value=_spec.get("notes") or None)
+        _nc = ws_.cell(row=row_num, column=18,
+                       value=(_spec.get("notes") if _same_week else None) or None)
         _nc.font = F_INPUT
         _nc.fill = FILL_INPUT
         _nc.alignment = A_LEFT
