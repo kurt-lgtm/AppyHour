@@ -48,20 +48,21 @@ def _read_have(path: str, sku_col: int, qty_col: int) -> list[tuple[str, int]]:
     """Return [(sku, qty), ...] from a CSV or XLSX HAVE export. 1-based col indexes."""
     si, qi = sku_col - 1, qty_col - 1
     rows: list[tuple[str, int]] = []
-    skipped = 0
+    skipped: list[str] = []      # SKUs with a blank/unparseable qty — NAMED, not counted
     ext = os.path.splitext(path)[1].lower()
 
     def _emit(sku_raw, qty_raw):
-        nonlocal skipped
         sku = str(sku_raw or "").strip()
         qraw = str(qty_raw if qty_raw is not None else "").strip()
-        if not sku or qraw == "":
-            skipped += 1
+        if not sku:
+            return
+        if qraw == "":
+            skipped.append(sku)
             return
         try:
             rows.append((sku, int(float(qraw))))
         except ValueError:
-            skipped += 1
+            skipped.append(f"{sku}={qraw!r}")
 
     if ext in (".xlsx", ".xlsm"):
         wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
@@ -80,7 +81,24 @@ def _read_have(path: str, sku_col: int, qty_col: int) -> list[tuple[str, int]]:
                     continue
                 _emit(r[si] if len(r) > si else "", r[qi] if len(r) > qi else "")
 
-    print(f"  Read {len(rows)} SKUs ({skipped} blank/bad skipped) from {path}")
+    print(f"  Read {len(rows)} SKUs from {path}")
+
+    # A blank qty is NOT zero — it means "not counted". The SKU is absent from the
+    # corrected file, so the HAVE-authoritative rule zeroes it and any demand shows
+    # as a full shortage. Name them so a phantom shortfall is never a surprise
+    # (PK-TCUST shipped blank two weeks running against ~630 demand).
+    if skipped:
+        print(f"  !! {len(skipped)} SKU(s) have a BLANK/unparseable qty and are NOT in the "
+              f"corrected file -> they will read as Avail 0, not 'uncounted':")
+        print(f"     {', '.join(skipped)}")
+
+    # Negative on-hand is an upstream count error (over-pick / mis-count). It flows
+    # straight into Avail and inflates the shortfall, so never let it pass silently.
+    negs = [(s, q) for s, q in rows if q < 0]
+    if negs:
+        print(f"  !! {len(negs)} SKU(s) have NEGATIVE on-hand — upstream count error, "
+              f"inflates the cut: {', '.join(f'{s}={q}' for s, q in negs)}")
+
     return rows
 
 

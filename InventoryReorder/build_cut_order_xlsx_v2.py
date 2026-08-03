@@ -295,6 +295,14 @@ def _fetch_all_data(settings: dict) -> dict:
                 if _stale:
                     print(f"  Zeroed {len(_stale)} SKU(s) absent from HAVE (no stale base fallback): "
                           f"{', '.join(_stale[:20])}{' …' if len(_stale) > 20 else ''}")
+                # Negative on-hand is an upstream count error (over-pick / mis-count).
+                # It flows straight into Avail and inflates the shortfall, so the cut
+                # would over-produce. Never let it pass silently (2026-08-03 HAVE:
+                # AC-WASP -1, MR-JRNL -99 -> a 223 phantom shortfall on 124 demand).
+                _negs = sorted((s, q) for s, q in _ci_have.items() if q < 0)
+                if _negs:
+                    print(f"  !! {len(_negs)} SKU(s) NEGATIVE in HAVE — upstream count error, "
+                          f"inflates the cut: {', '.join(f'{s}={q}' for s, q in _negs)}")
             else:
                 print(f"  Warning: corrected inventory had 0 usable rows, keeping base: {corrected_inv_path}")
         except Exception as e:
