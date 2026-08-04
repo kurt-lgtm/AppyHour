@@ -1815,8 +1815,30 @@ def _ingest_tommy_inputs(path: str) -> None:
     Explicit-only (never runs on a normal build) so it can't silently re-populate
     a deliberately-cleared rotation table.
     """
-    wb = openpyxl.load_workbook(path, data_only=True)
-    ws = wb["Cut Order"] if "Cut Order" in wb.sheetnames else wb.active
+    if path.lower().endswith(".csv"):
+        # Google Sheets exports one tab per CSV, so accept the "… - Cut Order.csv"
+        # form too. Load it into an in-memory sheet so every reader below works
+        # unchanged; numeric-looking cells are coerced, since CSV gives all text
+        # and the spec readers only accept int/float.
+        import csv as _csv
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        with open(path, newline="", encoding="utf-8-sig") as _f:
+            for _row in _csv.reader(_f):
+                out = []
+                for v in _row:
+                    v = (v or "").strip()
+                    if v and not v.startswith("#"):   # keep #REF! as text
+                        try:
+                            out.append(float(v) if "." in v else int(v))
+                            continue
+                        except ValueError:
+                            pass
+                    out.append(v or None)
+                ws.append(out)
+    else:
+        wb = openpyxl.load_workbook(path, data_only=True)
+        ws = wb["Cut Order"] if "Cut Order" in wb.sheetnames else wb.active
 
     def _norm(v):
         return str(v).strip().lower() if v is not None else ""
@@ -1909,9 +1931,13 @@ def _ingest_tommy_inputs(path: str) -> None:
                         # stop if we've wandered into a MONTHLY slot table ("AHB-…")
                         if cur.upper().startswith("AHB-"):
                             break
+                        # Record the curation even when the SKU cell is BLANK —
+                        # the sheet is authoritative, so a value the user cleared
+                        # must clear in settings rather than resurrect from the
+                        # last snapshot (Kurt blanked NMS while investigating the
+                        # MS/NMS CEX-EC counts).
                         chz = ws.cell(rr, chz_col).value
-                        if chz and str(chz).strip():
-                            out[cur] = str(chz).strip()
+                        out[cur] = str(chz).strip() if chz and str(chz).strip() else ""
                         rr += 1
                     return out
         return {}
