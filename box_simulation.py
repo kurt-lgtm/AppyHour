@@ -41,6 +41,10 @@ PHYSICAL_PREFIXES = set(PREFIX_DEFAULTS.keys())
 MANUAL_OVERRIDES: dict[str, float] = {
     # Historical overrides retained until verified in Sheet1
     "CH-GFLEECE": 0.18,
+    # wk0803 onboards (Kurt's DistVol sheet 2026-07-31) — not yet in the Desktop xlsx;
+    # CH prefix fallback (.20) over-sizes CH-OTTA (.15). Move to Sheet1 when it lands there.
+    "AC-QUIC": 0.12,
+    "CH-OTTA": 0.15,
     # CH-BOSI / AC-GLAW / AC-TOK / AC-BLUCAR / MT-COPPA / all MT-*
     # now live in Sheet1 directly (patched 2026-04-29)
 }
@@ -101,7 +105,54 @@ def _resolve_ci_column(ws, ci_col_letter: str) -> dict[int, float]:
     return ci
 
 
+# ── MySQL `distvol` replica read path (retirement step 2, ShipRouting/server/DATA_CANON_RULES.md).
+# Env-first: ROUTING_INPUTS_DB=1 AND DATABASE_URL → read the table; default = the Desktop xlsx,
+# byte-identical. The xlsx STAYS the authority; the table is a replica (etl_history --load-inputs).
+# Empty table → loud fallback to xlsx; half-loaded (< floor) → RAISE, never serve a shrunken map.
+DB_DISTVOL_MIN_ROWS = 200      # healthy replica ≈239 skus (2026-08-05 load)
+
+
+def _distvol_db() -> dict[str, float] | None:
+    if os.environ.get("ROUTING_INPUTS_DB") != "1":
+        return None
+    url = os.environ.get("DATABASE_URL", "")
+    m = re.match(r"mysql(?:\+\w+)?://([^:]+):([^@]+)@([^:/]+):(\d+)/([^?]+)", url)
+    if not m:
+        print("WARNING: ROUTING_INPUTS_DB=1 but DATABASE_URL missing/unparseable - using xlsx")
+        return None
+    import pymysql
+    usr, pw, host, port, db = m.groups()
+    try:
+        con = pymysql.connect(host=host, port=int(port), user=usr, password=pw,
+                              database=db, ssl={"ssl": {}})
+        try:
+            cur = con.cursor()
+            cur.execute("SELECT sku, distvol FROM distvol")
+            rows = cur.fetchall()
+        finally:
+            con.close()
+    except Exception as e:
+        # Transient db failure must not kill box sizing — the xlsx authority is right there.
+        print(f"WARNING: distvol db read failed ({type(e).__name__}: {e}) - using xlsx")
+        return None
+    if not rows:
+        print("distvol db replica EMPTY - falling back to xlsx")
+        return None
+    if len(rows) < DB_DISTVOL_MIN_ROWS:
+        raise RuntimeError(
+            f"distvol table has only {len(rows)} rows (< {DB_DISTVOL_MIN_ROWS}) - refusing a "
+            f"half-loaded replica. Re-run etl_history.py --load-inputs --tables distvol.")
+    print(f"distvol: db replica, {len(rows)} skus")
+    return {sku: float(dv) for sku, dv in rows}
+
+
 def build_lookup() -> dict[str, float]:
+    db_lookup = _distvol_db()
+    if db_lookup is not None:
+        # MANUAL_OVERRIDES still win on top — same semantics as the xlsx path below, and the code
+        # dict is the fresher authority between loads (wk0803 pattern: override lands in code first).
+        db_lookup.update(MANUAL_OVERRIDES)
+        return db_lookup
     wb = load_workbook(XLSX_LOOKUP)
     ws = wb["Sheet1"]
     lookup: dict[str, float] = {}

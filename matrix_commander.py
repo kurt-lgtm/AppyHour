@@ -19,6 +19,7 @@ import argparse
 import csv
 import io
 import json
+import os
 import re
 import sys
 from collections import Counter, defaultdict
@@ -393,13 +394,13 @@ def validate_mfg_names(translations: dict[str, str]) -> None:
     row from inventing a name RMFG's floor has never seen. The meal-type export is the authority;
     a name outside it = same hard reject as a missing translation (caught BY TYPE per §13.5).
     """
-    if not MFG_AUTHORITATIVE_PATH.exists():
-        print(f"  WARNING: {MFG_AUTHORITATIVE_PATH.name} missing - MFG name validation SKIPPED "
-              f"(refresh it from a meal-type export)")
-        return
+    # load_mfg_translations is env-first: MySQL replica when ROUTING_INPUTS_DB=1, csv otherwise —
+    # so on a host with the replica, validation runs even when the csv snapshot is absent
+    # (rule-21's silent skip-if-file-missing was itself a stale-baked-file failure mode).
     authoritative = set(load_mfg_translations(MFG_AUTHORITATIVE_PATH).values())
     if not authoritative:
-        print(f"  WARNING: {MFG_AUTHORITATIVE_PATH.name} empty - MFG name validation SKIPPED")
+        print(f"  WARNING: {MFG_AUTHORITATIVE_PATH.name} missing/empty (and no db replica) - "
+              f"MFG name validation SKIPPED (refresh from a meal-type export)")
         return
     bad = sorted(sku for sku, name in translations.items() if name not in authoritative)
     if bad:
@@ -667,6 +668,50 @@ def parse_matrix(xlsx_path: str | Path) -> tuple[list[OrderRow], list[str], dict
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+def _mfg_db_table(path: Path) -> str:
+    """Which MySQL replica table backs this csv path (retirement step 2)."""
+    return "mfg_names_authoritative" if path == MFG_AUTHORITATIVE_PATH else "mfg_translations"
+
+
+def _mfg_from_db(path: Path) -> dict[str, str] | None:
+    """Env-first MySQL replica read (ShipRouting/server/DATA_CANON_RULES.md "Small inputs").
+
+    ROUTING_INPUTS_DB=1 AND DATABASE_URL → read the replica table; anything else → None (csv, the
+    default — byte-identical local behavior). The CSVs stay the AUTHORITY; tables are replicas
+    (etl_history.py --load-inputs). Empty table → loud None (falls back to csv). This is what makes
+    RMFG onboarding take effect on a cloud host WITHOUT a redeploy, and it removes rule-21's
+    silent skip-if-file-missing on hosts that lack the csv snapshot.
+    """
+    if os.environ.get("ROUTING_INPUTS_DB") != "1":
+        return None
+    url = os.environ.get("DATABASE_URL", "")
+    m = re.match(r"mysql(?:\+\w+)?://([^:]+):([^@]+)@([^:/]+):(\d+)/([^?]+)", url)
+    if not m:
+        print("WARNING: ROUTING_INPUTS_DB=1 but DATABASE_URL missing/unparseable - using csv")
+        return None
+    import pymysql
+    usr, pw, host, port, db = m.groups()
+    table = _mfg_db_table(path)
+    try:
+        con = pymysql.connect(host=host, port=int(port), user=usr, password=pw,
+                              database=db, ssl={"ssl": {}})
+        try:
+            cur = con.cursor()
+            cur.execute(f"SELECT sku, mfg_name FROM {table}")  # noqa: S608 — table from closed map above
+            rows = cur.fetchall()
+        finally:
+            con.close()
+    except Exception as e:
+        # Transient db failure must not kill the matrix run — the csv authority is right there.
+        print(f"WARNING: {table} db read failed ({type(e).__name__}: {e}) - using csv")
+        return None
+    if not rows:
+        print(f"{table} db replica EMPTY - falling back to csv")
+        return None
+    print(f"{table}: db replica, {len(rows)} rows")
+    return {sku.strip(): name.strip() for sku, name in rows if sku and sku.strip()}
+
+
 def load_mfg_translations(csv_path: str | Path | None = None) -> dict[str, str]:
     """Load MFG translations: SKU -> MFG Name.
 
@@ -674,6 +719,9 @@ def load_mfg_translations(csv_path: str | Path | None = None) -> dict[str, str]:
     Exported from https://translator.robbinsmfginc.com/
     """
     path = Path(csv_path) if csv_path else MFG_TRANSLATIONS_PATH
+    from_db = _mfg_from_db(path)
+    if from_db is not None:
+        return from_db
     if not path.exists():
         return {}
     translations: dict[str, str] = {}
