@@ -338,15 +338,17 @@ function hourlyExceptionSweep() {
 
 // ---------------------------------------------------------------- host cleanup (manual)
 
-// 🔴 NOT named onOpen — this file lives in the SAME project as Code.gs, which already defines
-// onOpen. Two onOpen definitions in one Apps Script project do not merge: the later one silently
-// wins and the other menu vanishes. Call this from Code.gs's onOpen if the menu is wanted;
-// otherwise run the functions from the editor or the trigger.
-function onOpenExceptions() {
-  SpreadsheetApp.getUi().createMenu('Exceptions')
+// 🔴 This owns onOpen in the CLONE. Two onOpen definitions in one Apps Script project do not
+// merge — the later silently wins — so the cloned Code.gs's onOpen is renamed to
+// onOpen_reshipMenu_DISABLED_ there (clone-only patch, 2026-07-31; the live reship project keeps
+// its own onOpen untouched). That rename is deliberate and is also a SAFETY fix: the inherited
+// "Reship Report" menu ran refresh/menuRefresh* against the LIVE pivot sheet from this clone.
+// Do not restore Code.gs's onOpen here without renaming this one.
+function onOpen() {
+  SpreadsheetApp.getUi().createMenu('Shipping Exceptions')
     .addItem('Run sweep now', 'hourlyExceptionSweep')
     .addItem('Replay classifier self-test', 'excSelfTest')
-    .addItem('Remove inherited reship tabs', 'cleanupHostSheet')
+    .addItem('Remove leftover reship tabs', 'cleanupHostSheet')
     .addToUi();
 }
 
