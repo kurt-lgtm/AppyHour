@@ -8,10 +8,14 @@
  * It sits alongside the cloned Code.gs, which it DEPENDS on for shopifyGql_() — delete Code.gs
  * and excSeedCohort_ throws "shopifyGql_ is not defined" on the first run.
  *
- * 🔴 BOTH PROJECTS ARE TITLED "Running Reship". The clone kept the name, so the title is NOT a
- * safe identifier — key on parentId (the bound sheet). Dan's LIVE project is
- * 15K0MrUssFqacWybQAToz6CeHTouRU4IeNY4-DzZ4NeE1rBCCNGpGjAjv / parent 1weQz0AO...; this file was
- * deployed there by mistake on 2026-07-31 (dormant, no trigger, removed same day).
+ * 🔴 KEY ON parentId / scriptId, NEVER the project TITLE. This project was cloned from the reship
+ * one and inherited its name, so for a while BOTH were titled "Running Reship" — and this file
+ * got deployed into the LIVE reship project by mistake on 2026-07-31 (dormant, no trigger,
+ * removed same day; its Code.gs verified byte-identical before and after). Kurt renamed this one
+ * to "Exceptions" the same day to kill the ambiguity, but the rename does not change the
+ * scriptId, and a future clone would recreate the trap. The live reship project is
+ * 15K0MrUssFqacWybQAToz6CeHTouRU4IeNY4-DzZ4NeE1rBCCNGpGjAjv / parent 1weQz0AO... — it is Kurt's
+ * own report (not Dan's; Dan consumes it), which is why the misdeploy was recoverable.
  *
  * 🔴 A CLONED PROJECT DOES NOT INHERIT SCRIPT PROPERTIES. Only the code copies. First run in the
  * clone died with "Attribute provided with invalid value: Header:null" — a null SHOPIFY_TOKEN
