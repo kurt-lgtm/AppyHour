@@ -280,8 +280,57 @@ function excLog_(stamp, rec, cls, detail) {
 
 // ---------------------------------------------------------------- entry point
 
+/**
+ * Which Script Properties this file needs, and who reads them.
+ *
+ * 🔴 Apps Script reports a missing property as "Attribute provided with invalid value:
+ * Header:null" — thrown deep inside UrlFetchApp, naming neither the property nor the caller.
+ * That error burned two runs on 2026-07-31. Preflight so the message says what is actually
+ * wrong. A cloned project inherits code but NOT properties, and both projects here are titled
+ * "Running Reship", so it is easy to set them on the wrong one.
+ */
+var EXC_REQUIRED_PROPS = [
+  ['SHOPIFY_STORE', 'cohort seed (shopifyGql_) + order links'],
+  ['SHOPIFY_TOKEN', 'cohort seed (shopifyGql_)'],
+  ['PARCELPANEL_API_KEY', 'exception polling (excPpFetch_)'],
+  ['SLACK_BOT_TOKEN', 'posting to #exceptions (excSlackPost_)'],
+];
+
+function excPreflight_() {
+  var props = PropertiesService.getScriptProperties();
+  var missing = EXC_REQUIRED_PROPS.filter(function (p) {
+    return !String(props.getProperty(p[0]) || '').trim();
+  });
+  if (missing.length) {
+    throw new Error(
+      'Script Properties missing on THIS project (' + ScriptApp.getScriptId() + '): ' +
+      missing.map(function (p) { return p[0] + ' [' + p[1] + ']'; }).join(', ') +
+      '. Set them in Project Settings -> Script Properties on this project. A cloned project ' +
+      'does NOT inherit properties, and both projects are named "Running Reship" — check the ' +
+      'script id above matches the one you edited.');
+  }
+}
+
+/** Menu item: report which properties are set, WITHOUT ever printing their values. */
+function excCheckProperties() {
+  var props = PropertiesService.getScriptProperties();
+  var lines = ['script id: ' + ScriptApp.getScriptId(),
+               'bound sheet: ' + SpreadsheetApp.getActiveSpreadsheet().getId(), ''];
+  EXC_REQUIRED_PROPS.forEach(function (p) {
+    var v = String(props.getProperty(p[0]) || '').trim();
+    lines.push((v ? 'SET     (' + v.length + ' chars)  ' : 'MISSING              ') + p[0]);
+  });
+  var all = props.getKeys().sort().join(', ');
+  lines.push('', 'all keys on this project: ' + (all || '(none)'));
+  var msg = lines.join('\n');
+  Logger.log(msg);
+  try { SpreadsheetApp.getUi().alert('Exception sweep — properties', msg, SpreadsheetApp.getUi().ButtonSet.OK); } catch (e) {}
+  return msg;
+}
+
 function hourlyExceptionSweep() {
   try {
+    excPreflight_();
     var st = excLoadState_();
 
     // seed any cohort orders we haven't seen yet
@@ -346,6 +395,7 @@ function hourlyExceptionSweep() {
 // Do not restore Code.gs's onOpen here without renaming this one.
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('Shipping Exceptions')
+    .addItem('Check properties', 'excCheckProperties')
     .addItem('Run sweep now', 'hourlyExceptionSweep')
     .addItem('Replay classifier self-test', 'excSelfTest')
     .addItem('Remove leftover reship tabs', 'cleanupHostSheet')
