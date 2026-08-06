@@ -3,11 +3,26 @@
  * Constraints SSOT: ShippingReports/EXCEPTIONS_ALERT_RULES.md (repo). Read it before
  * changing anything here; the rules are authored there first.
  *
- * LIVES IN: the existing "Running Reship" script project, scriptId
- * 15K0MrUssFqacWybQAToz6CeHTouRU4IeNY4-DzZ4NeE1rBCCNGpGjAjv — alongside Code.gs, NOT a project
- * of its own (Kurt 2026-07-31). Reasons: the four Script Properties, the OAuth grant and the
- * Slack bot are already there, and this file DEPENDS on Code.gs's shopifyGql_() for the cohort
- * seed. A standalone copy would throw "shopifyGql_ is not defined" on its first run.
+ * LIVES IN: Kurt's CLONE of the reship script project, scriptId
+ * 1JZZmRuib73LYxED-dTcAx5L-YN5Na9Puo4eHoZdaqZFBQyEiEif3SSTH (bound to sheet 1kk1Qld...).
+ * It sits alongside the cloned Code.gs, which it DEPENDS on for shopifyGql_() — delete Code.gs
+ * and excSeedCohort_ throws "shopifyGql_ is not defined" on the first run.
+ *
+ * 🔴 BOTH PROJECTS ARE TITLED "Running Reship". The clone kept the name, so the title is NOT a
+ * safe identifier — key on parentId (the bound sheet). Dan's LIVE project is
+ * 15K0MrUssFqacWybQAToz6CeHTouRU4IeNY4-DzZ4NeE1rBCCNGpGjAjv / parent 1weQz0AO...; this file was
+ * deployed there by mistake on 2026-07-31 (dormant, no trigger, removed same day).
+ *
+ * 🔴 A CLONED PROJECT DOES NOT INHERIT SCRIPT PROPERTIES. Only the code copies. First run in the
+ * clone died with "Attribute provided with invalid value: Header:null" — a null SHOPIFY_TOKEN
+ * reaching UrlFetchApp. Set SHOPIFY_STORE, SHOPIFY_TOKEN, PARCELPANEL_API_KEY, SLACK_BOT_TOKEN
+ * on the clone by hand (the Apps Script API cannot read or write properties).
+ * Deliberately NOT set: SLACK_WEBHOOK (points at Dan's #reships — leaving it unset means a stray
+ * Code.gs function here cannot post to his channel) and GORGIAS_* (unused by the sweep).
+ *
+ * 🔴 The cloned Code.gs still has PIVOT_SHEET_ID pointed at Dan's LIVE report. Every function it
+ * defines (refresh, menuRefresh*, menuBackfillGorgias) writes to HIS sheet from this clone.
+ * Never run them here, and never give them a trigger here.
  *
  * Data surface is a DIFFERENT spreadsheet from the one the project is bound to: the sweep writes
  * its log + state to EXC_HOST_SHEET_ID via openById, and never touches Dan's pivot report.
