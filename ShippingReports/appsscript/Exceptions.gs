@@ -303,10 +303,33 @@ var EXC_EMOJI_ = {
   ATTEMPT_FAILED: ':warning:',
 };
 
+/**
+ * Human-facing label per class. DISPLAY ONLY — the class token stays the internal identity.
+ *
+ * 🔴 NEVER put a display label into `alerted_classes` or any dedupe/state key. The "already
+ * pinged" check is (order, class token); rewriting the stored token would make every
+ * previously-alerted order look new and re-spam #exceptions with old boxes. Rename here, at
+ * render time, and the state file never changes.
+ *
+ * 🔴 NEVER_PICKED_UP and LOST stay SEPARATE classes — Kurt renamed the display, not the
+ * taxonomy. NEVER_PICKED_UP = label created, carrier never scanned it (lost before it moved);
+ * LOST = scanned into the network, then vanished. Merging them destroys the reason, which is the
+ * whole point of the wording.
+ */
+var EXC_DISPLAY_ = {
+  NEVER_PICKED_UP: 'Lost in Transit (no scan)',   // Kurt 2026-08-07, verbatim
+  // LOST: intentionally NOT relabelled here — "Lost in Transit" was proposed for coherence but
+  // is not Kurt-approved yet. It renders as its token until it is.
+};
+
+function excDisplay_(cls) {
+  return EXC_DISPLAY_[cls] || String(cls || '').replace(/_/g, ' ');
+}
+
 function excMessage_(rec, cls, detail, eventAt) {
   // Verbatim carrier text is non-negotiable — it's what lets Dan judge in 2s without opening
   // anything. Order link last so Slack doesn't unfurl over the detail.
-  return (EXC_EMOJI_[cls] || ':warning:') + ' *' + cls.replace(/_/g, ' ') + '* — #' + rec.order +
+  return (EXC_EMOJI_[cls] || ':warning:') + ' *' + excDisplay_(cls) + '* — #' + rec.order +
          (rec.customer ? ' · ' + rec.customer : '') +
          (rec.carrier ? ' · ' + rec.carrier : '') +
          (rec.state ? ' · ' + rec.state : '') +
@@ -339,8 +362,9 @@ function excLog_(stamp, rec, cls, detail, eventAt) {
   if (String(head[1] || '') !== 'event when') {
     sh.getRange(1, 1, 1, width).setValues([EXC_LOG_HEADERS]).setFontWeight('bold');
   }
+  // display label in the sheet; the internal token stays in _exc_state.alerted_classes
   sh.appendRow([stamp, eventAt || '', '#' + rec.order, rec.customer, rec.carrier, rec.state,
-                cls, detail]);
+                excDisplay_(cls), detail]);
 }
 
 // ---------------------------------------------------------------- entry point
@@ -560,6 +584,20 @@ function excSelfTest() {
       fails.push('"' + c[0].slice(0, 40) + '" -> ' + got.cls + '/' + got.ping + ' expected ' + c[2] + '/' + c[3]);
     }
   });
+  // display-label guard (Kurt 2026-08-07): the rename is render-time ONLY. If the internal token
+  // ever leaks into the dedupe key, every already-alerted order re-fires and spams #exceptions.
+  if (excDisplay_('NEVER_PICKED_UP') !== 'Lost in Transit (no scan)') {
+    fails.push('NEVER_PICKED_UP must display as "Lost in Transit (no scan)"');
+  }
+  if (excDisplay_('LOST') === excDisplay_('NEVER_PICKED_UP')) {
+    fails.push('LOST and NEVER_PICKED_UP must stay distinct — different reasons, not a merge');
+  }
+  var npu = excClassify_({ checkpoints: [{ detail: 'Order created', status: 'INFO_RECEIVED' }],
+                           status: 'INFO_RECEIVED', fulfillment_date: '2026-01-01' });
+  if (npu.cls !== 'NEVER_PICKED_UP') {
+    fails.push('dedupe key must remain the token NEVER_PICKED_UP, got ' + npu.cls);
+  }
+
   // newest-first ordering guard: the oldest checkpoint is storefront copy, must never win
   var ordering = excClassify_({ checkpoints: [
     { detail: 'Your package has been damaged. Please contact the seller', status: 'EXCEPTION' },
