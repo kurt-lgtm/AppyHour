@@ -53,8 +53,18 @@ var EXC_HOST_SHEET_ID = '1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU';
 var EXC_CHANNEL = 'C0BLKKPAW8P';          // private #exceptions. NEVER SLACK_WEBHOOK (public #reships).
 var EXC_LOG_TAB = 'Exceptions';
 var EXC_STATE_TAB = '_exc_state';
-var EXC_MAX_POLL_PER_RUN = 900;           // 6-min Apps Script ceiling; PP is 1 GET/order, 50/batch
-var EXC_PP_FAIL_RATIO = 0.2;              // above this share of failed fetches -> CRITICAL, not "all clear"
+// 🔴 PACING: ParcelPanel rate-limits hard and per-minute. The proven client
+// (GelPackCalculator/parcel_panel.py) sleeps 0.3s between calls and backs off SIXTY-FIVE seconds
+// on a 429. The first live run here fired UrlFetchApp.fetchAll in batches of 50 with no pause and
+// no retry: 780 of 900 fetches failed — it throttled itself out after roughly the first two
+// batches. Small batches with a pause between them, and a single backoff retry, stay under it.
+// A 65s backoff cannot be repeated inside the 6-minute execution ceiling, so throttled orders are
+// left for the next run rather than retried to death.
+var EXC_PP_BATCH = 10;                    // requests per fetchAll
+var EXC_PP_PAUSE_MS = 1000;               // pause between batches -> ~10 req/s
+var EXC_PP_BACKOFF_MS = 5000;             // one retry for a batch that came back throttled
+var EXC_MAX_POLL_PER_RUN = 400;           // fits the 6-min ceiling at the pacing above
+var EXC_PP_FAIL_RATIO = 0.2;              // share of NON-throttle failures that means CRITICAL
 var EXC_COHORTS_BACK = 2;                 // current + previous ship week stay in the poll set
 
 function excSS_() { return SpreadsheetApp.openById(EXC_HOST_SHEET_ID); }
@@ -132,36 +142,65 @@ function excDaysSince_(iso) {
 
 // ---------------------------------------------------------------- ParcelPanel
 
-/** Fetch raw PP shipments for order numbers. Returns {orderNum: shipment}, plus a failure count. */
+/**
+ * Fetch raw PP shipments. Returns {ships, failed, throttled, attempted, seen}.
+ *
+ * `seen` is the set of order numbers PP actually answered for — callers must only stamp
+ * last_seen on those. Stamping an order we never reached pushes it to the BACK of the
+ * oldest-first queue, so the same orders starve run after run while the log looks healthy.
+ * Throttled (429) is counted apart from failed: throttling is expected backpressure and is
+ * retried next run, whereas a real failure rate means something is broken and must be loud.
+ */
 function excPpFetch_(orderNums) {
-  var out = { ships: {}, failed: 0, attempted: 0 };
+  var out = { ships: {}, failed: 0, throttled: 0, attempted: 0, seen: {} };
   var key = PropertiesService.getScriptProperties().getProperty('PARCELPANEL_API_KEY');
   if (!key || !orderNums.length) return out;
   var uniq = orderNums.filter(function (n, i) { return n && orderNums.indexOf(n) === i; });
   out.attempted = uniq.length;
-  var reqs = uniq.map(function (n) {
+
+  function reqFor(n) {
     return {
       url: 'https://open.parcelwill.com/api/v2/tracking/order?order_number=' + encodeURIComponent(n),
       headers: { 'x-parcelpanel-api-key': key },
       muteHttpExceptions: true,
     };
-  });
-  for (var i = 0; i < reqs.length; i += 50) {
-    var resp;
-    try {
-      resp = UrlFetchApp.fetchAll(reqs.slice(i, i + 50));
-    } catch (err) {
-      out.failed += Math.min(50, reqs.length - i);
-      continue;
-    }
+  }
+
+  function consume(slice, resp) {
+    var retry = [];
     resp.forEach(function (rp, k) {
-      if (rp.getResponseCode() !== 200) { out.failed++; return; }
+      var on = slice[k], code = rp.getResponseCode();
+      if (code === 429 || code === 503) { retry.push(on); return; }
+      if (code !== 200) { out.failed++; return; }
       try {
         var o = JSON.parse(rp.getContentText());
         var ships = ((o.order || {}).shipments) || ((o.data || {}).shipments) || o.shipments || [];
-        if (ships.length) out.ships[uniq[i + k]] = ships[0];
+        out.seen[on] = true;
+        if (ships.length) out.ships[on] = ships[0];
       } catch (e) { out.failed++; }
     });
+    return retry;
+  }
+
+  for (var i = 0; i < uniq.length; i += EXC_PP_BATCH) {
+    var slice = uniq.slice(i, i + EXC_PP_BATCH);
+    var retry;
+    try {
+      retry = consume(slice, UrlFetchApp.fetchAll(slice.map(reqFor)));
+    } catch (err) {
+      out.failed += slice.length;
+      continue;
+    }
+    if (retry.length) {                       // one backoff pass, then leave it for next run
+      Utilities.sleep(EXC_PP_BACKOFF_MS);
+      try {
+        var still = consume(retry, UrlFetchApp.fetchAll(retry.map(reqFor)));
+        out.throttled += still.length;
+      } catch (err2) {
+        out.throttled += retry.length;
+      }
+    }
+    if (i + EXC_PP_BATCH < uniq.length) Utilities.sleep(EXC_PP_PAUSE_MS);
   }
   return out;
 }
@@ -355,9 +394,12 @@ function hourlyExceptionSweep() {
 
     var pp = excPpFetch_(batch);
 
-    // 🔴 A PP outage must not read as "no exceptions" — silence has to fail loudly.
+    // 🔴 A PP outage must not read as "no exceptions" — silence has to fail loudly. But THROTTLING
+    // is not an outage: those orders keep their old last_seen, stay at the front of the queue and
+    // are picked up next run. Only genuine failures count against the ratio.
     if (pp.attempted && pp.failed / pp.attempted > EXC_PP_FAIL_RATIO) {
       throw new Error('ParcelPanel fetch failing: ' + pp.failed + '/' + pp.attempted +
+                      ' hard failures (throttled: ' + pp.throttled + ')' +
                       ' — results suppressed rather than reported as all-clear');
     }
 
@@ -365,6 +407,9 @@ function hourlyExceptionSweep() {
     var posted = 0;
     batch.forEach(function (on) {
       var rec = st[on], ship = pp.ships[on];
+      // Only stamp orders PP actually answered for. Stamping an unreached order sends it to the
+      // back of the oldest-first queue, starving it indefinitely while the log looks fine.
+      if (!pp.seen[on]) return;
       rec.last_seen = stamp;
       if (!ship) return;
       var c = ship.carrier;
@@ -381,7 +426,9 @@ function hourlyExceptionSweep() {
     });
 
     excSaveState_(st);
-    Logger.log('exceptions sweep: polled ' + batch.length + '/' + open.length + ' open, posted ' + posted);
+    Logger.log('exceptions sweep: reached ' + Object.keys(pp.seen).length + ' of ' + batch.length +
+               ' polled (' + open.length + ' open, throttled ' + pp.throttled +
+               ', hard failures ' + pp.failed + '), posted ' + posted);
   } catch (e) {
     try {
       excSlackPost_(':rotating_light: exceptions sweep FAILED: ' + e);
