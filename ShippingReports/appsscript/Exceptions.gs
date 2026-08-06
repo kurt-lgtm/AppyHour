@@ -3,47 +3,46 @@
  * Constraints SSOT: ShippingReports/EXCEPTIONS_ALERT_RULES.md (repo). Read it before
  * changing anything here; the rules are authored there first.
  *
- * LIVES IN: Kurt's CLONE of the reship script project, scriptId
- * 1JZZmRuib73LYxED-dTcAx5L-YN5Na9Puo4eHoZdaqZFBQyEiEif3SSTH (bound to sheet 1kk1Qld...).
- * It sits alongside the cloned Code.gs, which it DEPENDS on for shopifyGql_() — delete Code.gs
- * and excSeedCohort_ throws "shopifyGql_ is not defined" on the first run.
+ * LIVES IN: the LIVE Running Reship project, scriptId
+ * 15K0MrUssFqacWybQAToz6CeHTouRU4IeNY4-DzZ4NeE1rBCCNGpGjAjv, bound to the reship sheet
+ * 1weQz0AO... — co-hosted with Code.gs, writing its two tabs onto that same sheet
+ * (Kurt 2026-07-31: "what if we just add the exceptions here?").
  *
- * 🔴 KEY ON parentId / scriptId, NEVER the project TITLE. This project was cloned from the reship
- * one and inherited its name, so for a while BOTH were titled "Running Reship" — and this file
- * got deployed into the LIVE reship project by mistake on 2026-07-31 (dormant, no trigger,
- * removed same day; its Code.gs verified byte-identical before and after). Kurt renamed this one
- * to "Exceptions" the same day to kill the ambiguity, but the rename does not change the
- * scriptId, and a future clone would recreate the trap. The live reship project is
- * 15K0MrUssFqacWybQAToz6CeHTouRU4IeNY4-DzZ4NeE1rBCCNGpGjAjv / parent 1weQz0AO... — it is Kurt's
- * own report (not Dan's; Dan consumes it), which is why the misdeploy was recoverable.
+ * 🔴 RULING (Kurt 2026-08-06, verbatim): "running reship report will be king." Code.gs owns the
+ * reserved onOpen and the Reship Report menu. Apps Script concatenates files and runs exactly ONE
+ * onOpen — the last definition silently wins — so this file must never define one. Code.gs
+ * tail-calls onOpenExceptions (coordinator's 1d8f0aa); that is the only reason the menu appears.
  *
- * 🔴 A CLONED PROJECT DOES NOT INHERIT SCRIPT PROPERTIES. Only the code copies. First run in the
- * clone died with "Attribute provided with invalid value: Header:null" — a null SHOPIFY_TOKEN
- * reaching UrlFetchApp. Set SHOPIFY_STORE, SHOPIFY_TOKEN, PARCELPANEL_API_KEY, SLACK_BOT_TOKEN
- * on the clone by hand (the Apps Script API cannot read or write properties).
- * Deliberately NOT set: SLACK_WEBHOOK (points at Dan's #reships — leaving it unset means a stray
- * Code.gs function here cannot post to his channel) and GORGIAS_* (unused by the sweep).
+ * 🔴 DEPENDS on Code.gs's shopifyGql_() for the cohort seed. Deleting or renaming it breaks the
+ * sweep with "shopifyGql_ is not defined".
  *
- * 🔴 The cloned Code.gs still has PIVOT_SHEET_ID pointed at Dan's LIVE report. Every function it
- * defines (refresh, menuRefresh*, menuBackfillGorgias) writes to HIS sheet from this clone.
- * Never run them here, and never give them a trigger here.
+ * 🔴 COUPLING, the price of co-hosting: a syntax error in THIS file breaks the whole project and
+ * takes the hourly reship report down with it. Run excSelfTest() after every edit.
+ * hourlyExceptionSweep must NEVER be called from refresh() — it throws on failure by design,
+ * which would abort the reship run. It carries its OWN trigger so the two fail independently.
  *
- * Data surface is a DIFFERENT spreadsheet from the one the project is bound to: the sweep writes
- * its log + state to EXC_HOST_SHEET_ID via openById, and never touches Dan's pivot report.
+ * 🔴 DEPLOY: projects/.../content PUT replaces ALL files. Always GET live content and swap only
+ * this file — a push carrying just [appsscript, Exceptions] DELETES Code.gs, and vice versa.
+ * Assert the resulting file set and Code.gs's length after every push.
  *
- * 🔴 COUPLING RISK, the price of sharing a project: a syntax error in THIS file breaks the whole
- * project, taking the hourly reship report down with it. Run excSelfTest() after any edit here.
- * And hourlyExceptionSweep must NEVER be called from refresh() — it throws on failure by design,
- * which would abort the reship run. It gets its OWN trigger so the two fail independently.
+ * 🔴 TAB SCOPE: this job owns exactly two tabs, Exceptions and _exc_state. Raw Data, Triage,
+ * Product Mix, Product Mix (T), Daily, TnT2, Lost in Transit and Routing Match belong to the
+ * reship report — never read or written here.
  *
- * SETUP (one-time):
- *  1. Add this file to the Running Reship project. Properties are already set and shared:
- *     SHOPIFY_STORE, SHOPIFY_TOKEN, PARCELPANEL_API_KEY, SLACK_BOT_TOKEN.
- *     SLACK_BOT_TOKEN confirmed = appyhouropsreader (U0BG153RTNW), in #exceptions with
- *     chat:write + groups:read + groups:history (Kurt verified 2026-07-31).
- *  2. Run excSelfTest() — expect "PASS: 20 cases".
- *  3. Run hourlyExceptionSweep() once manually to authorize and seed the cohort.
- *  4. Triggers -> time-driven, hourly, hourlyExceptionSweep. SEPARATE from refresh's trigger.
+ * HISTORY worth keeping (both cost a live debugging cycle):
+ *  • Deployed into the wrong project 2026-07-31. A clone of this project kept the name, so BOTH
+ *    were titled "Running Reship" — key on parentId/scriptId, NEVER the title. It sat dormant
+ *    (a file creates no trigger) and was removed the same day, Code.gs byte-identical throughout.
+ *  • A CLONED project does not inherit Script Properties, only code. The clone's first run died
+ *    with "Attribute provided with invalid value: Header:null" — a null SHOPIFY_TOKEN reaching
+ *    UrlFetchApp, an error naming neither the property nor the cause. excPreflight_ now names it.
+ *
+ * PROPERTIES (already set on this project): SHOPIFY_STORE, SHOPIFY_TOKEN, PARCELPANEL_API_KEY,
+ * SLACK_BOT_TOKEN (= appyhouropsreader U0BG153RTNW, in #exceptions with chat:write + groups:read
+ * + groups:history). SLACK_WEBHOOK is NOT read here — it points at #reships.
+ *
+ * SETUP: excSelfTest() -> "PASS: 20 cases"; hourlyExceptionSweep() once by hand;
+ * installExceptionsTrigger() once to schedule it; excListTriggers() to confirm.
  */
 
 // The reship report sheet — this job now writes its Exceptions + _exc_state tabs alongside the
@@ -93,7 +92,13 @@ function excClassify_(ship) {
   var pickup = String((ship && ship.pickup_date) || '');
   var delivered = String((ship && ship.delivery_date) || '');
 
-  function r(cls, ping) { return { cls: cls, detail: detail, ping: ping, status: status }; }
+  // eventAt = when the CARRIER scanned it (checkpoint_time), which is the number that matters for
+  // triage — "damaged since Tuesday 08:14" beats "a cron noticed at 16:00". Kept separate from the
+  // sweep's own stamp; the gap between the two IS the feed latency, which is its own signal.
+  var eventAt = String((pick && pick.checkpoint_time) || '').replace('T', ' ').slice(0, 16);
+  function r(cls, ping) {
+    return { cls: cls, detail: detail, ping: ping, status: status, eventAt: eventAt };
+  }
 
   // A real delivery_date is authoritative — nothing beats it.
   if (delivered) return r('DELIVERED', false);
@@ -298,30 +303,44 @@ var EXC_EMOJI_ = {
   ATTEMPT_FAILED: ':warning:',
 };
 
-function excMessage_(rec, cls, detail) {
+function excMessage_(rec, cls, detail, eventAt) {
   // Verbatim carrier text is non-negotiable — it's what lets Dan judge in 2s without opening
   // anything. Order link last so Slack doesn't unfurl over the detail.
   return (EXC_EMOJI_[cls] || ':warning:') + ' *' + cls.replace(/_/g, ' ') + '* — #' + rec.order +
          (rec.customer ? ' · ' + rec.customer : '') +
          (rec.carrier ? ' · ' + rec.carrier : '') +
          (rec.state ? ' · ' + rec.state : '') +
+         (eventAt ? '\n_carrier scan: ' + eventAt + '_' : '') +
          '\n> ' + (detail || '(no carrier text)') +
          '\nhttps://admin.shopify.com/store/' +
          PropertiesService.getScriptProperties().getProperty('SHOPIFY_STORE') +
          '/orders?query=' + encodeURIComponent(rec.order);
 }
 
-function excLog_(stamp, rec, cls, detail) {
+var EXC_LOG_HEADERS = ['detected', 'event when', 'order', 'customer', 'carrier', 'state',
+                       'class', 'carrier event'];
+
+/**
+ * Append one alert row.
+ *
+ * Two timestamps on purpose: `detected` = when this sweep ran and posted (shared by every row
+ * from the same run); `event when` = the carrier's own checkpoint_time. Triage wants the second.
+ * Self-heals the header if the tab predates the event-when column.
+ */
+function excLog_(stamp, rec, cls, detail, eventAt) {
   var ss = excSS_();
   var sh = ss.getSheetByName(EXC_LOG_TAB);
   if (!sh) {
     sh = ss.insertSheet(EXC_LOG_TAB);
-    sh.getRange(1, 1, 1, 7)
-      .setValues([['when', 'order', 'customer', 'carrier', 'state', 'class', 'carrier event']])
-      .setFontWeight('bold');
     sh.setFrozenRows(1);
   }
-  sh.appendRow([stamp, '#' + rec.order, rec.customer, rec.carrier, rec.state, cls, detail]);
+  var width = EXC_LOG_HEADERS.length;
+  var head = sh.getLastRow() ? sh.getRange(1, 1, 1, width).getValues()[0] : [];
+  if (String(head[1] || '') !== 'event when') {
+    sh.getRange(1, 1, 1, width).setValues([EXC_LOG_HEADERS]).setFontWeight('bold');
+  }
+  sh.appendRow([stamp, eventAt || '', '#' + rec.order, rec.customer, rec.carrier, rec.state,
+                cls, detail]);
 }
 
 // ---------------------------------------------------------------- entry point
@@ -418,8 +437,8 @@ function hourlyExceptionSweep() {
       if (v.cls === 'DELIVERED') { rec.open = false; return; }
       if (!v.ping) return;
       if (rec.alerted.indexOf(v.cls) >= 0) return;   // dedup on (order, class)
-      excSlackPost_(excMessage_(rec, v.cls, v.detail));
-      excLog_(stamp, rec, v.cls, v.detail);
+      excSlackPost_(excMessage_(rec, v.cls, v.detail, v.eventAt));
+      excLog_(stamp, rec, v.cls, v.detail, v.eventAt);
       rec.alerted.push(v.cls);
       rec.open = false;                              // notified once; a human owns it now
       posted++;
