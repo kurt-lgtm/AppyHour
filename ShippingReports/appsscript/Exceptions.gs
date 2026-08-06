@@ -400,15 +400,54 @@ function hourlyExceptionSweep() {
 // its own onOpen untouched). That rename is deliberate and is also a SAFETY fix: the inherited
 // "Reship Report" menu ran refresh/menuRefresh* against the LIVE pivot sheet from this clone.
 // Do not restore Code.gs's onOpen here without renaming this one.
-// 🔴 NOT named onOpen. This project's Code.gs owns onOpen (the Reship Report menu) and two
-// definitions do not merge — the later silently wins, so defining onOpen here would delete the
-// reship menu from a live report. Call this from Code.gs's onOpen to surface the items, or run
-// the functions from the editor.
+/**
+ * Install/repair the hourly trigger. Run once from the editor; safe to re-run.
+ *
+ * 🔴 Scheduling lives HERE, not in a hand-made UI trigger. A UI-created trigger is invisible to
+ * source control and to the Apps Script API (which cannot list triggers), so "is the sweep
+ * actually scheduled?" becomes unanswerable — exactly the dead-cadence signature that has burned
+ * shopify_orders, ontrac_master, mfg_translations and fulfillments-sync. Idempotent: drops any
+ * existing hourlyExceptionSweep triggers before creating one, so re-running cannot stack duplicates.
+ *
+ * 🔴 Deliberately does NOT touch triggers for any other function — the reship report's `refresh`
+ * trigger must keep running independently. hourlyExceptionSweep throws on failure by design; if
+ * the two ever shared a trigger, an exception-sweep failure would abort the reship run.
+ */
+function installExceptionsTrigger() {
+  var existing = ScriptApp.getProjectTriggers().filter(function (t) {
+    return t.getHandlerFunction() === 'hourlyExceptionSweep';
+  });
+  existing.forEach(function (t) { ScriptApp.deleteTrigger(t); });
+  ScriptApp.newTrigger('hourlyExceptionSweep').timeBased().everyHours(1).create();
+  var msg = 'hourlyExceptionSweep: removed ' + existing.length + ' existing trigger(s), installed 1 hourly';
+  Logger.log(msg);
+  return msg;
+}
+
+/** Report what IS scheduled on this project, so the answer is never a guess. */
+function excListTriggers() {
+  var lines = ScriptApp.getProjectTriggers().map(function (t) {
+    return '  ' + t.getHandlerFunction() + '  [' + t.getEventType() + ']';
+  });
+  var msg = 'triggers on this project (' + ScriptApp.getScriptId() + '):\n' +
+            (lines.length ? lines.join('\n') : '  (none)');
+  Logger.log(msg);
+  return msg;
+}
+
+// 🔴 NOT named onOpen. Code.gs owns the reserved onOpen (the Reship Report menu) and Apps Script
+// runs exactly ONE — files are concatenated and the last definition silently wins, so defining
+// onOpen here is a coin-flip that can kill the reship menu with no error. Ruling, Kurt 2026-08-06:
+// "running reship report will be king." Code.gs's onOpen tail-calls this installer (coordinator's
+// 1d8f0aa), which is why the menu appears at all — onOpenExceptions is not a reserved name and is
+// never auto-invoked on its own. Keep this name, keep it idempotent, never rename it.
 function onOpenExceptions() {
   SpreadsheetApp.getUi().createMenu('Shipping Exceptions')
     .addItem('Check properties', 'excCheckProperties')
     .addItem('Run sweep now', 'hourlyExceptionSweep')
     .addItem('Replay classifier self-test', 'excSelfTest')
+    .addItem('Show scheduled triggers', 'excListTriggers')
+    .addItem('Install/repair hourly trigger', 'installExceptionsTrigger')
     .addToUi();
 }
 
