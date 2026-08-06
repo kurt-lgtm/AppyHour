@@ -56,6 +56,11 @@ function onOpen() {
     .addSeparator()
     .addItem('Backfill Gorgias + enrich reships', 'menuBackfillGorgias')
     .addToUi();
+  // 🔴 Running Reship Report is KING (Kurt 2026-08-06): this file owns the reserved
+  // onOpen. Co-hosted builds must NOT define their own onOpen (Apps Script runs only
+  // one — last file loaded silently wins) and must NOT retire this menu. They expose
+  // an installer we CALL here, so their menu appears without contesting ownership.
+  try { if (typeof onOpenExceptions === 'function') onOpenExceptions(); } catch (e) {}
 }
 
 // shared helpers for the menu items
