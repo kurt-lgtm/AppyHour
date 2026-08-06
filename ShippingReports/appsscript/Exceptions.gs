@@ -46,7 +46,10 @@
  *  4. Triggers -> time-driven, hourly, hourlyExceptionSweep. SEPARATE from refresh's trigger.
  */
 
-var EXC_HOST_SHEET_ID = '1kk1Qld-7QDIkhIKL93EIc6NGmOhnD_PZcJdTNX9m8Pg';
+// The reship report sheet — this job now writes its Exceptions + _exc_state tabs alongside the
+// reship tabs rather than to a separate clone (Kurt 2026-07-31). Same sheet the project is bound
+// to, so SpreadsheetApp.getActive() would also work; openById is kept so the target is explicit.
+var EXC_HOST_SHEET_ID = '1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU';
 var EXC_CHANNEL = 'C0BLKKPAW8P';          // private #exceptions. NEVER SLACK_WEBHOOK (public #reships).
 var EXC_LOG_TAB = 'Exceptions';
 var EXC_STATE_TAB = '_exc_state';
@@ -397,28 +400,25 @@ function hourlyExceptionSweep() {
 // its own onOpen untouched). That rename is deliberate and is also a SAFETY fix: the inherited
 // "Reship Report" menu ran refresh/menuRefresh* against the LIVE pivot sheet from this clone.
 // Do not restore Code.gs's onOpen here without renaming this one.
-function onOpen() {
+// 🔴 NOT named onOpen. This project's Code.gs owns onOpen (the Reship Report menu) and two
+// definitions do not merge — the later silently wins, so defining onOpen here would delete the
+// reship menu from a live report. Call this from Code.gs's onOpen to surface the items, or run
+// the functions from the editor.
+function onOpenExceptions() {
   SpreadsheetApp.getUi().createMenu('Shipping Exceptions')
     .addItem('Check properties', 'excCheckProperties')
     .addItem('Run sweep now', 'hourlyExceptionSweep')
     .addItem('Replay classifier self-test', 'excSelfTest')
-    .addItem('Remove leftover reship tabs', 'cleanupHostSheet')
     .addToUi();
 }
 
-/** Manual only. Drops the reship tabs this copy inherited. Never called by the hourly job. */
-function cleanupHostSheet() {
-  var ss = excSS_();
-  if (ss.getId() !== EXC_HOST_SHEET_ID) throw new Error('refusing to clean a sheet that is not the host copy');
-  var drop = ['Product Mix (T)', 'Product Mix', 'Count of requested', 'Count of created',
-              'Count of incoming week', 'Count of outgoing week', 'Triage', 'Raw Data', '_seed', '_state'];
-  var removed = [];
-  drop.forEach(function (name) {
-    var sh = ss.getSheetByName(name);
-    if (sh) { ss.deleteSheet(sh); removed.push(name); }
-  });
-  Logger.log('removed: ' + removed.join(', '));
-}
+// 🔴 cleanupHostSheet() DELETED 2026-07-31, deliberately — do not reintroduce it.
+// It dropped tabs by name (Product Mix (T), Triage, Raw Data, _seed, _state) to strip a clone
+// back to purpose. Those same names are the REAL reship report on this sheet. Its only guard
+// was `if (ss.getId() !== EXC_HOST_SHEET_ID) throw` — so pointing EXC_HOST_SHEET_ID at the live
+// sheet, which is exactly what moving here does, turned that guard from a fence into an aim.
+// A destructive helper whose safety depends on a constant that the migration itself changes is
+// not safe. The clone's tabs were removed by hand; nothing needs this function.
 
 /**
  * Replays the classifier against the 6/29-7/20 events pulled on 2026-07-30.
