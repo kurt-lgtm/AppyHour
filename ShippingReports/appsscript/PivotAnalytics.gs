@@ -161,7 +161,13 @@ function paDerive_(node) {
  */
 function paPpFetch_(orderNums, winLo, winHi) {
   var out = {}, key = PropertiesService.getScriptProperties().getProperty('PARCELPANEL_API_KEY');
-  if (!key || !orderNums.length) return out;
+  // 🔴 LOUD, never silent. PP only ever RESCUES boxes Shopify does not already show delivered, so a
+  // total PP failure is invisible everywhere except those few orders — on the 2026-08-07 preview it
+  // cost exactly 2 (#166228, #166660) out of 2,305 and looked like a rounding wobble. Count every
+  // stage and shout if PP contributed nothing.
+  var stats = { asked: orderNums.length, ok: 0, http: {}, delivered: 0 };
+  if (!key) { paLog_('  🔴 PP SKIPPED — PARCELPANEL_API_KEY not set; union degraded to Shopify-only'); return out; }
+  if (!orderNums.length) return out;
   for (var i = 0; i < orderNums.length; i += 50) {
     var slice = orderNums.slice(i, i + 50);
     var resp = UrlFetchApp.fetchAll(slice.map(function (n) {
@@ -169,21 +175,31 @@ function paPpFetch_(orderNums, winLo, winHi) {
                headers: { 'x-parcelpanel-api-key': key }, muteHttpExceptions: true };
     }));
     resp.forEach(function (r, k) {
-      if (r.getResponseCode() !== 200) return;
+      var code = r.getResponseCode();
+      stats.http[code] = (stats.http[code] || 0) + 1;
+      if (code !== 200) return;
+      stats.ok++;
       try {
         var o = JSON.parse(r.getContentText());
         var ships = ((o.order || {}).shipments) || ((o.data || {}).shipments) || o.shipments || [];
         if (!ships.length) return;
         var s = ships[0];
+        // ⚠️ `delivery_status` comes back NULL from this endpoint; the real field is `status`
+        // (verified live 2026-08-07). Keep both — order matters only if PP ever populates the first.
         var status = String(s.delivery_status || s.status || '').toUpperCase();
         var pk = (String(s.pickup_date || '').match(/^\d{4}-\d{2}-\d{2}/) || [null])[0];
         var dl = (String(s.delivery_date || '').match(/^\d{4}-\d{2}-\d{2}/) || [null])[0];
         if (pk && (pk < winLo || pk > winHi)) pk = null;
         if (dl && (dl < winLo || dl > winHi)) dl = null;
-        out[slice[k]] = { delivered: status.indexOf('DELIVER') >= 0, pk: pk, dl: dl };
+        var del = status.indexOf('DELIVER') >= 0;
+        if (del) stats.delivered++;
+        out[slice[k]] = { delivered: del, pk: pk, dl: dl };
       } catch (e) {}
     });
   }
+  paLog_('  PP: asked ' + stats.asked + '  http ' + JSON.stringify(stats.http) +
+         '  parsed ' + Object.keys(out).length + '  delivered ' + stats.delivered);
+  if (!stats.ok) paLog_('  🔴 PP RETURNED NOTHING USABLE — union degraded to Shopify-only this run');
   return out;
 }
 
@@ -216,25 +232,46 @@ function paUnion_(recs, pp) {
 
 // ---------------------------------------------------------------- aggregate
 
+/**
+ * 🔴 SECTION-SCOPED KEYS. The same label appears in more than one block — `Unknown · 2 Day` exists
+ * in BOTH `By Hub (assigned)` (the no-routing-tag bucket) and `By Carrier`. A flat label→value map
+ * collapses them into one key, and a label-keyed writer then stamps that single value into BOTH
+ * rows: the hub value 195/14 was written onto the carrier rows, double counting 209 orders whose
+ * carriers were already counted under FedEx/OnTrac/UPS. Keys are therefore `SECTION||label`, and
+ * the writer resolves the same key by tracking the section header as it walks rows. Same class as
+ * the rate-row pairing fix — never identify a row by its bare label.
+ * (There is never an unknown CARRIER — Kurt standing. The carrier section only ever receives
+ * carrier-derived buckets, so a carrier `Unknown` row simply gets no key and is left alone.)
+ */
+var PA_SECTIONS = { 'By Hub (assigned)': 'hub', 'By Hub': 'hub', 'By Carrier': 'carrier',
+                    'By State': 'state', 'By Box': 'box' };
+
+function paKey_(section, label) { return section + '||' + label; }
+
 function paValues_(recs, tab) {
-  var total = recs.length, m = {}, i;
+  var total = recs.length, m = {};
   function n(pred) { var c = 0; recs.forEach(function (r) { if (pred(r)) c++; }); return c; }
   var PRED = (tab === PA_TABS.tnt2)
     ? { '2 Day': function (r) { return r.ontime; }, '3+ Day': function (r) { return r.late; } }
     : { 'Arrived': function (r) { return r.arrived; }, 'Not Arrived': function (r) { return !r.arrived; } };
-  m['Total Shipments'] = total;
+  m[paKey_('', 'Total Shipments')] = total;
   Object.keys(PRED).forEach(function (k) {
-    m[(tab === PA_TABS.tnt2) ? (k + ' Shipments') : k] = n(PRED[k]);
-    ['hub', 'carrier', 'state', 'box'].forEach(function (dim) {
+    m[paKey_('', (tab === PA_TABS.tnt2) ? (k + ' Shipments') : k)] = n(PRED[k]);
+    Object.keys(PA_SECTIONS).forEach(function (sec) {
+      var dim = PA_SECTIONS[sec];
       recs.forEach(function (r) {
         if (!PRED[k](r)) return;
         var key = (dim === 'hub') ? r.assigned.hub : r[dim];
+        // the sheet's existing hub row for "no routing tag" is labelled `Unknown`
         var lab = (dim === 'hub' && key === PA_NO_TAG) ? 'Unknown' : key;
-        m[lab + ' · ' + k] = (m[lab + ' · ' + k] || 0) + 1;
+        var kk = paKey_(sec, lab + ' · ' + k);
+        m[kk] = (m[kk] || 0) + 1;
       });
     });
   });
-  if (tab === PA_TABS.tnt2) m['of which: Lost in Transit'] = n(function (r) { return r.lost; });
+  if (tab === PA_TABS.tnt2) {
+    m[paKey_('', 'of which: Lost in Transit')] = n(function (r) { return r.lost; });
+  }
   return m;
 }
 
@@ -242,13 +279,13 @@ function paRoutingValues_(recs) {
   var m = {};
   // Hub compares assigned vs ACTUAL, and actual comes from carrier invoices (~1wk lag). Filling it
   // from the tag would compare the tag to itself and always read 100%.
-  m['Routing Matched - Hub'] = PA_IMMATURE;
+  m[paKey_('', 'Routing Matched - Hub')] = PA_IMMATURE;
   var elig = 0, ok = 0;
   recs.forEach(function (r) {
     if (!r.assigned.carrier || r.carrier === 'Unknown') return;   // uncomparable, not "matched"
     elig++; if (r.assigned.carrier === r.carrier) ok++;
   });
-  m['Routing Matched - Carrier'] = elig ? (Math.round(ok / elig * 1000) / 10).toFixed(1) + '%' : 'n/a';
+  m[paKey_('', 'Routing Matched - Carrier')] = elig ? (Math.round(ok / elig * 1000) / 10).toFixed(1) + '%' : 'n/a';
   return m;
 }
 
@@ -287,12 +324,15 @@ function paCurrentCol_(sheet, shipWeek) {
 function paWriteOwned_(sheet, col, valuesByLabel, dry) {
   var lastRow = Math.max(1, sheet.getLastRow());
   var labels = sheet.getRange(1, 1, lastRow, 1).getValues().map(function (r) { return String(r[0]).trim(); });
-  var wrote = 0, missing = [], seen = {};
+  var wrote = 0, missing = [], seen = {}, section = '';
   for (var i = 0; i < labels.length; i++) {
     var lab = labels[i];
-    if (!lab || !Object.prototype.hasOwnProperty.call(valuesByLabel, lab)) continue;
-    var v = valuesByLabel[lab];
-    seen[lab] = true;
+    // track the block we are inside — a bare label is ambiguous across sections
+    if (Object.prototype.hasOwnProperty.call(PA_SECTIONS, lab)) { section = lab; continue; }
+    var key = paKey_(section, lab);
+    if (!lab || !Object.prototype.hasOwnProperty.call(valuesByLabel, key)) continue;
+    var v = valuesByLabel[key];
+    seen[key] = true;
     var cell = sheet.getRange(i + 1, col);
     if (dry) {
       paLog_('  [dry] ' + sheet.getName() + '!' + cell.getA1Notation() + '  ' + lab + '  = ' + v);
@@ -303,7 +343,7 @@ function paWriteOwned_(sheet, col, valuesByLabel, dry) {
     wrote++;
   }
   Object.keys(valuesByLabel).forEach(function (k) {
-    if (!seen[k] && /·/.test(k)) missing.push(k + '=' + valuesByLabel[k]);
+    if (!seen[k] && /·/.test(k)) missing.push(k.replace('||', ' → ') + '=' + valuesByLabel[k]);
   });
   if (missing.length) {
     paLog_('  ⚠️ ' + sheet.getName() + ': no row on the sheet for ' + missing.length +
@@ -323,7 +363,14 @@ function refreshCurrentColumn(shipWeek) {
   var mon = shipWeek.replace('_SHIP_', '');
   var lo = Utilities.formatDate(new Date(new Date(mon + 'T00:00:00Z').getTime() - 2 * 86400000), PA_TZ, 'yyyy-MM-dd');
   var hi = Utilities.formatDate(new Date(new Date().getTime() + 86400000), PA_TZ, 'yyyy-MM-dd');
-  paUnion_(recs, paPpFetch_(recs.map(function (r) { return r.order; }), lo, hi));
+  // PP is the RESCUE side of the union — it can only change a box Shopify does not already show
+  // delivered-with-a-pickup-scan. Asking PP for all ~2,300 orders was 47 fetchAll batches against a
+  // 6-minute budget; scoping it to the handful that actually need rescuing makes the union both
+  // cheap and reliable, and changes no result (the OR is unaffected for already-delivered boxes).
+  var needPp = recs.filter(function (r) { return !r.shDlv || !r.shMove; })
+                   .map(function (r) { return r.order; });
+  paLog_('PP rescue candidates: ' + needPp.length + ' of ' + recs.length);
+  paUnion_(recs, paPpFetch_(needPp, lo, hi));
 
   var total = recs.length;
   var ot = 0, lt = 0, arr = 0, lost = 0, active = 0;
