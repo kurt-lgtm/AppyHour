@@ -17,6 +17,26 @@ One tab per ship week (`_SHIP_<Monday>`), refreshed daily by a scheduled task; a
 **Inputs:** Gorgias tickets (bodies, not tags), Slack `#reship-and-order-requests` (corroboration), Shopify orders (GraphQL, live), `shipping.db` fulfillments (cohort tags, read-only via `connect_ro()`).
 **Output:** sheet tabs above + Slack DM to Kurt ONLY on parameter breach (anomaly-first, no daily noise).
 
+## Definitions (Kurt)
+
+- **Lane = (carrier, origin hub, dest zip3)** — NOT carrier-alone, NOT a state, NOT zip5. When Kurt says
+  "lanes," group by origin **hub + carrier + destination zip3** together (e.g. `OnTrac @ Anaheim → 950`),
+  because the same carrier performs very differently out of different hubs AND across zip3 regions. A "bad
+  lane" = that (carrier, hub, zip3) misses the 2-day SLA; the same carrier can be fine on another hub or
+  zip3. State-only or carrier-only cuts hide the signal; zip5-exact over-fragments (tiny n).
+- **TNT data — be specific about source + granularity** (this is how the engine determines lanes; match it):
+  - **Historical carrier-hub trust** = the actuals late-rate layer that decides whether a regional carrier
+    is safe → keyed **(carrier, hub, dest zip3)** — `ShipRouting/lib/engine.py:856`
+    (`actuals.get((carrier, hub, zip[:3]))`). This is the grain for any "was this lane bad historically" cut.
+  - **Forward TNT quote** (FedEx/UPS estimate from ShipEngine) → keyed **zip5** — `lib/carrier_tnt.py:60`
+    (`cached_tnt(origin_zip5, dest_zip5)`, cache `{origin_zip5}>{dest_zip5}`, FedEx+UPS only, NOT OnTrac/Veho).
+  - The real origin hub for a shipped box comes from carrier invoices (`shipments.hub`), not
+    `delivery_status` (its `origin_hub` is usually blank); invoices lag ~1 week, so a just-shipped cohort
+    can't be lane-cut at hub grain until its invoices land.
+  - A FedEx pin is NOT always a TNT decision — a max-ice box (`!ExtraGel…!`) to a hot dest can be pinned
+    FedEx for THERMAL/air reasons even when the ground (carrier,hub,zip3) lane is a proven 1-day. Don't read
+    every `!ANY FedEx` tag as "the ground lane was too slow."
+
 ## ✅ Current shipped state (2026-07-27) — canonical sheet, tabs, tool menu, overrides
 
 🔴 **The report you actually touch is the PIVOT sheet `1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU`**
@@ -178,6 +198,197 @@ Four blocks over the swept window, unit = deduped reship orders:
 - Full-reship reasons: lost / misdelivered / gel burst. Warm/delayed → partial (Jessa 7/09). Crackers/jams/nuts excluded from reships unless damaged (all-summer 3×48oz config).
 - #160051-class rows (no ticket, paid total, stale tag) → `UNKNOWN`, listed until resolved.
 
+## 🔴 Cohort-analytics tabs — TnT2 · Lost in Transit · Routing Match (Kurt 2026-08-06)
+
+These three tabs live on the SAME pivot sheet but are **NOT reships** — they are **cohort-wide**
+shipping analytics over the whole `_SHIP_` cohort (~2,500 orders/wk). Columns = ship weeks; rows =
+metric groups (Total, then By Hub / Carrier / State / Box). Built originally by a LOCAL Python
+builder (`build_dan_tabs.py` full rebuild of matured cohorts; `fill_E_0803.py` current-column fill
+from a cwill CSV + Shopify). The target end-state is a **headless GAS refresh** reading delivery
+telemetry from DO MySQL via Jdbc — NO local script, NO per-order ParcelPanel calls.
+
+### 🔴 BLOCKER / precondition gate — do NOT wire until BOTH clear (verify each, don't assume)
+
+1. **`shipments` + `delivery_status` in the cloud DB with a scheduled OWNER.** 🔴 Per the p7
+   coordinator (2026-08-06) the DO MySQL currently holds **only `shopify_orders`** — the delivery
+   telemetry (`delivery_status`/`shipments`) is **NOT in the cloud DB yet** (the matrix DDL +
+   any one-time `etl_history --load` snapshot is not a maintained cloud owner). Until that telemetry
+   migrates with a scheduled owner + freshness assert, the **transit/lost/hub half stays fully
+   blocked** — a refresh reading it now would either fail or walk-forward on stale/absent data
+   ("stale replica worse than absent", DATA_CANON:57). Coordinate with the ingest epic
+   ([[ingests-off-kurts-pc-epic]]); do NOT create/alter their tables. Also note invoices
+   lag ~1wk (line 34–35): a just-shipped cohort has NO `shipments.hub` yet → Routing Match "actual
+   hub" is blank for the newest column until its invoices land. Show blank, never guess a hub.
+2. **Jdbc reachability.** DO managed MySQL firewall only allows the droplet jump box today (direct
+   connect from here times out). Apps Script Jdbc egresses from Google IP ranges → those ranges must
+   be added to DO **trusted sources**, a **read-only** DB user used (`shipping_appyhour` exists,
+   role=normal — confirm it's SELECT-only on those two tables), and its creds put in **Script
+   Properties** (`MYSQL_HOST/PORT/DB/USER/PASS`), never in code. `Jdbc.getConnection("jdbc:mysql://
+   host:25060/appyhourbox-shipping-db?useSSL=true", user, pass)`. Verify a trivial `SELECT 1` from
+   GAS before building the query layer.
+
+### 🟢 Headless mechanism — SHOPIFY is the delivery truth (coordinator 2026-08-06, proven)
+
+The blocker is mostly LIFTED without waiting on the telemetry migration: **Shopify GraphQL fulfillment
+events carry delivery status + timestamps**, and Apps Script already reaches Shopify (`shopifyGql_`).
+NO JDBC, NO ParcelPanel API, NO local dependency for most grains. Query per order:
+`fulfillments(first:10){ displayStatus trackingInfo{company number} events(first:50,
+sortKey:HAPPENED_AT){ status happenedAt } }` + `shippingAddress{provinceCode}` + `tags`.
+
+- **Per-metric headless status:**
+  - ✅ **NOW from Shopify:** TnT2 Total / 2 Day / 3+ Day, By Carrier, By State, By Box; Lost Arrived /
+    Not Arrived (all breakdowns); Routing Match **Carrier** (assigned tag vs Shopify carrier).
+  - ❌ **Still blocked → emit `n/a (immature)`, never invent:** **By Hub** and Routing Match **Hub** —
+    actual origin hub = carrier invoices (`shipments.hub`), local-only, ~1wk lag.
+- 🔴 **Multi-fulfillment gotcha (cost real numbers — do NOT repeat):** an order can have MULTIPLE
+  fulfillments and the DELIVERED one is often NOT `fulfillments[0]` (#166044). Read `fulfillments(first:10)`,
+  **scan ALL, let the delivered one win** — reading only the first mislabels delivered boxes as no-scan.
+- ⚠️ **TNT basis caveat — label it, don't hide it:** TNT = delivery − **pickup scan**. PP `pickup_date`
+  is the source of record; on ~17% of orders (367/2,183 @ 08-03) it is a full day EARLIER than Shopify's
+  first `IN_TRANSIT` scan → a pure-Shopify build UNDERCOUNTS late (~146 vs 161 @ 08-03). Implement on the
+  Shopify scan basis, **log the basis used**, and switch pickup to PP `pickup_date` when shipments/PP
+  land in the cloud (the sole remaining JDBC use). Why PP is stale as a live source: its writer
+  `GelPackCalculator/sync_logon.py` is logon-triggered + 12h-throttled → up to 19h-old delivery data,
+  which is exactly why an "hourly headless" report needs Shopify, not PP.
+
+### Locked definitions (Kurt 2026-08-06 — do NOT re-derive from adjacent sources)
+
+- **TnT2** — late = `delivery_status.transit_days > 2` from **shipping.db timestamps**, NEVER the PP
+  `transit_time` column (TNT HARD RULE, ShippingReports/CLAUDE.md). Split **2-Day vs 3+ Day**.
+- **Lost in Transit** — **Arrived** = delivered OR invoice-confirmed (`shipments.delivery_date`);
+  **Not Arrived** = neither. **Matured cohorts only** (a live cohort's "not arrived" is just in-flight).
+  Veho quirk: `exception` status WITH a `delivery_date` = **delivered**, not lost.
+- **Routing Match** — assigned hub/carrier parsed from `shopify_orders.raw_routing_tags`
+  (`!ANY/NO <carrier> - <Hub>_AHB!`) vs **actual** (`delivery_status.origin_hub` / carrier). Incident
+  motivating it: `_outputs/reports/2026-07-29-tag-mismatches-vF.csv` (RMFG shipped from a different
+  hub than the routing tag — matured 07-13 hub-match ~32%). Box normalized: `TRAY`→Medium Tray,
+  `TRAY_LARGE`→Large Tray, else Regular Box.
+- **Carrier** = ParcelPanel/`shipments` carrier normalized (LaserShip/Veho/OnTrac/FedEx/UPS), **NOT**
+  Shopify `tracking_company` (mislabels OnTrac↔LaserShip/Veho — same rule as R69 above).
+
+### Walk-forward rules (negatives-first)
+
+- **A1. Matured columns are FROZEN — write once, never recompute.** Only the CURRENT (rightmost)
+  cohort column refreshes each run. Rewriting a matured column re-derives history off a telemetry
+  copy that has since changed and silently rewrites numbers Dan already read. The refresh MUST target
+  the current column by ship-week header match, never a full-tab rebuild.
+- **A2. Append a NEW column only when the ship week ROLLS.** On roll, freeze the prior current column
+  and add rows for any new By-Hub/Carrier/State/Box key values seen (never drop an existing row —
+  gaps read as zero, not missing).
+- **A3. Current-column source is the cloud MySQL telemetry (precond 1), NOT ParcelPanel per-order and
+  NOT a CSV.** CSVs (cwill backfill) are **backfill only** — one-time seeding of a matured column that
+  predates cloud telemetry, never the refresh mechanism.
+- **A4. Lost/TnT2 for the CURRENT column are provisional** (cohort not matured; invoices lagging).
+  Label the current column maturity in the header/provenance cell so a partial "Not Arrived" isn't
+  read as loss. Lost-in-Transit totals are only final once the cohort matures.
+- **A5. Blank ≠ zero.** Missing actual hub (invoices not in yet) → blank cell, never a fabricated hub
+  or a silent 0 in the match rate.
+- **A6. 🔴 NEVER write over rows the builder does not own (Kurt via coordinator 2026-08-06).** Dan
+  hand-adds his OWN rows/formulas to these tabs (e.g. a blank-label late-% row under "3+ Day
+  Shipments" = `=3+Day/Total` → 6.32% / 7.18% / 4.71%), and more over time. The refresh keys off the
+  row **LABEL** and computes a value ONLY for builder-owned metric rows: **Total · 2-Day · 3+ Day ·
+  Arrived · Not Arrived · `{value} · 2 Day|3+ Day|Arrived|Not Arrived` · Routing Matched - Hub|Carrier
+  · the "By X" section headers** (+ their By-Hub/Carrier/State/Box key rows). Any row it does NOT
+  recognize — blank-label rows, Dan's formula rows — is **SKIPPED, cells untouched**. Do NOT write a
+  full contiguous column; issue a **per-cell batch that touches only owned rows**, so Dan's formulas
+  keep recomputing off the data cells. Mirror the interim local builder exactly
+  (`fill_E_0803.py`: `value_for()` returns `None`/null for unrecognized labels; writer batches only
+  non-None cells).
+
+### Directives 1–3 (Kurt via coordinator 2026-08-06) — parity across local builders + GAS
+
+- **D1. ~~MERGE OnTrac → LaserShip.~~ 🔴 SUPERSEDED 2026-08-07 by D5 — the canonical name is
+  `OnTrac`, LaserShip is the alias.** The merge itself still holds (one bucket, never two); only the
+  bucket's NAME reversed. Do not restore `LaserShip` as an output label.
+- **D2. CODIFY the rate row — BLANK-LABEL, POSITIONAL, after EVERY pair (both tabs).** Dan's
+  hand-added %-rows were inconsistent/broken (`=B4/B2`, `=SUM(B24+B22)/B21`). Replaced with a
+  GENERATED, builder-OWNED **blank-label** rate row directly after each group's good→bad count pair —
+  Total AND every By-Hub / By-Carrier / By-State / By-Box value (~64 rate rows/tab). Structure per
+  value: `{key} · {good}` row, `{key} · {bad}` row, then the BLANK-LABEL rate row (same after the
+  Total pair). Formula = **`=IF(good+bad>0, bad/(good+bad), "")`**, a LIVE per-column formula
+  referencing the two rows above. Grains: **TnT2** good=`2 Day`/`2 Day Shipments`, bad=`3+
+  Day`/`3+ Day Shipments`; **Lost** good=`Arrived`, bad=`Not Arrived`. 🔴 These blank rows USED to be
+  Dan's and are **builder-owned now** — the walk-forward writer recognizes them **positionally** (a
+  blank row whose r-1 matches bad and r-2 matches good) and maintains them, while still SKIPPING any
+  OTHER unrecognized blank/row Dan adds elsewhere (A6 holds). GAS: `writeRateFormulasAndFormat_`.
+- **D3. Number format by ROW TYPE — real bug guard, not cosmetics.** Count rows = NUMBER `"0"`,
+  rate rows = PERCENT `"0.00%"`, applied via `spreadsheets.batchUpdate` repeatCell (GAS:
+  `setNumberFormat` in the rate/format pass). After the restructure, rows that were previously Dan's
+  %-formatted rows held COUNTS and rendered `"100.00%"`/`"2600.00%"` for a count of 1/26. **Always
+  set BOTH, never inherit** the cell's prior format.
+- **D4. 07-27 (col D) mismatch → EVEN HAIRCUT to the column total, keep 105 (Kurt: "paper over it").**
+  Col D was reconciled by an even haircut so every dimension sums to the column total (3+ = **105**
+  across Hub/Carrier/State/Box; 2-Day = 2110). 🔴 A naive rebuild from current shipping.db recomputes
+  07-27 to **126** and would UNDO the haircut — so the refresh MUST be **walk-forward, matured
+  columns FROZEN** exactly as specced. Do NOT rebuild a matured column. (Supersedes the earlier
+  "rebuild to 126" note — Kurt chose the haircut; the local builder was deliberately NOT re-run for
+  this column.)
+
+### Directives 5–12 (Kurt 2026-08-07) — proven on `_SHIP_2026-08-03`, negatives first
+
+Every rule below is a bug that reached a number before it was caught. GAS port: `PivotAnalytics.gs`.
+
+- **D5. Canonical carrier name = `OnTrac`; LaserShip is the ALIAS.** Both spellings fold to
+  `OnTrac`; no LaserShip bucket exists anywhere. Reverses D1's naming.
+- **D6. Delivered = Shopify DELIVERED event ∪ ParcelPanel `status='delivered'`. NEITHER SOURCE IS
+  COMPLETE.** PP hid **224** deliveries Shopify had (its writer `GelPackCalculator/sync_logon.py` is
+  logon-triggered + 12h-throttled); Shopify's feed was missing OnTrac's final scan on **#166228** and
+  **#166660**, both confirmed delivered on OnTrac's own tracking pages. Undelivered only if BOTH are
+  silent. Supersedes the "Shopify IS the delivery truth" framing above.
+- **D7. `displayStatus` is a LAGGING ROLLUP — a DELIVERED scan event beats it.** Three wk0803 boxes
+  read DELAYED / OUT_FOR_DELIVERY with a DELIVERED scan. Also scan **ALL** `fulfillments(first:10)` —
+  the delivered one is often not index 0; reading index 0 lost 26 deliveries.
+- **D8. `happenedAt` is UTC — convert to `America/New_York` BEFORE taking the date.** Skipping this
+  adds a phantom day to every evening delivery: it shifted 471 rows and DOUBLED late (146 vs 62).
+- **D9. Survivorship — late is measured over the WHOLE cohort, and Lost in Transit is INSIDE 3+ Day.**
+  `3+ Day` = delivered-late **+ all undelivered**, so `2 Day + 3+ Day == Total Shipments` and the rate
+  row divides by the full cohort naturally. Never-collected boxes COUNT as late. A nested
+  `of which: Lost in Transit` sub-row sits under `3+ Day` (non-blank label, no rate row beneath, and
+  **nothing may sum it** — double counting turns 114 into 166 of 2,305).
+- **D10. Lost vs ACTIVE.** Of the undelivered, a box with a real scan in the last **24h** is ACTIVE
+  (super-late, demonstrably moving) and is EXCLUDED from the `of which: Lost in Transit` count; zero
+  scans, or silent ≥24h, stays LOST ("unverified" ≠ "known not lost"). Recency is clock-dependent —
+  recompute every run, never cache the class. 🔴 **`CONFIRMED` fires at LABEL CREATION and is NOT a
+  scan** — "has events" is the wrong filter. A real scan is `IN_TRANSIT` / `OUT_FOR_DELIVERY` /
+  `ATTEMPTED_DELIVERY` / `READY_FOR_PICKUP` / `PICKED_UP` / `DELIVERED`.
+- **D11. Routing tags: fullmatch per tag, drop `!NO `, require EXACTLY ONE assignment.** Format is
+  `!<Carrier> <Service> - <Hub>_AHB!` (`!ANY FedEx - <Hub>_AHB!` for pins). An order carries ONE
+  assignment plus several `!NO <carrier> - <Hub>_AHB!` EXCLUSIONS, so a `.search()` over the joined
+  tag string returns an **excluded** hub — **209 of 2,305** orders carry exclusions ONLY and would
+  have been stamped with a hub the engine explicitly ruled out. Those are `(no routing tag)` (the
+  sheet's `Unknown` row), never a guessed hub. **By Hub is the ASSIGNED/intended hub** — header reads
+  `By Hub (assigned)`. **`Routing Matched - Hub` stays `n/a (immature)`**: it compares assigned vs
+  ACTUAL, actual needs carrier invoices (~1wk lag), and filling it from the tag compares the tag to
+  itself and always reads 100%. Orders with no assignment are **uncomparable, not "matched"** — they
+  leave the Routing-Match denominator (counting them as matched inflated it to a false 96.6%).
+- **D12. Join on `order_number`, never `tracking_number`, and window-guard every date.** FedEx
+  REUSES tracking numbers. **#166740** carries BOTH `_SHIP_2026-08-03` and `RMFG_20260728` and its
+  only shipped fulfillment is the 07-28 one delivered 07-30 — the newest-delivered-fulfillment rule
+  scored a **July** shipment as this cohort's TNT 2. **Cohort-pin dedupe rule (Kurt):** an order
+  pinned to one cohort column must NEVER be counted in another cohort/RMFG column later; #166740
+  stays in 08-03 only. Reject out-of-window dates and SURFACE them — never silently drop the order
+  (that changes Total Shipments, which is a human decision).
+- **D13. Rows are never appended or inserted by the writer.** A row insert shifts every formula
+  reference below it. A bucket with no row is REPORTED for a human to add (Chicago's 307 orders had
+  no row until Kurt approved one). Writes stay owned-row, per-cell, keyed off the column-A label;
+  blank-label rate rows are never overwritten.
+
+🔴 **GAS global-namespace hazard.** Apps Script loads every `.gs` into ONE global scope, so a
+duplicated top-level name silently overrides across files — an "inert" file gated behind a property
+is NOT inert. `normCarrier_` was defined in BOTH `Code.gs:954` (OnTrac as its own bucket) and
+`PivotAnalytics.gs` (merged into LaserShip), so the live hourly reship report was using whichever
+loaded last. All `PivotAnalytics.gs` symbols are now `pa`-prefixed. **Still outstanding (pre-existing,
+NOT introduced by the analytics port): `refresh` and `iso_` are duplicated between `Code.gs` and
+`PivotSheet.gs`** — `iso_` is identical so it is harmless, but the two `refresh` bodies differ.
+
+### Cutover checklist (once preconditions clear)
+
+(a) confirm Jdbc `SELECT 1` from GAS + RO user scoped; (b) implement the walk-forward current-column
+refresh (`PivotAnalytics.gs`) reading telemetry via Jdbc + Shopify for assigned tags/box/state;
+(c) add a **Reship Report** menu item + reuse the hourly trigger; (d) **verify against the local
+builder's numbers on a matured cohort** before trusting the headless path (identical figures, not
+"it ran"). Deploy = same REST `updateContent`/`clasp push` path as `Code.gs`.
+
 ## Non-goals
 
 - Not a refund tracker (refund requests ≠ reship issues — [[feedback_refund_not_issue]]).
@@ -188,6 +399,12 @@ Four blocks over the swept window, unit = deduped reship orders:
 
 - 2026-07-09 — initial draft (Claude, from Kurt/Dan/Jessa Slack thread C0A6185SY0Z + 7/08 session findings). Awaiting Kurt approval.
 - 2026-07-13 — headless port to the pivot sheet (R15–R17); local schtask disabled.
+- 2026-08-06 — spec'd the walk-forward headless refresh for the three cohort-analytics tabs (TnT2,
+  Lost in Transit, Routing Match): locked definitions, walk-forward rules A1–A5 (freeze matured /
+  refresh current column only / MySQL-not-PP-not-CSV / provisional current / blank≠zero), JDBC
+  mechanism, and the two-part precondition BLOCKER (scheduled cloud owner for shipments+delivery_status
+  — today manual/stale — and DO firewall allowlist + RO user for Apps Script Jdbc). Doc-before-code
+  gate; no GAS wired yet (blocked on the ingest epic).
 - 2026-07-27 — added "Current shipped state" section: canonical = pivot sheet, Product Mix
   (Reship/Unresolved/Potential/Actual), Product Mix (T) transpose + By Issue/Carrier/State breakdowns
   (%+discrete), Parcel Panel carrier (Script Property `PARCELPANEL_API_KEY`), Reship Report custom
