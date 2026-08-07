@@ -48,6 +48,16 @@
 // The reship report sheet — this job now writes its Exceptions + _exc_state tabs alongside the
 // reship tabs rather than to a separate clone (Kurt 2026-07-31). Same sheet the project is bound
 // to, so SpreadsheetApp.getActive() would also work; openById is kept so the target is explicit.
+// 🔴 STOP-WRITE GUARD (Kurt via coordinator, 2026-08-07): "do not push anything to the
+// #exceptions Slack channel yet." While true, a sweep is fully READ-ONLY — no Slack post, no
+// Exceptions row, no state write — and instead logs what it WOULD have posted.
+// Defaults ON deliberately: the queue holds 4,289 open orders whose backlog would dump into the
+// channel on the first real drain. Kurt decides when the channel goes live; flipping this to
+// false is that decision, and nothing else should flip it.
+// Dry runs deliberately persist NOTHING: marking an order alerted here would silently swallow
+// its real ping later, which is the opposite of the failure this whole job exists to prevent.
+var EXC_DRY_RUN = true;
+
 var EXC_HOST_SHEET_ID = '1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU';
 var EXC_CHANNEL = 'C0BLKKPAW8P';          // private #exceptions. NEVER SLACK_WEBHOOK (public #reships).
 var EXC_LOG_TAB = 'Exceptions';
@@ -295,6 +305,10 @@ function excSaveState_(st) {
 // ---------------------------------------------------------------- Slack
 
 function excSlackPost_(text) {
+  // 🔴 Last line of defence for the stop-write. Callers already check EXC_DRY_RUN, but this makes
+  // the channel unreachable from ANY call site, including one added later by someone who did not
+  // read the flag. Belt and braces on purpose — the cost of a stray post is Kurt's channel.
+  if (EXC_DRY_RUN) { Logger.log('[DRY RUN] suppressed Slack post: ' + String(text).slice(0, 120)); return; }
   var token = PropertiesService.getScriptProperties().getProperty('SLACK_BOT_TOKEN');
   if (!token) throw new Error('SLACK_BOT_TOKEN missing — cannot post to #exceptions');
   var r = UrlFetchApp.fetch('https://slack.com/api/chat.postMessage', {
@@ -467,7 +481,7 @@ function hourlyExceptionSweep() {
     }
 
     var stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
-    var posted = 0;
+    var posted = 0, wouldPost = [];
     batch.forEach(function (on) {
       var rec = st[on], ship = pp.ships[on];
       // Only stamp orders PP actually answered for. Stamping an unreached order sends it to the
@@ -481,6 +495,11 @@ function hourlyExceptionSweep() {
       if (v.cls === 'DELIVERED') { rec.open = false; return; }
       if (!v.ping) return;
       if (rec.alerted.indexOf(v.cls) >= 0) return;   // dedup on (order, class)
+      if (EXC_DRY_RUN) {                             // stop-write: record, post nothing
+        wouldPost.push('#' + rec.order + '  ' + excDisplay_(v.cls) + '  ' + rec.carrier +
+                       '  ' + rec.state + '  ' + (v.eventAt || 'no scan time'));
+        return;                                      // no state mutation — see EXC_DRY_RUN note
+      }
       excSlackPost_(excMessage_(rec, v.cls, v.detail, v.eventAt));
       excLog_(stamp, rec, v.cls, v.detail, v.eventAt);
       rec.alerted.push(v.cls);
@@ -488,15 +507,25 @@ function hourlyExceptionSweep() {
       posted++;
     });
 
-    excSaveState_(st);
+    if (!EXC_DRY_RUN) excSaveState_(st);             // dry run persists nothing at all
     var reached = Object.keys(pp.seen).length;
     var neverPolled = open.filter(function (k) { return !String(st[k].last_seen || '').trim(); }).length;
     Logger.log('exceptions sweep: reached ' + reached + ' of ' + batch.length + ' polled (' +
                open.length + ' open, ' + neverPolled + ' still never polled, throttled ' +
                pp.throttled + ', hard failures ' + pp.failed +
-               (pp.budgetHit ? ', TIME BUDGET hit' : '') + '), posted ' + posted);
+               (pp.budgetHit ? ', TIME BUDGET hit' : '') + '), posted ' + posted +
+               (EXC_DRY_RUN ? ' [DRY RUN — nothing posted, nothing saved]' : ''));
+    if (EXC_DRY_RUN) {
+      Logger.log('DRY RUN would post ' + wouldPost.length + ' alert(s):\n  ' +
+                 wouldPost.slice(0, 25).join('\n  ') +
+                 (wouldPost.length > 25 ? '\n  ...and ' + (wouldPost.length - 25) + ' more' : ''));
+    }
+    return { posted: posted, wouldPost: wouldPost.length, reached: reached,
+             open: open.length, neverPolled: neverPolled, dryRun: EXC_DRY_RUN };
   } catch (e) {
     try {
+      // stop-write covers the failure alert too — it posts to the same channel
+      if (EXC_DRY_RUN) throw e;
       excSlackPost_(':rotating_light: exceptions sweep FAILED: ' + e);
     } catch (e2) {
       MailApp.sendEmail(Session.getEffectiveUser().getEmail(), '[exceptions] sweep failed', String(e));
@@ -557,7 +586,8 @@ function excListTriggers() {
 function onOpenExceptions() {
   SpreadsheetApp.getUi().createMenu('Shipping Exceptions')
     .addItem('Check properties', 'excCheckProperties')
-    .addItem('Run sweep now', 'hourlyExceptionSweep')
+    .addItem(EXC_DRY_RUN ? 'Run sweep now (DRY RUN — no Slack)' : 'Run sweep now (LIVE — posts to Slack)',
+             'hourlyExceptionSweep')
     .addItem('Replay classifier self-test', 'excSelfTest')
     .addItem('Show scheduled triggers', 'excListTriggers')
     .addItem('Install/repair hourly trigger', 'installExceptionsTrigger')
