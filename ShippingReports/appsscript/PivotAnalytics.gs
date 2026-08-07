@@ -243,10 +243,17 @@ function paUnion_(recs, pp) {
  * (There is never an unknown CARRIER — Kurt standing. The carrier section only ever receives
  * carrier-derived buckets, so a carrier `Unknown` row simply gets no key and is left alone.)
  */
+// Header text → dimension. Both hub spellings are accepted so a header rename cannot orphan the
+// section. 🔴 Keys are built from the DIMENSION, never the header text: keying by header emitted
+// every hub bucket TWICE (once per accepted spelling), and the copy under the spelling not on the
+// sheet matched nothing and was reported as "no row on the sheet — a human must add the row" for
+// buckets that had just been written correctly. False missing-bucket warnings are as corrosive as
+// silent failures: they train the reader to ignore the real ones.
 var PA_SECTIONS = { 'By Hub (assigned)': 'hub', 'By Hub': 'hub', 'By Carrier': 'carrier',
                     'By State': 'state', 'By Box': 'box' };
+var PA_DIMS = ['hub', 'carrier', 'state', 'box'];
 
-function paKey_(section, label) { return section + '||' + label; }
+function paKey_(dim, label) { return dim + '||' + label; }
 
 function paValues_(recs, tab) {
   var total = recs.length, m = {};
@@ -257,14 +264,13 @@ function paValues_(recs, tab) {
   m[paKey_('', 'Total Shipments')] = total;
   Object.keys(PRED).forEach(function (k) {
     m[paKey_('', (tab === PA_TABS.tnt2) ? (k + ' Shipments') : k)] = n(PRED[k]);
-    Object.keys(PA_SECTIONS).forEach(function (sec) {
-      var dim = PA_SECTIONS[sec];
+    PA_DIMS.forEach(function (dim) {
       recs.forEach(function (r) {
         if (!PRED[k](r)) return;
         var key = (dim === 'hub') ? r.assigned.hub : r[dim];
         // the sheet's existing hub row for "no routing tag" is labelled `Unknown`
         var lab = (dim === 'hub' && key === PA_NO_TAG) ? 'Unknown' : key;
-        var kk = paKey_(sec, lab + ' · ' + k);
+        var kk = paKey_(dim, lab + ' · ' + k);
         m[kk] = (m[kk] || 0) + 1;
       });
     });
@@ -324,12 +330,13 @@ function paCurrentCol_(sheet, shipWeek) {
 function paWriteOwned_(sheet, col, valuesByLabel, dry) {
   var lastRow = Math.max(1, sheet.getLastRow());
   var labels = sheet.getRange(1, 1, lastRow, 1).getValues().map(function (r) { return String(r[0]).trim(); });
-  var wrote = 0, missing = [], seen = {}, section = '';
+  var wrote = 0, missing = [], seen = {}, dim = '';
   for (var i = 0; i < labels.length; i++) {
     var lab = labels[i];
-    // track the block we are inside — a bare label is ambiguous across sections
-    if (Object.prototype.hasOwnProperty.call(PA_SECTIONS, lab)) { section = lab; continue; }
-    var key = paKey_(section, lab);
+    // track the block we are inside — a bare label is ambiguous across sections. The header text is
+    // resolved to a DIMENSION here, so either accepted spelling lands on the same keys.
+    if (Object.prototype.hasOwnProperty.call(PA_SECTIONS, lab)) { dim = PA_SECTIONS[lab]; continue; }
+    var key = paKey_(dim, lab);
     if (!lab || !Object.prototype.hasOwnProperty.call(valuesByLabel, key)) continue;
     var v = valuesByLabel[key];
     seen[key] = true;
