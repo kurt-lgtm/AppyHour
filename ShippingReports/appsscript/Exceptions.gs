@@ -62,7 +62,16 @@ var EXC_STATE_TAB = '_exc_state';
 var EXC_PP_BATCH = 10;                    // requests per fetchAll
 var EXC_PP_PAUSE_MS = 1000;               // pause between batches -> ~10 req/s
 var EXC_PP_BACKOFF_MS = 5000;             // one retry for a batch that came back throttled
-var EXC_MAX_POLL_PER_RUN = 400;           // fits the 6-min ceiling at the pacing above
+// 🔴 THROUGHPUT: 400/run was set by guessing, not by measuring, and it starved the queue — on
+// 2026-08-07 4,287 of 4,587 seeded orders had NEVER been polled, including 2,325 of the 2,361 in
+// the LIVE cohort, so 26 of 27 no-scan boxes aged 3-5 days undetected. At the pacing above, 400
+// orders costs ~40s of sleep plus fetch time: well under two minutes of a six-minute ceiling.
+// The cap is now bounded by a TIME BUDGET instead of a guess.
+// 🔴 The budget is not optional. If the run is killed at 6 minutes, excSaveState_ never executes,
+// so last_seen never advances and the NEXT run re-polls the same head of the queue — a starvation
+// loop that looks like activity. Stop fetching at the budget, then always save.
+var EXC_MAX_POLL_PER_RUN = 1200;          // hard ceiling; the time budget normally binds first
+var EXC_TIME_BUDGET_MS = 240000;          // 4 min of fetching, leaving 2 min to write state
 var EXC_PP_FAIL_RATIO = 0.2;              // share of NON-throttle failures that means CRITICAL
 var EXC_COHORTS_BACK = 2;                 // current + previous ship week stay in the poll set
 
@@ -156,8 +165,8 @@ function excDaysSince_(iso) {
  * Throttled (429) is counted apart from failed: throttling is expected backpressure and is
  * retried next run, whereas a real failure rate means something is broken and must be loud.
  */
-function excPpFetch_(orderNums) {
-  var out = { ships: {}, failed: 0, throttled: 0, attempted: 0, seen: {} };
+function excPpFetch_(orderNums, deadline) {
+  var out = { ships: {}, failed: 0, throttled: 0, attempted: 0, seen: {}, budgetHit: false };
   var key = PropertiesService.getScriptProperties().getProperty('PARCELPANEL_API_KEY');
   if (!key || !orderNums.length) return out;
   var uniq = orderNums.filter(function (n, i) { return n && orderNums.indexOf(n) === i; });
@@ -188,6 +197,7 @@ function excPpFetch_(orderNums) {
   }
 
   for (var i = 0; i < uniq.length; i += EXC_PP_BATCH) {
+    if (deadline && new Date().getTime() > deadline) { out.budgetHit = true; break; }
     var slice = uniq.slice(i, i + EXC_PP_BATCH);
     var retry;
     try {
@@ -431,11 +441,21 @@ function hourlyExceptionSweep() {
     });
 
     var open = Object.keys(st).filter(function (k) { return st[k].open; });
-    // oldest-seen first so nothing starves under the per-run cap
-    open.sort(function (a, b) { return String(st[a].last_seen || '').localeCompare(String(st[b].last_seen || '')); });
+
+    // 🔴 Priority: NEWEST cohort first, then never-polled, then oldest-seen. A pure oldest-seen
+    // sort let a matured cohort compete with the live one for poll budget — on 2026-08-07 the
+    // live _SHIP_2026-08-03 cohort had 2,325 of 2,361 orders never polled while 2,226 rows from
+    // the previous week sat in the same queue. Matured boxes are already delivered or already
+    // someone's problem; a no-scan box in the LIVE cohort is the one that still costs a reship.
+    open.sort(function (a, b) {
+      var ca = String(st[a].cohort || ''), cb = String(st[b].cohort || '');
+      if (ca !== cb) return cb.localeCompare(ca);              // newest cohort tag first
+      var sa = String(st[a].last_seen || ''), sb = String(st[b].last_seen || '');
+      return sa.localeCompare(sb);                             // never-polled ('') sorts first
+    });
     var batch = open.slice(0, EXC_MAX_POLL_PER_RUN);
 
-    var pp = excPpFetch_(batch);
+    var pp = excPpFetch_(batch, new Date().getTime() + EXC_TIME_BUDGET_MS);
 
     // 🔴 A PP outage must not read as "no exceptions" — silence has to fail loudly. But THROTTLING
     // is not an outage: those orders keep their old last_seen, stay at the front of the queue and
@@ -469,9 +489,12 @@ function hourlyExceptionSweep() {
     });
 
     excSaveState_(st);
-    Logger.log('exceptions sweep: reached ' + Object.keys(pp.seen).length + ' of ' + batch.length +
-               ' polled (' + open.length + ' open, throttled ' + pp.throttled +
-               ', hard failures ' + pp.failed + '), posted ' + posted);
+    var reached = Object.keys(pp.seen).length;
+    var neverPolled = open.filter(function (k) { return !String(st[k].last_seen || '').trim(); }).length;
+    Logger.log('exceptions sweep: reached ' + reached + ' of ' + batch.length + ' polled (' +
+               open.length + ' open, ' + neverPolled + ' still never polled, throttled ' +
+               pp.throttled + ', hard failures ' + pp.failed +
+               (pp.budgetHit ? ', TIME BUDGET hit' : '') + '), posted ' + posted);
   } catch (e) {
     try {
       excSlackPost_(':rotating_light: exceptions sweep FAILED: ' + e);
