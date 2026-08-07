@@ -375,11 +375,15 @@ Every rule below is a bug that reached a number before it was caught. GAS port: 
 
 🔴 **GAS global-namespace hazard.** Apps Script loads every `.gs` into ONE global scope, so a
 duplicated top-level name silently overrides across files — an "inert" file gated behind a property
-is NOT inert. `normCarrier_` was defined in BOTH `Code.gs:954` (OnTrac as its own bucket) and
-`PivotAnalytics.gs` (merged into LaserShip), so the live hourly reship report was using whichever
-loaded last. All `PivotAnalytics.gs` symbols are now `pa`-prefixed. **Still outstanding (pre-existing,
-NOT introduced by the analytics port): `refresh` and `iso_` are duplicated between `Code.gs` and
-`PivotSheet.gs`** — `iso_` is identical so it is harmless, but the two `refresh` bodies differ.
+is NOT inert once it is deployed. `normCarrier_` was defined in BOTH `Code.gs:954` (OnTrac as its
+own bucket) and `PivotAnalytics.gs` (merged into LaserShip), which would have silently changed the
+live hourly reship report's carrier bucketing **the moment PivotAnalytics was first pushed**.
+Verified 2026-08-07: the deployed project contains only `appsscript`, `Code`, `Exceptions` — neither
+`PivotAnalytics.gs` nor `PivotSheet.gs` had ever been pushed, so nothing was live-broken; this was
+caught before deployment, not after. All `PivotAnalytics.gs` symbols are now `pa`-prefixed.
+**Still latent (pre-existing, NOT introduced by the analytics port): `refresh` and `iso_` are
+duplicated between `Code.gs` and the also-unpushed `PivotSheet.gs`** — `iso_` is identical so it is
+harmless, but the two `refresh` bodies differ. Pushing `PivotSheet.gs` as-is would hijack `refresh`.
 
 ### Cutover checklist (once preconditions clear)
 

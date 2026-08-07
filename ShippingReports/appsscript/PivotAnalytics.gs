@@ -8,11 +8,14 @@
  * 🔴 GLOBAL-NAMESPACE COLLISION HAZARD. Apps Script loads every .gs into ONE global scope, so a
  * duplicated top-level name silently overrides across files — a "disabled" file is NOT inert.
  * This file previously defined `normCarrier_`, which ALSO exists in Code.gs:954 with DIFFERENT
- * behavior (Code.gs keeps OnTrac as its own bucket; this file merged it into LaserShip), so the
- * live hourly reship report was picking up whichever loaded last. Every symbol here is now
- * `pa`-prefixed and this file defines NOTHING that Code.gs / Exceptions.gs / PivotSheet.gs define.
- * Do not add an unprefixed function to this file. (Pre-existing, NOT introduced here and NOT fixed
- * here: `refresh` and `iso_` are still duplicated between Code.gs and PivotSheet.gs.)
+ * behavior (Code.gs keeps OnTrac as its own bucket; this file merged it into LaserShip) — that
+ * would have silently changed the live hourly reship report's carrier bucketing the moment this
+ * file was first pushed. Verified 2026-08-07: the deployed project held only appsscript/Code/
+ * Exceptions, so this was caught BEFORE deployment. Every symbol here is now `pa`-prefixed and this
+ * file defines NOTHING that Code.gs / Exceptions.gs / PivotSheet.gs define. Do not add an
+ * unprefixed function here. (Latent, pre-existing, NOT fixed here: `refresh` and `iso_` are
+ * duplicated between Code.gs and the also-unpushed PivotSheet.gs — pushing that file would hijack
+ * `refresh`.)
  *
  * 🔴 DRY RUN BY DEFAULT. Writes nothing until Script Property PIVOT_ANALYTICS_WRITE === '1'.
  * Dry run logs every intended cell write via Logger. Kurt reviews, then flips the property.
