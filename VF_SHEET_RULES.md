@@ -71,18 +71,61 @@ Kori "Address (PO Box / Slash)" check (~2518-2533, 2613):
 - **Low item count (~2482):** `Total` < 10 items fails unless the order is a `reship` or contains a
   tray (`TR-`) — else it's a suspected short box.
 
-## 5. Asymmetric generation — LEDGER truth + async verify (Kurt A/A/A, 2026-08-06)
+## 5. Asymmetric generation — INTENT-first + async verify (Kurt 2026-08-07; supersedes ledger-first)
 
-Sheet generation reads the **apply-time LEDGER**, never a blocking live-Shopify fetch. Rules,
-negatives-first:
+Sheet generation reads the **INTENT BUILD**, never a blocking live-Shopify fetch and no longer a
+wait on apply. Kurt, 2026-08-07: *"ship the sheet from the intent build FIRST — with the divergence
+set ENUMERATED and asserted… we can always align it later."*
 
-- 🔴 **The wk0703 burn stays fixed by the VERIFIER, not by live-fetching.** The old rule "col L
-  from live tags at export" existed because a stale tag column shipped; asymmetric generation
-  replaces it: col L comes from the ledger (what apply ACTUALLY wrote), and the async verifier
-  diffs ledger vs live AFTER generation, flagging any divergence loudly (Q1=A: alarm+patch — the
-  automated wk0803 rev-2..7 workflow). A vF whose verifier pass hasn't run/completed is marked
-  UNVERIFIED on its Summary line; presend_check refuses an unverified sheet older than its cohort's
-  last apply.
+### 🔴 READ BOTH DIRECTIONS BEFORE CHANGING THIS — the source of truth has moved twice, for reasons
+
+**Neither direction is naively "safer". Do not restore either one without its guard.**
+
+| | source | why it was chosen | what it costs |
+|---|---|---|---|
+| **wk0703 and before** | live tags at export | a stale tag column had shipped | a blocking live fetch; the sheet serialized behind Shopify |
+| **8/06 ledger-first** | apply-time ledger | col L = what apply ACTUALLY wrote | the sheet still waits for **apply** to finish |
+| **8/07 INTENT-first (current)** | the intent build | removes the serialization entirely — the 2-hour drift-in crunch that nearly scrapped wk0810 | the sheet can show a tag Shopify **has not received yet** |
+
+🔴 **INTENT-first re-opens the wk0703 failure class — a sheet showing a tag that was never written —
+and the ONLY thing closing it is the divergence assert below.** That assert is therefore
+**load-bearing**, not diagnostic. Weaken it to a warning and this section is strictly worse than
+what it replaced: fast, and quietly wrong. Kurt, on "asserted": **hard gate**.
+
+### The divergence contract (the load-bearing piece)
+
+Three-way, per order: **`intent_tag`** (the build's decision) · **`ledger_tag`** (what `apply.py`
+wrote) · **`live_tag`** (READ-ONLY GraphQL). Every order classifies as exactly one of:
+
+- **matched** — intent == ledger == live. Nothing to do.
+- **pending-apply** — intent set, apply hasn't reached this order yet. Expected during the async
+  window; must resolve before send.
+- **operator-corrected** — live diverges because a human wrote it. Honor the live tag, patch the row.
+- 🔴 **ANOMALY** — any divergence that is **not** in the pending-correction set.
+
+**Gate: `anomaly_count > 0` FAILS the sheet and NAMES the orders.** Mismatches ⊆ pending-correction
+list, zero others. A sheet cannot be sent while an anomaly stands — this is the wk0703 guard.
+
+### Unchanged by async — these gate the BUILD, not the timing
+
+- **Multi-leg union**: P2+ legs build and apply on the **WEEK tag**; caps are per-build, so sub-tag
+  builds undercount the shared trailer ([[multi-leg-shipweek-union-doctrine]]). **Tag-count
+  stability** still gates. Async changes *when* the sheet is produced, never *what the build may
+  produce from*. **Never format-validate operator tags.**
+- A vF whose verifier pass hasn't run/completed is marked **UNVERIFIED** on its Summary line, and
+  `presend_check` refuses an unverified sheet older than its cohort's last apply. **That guard does
+  not relax because generation got faster** — it matters more now, not less.
+
+### Acceptance (before any live run)
+
+Replay wk0810 frozen: the intent-generated sheet must be **cell-identical to the ledger-generated
+one on every non-divergent row**, and the divergence set must reproduce the **376 logged tag
+writes** exactly (`_outputs/logs/wk0810_corrective_delta.jsonl`).
+
+- 🔴 **The verifier, not live-fetching, is what fixes the wk0703 burn.** The old rule "col L from
+  live tags at export" existed because a stale tag column shipped. The async verifier diffs
+  intent → ledger → live AFTER generation, flagging any divergence loudly (Q1=A: alarm+patch — the
+  automated wk0803 rev-2..7 workflow).
 - 🔴 **The ledger is written AT APPLY TIME by apply.py, full item snapshot** (Q2=A): every order's
   tags (as-written), address (as-shipped — MASS/COG boxes keep the COG address even after Shopify
   restore), items (fulfillable lines at apply moment), box/tray class, ProductionDay inputs. One
