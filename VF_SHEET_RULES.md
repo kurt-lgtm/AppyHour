@@ -119,8 +119,36 @@ list, zero others. A sheet cannot be sent while an anomaly stands — this is th
 ### Acceptance (before any live run)
 
 Replay wk0810 frozen: the intent-generated sheet must be **cell-identical to the ledger-generated
-one on every non-divergent row**, and the divergence set must reproduce the **376 logged tag
-writes** exactly (`_outputs/logs/wk0810_corrective_delta.jsonl`).
+one on every non-divergent row**, and:
+
+> **divergence set == corrective set MINUS net-zero round-trips, with ZERO unexplained members.**
+
+🔴 **The obvious wording — "the divergence set reproduces the 376 logged writes exactly" — is
+UNMEETABLE, and knowing why is the point.** 13 of those writes are Kurt's *"nO, WESTERN la, keep
+them on dallas"* reverts: Dallas → Nashville → Dallas round-trips that **net to zero**. A
+state-based diff cannot see a write that was undone, and **should not** — the sheet cares where the
+box ENDED, which is the sheet-first doctrine's own logic. An implementation contorted to "reproduce
+376" would have to treat an undone write as a live divergence, i.e. deliberately break the thing
+the gate is for.
+
+So the criterion has two halves and both must hold:
+- **zero divergent-not-corrective** — every divergence we find is a write we logged (no phantoms);
+- **corrective-not-divergent must be exactly the net-zero round-trips** — nothing else may hide there.
+
+**Measured 2026-08-07 on wk0810** (`lib/vf_divergence.py`, real ledger + 16:12 intent build + live):
+matched **1,976** · operator_corrected **275** · left_cohort **9** · **anomaly 0** · divergent∉corrective
+**0** · corrective∉divergent **13** (the reverts, confirmed independently against the write log).
+
+### Divergence classes — `left_cohort` and the emptiness trap
+
+An order can legitimately leave the cohort (cancelled, fulfilled, or **re-cohorted** — wk0810's
+`#170540` moved to `RMFG_20260811`, so stripping its routing tag was correct and the row drops).
+
+🔴 **`left_cohort` requires POSITIVE evidence** — absent from the cohort tag query, or carrying a
+different `RMFG_` batch tag. It is **never** inferred from "live has no routing tag", because an
+order still IN this cohort with its tag stripped is the wk0703 symptom exactly. Emptiness-as-benign
+would make this class the loophole that swallows the failure the gate exists to catch. Both
+directions are test-pinned.
 
 - 🔴 **The verifier, not live-fetching, is what fixes the wk0703 burn.** The old rule "col L from
   live tags at export" existed because a stale tag column shipped. The async verifier diffs
