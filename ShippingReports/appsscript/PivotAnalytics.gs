@@ -34,6 +34,10 @@ var PA_SLA = 2;
 var PA_ACTIVE_HRS = 24;
 var PA_NO_TAG = '(no routing tag)';
 var PA_PAGE = 25;
+// Daily-trigger guards (Kurt 2026-08-07). PP budget is 2,500 calls/WEEK and Exceptions' hourly job
+// is the dominant consumer; this leg must stay a rounding error against it (~45 × 4 ≈ 180/wk).
+var PA_PP_MIN_AGE_DAYS = 3;    // Tue/Wed run Shopify-only — the rescue set is ~the whole cohort then
+var PA_PP_MAX_CALLS = 200;     // hard backstop on any single run, oldest-scan first
 
 /** 🔴 A real carrier scan. CONFIRMED is emitted at LABEL CREATION and is NOT a scan — including it
  * makes every never-collected box look like it moved ("has events" is the wrong filter). */
@@ -364,7 +368,18 @@ function paWriteOwned_(sheet, col, valuesByLabel, dry) {
 function refreshCurrentColumn(shipWeek) {
   var dry = !paWriteArmed_();
   if (!shipWeek) shipWeek = paCurrentShipWeek_();
-  paLog_('=== refreshCurrentColumn ' + shipWeek + ' — ' + (dry ? 'DRY RUN (no writes)' : 'WRITING') + ' ===');
+  var age = paCohortAgeDays_(shipWeek);
+  paLog_('=== refreshCurrentColumn ' + shipWeek + ' (cohort age ' + age + 'd) — ' +
+         (dry ? 'DRY RUN (no writes)' : 'WRITING') + ' ===');
+
+  // 🔴 GUARD 1 — ship day. On a DAILY trigger the Monday run fires while the cohort is still being
+  // handed to carriers: nothing has moved, so every box would read undelivered and, under the
+  // survivorship rule, LATE. Anchored on cohort AGE rather than day-of-week so a shifted ship day
+  // (holiday week) can't defeat it.
+  if (age <= 0) {
+    paLog_('SKIP — cohort ships today (age ' + age + 'd); nothing to measure yet.');
+    return { skipped: 'ship-day', shipWeek: shipWeek, age: age };
+  }
 
   var recs = paFetchCohort_(shipWeek);
   var mon = shipWeek.replace('_SHIP_', '');
@@ -374,10 +389,27 @@ function refreshCurrentColumn(shipWeek) {
   // delivered-with-a-pickup-scan. Asking PP for all ~2,300 orders was 47 fetchAll batches against a
   // 6-minute budget; scoping it to the handful that actually need rescuing makes the union both
   // cheap and reliable, and changes no result (the OR is unaffected for already-delivered boxes).
-  var needPp = recs.filter(function (r) { return !r.shDlv || !r.shMove; })
-                   .map(function (r) { return r.order; });
-  paLog_('PP rescue candidates: ' + needPp.length + ' of ' + recs.length);
-  paUnion_(recs, paPpFetch_(needPp, lo, hi));
+  var cand = recs.filter(function (r) { return !r.shDlv || !r.shMove; });
+  paLog_('PP rescue candidates: ' + cand.length + ' of ' + recs.length);
+  var pp = {};
+  if (age < PA_PP_MIN_AGE_DAYS) {
+    // 🔴 GUARD 2 — PP budget is 2,500 calls/WEEK (Kurt, standing) and Exceptions' hourly job is the
+    // dominant consumer. Early in the week almost the whole cohort is still undelivered, so the
+    // rescue set ≈ 2,300 and one uncapped Tuesday run could eat the week's budget. Deliveries
+    // stream in via Shopify fine mid-week and PP reconciles on later runs, so skip the leg outright.
+    paLog_('  PP: skipped (cohort age <' + PA_PP_MIN_AGE_DAYS + 'd) — Shopify-only this run');
+  } else {
+    // 🔴 GUARD 3 — hard backstop regardless of day. Oldest first: a box silent longest is the one
+    // most worth rescuing. Loud when it bites; a silent truncation would read as "PP found nothing".
+    cand.sort(function (a, b) { return String(a.lastScanIso || '') < String(b.lastScanIso || '') ? -1 : 1; });
+    var take = cand.slice(0, PA_PP_MAX_CALLS);
+    if (cand.length > take.length) {
+      paLog_('  PP: capped at ' + PA_PP_MAX_CALLS + ', skipped ' + (cand.length - take.length) +
+             ' candidates (oldest-scan first)');
+    }
+    pp = paPpFetch_(take.map(function (r) { return r.order; }), lo, hi);
+  }
+  paUnion_(recs, pp);
 
   var total = recs.length;
   var ot = 0, lt = 0, arr = 0, lost = 0, active = 0;
@@ -407,14 +439,31 @@ function refreshCurrentColumn(shipWeek) {
   return { total: total, twoDay: ot, threePlus: lt, arrived: arr, lost: lost, active: active, dry: dry };
 }
 
-/** Rightmost `_SHIP_` header already on the TnT2 tab = the cohort currently being tracked. */
+/**
+ * Current cohort = the most recent ship Monday that actually HAS orders in Shopify.
+ * 🔴 Derived from the calendar + Shopify, NOT from the sheet's rightmost header. Reading the
+ * header would pin the script to whatever column already exists, so it could never discover a new
+ * cohort and would refresh last week's column forever — the walk-forward would silently stall.
+ * Walking back week by week (not assuming this Monday) also makes the Monday-skip safe: the first
+ * touch of a new cohort is Tuesday, and `paCurrentCol_` appends the column then.
+ */
 function paCurrentShipWeek_() {
-  var sh = SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName(PA_TABS.tnt2);
-  var headers = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0].map(String);
-  var week = '';
-  headers.forEach(function (h) { if (/^_SHIP_\d{4}-\d{2}-\d{2}$/.test(h.trim())) week = h.trim(); });
-  if (!week) throw new Error('no _SHIP_ column header found on ' + PA_TABS.tnt2);
-  return week;
+  var now = new Date();
+  var dow = Number(Utilities.formatDate(now, PA_TZ, 'u'));    // 1=Mon .. 7=Sun
+  for (var wk = 0; wk < 3; wk++) {
+    var d = new Date(now.getTime() - ((dow - 1) + wk * 7) * 86400000);
+    var tag = '_SHIP_' + Utilities.formatDate(d, PA_TZ, 'yyyy-MM-dd');
+    if (ordersCount_("tag:'" + tag + "' -status:cancelled -tag:'Reship'") > 0) return tag;
+    paLog_('  no orders for ' + tag + ' — walking back a week');
+  }
+  throw new Error('no _SHIP_ cohort with orders found in the last 3 weeks');
+}
+
+/** Whole days from the cohort's ship Monday to today, ET. 0 = ships today. */
+function paCohortAgeDays_(shipWeek) {
+  var mon = shipWeek.replace('_SHIP_', '');
+  var today = Utilities.formatDate(new Date(), PA_TZ, 'yyyy-MM-dd');
+  return paDayDiff_(mon, today);
 }
 
 /** Dry-run entry point for Kurt: run this, then read View → Logs. Writes nothing, ever. */

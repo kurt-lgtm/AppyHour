@@ -385,6 +385,31 @@ caught before deployment, not after. All `PivotAnalytics.gs` symbols are now `pa
 duplicated between `Code.gs` and the also-unpushed `PivotSheet.gs`** — `iso_` is identical so it is
 harmless, but the two `refresh` bodies differ. Pushing `PivotSheet.gs` as-is would hijack `refresh`.
 
+### D14 — DAILY cadence guards (Kurt 2026-08-07)
+
+The refresh runs on a **daily** time-trigger (evening), not weekly — weekly was too slow. The
+trigger UI cannot express any of the following, so all four live in `refreshCurrentColumn`:
+
+- **Ship-day skip.** Cohort age `0` → log one line and exit. On a daily trigger the Monday run
+  fires while boxes are still being handed to carriers: nothing has moved, so every box reads
+  undelivered and — under the survivorship rule (D9) — **LATE**. Anchored on cohort **age**, not
+  day-of-week, so a shifted ship day (holiday week) cannot defeat it.
+- **PP leg gated by cohort age.** Age `<3d` (Tue/Wed) → Shopify-only, log `PP: skipped (cohort age
+  <3d)`. PP budget is **2,500 calls/week** (standing) and Exceptions' hourly job is the dominant
+  consumer. Early in the week the rescue set ≈ the whole cohort (~2,300), so one uncapped Tuesday
+  run could eat the week. Deliveries stream via Shopify fine mid-week and PP reconciles later.
+- **Hard cap 200 PP calls/run**, any day, **oldest-scan first** — the box silent longest is the one
+  most worth rescuing. Logs `PP: capped, skipped N candidates` when it bites. A silent truncation
+  would read as "PP found nothing", which is the failure this whole leg already burned us on.
+- **Steady state ≈ 45 × 4 ≈ 180 PP calls/week** against 2,500.
+
+🔴 **The cohort is resolved from the CALENDAR + Shopify, never from the sheet's rightmost header.**
+Reading the header pins the script to whatever column already exists, so it could never discover a
+new cohort and would refresh last week's column forever — the walk-forward would silently stall.
+`paCurrentShipWeek_` walks back week by week from the most recent Monday and takes the first tag
+with orders, which also makes the Monday skip safe: first touch of a new cohort is Tuesday, and
+`paCurrentCol_` appends the column then.
+
 ### Cutover checklist (once preconditions clear)
 
 (a) confirm Jdbc `SELECT 1` from GAS + RO user scoped; (b) implement the walk-forward current-column
