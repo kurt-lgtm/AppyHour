@@ -387,8 +387,19 @@ harmless, but the two `refresh` bodies differ. Pushing `PivotSheet.gs` as-is wou
 
 ### D14 — DAILY cadence guards (Kurt 2026-08-07)
 
-The refresh runs on a **daily** time-trigger (evening), not weekly — weekly was too slow. The
-trigger UI cannot express any of the following, so all four live in `refreshCurrentColumn`:
+The refresh runs on a **daily** time-trigger, not weekly — weekly was too slow. Trigger =
+**Time-driven → Day timer, an EVENING hour** (after the day's last meaningful carrier scans).
+**The first executing run of each week is TUESDAY EVENING** (Kurt: "we can start tuesday evening")
+— that falls out of the ship-day guard rather than being configured, since the Monday run exits.
+
+| day | cohort age | what runs |
+|---|---:|---|
+| **Mon** (ship day) | 0 | **exits** — one log line, no writes, no fetch |
+| **Tue** (first real run) | 1 | Shopify-only; appends the new `_SHIP_` column |
+| **Wed** | 2 | Shopify-only |
+| **Thu–Sun** | 3+ | Shopify **+ PP rescue**, ≤200 calls/run, oldest-scan first |
+
+The trigger UI cannot express any of the following, so all four live in `refreshCurrentColumn`:
 
 - **Ship-day skip.** Cohort age `0` → log one line and exit. On a daily trigger the Monday run
   fires while boxes are still being handed to carriers: nothing has moved, so every box reads
