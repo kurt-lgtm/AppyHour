@@ -37,7 +37,12 @@ var PA_PAGE = 25;
 // Daily-trigger guards (Kurt 2026-08-07). PP budget is 2,500 calls/WEEK and Exceptions' hourly job
 // is the dominant consumer; this leg must stay a rounding error against it (~45 × 4 ≈ 180/wk).
 var PA_PP_MIN_AGE_DAYS = 3;    // Tue/Wed run Shopify-only — the rescue set is ~the whole cohort then
-var PA_PP_MAX_CALLS = 200;     // hard backstop on any single run, oldest-scan first
+var PA_PP_MAX_CALLS = 200;     // hard backstop per RUN (shared across both cohort legs)
+// 🔴 MATURITY (D15, Kurt 2026-08-07). A cohort column is SCRIPT-OWNED and self-heals daily from age
+// 1 until it hits this age, then FREEZES — the script refuses it forever after and it becomes
+// Kurt-owned. This is what makes stale wrongness recoverable: a box frozen as 3+ Day / Not Arrived
+// that later proves delivered gets corrected while the column is still in-window.
+var PA_MATURITY_DAYS = 10;
 
 /** 🔴 A real carrier scan. CONFIRMED is emitted at LABEL CREATION and is NOT a scan — including it
  * makes every never-collected box look like it moved ("has events" is the wrong filter). */
@@ -302,25 +307,49 @@ function paRoutingValues_(recs) {
 // ---------------------------------------------------------------- write
 
 /**
- * 🔴 WALK-FORWARD FREEZE, enforced as an assert not a convention: this resolves the current
- * ship-week column and REFUSES to return anything left of the rightmost header. Matured columns
- * are frozen.
+ * 🔴 WALK-FORWARD FREEZE — an assert, never a convention.
+ *
+ * The maturity model (D15): a cohort column is SCRIPT-OWNED and self-heals daily from age 1 until
+ * age `PA_MATURITY_DAYS`; at that age it FREEZES and the script refuses it forever after. So this
+ * permits the rightmost column, and the one immediately left of it ONLY while that column is still
+ * inside the window.
+ *
+ * Two rules make the loosening safe:
+ *   - the age is RE-DERIVED FROM THAT COLUMN'S OWN HEADER, never from a parameter, so no caller can
+ *     talk the writer into an old column by passing a friendly ship week;
+ *   - the two columns must be DISTINCT and ADJACENT, so a header gap or a duplicated header cannot
+ *     let the previous leg land on the current column.
+ *
+ * `allowAppend` is false for the previous leg: a previous cohort whose column does not exist must be
+ * reported, never appended — appending would put an older cohort to the RIGHT of the current one.
  */
-function paCurrentCol_(sheet, shipWeek) {
+function paCurrentCol_(sheet, shipWeek, allowAppend) {
   var lastCol = Math.max(1, sheet.getLastColumn());
   var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(String);
   var idx = headers.indexOf(shipWeek);
-  if (idx >= 0) {
-    var col = idx + 1;
-    var rightmost = 1;
-    for (var i = 0; i < headers.length; i++) if (/^_SHIP_\d{4}-\d{2}-\d{2}$/.test(headers[i].trim())) rightmost = i + 1;
-    if (col < rightmost) {
-      throw new Error('REFUSING to write matured column ' + col + ' (' + shipWeek +
-                      '); rightmost cohort column is ' + rightmost);
-    }
-    return col;
+  if (idx < 0) {
+    if (allowAppend === false) return 0;              // caller logs and skips
+    return lastCol + 1;                               // new week rolled → append to the right
   }
-  return lastCol + 1;   // new week rolled → append to the right
+  var col = idx + 1, rightmost = 1;
+  for (var i = 0; i < headers.length; i++) {
+    if (/^_SHIP_\d{4}-\d{2}-\d{2}$/.test(headers[i].trim())) rightmost = i + 1;
+  }
+  if (col === rightmost) return col;
+  if (rightmost - col !== 1) {
+    throw new Error('REFUSING column ' + col + ' (' + shipWeek + '): not adjacent to the rightmost ' +
+                    'cohort column ' + rightmost);
+  }
+  var hdr = String(headers[col - 1]).trim();          // re-derive from the column itself
+  if (!/^_SHIP_\d{4}-\d{2}-\d{2}$/.test(hdr)) {
+    throw new Error('REFUSING column ' + col + ': header ' + hdr + ' is not a cohort header');
+  }
+  var age = paCohortAgeDays_(hdr);
+  if (age >= PA_MATURITY_DAYS) {
+    throw new Error('REFUSING frozen column ' + col + ' (' + hdr + ', age ' + age + 'd >= ' +
+                    PA_MATURITY_DAYS + 'd) — matured columns are Kurt-owned');
+  }
+  return col;
 }
 
 /**
@@ -365,22 +394,13 @@ function paWriteOwned_(sheet, col, valuesByLabel, dry) {
 
 // ---------------------------------------------------------------- entry point
 
-function refreshCurrentColumn(shipWeek) {
-  var dry = !paWriteArmed_();
-  if (!shipWeek) shipWeek = paCurrentShipWeek_();
+/**
+ * Refresh ONE cohort's column. `budget` is shared across legs so both together respect the
+ * per-run PP cap. `allowAppend` is false for the previous leg (see paCurrentCol_).
+ */
+function paRefreshOne_(shipWeek, dry, budget, allowAppend) {
   var age = paCohortAgeDays_(shipWeek);
-  paLog_('=== refreshCurrentColumn ' + shipWeek + ' (cohort age ' + age + 'd) — ' +
-         (dry ? 'DRY RUN (no writes)' : 'WRITING') + ' ===');
-
-  // 🔴 GUARD 1 — ship day. On a DAILY trigger the Monday run fires while the cohort is still being
-  // handed to carriers: nothing has moved, so every box would read undelivered and, under the
-  // survivorship rule, LATE. Anchored on cohort AGE rather than day-of-week so a shifted ship day
-  // (holiday week) can't defeat it.
-  if (age <= 0) {
-    paLog_('SKIP — cohort ships today (age ' + age + 'd); nothing to measure yet.');
-    return { skipped: 'ship-day', shipWeek: shipWeek, age: age };
-  }
-
+  paLog_('-- leg ' + shipWeek + ' (age ' + age + 'd)');
   var recs = paFetchCohort_(shipWeek);
   var mon = shipWeek.replace('_SHIP_', '');
   var lo = Utilities.formatDate(new Date(new Date(mon + 'T00:00:00Z').getTime() - 2 * 86400000), PA_TZ, 'yyyy-MM-dd');
@@ -402,11 +422,13 @@ function refreshCurrentColumn(shipWeek) {
     // 🔴 GUARD 3 — hard backstop regardless of day. Oldest first: a box silent longest is the one
     // most worth rescuing. Loud when it bites; a silent truncation would read as "PP found nothing".
     cand.sort(function (a, b) { return String(a.lastScanIso || '') < String(b.lastScanIso || '') ? -1 : 1; });
-    var take = cand.slice(0, PA_PP_MAX_CALLS);
+    // budget is shared across legs — both cohorts together respect the per-RUN cap
+    var take = cand.slice(0, Math.max(0, budget.left));
     if (cand.length > take.length) {
-      paLog_('  PP: capped at ' + PA_PP_MAX_CALLS + ', skipped ' + (cand.length - take.length) +
-             ' candidates (oldest-scan first)');
+      paLog_('  PP: capped at ' + budget.left + ' remaining this run, skipped ' +
+             (cand.length - take.length) + ' candidates (oldest-scan first)');
     }
+    budget.left -= take.length;
     pp = paPpFetch_(take.map(function (r) { return r.order; }), lo, hi);
   }
   paUnion_(recs, pp);
@@ -425,18 +447,83 @@ function refreshCurrentColumn(shipWeek) {
   [PA_TABS.tnt2, PA_TABS.lost].forEach(function (name) {
     var sh = ss.getSheetByName(name);
     if (!sh) { paLog_('  ⚠️ missing tab ' + name); return; }
-    var col = paCurrentCol_(sh, shipWeek);
-    paLog_('-- ' + name + ' col ' + col);
+    var col = paCurrentCol_(sh, shipWeek, allowAppend);
+    if (!col) { paLog_('  ⚠️ ' + name + ': no column for ' + shipWeek + ' — skipped (never appended left)'); return; }
+    paLog_('  ' + name + ' col ' + col);
     paWriteOwned_(sh, col, paValues_(recs, name), dry);
   });
   var rm = ss.getSheetByName(PA_TABS.routing);
   if (rm) {
-    var rc = paCurrentCol_(rm, shipWeek);
-    paLog_('-- ' + PA_TABS.routing + ' col ' + rc);
-    paWriteOwned_(rm, rc, paRoutingValues_(recs), dry);
+    var rc = paCurrentCol_(rm, shipWeek, allowAppend);
+    if (rc) {
+      paLog_('  ' + PA_TABS.routing + ' col ' + rc);
+      paWriteOwned_(rm, rc, paRoutingValues_(recs), dry);
+    }
   }
+  return { shipWeek: shipWeek, age: age, total: total, twoDay: ot, threePlus: lt,
+           arrived: arr, lost: lost, active: active };
+}
+
+/** The cohort one week before `shipWeek`, if it has orders. '' when there is none. */
+function paPreviousShipWeek_(shipWeek) {
+  var mon = new Date(shipWeek.replace('_SHIP_', '') + 'T12:00:00Z');
+  var tag = '_SHIP_' + Utilities.formatDate(new Date(mon.getTime() - 7 * 86400000), PA_TZ, 'yyyy-MM-dd');
+  return ordersCount_("tag:'" + tag + "' -status:cancelled -tag:'Reship'") > 0 ? tag : '';
+}
+
+/**
+ * Daily entry point. Refreshes the current cohort, then RECONCILES the previous one while it is
+ * still inside the maturity window (D15) — a box frozen as 3+ Day / Not Arrived can later prove
+ * delivered, and without this the column freezes at a value we already know is wrong.
+ */
+function refreshCurrentColumn(shipWeek) {
+  var dry = !paWriteArmed_();
+  var cur = shipWeek || paCurrentShipWeek_();
+  var age = paCohortAgeDays_(cur);
+  paLog_('=== refreshCurrentColumn ' + cur + ' (age ' + age + 'd) — ' +
+         (dry ? 'DRY RUN (no writes)' : 'WRITING') + ' ===');
+
+  // 🔴 GUARD 1 — ship day. On a DAILY trigger the Monday run fires while the cohort is still being
+  // handed to carriers: nothing has moved, so every box would read undelivered and, under the
+  // survivorship rule, LATE. Anchored on cohort AGE rather than day-of-week so a shifted ship day
+  // (holiday week) can't defeat it.
+  if (age <= 0) {
+    paLog_('SKIP — cohort ships today (age ' + age + 'd); nothing to measure yet.');
+    return { skipped: 'ship-day', shipWeek: cur, age: age };
+  }
+
+  var budget = { left: PA_PP_MAX_CALLS };             // shared across both legs
+  var out = { dry: dry, current: null, previous: null };
+  var t0 = new Date().getTime();
+  out.current = paRefreshOne_(cur, dry, budget, true);
+  var tCur = new Date().getTime();
+  paLog_('leg timing: current ' + ((tCur - t0) / 1000).toFixed(1) + 's');
+
+  // ---- previous leg: SECOND, and never allowed to take the current column down with it ----
+  var prev = paPreviousShipWeek_(cur);
+  if (!prev) {
+    paLog_('reconcile: no previous cohort found');
+  } else {
+    var pAge = paCohortAgeDays_(prev);
+    if (pAge >= PA_MATURITY_DAYS) {
+      paLog_('reconcile: ' + prev + ' is FROZEN (age ' + pAge + 'd >= ' + PA_MATURITY_DAYS +
+             'd) — Kurt-owned from here, not touched');
+    } else {
+      try {
+        out.previous = paRefreshOne_(prev, dry, budget, false);
+      } catch (e) {
+        // 🔴 loud, and NON-fatal: the current column is already written by this point. A previous-leg
+        // failure (6-min ceiling, a refused column) must never cost us the current refresh.
+        paLog_('🔴 reconcile leg FAILED for ' + prev + ' — current column is already written and is ' +
+               'unaffected. Error: ' + e);
+      }
+      paLog_('leg timing: previous ' + ((new Date().getTime() - tCur) / 1000).toFixed(1) + 's');
+    }
+  }
+  paLog_('total ' + ((new Date().getTime() - t0) / 1000).toFixed(1) + 's of the 360s ceiling; ' +
+         'PP calls used ' + (PA_PP_MAX_CALLS - budget.left) + ' of ' + PA_PP_MAX_CALLS);
   paLog_('=== done (' + (dry ? 'DRY RUN — nothing written' : 'written') + ') ===');
-  return { total: total, twoDay: ot, threePlus: lt, arrived: arr, lost: lost, active: active, dry: dry };
+  return out;
 }
 
 /**

@@ -421,6 +421,42 @@ new cohort and would refresh last week's column forever — the walk-forward wou
 with orders, which also makes the Monday skip safe: first touch of a new cohort is Tuesday, and
 `paCurrentCol_` appends the column then.
 
+### D15 — MATURITY MODEL: script-owned 0–10d, frozen and Kurt-owned after (Kurt 2026-08-07)
+
+**`PA_MATURITY_DAYS = 10`.** A cohort column is **script-owned** and self-heals on every daily run
+from age 1 until age 10; at 10 days it **FREEZES** and the script refuses it forever after.
+
+**Why it exists — stale wrongness.** A box frozen as `3+ Day` / `Not Arrived` can later prove
+delivered. On 2026-08-07 alone `arrived` moved 2,253 → 2,256 → 2,260 → 2,262 across a single day.
+Without reconciliation the column freezes at a number we already know is wrong.
+
+**Shape.** Each daily run refreshes up to **two** cohorts: the current one, then the previous one
+while it is still <10d. In practice both legs only run on roughly days 7–10 of the older cohort.
+
+- The previous leg runs **SECOND** and is wrapped: a failure there (6-minute ceiling, a refused
+  column) logs loudly and **never costs us the current column**, which is already written by then.
+- Per-leg timings and PP usage are logged every run so headroom against the 360s ceiling is visible.
+- The ≤200 PP calls/run cap is **shared across both legs**; oldest-scan-first unchanged; Tue/Wed
+  still skip PP entirely.
+- A previous cohort whose column does not exist is **reported, never appended** — appending would
+  place an older cohort to the RIGHT of the current one.
+
+🔴 **The freeze assert is bounded, not removed.** `paCurrentCol_` permits the rightmost column, or
+the one immediately left of it, and only then:
+- the age is **re-derived from that column's own header**, never from a parameter, so no caller can
+  talk the writer into an old column by passing a friendly ship week;
+- the two columns must be **distinct and adjacent**, so a header gap or a duplicated header cannot
+  let the previous leg land on the current column;
+- age ≥ `PA_MATURITY_DAYS` throws with the column, header and age named.
+
+**The 105 story is the motivating case, and the reason the window is bounded at all.** Column D
+(`_SHIP_2026-07-27`) was reconciled BY HAND — an even haircut to 105 (D4) — and a naive rebuild
+recomputes it to 126. Under this model that column is long frozen and untouchable. Kurt's position
+(accepted): hand edits only existed because the numbers were wrong; with union truth (D6) plus daily
+self-heal they should not recur, and **a disagreement inside the 10-day window is a bug report, not
+an edit**. His day-of hand edits live on OTHER sheets (vF routing), not this one, and his own
+rows/notes here are label-skipped by the owned-row writer regardless.
+
 ### Cutover checklist (once preconditions clear)
 
 (a) confirm Jdbc `SELECT 1` from GAS + RO user scoped; (b) implement the walk-forward current-column
