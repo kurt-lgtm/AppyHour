@@ -43,6 +43,13 @@ var PA_PP_MAX_CALLS = 200;     // hard backstop per RUN (shared across both coho
 // Kurt-owned. This is what makes stale wrongness recoverable: a box frozen as 3+ Day / Not Arrived
 // that later proves delivered gets corrected while the column is still in-window.
 var PA_MATURITY_DAYS = 10;
+// 🔴 THREE OBSERVATIONS under `3+ Day Shipments` (D16, Kurt-approved 2026-08-07). Order matters —
+// it is the on-sheet row order. All three are INSIDE 3+ Day, none is summed into any total, and
+// together they PARTITION Not Arrived. NOTE: the words "Lost in Transit" appear NOWHERE on TnT2
+// by request — that phrasing is what Dan reacts to. The Lost in Transit TAB keeps its own name.
+var PA_OBS = ['still moving (4+ days)',            // undelivered, a real scan <24h — moving
+              'no scan in 24h+ (investigating)',   // scanned, then silent >=24h
+              'never picked up by carrier'];       // zero carrier scans ever
 
 /** 🔴 A real carrier scan. CONFIRMED is emitted at LABEL CREATION and is NOT a scan — including it
  * makes every never-collected box look like it moved ("has events" is the wrong filter). */
@@ -289,8 +296,9 @@ function paValues_(recs, tab) {
   // PARTITION Not Arrived, which is why churn between them is legitimate: a box going dark is a
   // visible migration from one row to the other with the sum unchanged.
   if (tab === PA_TABS.tnt2) {
-    m[paKey_('', 'of which: 4+ Day, still in transit')] = n(function (r) { return r.active; });
-    m[paKey_('', 'of which: Lost in Transit')] = n(function (r) { return r.lost; });
+    m[paKey_('', PA_OBS[0])] = n(function (r) { return r.active; });
+    m[paKey_('', PA_OBS[1])] = n(function (r) { return r.lost && r.moved; });
+    m[paKey_('', PA_OBS[2])] = n(function (r) { return r.lost && !r.moved; });
   }
   return m;
 }
@@ -454,20 +462,34 @@ function paRefreshOne_(shipWeek, dry, budget, allowAppend) {
   // the PAIR: still-in-transit + lost == Not Arrived, and that SUM is monotone non-increasing within
   // a cohort — a box leaves only by DELIVERING, and delivered cannot un-deliver. `lost` may rise
   // only when still-in-transit falls by at least as much. Refuse rather than publish a rise.
-  var prev = paReadNested_(ss, shipWeek);
-  if (prev.sit !== null && prev.lost !== null) {
-    if (active + lost > prev.sit + prev.lost) {
-      throw new Error('REFUSING to write: still-in-transit + lost rose ' + (prev.sit + prev.lost) +
-                      ' -> ' + (active + lost) + '. Delivered cannot un-deliver.');
-    }
-    if (lost > prev.lost && (prev.sit - active) < (lost - prev.lost)) {
-      throw new Error('lost rose ' + prev.lost + ' -> ' + lost +
-                      ' without a matching still-in-transit fall (' + prev.sit + ' -> ' + active + ')');
-    }
-    paLog_('  monotonicity: sum ' + (prev.sit + prev.lost) + ' -> ' + (active + lost) + ' ✅');
-  } else {
-    paLog_('  monotonicity: no prior pair on the sheet — first write, gate skipped');
+  var obs = {}, newSum = 0;
+  obs[PA_OBS[0]] = active;
+  obs[PA_OBS[1]] = 0; obs[PA_OBS[2]] = 0;
+  recs.forEach(function (r) {
+    if (!r.lost) return;
+    obs[r.moved ? PA_OBS[1] : PA_OBS[2]] += 1;
+  });
+  PA_OBS.forEach(function (k) { newSum += obs[k]; });
+  if (newSum !== total - arr) {
+    throw new Error('three observations sum ' + newSum + ' != Not Arrived ' + (total - arr));
   }
+  var prev = paReadNested_(ss, shipWeek), prevKeys = Object.keys(prev), oldSum = 0;
+  prevKeys.forEach(function (k) { oldSum += prev[k]; });
+  if (prevKeys.length === PA_OBS.length) {
+    if (newSum > oldSum) {
+      throw new Error('REFUSING to write: the three observations rose ' + oldSum + ' -> ' + newSum +
+                      '. A box leaves only by DELIVERING and delivered cannot un-deliver.');
+    }
+    PA_OBS.forEach(function (k) {
+      // migration BETWEEN the rows is expected — a box going dark moves one row to the next with
+      // the sum unchanged. Log it so the movement is visible rather than a silent headline shift.
+      if (obs[k] > prev[k]) paLog_('  migration: ' + k + ' ' + prev[k] + ' -> ' + obs[k]);
+    });
+    paLog_('  monotonicity: sum ' + oldSum + ' -> ' + newSum + ' (non-increasing) ✅');
+  } else {
+    paLog_('  monotonicity: partial prior row set — first write, gate skipped');
+  }
+  PA_OBS.forEach(function (k) { paLog_('    ' + k + ' = ' + obs[k]); });
 
   [PA_TABS.tnt2, PA_TABS.lost].forEach(function (name) {
     var sh = ss.getSheetByName(name);
@@ -495,18 +517,18 @@ function paRefreshOne_(shipWeek, dry, budget, allowAppend) {
  * rows, and a substring match grabs the first and silently compares the wrong pair.
  */
 function paReadNested_(ss, shipWeek) {
-  var out = { sit: null, lost: null };
+  var out = {};
   var sh = ss.getSheetByName(PA_TABS.tnt2);
   if (!sh) return out;
   var col = 0, headers = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0];
   for (var i = 0; i < headers.length; i++) if (String(headers[i]).trim() === shipWeek) col = i + 1;
   if (!col) return out;
-  var rows = sh.getRange(1, 1, Math.max(1, sh.getLastRow()), col).getValues();
-  rows.forEach(function (r) {
+  sh.getRange(1, 1, Math.max(1, sh.getLastRow()), col).getValues().forEach(function (r) {
     var lab = String(r[0]).trim(), v = r[col - 1];
-    if (typeof v !== 'number') return;
-    if (lab === 'of which: 4+ Day, still in transit') out.sit = v;
-    else if (lab === 'of which: Lost in Transit') out.lost = v;
+    // 🔴 only the OBSERVATION rows, matched by FULL label. Sweeping in any other numeric row (the
+    // python twin briefly pulled `Not Arrived` into this set) inflates the baseline and the
+    // monotonicity gate then compares against a number that means nothing.
+    if (PA_OBS.indexOf(lab) >= 0 && typeof v === 'number') out[lab] = v;
   });
   return out;
 }

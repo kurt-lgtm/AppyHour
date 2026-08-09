@@ -457,7 +457,33 @@ self-heal they should not recur, and **a disagreement inside the 10-day window i
 an edit**. His day-of hand edits live on OTHER sheets (vF routing), not this one, and his own
 rows/notes here are label-skipped by the owned-row writer regardless.
 
-### D16 — THREE-ROW model under `3+ Day`, and the monotonicity invariant (Kurt 2026-08-07)
+### D16 — THREE OBSERVATIONS under `3+ Day`, and the monotonicity invariant (Kurt 2026-08-07)
+
+**APPROVED MODEL** (Kurt's paste, verbatim):
+
+```
+3+ Day Shipments                     111
+   still moving (4+ days)              3
+   no scan in 24h+ (investigating)    13
+   never picked up by carrier         27
+```
+
+Definitions: **still moving** = undelivered, last real movement scan <24h · **no scan in 24h+** =
+scanned, then silent ≥24h · **never picked up** = zero carrier scans ever. The three **partition
+Not Arrived**.
+
+🔴 **The words "Lost in Transit" appear NOWHERE on TnT2** — that phrasing is what Dan reacts to.
+The Lost in Transit **tab** keeps its own name and rows untouched.
+
+All three sit INSIDE `3+ Day` and **none is summed into any total**. Asserted every run: the three
+sum to `Not Arrived`; that SUM is **monotone non-increasing** per cohort (refuse to write on a
+rise — a box leaves only by DELIVERING, and delivered cannot un-deliver); migration BETWEEN the
+three is expected and logged by name; `2 Day + 3+ Day == Total` unchanged.
+
+Superseded en route to this: a single `of which: Lost in Transit` row (churned, Kurt cleared it),
+then a two-row split. Both are dead — the keys are gone, not merely unused.
+
+#### History that motivated it
 
 Kurt cleared the single nested cell himself — *"i removed it because it kept changing"* — because the
 clock-recomputed lost number churned 49 → 39 → 40. His ruling: **the lost number "should go down,
