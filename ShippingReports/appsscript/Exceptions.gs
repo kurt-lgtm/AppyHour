@@ -286,7 +286,7 @@ function excLoadState_() {
   if (!sh || sh.getLastRow() < 2) return st;
   // 9 columns: the 9th (`logged_classes`) is the SHEET-RECORD dedup, separate from `alerted`.
   // It must round-trip through state or the same exception is re-appended to the tab every sweep.
-  sh.getRange(2, 1, sh.getLastRow() - 1, 9).getValues().forEach(function (r) {
+  sh.getRange(2, 1, sh.getLastRow() - 1, EXC_STATE_COLS.length).getValues().forEach(function (r) {
     if (!r[0]) return;
     st[String(r[0])] = {
       order: String(r[0]), cohort: r[1], customer: r[2], state: r[3], carrier: r[4],
@@ -299,18 +299,27 @@ function excLoadState_() {
   return st;
 }
 
+// 🔴 ONE schema definition. The width was a literal 8 while the header grew to 9, which threw
+// "The number of columns in the data does not match the number of columns in the range" on EVERY
+// save — and because clear() runs first, each throw left _exc_state EMPTY. Derive the width from
+// the header row so adding a column can never desync it again.
+var EXC_STATE_COLS = ['order', 'cohort', 'customer', 'state', 'carrier', 'open',
+                      'alerted_classes', 'last_seen', 'logged_classes'];
+
 function excSaveState_(st) {
   var ss = excSS_();
   var sh = ss.getSheetByName(EXC_STATE_TAB) || ss.insertSheet(EXC_STATE_TAB);
-  sh.clear();
-  var rows = [['order', 'cohort', 'customer', 'state', 'carrier', 'open', 'alerted_classes',
-               'last_seen', 'logged_classes']];
+  var rows = [EXC_STATE_COLS.slice()];
   Object.keys(st).forEach(function (k) {
     var r = st[k];
     rows.push([r.order, r.cohort, r.customer, r.state, r.carrier, r.open ? '1' : '0',
                r.alerted.join(','), r.last_seen || '', (r.logged || []).join(',')]);
   });
-  sh.getRange(1, 1, rows.length, 8).setValues(rows);
+  // write FIRST, then trim: clearing up front means any failure here destroys the state outright.
+  sh.getRange(1, 1, rows.length, EXC_STATE_COLS.length).setValues(rows);
+  if (sh.getLastRow() > rows.length) {
+    sh.getRange(rows.length + 1, 1, sh.getLastRow() - rows.length, EXC_STATE_COLS.length).clearContent();
+  }
   sh.hideSheet();
 }
 
