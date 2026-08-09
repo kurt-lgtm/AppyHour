@@ -399,5 +399,84 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
     col L), MFG *onboarding* at the translator portal, and whether a SKU has a $0 in-box variant.
     Tests: `tests/test_vf_items.py`.
 
+25. **EVERY order carries EXACTLY ONE tasting guide, and WHICH one is a POLICY TABLE — never an
+    `if`** (Kurt 2026-08-09, standing rule; verbatim: *"all orders must have a tasting guide. if its
+    got a TR- tray sku in it, it gets pkbitesguide. if its got regular shit, its PK-TCUST"*).
+
+    🔴 **The failure first.** A row with **no** guide column set ships a box with **no tasting
+    guide** — the customer gets cheese and no idea what it is, and RMFG has nothing to pick because
+    the sheet never asked for one. A row with the **wrong** guide is worse than none: RMFG picks a
+    guide that does not describe the box (a tray order handed the Custom Box guide names products
+    that are not in it). A row with **two** guides is a double insert and a printed-stock overrun.
+    None of these fail loudly anywhere today — a missing guide column looks exactly like a blank
+    cell. On the submitted `08-10-26_vF` this was **29 orders with no guide and 1 mismatched out of
+    2,253** (measured 2026-08-09, read-only).
+
+    (a) **The selection table (fully resolved — Kurt answered both open cases 2026-08-09).** Ordered
+        predicates, first match wins; the table is DATA (`vf_items.GUIDE_POLICY`), so a future change
+        is an edit to a table or a `--guide-policy` json, never a rewritten branch:
+
+        | # | when | guide | status |
+        |---|------|-------|--------|
+        | 1 | order carries any `TR-` SKU (tray) | `PK-BITESGUIDE` | active |
+        | 2 | otherwise | `PK-TCUST` | active |
+        | — | `PK-FCUST` "Tasting Guide - The First AppyHour" | never selected | 🔴 **RETIRED** |
+        | — | `PK-TMDT` "Tasting Guide - Mediterranean Escape" | never selected by default | 🟡 **PARKED** |
+
+        **A MIXED order (tray AND regular items) is a TRAY order** — bites guide ONLY, never both
+        (Kurt 2026-08-09: *"TR- tray gets bitesguide"*). Tray presence decides; item mix does not.
+    (b) 🔴 **RETIRED ≠ DELETED, PARKED ≠ GONE** — the [[max-ice-directive-is-seasonal]] / Veho /
+        Indy-cap shape. `PK-FCUST` is retired: the table never selects it, but the validator still
+        RECOGNIZES it and reports "retired guide present" so an existing sheet carrying it is
+        *identified and corrected*, never silently accepted and never silently stripped. `PK-TMDT`
+        is a parked backup (Kurt: *"the TMDT is a weird backup we may use again"*): never selected
+        by default, reported as **INFO** (not an error) when a sheet carries it — that means someone
+        used it deliberately — and re-enabled **by config** (`--guide-policy`), not by a code edit.
+        Deleting either entry from the table would erase the only record of *why* they are inert.
+    (c) 🔴 **This is a SHEET rule. Shopify line-item state is NOT authoritative for it and a
+        mismatch is EXPECTED, not a defect** (Kurt 2026-08-09: *"its really not the biggest thing
+        in the world if that is not consistent with the shopify write"*). RMFG picks from the
+        submitted vF, so the sheet is where the guide must be correct. **Never** build a
+        sheet-vs-Shopify guide reconciliation, a divergence check, or a Shopify-side backfill for
+        guides — that is the "helpfully close the gap" move this clause exists to stop. Same posture
+        as **ice** (`VF_SHEET_RULES` §5b / `ROUTING_RULES` §18.6: tags are a SET, quantity is
+        inexpressible, the SHEET wins) and **routing tags** (a historical record consumed days
+        later). Three surfaces, ONE doctrine: *the sheet is the artifact; Shopify is not its mirror.*
+    (d) 🔴 **A guide header is written ONLY from the MFG authority** — `vf_items` resolves
+        `PK-BITESGUIDE`/`PK-TCUST` through `Authority.header_for_sku` and the write is re-gated by
+        rule 21's `validate_mfg_names` (rule 24a). A guide SKU absent from
+        `mfg_names_authoritative.csv` → **REFUSE and print MISSING**; never invent
+        `AHB (S_REG): Tasting Guide - <something>`. That is the 2026-08-04 Cumin class applied to
+        inserts.
+    (e) **Guides are `PK-` inserts: DistVol 0.** Adding one **cannot** change box sizing, ice
+        quantity, gel packs, or routing (`box_simulation.PREFIX_DEFAULTS` PK = 0). Remediation of a
+        guide is therefore safe to run AFTER routing/ice have been applied — it moves no thermal or
+        carrier decision. It DOES change col-D `Total` (rule 0: Total = ALL product columns), which
+        is recomputed, and it DOES add a pickable line to RMFG's workload.
+    (f) 🔴 **Reships are the high-incidence class** (Kurt 2026-08-09: *"its usually reships that need
+        hand editing"*). CS creates reships outside the curation pipeline, so they arrive on the
+        sheet missing or mis-guided far more often than regular rows. Reships are identified by TAG
+        via the canonical `ShipRouting/lib/qc_gate.is_reship_tag` (both live formats: `Reship -
+        <reason>` AND nested `Shipping::<reason>::<x>`) — **never a hand-rolled substring match**,
+        which misses the nested form. `vf_items` fails loudly if that import is unavailable rather
+        than degrading to a guess. Every guide count is reported **split reship vs regular**; a flat
+        total hides the concentration.
+    (g) **Sheet-time remediation is a PATCH, not the fix.** `vf_items guides --write` closes the gap
+        on a built sheet; the guide should be present **by construction** upstream (generator +
+        reship intake, §"upstream" below). Patching a sheet every week is the manual-intervention
+        the north star says to remove.
+    (h) **Duplicates are NEVER auto-resolved.** Two guides on one row is refused-and-named: choosing
+        which to delete is a judgment (one of them may be a deliberate parked `PK-TMDT`), and
+        auto-deleting a guide someone added is data loss. Same for a guide with qty ≠ 1.
+    (i) **Retired/parked guides are never auto-replaced.** A row carrying `PK-FCUST`/`PK-TMDT` is
+        reported, and `--fix-mismatch` skips it by name — correcting it requires an explicit human
+        decision, because "retired" is a policy statement, not a defect classification.
+    Command: `vf_items guides <sheet> [--fix-mismatch] [--guide-policy p.json] [--write]` — dry-run
+    by default, `_rN.xlsx` revisions, ledgered, preservation-verified, exactly like every rule-24 op.
+    `validate` reports guide coverage read-only. **Not enforced here:** anything Shopify-side (c),
+    and whether RMFG has enough guides PRINTED (that is a cut-order concern — the weekly demand for
+    `PK-BITESGUIDE`/`PK-TCUST` must be counted, `InventoryReorder/build_cut_order_xlsx_v2.py`).
+    Tests: `tests/test_vf_items.py`.
+
 Linked from `AppyHour/CLAUDE.md`. Audit that produced this doc:
 `_outputs/reports/2026-07-02-matrix-tool-audit.md`.

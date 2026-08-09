@@ -419,8 +419,26 @@ def test_validate_flags_invented_header_dupe_row_and_total_drift(tmp_path, autho
     assert revisions(s) == []
 
 
-def test_validate_is_clean_on_a_well_formed_sheet(sheet, authority, capsys):
-    assert run(["validate", str(sheet)], authority) == 0
+@pytest.fixture
+def wellformed(tmp_path):
+    """🔴 A "well-formed" sheet must satisfy rule 25 too: every order carries EXACTLY ONE guide,
+    the one the table picks. The pre-rule fixture (no guide columns at all) encoded a world where a
+    box could ship with no tasting guide — that pin was WRONG, not merely stale, so it moved here
+    rather than being loosened. The missing-guide path is pinned by `gsheet` below."""
+    return _write_sheet(
+        tmp_path / "AHB_WeeklyProductionQuery_08-10-26_vF.xlsx",
+        [H_TETI, H_ETX, H_TRAY, G_BITES, G_TCUST],
+        [
+            {"OrderID": 1001, "Tags": "", H_TETI: 1, G_TCUST: 1},
+            {"OrderID": 1002, "Tags": "", H_TRAY: 1, G_BITES: 1},
+            {"OrderID": 1003, "Tags": "", H_TETI: 1, H_ETX: 1, G_TCUST: 1},
+            {"OrderID": 1004, "Tags": "", H_TRAY: 1, H_TETI: 1, G_BITES: 1},   # MIXED -> bites
+        ],
+    )
+
+
+def test_validate_is_clean_on_a_well_formed_sheet(wellformed, gauthority, capsys):
+    assert run(["validate", str(wellformed)], gauthority) == 0
     assert "CLEAN" in capsys.readouterr().out
 
 
@@ -492,3 +510,176 @@ def test_preservation_verifier_catches_a_dropped_row(sheet):
     wb.close()
     probs = vf_items.verify_preserved(before, vf_items.snapshot(out), {})
     assert any("row count changed" in p or "row identity changed" in p for p in probs)
+
+
+# ── tasting guides (MATRIX_RULES rule 25) ────────────────────────────────────
+# 🔴 SYNTHETIC ONLY. Burn: 29 of 2,253 orders on the submitted 08-10-26 vF carried NO tasting
+# guide (measured 2026-08-09) — a box of cheese with nothing telling the customer what it is.
+G_BITES = P + "Tasting Guide - Gourmet Bites"
+G_TCUST = P + "Tasting Guide - Custom Box"
+G_FCUST = P + "Tasting Guide - The First AppyHour"
+G_TMDT = P + "Tasting Guide - Mediterranean Escape"
+H_TRAY = P + "When in Rome"
+GUIDE_AUTH_ROWS = AUTH_ROWS + [
+    ("PK-BITESGUIDE", G_BITES), ("PK-TCUST", G_TCUST),
+    ("PK-FCUST", G_FCUST), ("PK-TMDT", G_TMDT), ("TR-ROME", H_TRAY),
+]
+
+
+@pytest.fixture
+def gauthority(tmp_path) -> Path:
+    p = tmp_path / "mfg_names_authoritative.csv"
+    with open(p, "w", newline="", encoding="utf-8") as fh:
+        csv.writer(fh).writerows(GUIDE_AUTH_ROWS)
+    return p
+
+
+@pytest.fixture
+def gsheet(tmp_path):
+    """1001 tray/no guide · 1002 regular/no guide (RESHIP) · 1003 tray w/ WRONG guide ·
+    1004 regular/correct · 1005 TWO guides · 1006 retired FCUST · 1007 parked TMDT (nested
+    reship tag) · 1008 MIXED tray+regular, no guide (Kurt: tray wins)."""
+    return _write_sheet(
+        tmp_path / "AHB_WeeklyProductionQuery_08-10-26_vF.xlsx",
+        [H_TETI, H_ETX, H_TRAY, G_BITES, G_TCUST, G_FCUST, G_TMDT],
+        [
+            {"OrderID": 1001, "Tags": "", H_TRAY: 1},
+            {"OrderID": 1002, "Tags": "Reship - Arrived Warm", H_TETI: 1},
+            {"OrderID": 1003, "Tags": "", H_TRAY: 1, G_TCUST: 1},
+            {"OrderID": 1004, "Tags": "", H_TETI: 1, G_TCUST: 1},
+            {"OrderID": 1005, "Tags": "", H_TETI: 1, G_TCUST: 1, G_BITES: 1},
+            {"OrderID": 1006, "Tags": "", H_TETI: 1, G_FCUST: 1},
+            {"OrderID": 1007, "Tags": "Shipping::Delayed in transit::x", H_TETI: 1, G_TMDT: 1},
+            {"OrderID": 1008, "Tags": "", H_TRAY: 1, H_TETI: 1, H_ETX: 1},
+        ],
+    )
+
+
+def _audit(sheet_path, authority_path, policy=None):
+    auth = vf_items.Authority(authority_path)
+    return vf_items.GuideAudit(vf_items.Sheet(sheet_path), auth,
+                               vf_items.GuidePolicy.load(policy))
+
+
+def _orders(items):
+    return {x["order"] for x in items}
+
+
+def test_policy_table_tray_gets_bitesguide_regular_gets_tcust():
+    pol = vf_items.GuidePolicy()
+    assert pol.select({"TR-ROME", "CH-TETI"})[0] == "PK-BITESGUIDE"   # MIXED -> tray wins
+    assert pol.select({"TR-ROME"})[0] == "PK-BITESGUIDE"
+    assert pol.select({"CH-TETI", "AC-FCWALN"})[0] == "PK-TCUST"
+
+
+def test_policy_never_selects_retired_or_parked():
+    pol = vf_items.GuidePolicy()
+    assert {r["guide"] for r in pol.rules} == {"PK-BITESGUIDE", "PK-TCUST"}
+    assert pol.status_of("PK-FCUST") == "retired"
+    assert pol.status_of("PK-TMDT") == "parked"      # parked, NOT deleted (25b)
+
+
+def test_policy_refuses_a_table_that_selects_an_inert_guide():
+    with pytest.raises(vf_items.ItemEditRefused) as e:
+        vf_items.GuidePolicy(rules=[{"when": "default", "guide": "PK-TMDT"}])
+    assert "parked" in str(e.value)
+
+
+def test_parked_guide_is_re_enabled_by_CONFIG_not_a_code_edit(tmp_path):
+    p = tmp_path / "policy.json"
+    p.write_text(json.dumps({"status": {"PK-TMDT": "active"},
+                             "rules": [{"when_prefix": "TR-", "guide": "PK-BITESGUIDE"},
+                                       {"when": "default", "guide": "PK-TMDT"}]}),
+                 encoding="utf-8")
+    assert vf_items.GuidePolicy.load(p).select({"CH-TETI"})[0] == "PK-TMDT"
+    assert vf_items.GuidePolicy().select({"CH-TETI"})[0] == "PK-TCUST"   # built-in unchanged
+
+
+def test_audit_detects_missing_duplicate_mismatched_retired_and_parked(gsheet, gauthority):
+    a = _audit(gsheet, gauthority)
+    assert _orders(a.none_) == {"1001", "1002", "1008"}
+    assert _orders(a.multi) == {"1005"}
+    assert _orders(a.mismatched) == {"1003"}          # tray order carrying PK-TCUST
+    assert _orders(a.retired_present) == {"1006"}
+    assert _orders(a.parked_present) == {"1007"}
+    assert _orders(a.tray_bearing) == {"1001", "1003", "1008"}
+    assert "1004" in _orders(a.exactly_one)
+
+
+def test_audit_splits_reship_from_regular_via_the_canonical_parser(gsheet, gauthority):
+    a = _audit(gsheet, gauthority)
+    # 🔴 25f: the NESTED `Shipping::<reason>::` form must count — a hand-rolled "reship" substring
+    # match would miss 1007 entirely.
+    assert {x["order"] for x in a.rows if x["reship"]} == {"1002", "1007"}
+
+
+def test_guides_remediation_adds_the_missing_guide_and_preserves_everything(gsheet, gauthority):
+    before, dims = cells(gsheet)
+    guide_cols = {vf_items.Sheet(gsheet).hdr[h] for h in (G_BITES, G_TCUST)}
+    total_col = vf_items.Sheet(gsheet).hdr["Total"]
+    assert vf_items.main(["guides", str(gsheet), "--authority", str(gauthority), "--write"]) == 0
+    out = revisions(gsheet)
+    assert len(out) == 1
+    a = _audit(out[0], gauthority)
+    assert not a.none_
+    for o, want in (("1001", "PK-BITESGUIDE"), ("1002", "PK-TCUST"), ("1008", "PK-BITESGUIDE")):
+        assert next(x for x in a.rows if x["order"] == o)["carried"] == [(want, 1)]
+    after, dims2 = cells(out[0])
+    assert dims == dims2
+    changed = {k for k in after if after[k] != before.get(k)}
+    assert changed and all(c in guide_cols | {total_col} for _r, c in changed)
+
+
+def test_guides_leaves_duplicate_retired_and_parked_alone_and_NAMES_them(gsheet, gauthority,
+                                                                        capsys):
+    vf_items.main(["guides", str(gsheet), "--authority", str(gauthority), "--write"])
+    a = _audit(revisions(gsheet)[0], gauthority)
+    assert _orders(a.multi) == {"1005"}               # never auto-resolved (25h)
+    assert _orders(a.retired_present) == {"1006"}     # identified, never stripped (25b/i)
+    assert _orders(a.parked_present) == {"1007"}
+    txt = capsys.readouterr().out
+    assert "LEFT ALONE" in txt
+    assert all(o in txt for o in ("1005", "1006", "1007"))
+
+
+def test_guides_mismatch_needs_an_explicit_flag(gsheet, gauthority):
+    vf_items.main(["guides", str(gsheet), "--authority", str(gauthority), "--write"])
+    assert _orders(_audit(revisions(gsheet)[0], gauthority).mismatched) == {"1003"}
+    vf_items.main(["guides", str(gsheet), "--authority", str(gauthority), "--write",
+                   "--fix-mismatch"])
+    a = _audit(revisions(gsheet)[-1], gauthority)
+    assert not a.mismatched
+    assert next(x for x in a.rows if x["order"] == "1003")["carried"] == [("PK-BITESGUIDE", 1)]
+
+
+def test_guides_adds_the_column_when_the_sheet_lacks_it(tmp_path, gauthority):
+    s = _write_sheet(tmp_path / "vF.xlsx", [H_TETI], [{"OrderID": 2001, "Tags": "", H_TETI: 1}])
+    assert vf_items.main(["guides", str(s), "--authority", str(gauthority), "--write"]) == 0
+    out = revisions(s)[0]
+    assert next(x for x in _audit(out, gauthority).rows
+                if x["order"] == "2001")["carried"] == [("PK-TCUST", 1)]
+    assert G_TCUST in vf_items.Sheet(out).headers
+
+
+def test_guides_REFUSES_when_the_guide_is_absent_from_the_authority(tmp_path, authority, capsys):
+    """🔴 25d — never invent 'AHB (S_REG): Tasting Guide - …'. No file, no ledger."""
+    s = _write_sheet(tmp_path / "vF.xlsx", [H_TETI], [{"OrderID": 3001, "Tags": "", H_TETI: 1}])
+    assert vf_items.main(["guides", str(s), "--authority", str(authority), "--write"]) == 1
+    assert revisions(s) == []
+    assert ledger_entries(s) == []
+    assert "MISSING" in capsys.readouterr().out
+
+
+def test_guides_recomputes_total_ledgers_and_reverts(gsheet, gauthority):
+    sh = vf_items.Sheet(gsheet)
+    r1001 = next(r for r, o in sh.data_rows() if o == "1001")
+    before_total = sh.get(r1001, "Total")
+    vf_items.main(["guides", str(gsheet), "--authority", str(gauthority), "--write"])
+    out = revisions(gsheet)[0]
+    assert vf_items.Sheet(out).get(r1001, "Total") == before_total + 1     # rule 0
+    assert [e for e in ledger_entries(gsheet) if e["op"] == "guides"]
+    assert vf_items.main(["revert", str(out), "--authority", str(gauthority), "--write",
+                          "--ledger", str(vf_items.ledger_path(gsheet))]) == 0
+    back = revisions(out)[0]
+    assert vf_items.Sheet(back).get(r1001, "Total") == before_total
+    assert "1001" in _orders(_audit(back, gauthority).none_)      # revert really undid the guide

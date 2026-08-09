@@ -31,6 +31,7 @@ Hard invariants (each a real burn — MATRIX_RULES rule 24a-i):
 
 CLI (dry-run unless --write):
   validate       <sheet>                                       audit the item matrix (read-only)
+  guides         <sheet> [--fix-mismatch] [--guide-policy p.json]   rule 25: exactly ONE guide/order
   swap           <sheet> --from CH-TETI --to CH-ETX,CH-WWHO [--orders ids|file | --all]
   qty            <sheet> --sku CH-ETX --orders ids --set 2 | --delta 1
   add-column     <sheet> --sku CH-ETX
@@ -85,6 +86,123 @@ META_HEADERS = ("OrderID", "Name", "Distribution Type", "Total", "Phone Number",
 SMART_PUNCT = {"‘": "left single quote", "’": "right single quote (curly apostrophe)",
                "“": "left double quote", "”": "right double quote",
                "–": "en-dash", "—": "em-dash", " ": "non-breaking space"}
+
+
+# ── tasting-guide policy (MATRIX_RULES rule 25) ──────────────────────────────
+# 🔴 A TABLE, not an if/else chain. Kurt's rule changes as DATA (edit the table or pass
+# --guide-policy p.json); a branch would have to be rewritten and re-tested every time.
+GUIDE_RULE = "MATRIX_RULES.md rule 25"
+
+# status: "active"  = selectable
+#         "retired" = never selected; RECOGNIZED so a sheet carrying it is IDENTIFIED, never
+#                     silently accepted and never silently stripped (25b)
+#         "parked"  = a backup Kurt may re-enable BY CONFIG; INFO when present, not an error (25b)
+GUIDE_STATUS = {
+    "PK-BITESGUIDE": "active",
+    "PK-TCUST": "active",
+    "PK-FCUST": "retired",   # Kurt 2026-08-09 "FCUST is retired." — kept visible, never chosen
+    "PK-TMDT": "parked",     # Kurt 2026-08-09 "the TMDT is a weird backup we may use again."
+}
+
+# Ordered predicates, FIRST MATCH WINS. `when_prefix`: the order carries any SKU with that prefix.
+# A mixed order (tray + regular) matches rule 1 — tray wins, bites guide ONLY (Kurt 2026-08-09).
+GUIDE_POLICY = (
+    {"when_prefix": "TR-", "guide": "PK-BITESGUIDE", "why": "order carries a TR- tray"},
+    {"when": "default", "guide": "PK-TCUST", "why": "regular (non-tray) order"},
+)
+
+
+class GuidePolicy:
+    """The ONLY place this tool answers 'which guide does this order get'."""
+
+    def __init__(self, rules=GUIDE_POLICY, status=GUIDE_STATUS, source="built-in table"):
+        self.rules = [dict(r) for r in rules]
+        self.status = dict(status)
+        self.source = source
+        for r in self.rules:
+            g = r.get("guide")
+            if g not in self.status:
+                raise ItemEditRefused(f"{GUIDE_RULE}: policy rule selects {g!r}, which is not in "
+                                      f"the guide status table — every selectable guide must be "
+                                      f"declared (never an ad-hoc SKU).")
+            if self.status[g] != "active":
+                raise ItemEditRefused(
+                    f"{GUIDE_RULE}: policy rule selects {g!r} but its status is "
+                    f"{self.status[g]!r}. A retired/parked guide is re-enabled by setting its "
+                    f"status to 'active' in the SAME policy file — never by selecting it while it "
+                    f"is still marked inert (25b).")
+
+    @classmethod
+    def load(cls, path=None):
+        """--guide-policy json: {"rules":[{"when_prefix":"TR-","guide":"PK-X"},…],
+        "status":{"PK-TMDT":"active"}} — re-enabling a parked guide is CONFIG, not a code edit."""
+        if not path:
+            return cls()
+        p = Path(path)
+        if not p.exists():
+            raise ItemEditRefused(f"--guide-policy {p} does not exist. Never fall back to the "
+                                  f"built-in table silently when an override was asked for.")
+        data = json.loads(p.read_text(encoding="utf-8"))
+        status = {**GUIDE_STATUS, **(data.get("status") or {})}
+        rules = data.get("rules") or GUIDE_POLICY
+        for r in rules:
+            if "guide" not in r or not ({"when", "when_prefix", "when_sku"} & set(r)):
+                raise ItemEditRefused(f"--guide-policy: malformed rule {r!r} — needs a 'guide' and "
+                                      f"one of when/when_prefix/when_sku.")
+        return cls(rules, status, source=str(p))
+
+    @property
+    def known(self) -> set:
+        return set(self.status)
+
+    def status_of(self, sku) -> str:
+        return self.status.get(sku, "unknown")
+
+    def select(self, skus_present) -> tuple[str, str]:
+        """(guide_sku, why) for an order, from the SKUs it carries. Never returns None: rule 25 is
+        'every order carries exactly one guide', so a table with no default is a refusal."""
+        present = {str(s) for s in skus_present if s}
+        for r in self.rules:
+            if r.get("when") == "default":
+                return r["guide"], r.get("why", "default rule (no earlier predicate matched)")
+            pre = r.get("when_prefix")
+            if pre and any(s.startswith(pre) for s in present):
+                return r["guide"], r.get("why", f"carries a {pre} SKU")
+            sku = r.get("when_sku")
+            if sku and sku in present:
+                return r["guide"], r.get("why", f"carries {sku}")
+        raise ItemEditRefused(f"{GUIDE_RULE}: no policy rule matched and the table has no default "
+                              f"— every order must get exactly one guide. Fix {self.source}.")
+
+
+def _is_reship_tags(tags) -> bool:
+    """🔴 25f — reships are the high-incidence class, and they are identified by TAG through the
+    CANONICAL parser (`ShipRouting/lib/qc_gate.is_reship_tag`), which knows BOTH live formats
+    (`Reship - <reason>` and nested `Shipping::<reason>::<x>`). A hand-rolled substring match misses
+    the nested form. Unavailable import = FAIL LOUD, never a guess."""
+    fn = _load_is_reship_tag()
+    parts = [t.strip() for t in str(tags or "").split(",") if t.strip()]
+    return any(fn(t) for t in parts)
+
+
+_IS_RESHIP_TAG = None
+
+
+def _load_is_reship_tag():
+    global _IS_RESHIP_TAG
+    if _IS_RESHIP_TAG is None:
+        sr = r"C:\Users\Work\Claude Projects\ShipRouting"      # same bridge matrix_commander uses
+        if sr not in sys.path:
+            sys.path.insert(0, sr)
+        try:
+            from lib.qc_gate import is_reship_tag
+        except Exception as e:                                  # noqa: BLE001 — surfaced, not eaten
+            raise ItemEditRefused(
+                f"{GUIDE_RULE} 25f: canonical reship parser unavailable "
+                f"(lib.qc_gate: {type(e).__name__}: {e}). REFUSING rather than hand-rolling a "
+                f"substring match that misses the nested `Shipping::<reason>::` form.") from e
+        _IS_RESHIP_TAG = is_reship_tag
+    return _IS_RESHIP_TAG
 
 
 def _force_utf8():
@@ -616,7 +734,190 @@ def select_rows(sheet: Sheet, args) -> list[tuple[int, str]]:
     raise ItemEditRefused("no selection: pass --orders <ids|file>, --state XX, or --all.")
 
 
+# ── tasting-guide audit (rule 25) ────────────────────────────────────────────
+class GuideAudit:
+    """Read-only guide coverage of a built sheet. Every bucket is split reship vs regular (25f)."""
+
+    def __init__(self, sheet: Sheet, auth: Authority, policy: GuidePolicy):
+        self.sheet, self.auth, self.policy = sheet, auth, policy
+        self.guide_cols: dict[str, str] = {}      # sku -> header, for guides ON the sheet
+        for h in sheet.product_headers:
+            sku = auth.sku_for_header(h)
+            if sku in policy.known:
+                self.guide_cols[sku] = h
+        self.rows: list[dict] = []
+        self.missing_cols: list[str] = []
+        for r, o in sheet.data_rows():
+            skus, carried = set(), []
+            for h in sheet.product_headers:
+                if qty_of(sheet.get(r, h)) > 0:
+                    s = auth.sku_for_header(h) or h
+                    skus.add(s)
+                    if s in policy.known:
+                        carried.append((s, qty_of(sheet.get(r, h))))
+            want, why = policy.select(skus)
+            tags = sheet.get(r, TAGS_COL) if TAGS_COL in sheet.hdr else ""
+            self.rows.append({"row": r, "order": o, "want": want, "why": why,
+                              "carried": carried, "reship": _is_reship_tags(tags)})
+        for sku in {x["want"] for x in self.rows}:
+            if sku not in self.guide_cols:
+                self.missing_cols.append(sku)
+
+    # -- buckets ----------------------------------------------------------
+    def _pick(self, fn):
+        return [x for x in self.rows if fn(x)]
+
+    @property
+    def none_(self):
+        return self._pick(lambda x: not x["carried"])
+
+    @property
+    def exactly_one(self):
+        return self._pick(lambda x: len(x["carried"]) == 1)
+
+    @property
+    def multi(self):
+        return self._pick(lambda x: len(x["carried"]) > 1)
+
+    @property
+    def mismatched(self):
+        """One guide, but not the one the table says — EXCLUDING retired/parked, which get their
+        own buckets (25i: a retired guide is a policy statement, not a plain mismatch)."""
+        return self._pick(lambda x: len(x["carried"]) == 1
+                          and x["carried"][0][0] != x["want"]
+                          and self.policy.status_of(x["carried"][0][0]) == "active")
+
+    @property
+    def retired_present(self):
+        return self._pick(lambda x: any(self.policy.status_of(s) == "retired" for s, _q in
+                                        x["carried"]))
+
+    @property
+    def parked_present(self):
+        return self._pick(lambda x: any(self.policy.status_of(s) == "parked" for s, _q in
+                                        x["carried"]))
+
+    @property
+    def bad_qty(self):
+        return self._pick(lambda x: any(q != 1 for _s, q in x["carried"]))
+
+    @property
+    def tray_bearing(self):
+        return self._pick(lambda x: x["want"] == "PK-BITESGUIDE")
+
+    def report(self) -> int:
+        pol = self.policy
+        print(f"\n🎫 tasting-guide coverage ({GUIDE_RULE}) — policy: {pol.source}")
+        for i, r in enumerate(pol.rules, start=1):
+            cond = ("otherwise" if r.get("when") == "default"
+                    else f"carries {r.get('when_prefix') or r.get('when_sku')}")
+            print(f"   {i}. {cond:<22} -> {r['guide']}")
+        inert = [f"{s} [{st}]" for s, st in pol.status.items() if st != "active"]
+        if inert:
+            print(f"   inert (never selected, still recognized): {', '.join(inert)}")
+        print(f"   guide columns on the sheet: "
+              f"{sorted(self.guide_cols) or 'NONE'}")
+
+        def split(items):
+            rs = sum(1 for x in items if x["reship"])
+            return f"{len(items):>5}   (reship {rs} / regular {len(items) - rs})"
+
+        n_rs = sum(1 for x in self.rows if x["reship"])
+        print(f"\n   orders: {len(self.rows)}   (reship {n_rs} / regular {len(self.rows) - n_rs})")
+        print(f"   tray-bearing (-> PK-BITESGUIDE):  {split(self.tray_bearing)}")
+        for icon, label, items in (
+            ("🔴", "NO guide", self.none_),
+            ("✅", "exactly one guide", self.exactly_one),
+            ("🔴", "MORE THAN ONE guide (never auto-fixed, 25h)", self.multi),
+            ("🔴", "MISMATCHED vs the table", self.mismatched),
+            ("🔴", "guide qty != 1 (25h)", self.bad_qty),
+            ("🔴", "RETIRED guide present (25b — identify, never strip)", self.retired_present),
+            ("🔵", "PARKED guide present (INFO — used deliberately)", self.parked_present),
+        ):
+            mark = "✅" if not items else icon
+            print(f"   {mark} {label + ':':<48}{split(items)}")
+            for x in items[:8]:
+                got = ",".join(f"{s}x{q}" for s, q in x["carried"]) or "-"
+                print(f"        • order {x['order']}{' [RESHIP]' if x['reship'] else ''}: "
+                      f"want {x['want']} ({x['why']}), has {got}")
+            if len(items) > 8:
+                print(f"        … {len(items) - 8} more")
+        if self.missing_cols:
+            print(f"   ⚠️  guide column(s) the table needs but the sheet lacks: "
+                  f"{sorted(self.missing_cols)} — `guides --write` adds them from the authority")
+        fails = (len(self.none_) + len(self.multi) + len(self.mismatched) + len(self.bad_qty)
+                 + len(self.retired_present))
+        return fails
+
+
 # ── commands ─────────────────────────────────────────────────────────────────
+def cmd_guides(args) -> int:
+    """🔴 rule 25 — bring every order to EXACTLY ONE correct tasting guide.
+
+    Adds the guide where MISSING. `--fix-mismatch` also corrects an active-but-wrong guide.
+    NEVER touches: duplicates (25h), qty!=1 (25h), retired/parked guides (25i) — each is named and
+    left for a human. Every header written comes from the MFG authority (25d).
+    """
+    auth = Authority(args.authority, args.allow_missing_authority)
+    policy = GuidePolicy.load(args.guide_policy)
+    sheet = Sheet(args.sheet, args.sheet_name)
+    audit = GuideAudit(sheet, auth, policy)
+    audit.report()
+    plan = Plan("guides", args.reason)
+
+    # 🔴 25d: a needed guide column is created ONLY from the authority; absent -> MISSING, refuse.
+    for sku in sorted(audit.missing_cols):
+        try:
+            header = auth.header_for_sku(sku)
+        except ItemEditRefused as e:
+            plan.refuse(str(e))
+            continue
+        probs = auth.header_problems(header)
+        if probs:
+            plan.refuse(f"{sku}: header {header!r} " + "; ".join(probs))
+            continue
+        plan.added.append(header)
+        audit.guide_cols[sku] = header
+    if plan.refusals:
+        return apply_plan(sheet, plan, auth, write=False)[0]
+
+    skipped = []
+    for x in audit.rows:
+        carried = x["carried"]
+        if len(carried) > 1:
+            skipped.append(f"order {x['order']}: {len(carried)} guides "
+                           f"({','.join(s for s, _q in carried)}) — 25h, resolve by hand")
+            continue
+        if carried and carried[0][1] != 1:
+            skipped.append(f"order {x['order']}: {carried[0][0]} qty={carried[0][1]} — 25h")
+            continue
+        if carried and policy.status_of(carried[0][0]) in ("retired", "parked"):
+            skipped.append(f"order {x['order']}: carries {carried[0][0]} "
+                           f"[{policy.status_of(carried[0][0])}] — 25i, never auto-replaced")
+            continue
+        target = audit.guide_cols[x["want"]]
+        if not carried:
+            plan.set_cell(x["row"], x["order"], target, sheet.get(x["row"], target)
+                          if target in sheet.hdr else None, 1)
+        elif carried[0][0] != x["want"]:
+            if not args.fix_mismatch:
+                skipped.append(f"order {x['order']}: has {carried[0][0]}, table says {x['want']} "
+                               f"— pass --fix-mismatch to correct it")
+                continue
+            old = audit.guide_cols[carried[0][0]]
+            plan.set_cell(x["row"], x["order"], old, sheet.get(x["row"], old), None)
+            plan.set_cell(x["row"], x["order"], target, sheet.get(x["row"], target)
+                          if target in sheet.hdr else None, 1)
+    if skipped:
+        print(f"\n⚠️  {len(skipped)} order(s) LEFT ALONE (named, never silently swallowed):")
+        for m in skipped[:20]:
+            print("   • " + m)
+        if len(skipped) > 20:
+            print(f"   … {len(skipped) - 20} more")
+    recompute_totals(sheet, plan)
+    return apply_plan(sheet, plan, auth, write=args.write)[0]
+
+
 def cmd_validate(args) -> int:
     auth = Authority(args.authority, args.allow_missing_authority)
     sheet = Sheet(args.sheet, args.sheet_name)
@@ -684,8 +985,10 @@ def cmd_validate(args) -> int:
     _section("Total != sum of product cells (rule 0)", total_drift,
              lambda x: f"order {x[0]}: sheet={x[1]} computed={x[2]}")
 
+    guide_fails = GuideAudit(sheet, auth, GuidePolicy.load(args.guide_policy)).report()
+
     fails = (len(bad_headers) + len(dupe_cols) + len(multi_sku) + len(dupe_rows)
-             + len(bad_cells) + len(total_drift))
+             + len(bad_cells) + len(total_drift) + guide_fails)
     print(f"\n{'✅ CLEAN' if not fails else '🔴 ' + str(fails) + ' DEFECT GROUP(S)'} — read-only, "
           f"nothing written.")
     return 0 if not fails else 1
@@ -960,6 +1263,9 @@ def build_parser():
         p.add_argument("--authority", default=None, help="override mfg_names_authoritative.csv")
         p.add_argument("--allow-missing-authority", action="store_true",
                        help="downgrade a missing/empty authority to a warning (LOGGED)")
+        p.add_argument("--guide-policy", default=None,
+                       help="json overriding the rule-25 guide table (re-enable a PARKED guide by "
+                            "CONFIG, never a code edit)")
         if write:
             p.add_argument("--write", action="store_true", help="emit <stem>_rN.xlsx (else dry-run)")
             p.add_argument("--reason", default="", help="why (recorded in the ledger)")
@@ -1003,13 +1309,17 @@ def build_parser():
     p.add_argument("--vfgr", required=True)
     p.add_argument("--gift-drop", default="")
 
+    p = common(sub.add_parser("guides", help="every order gets EXACTLY ONE tasting guide (rule 25)"))
+    p.add_argument("--fix-mismatch", action="store_true",
+                   help="also correct an active-but-wrong guide (retired/parked never auto-fixed)")
+
     p = common(sub.add_parser("revert", help="restore prior cell values from the ledger"),
                select=True)
     p.add_argument("--ledger")
     return ap
 
 
-HANDLERS = {"validate": cmd_validate, "swap": cmd_swap, "qty": cmd_qty,
+HANDLERS = {"validate": cmd_validate, "guides": cmd_guides, "swap": cmd_swap, "qty": cmd_qty,
             "add-column": cmd_add_column, "drop-column": cmd_drop_column,
             "rename-column": cmd_rename_column, "replace-name": cmd_replace_name,
             "gift": cmd_gift, "revert": cmd_revert}
@@ -1019,7 +1329,8 @@ def main(argv=None) -> int:
     _force_utf8()
     args = build_parser().parse_args(argv)
     for attr, default in (("write", False), ("reason", ""), ("force", False),
-                          ("authority", None), ("allow_missing_authority", False)):
+                          ("authority", None), ("allow_missing_authority", False),
+                          ("guide_policy", None), ("fix_mismatch", False)):
         if not hasattr(args, attr):
             setattr(args, attr, default)
     try:
