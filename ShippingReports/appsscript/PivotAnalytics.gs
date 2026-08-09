@@ -284,7 +284,12 @@ function paValues_(recs, tab) {
       });
     });
   });
+  // 🔴 THREE-ROW MODEL (D16, Kurt 2026-08-07: "fine we go with tnt3, tnt4+, still in transit").
+  // Both nested rows sit INSIDE `3+ Day Shipments` and neither may be summed into any total. They
+  // PARTITION Not Arrived, which is why churn between them is legitimate: a box going dark is a
+  // visible migration from one row to the other with the sum unchanged.
   if (tab === PA_TABS.tnt2) {
+    m[paKey_('', 'of which: 4+ Day, still in transit')] = n(function (r) { return r.active; });
     m[paKey_('', 'of which: Lost in Transit')] = n(function (r) { return r.lost; });
   }
   return m;
@@ -444,6 +449,26 @@ function paRefreshOne_(shipWeek, dry, budget, allowAppend) {
          '  lateRate ' + (lt / total * 100).toFixed(2) + '%');
 
   var ss = SpreadsheetApp.openById(PIVOT_SHEET_ID);
+
+  // 🔴 MONOTONICITY GATE (D16, Kurt: the lost number "should go down, not up"). The invariant is on
+  // the PAIR: still-in-transit + lost == Not Arrived, and that SUM is monotone non-increasing within
+  // a cohort — a box leaves only by DELIVERING, and delivered cannot un-deliver. `lost` may rise
+  // only when still-in-transit falls by at least as much. Refuse rather than publish a rise.
+  var prev = paReadNested_(ss, shipWeek);
+  if (prev.sit !== null && prev.lost !== null) {
+    if (active + lost > prev.sit + prev.lost) {
+      throw new Error('REFUSING to write: still-in-transit + lost rose ' + (prev.sit + prev.lost) +
+                      ' -> ' + (active + lost) + '. Delivered cannot un-deliver.');
+    }
+    if (lost > prev.lost && (prev.sit - active) < (lost - prev.lost)) {
+      throw new Error('lost rose ' + prev.lost + ' -> ' + lost +
+                      ' without a matching still-in-transit fall (' + prev.sit + ' -> ' + active + ')');
+    }
+    paLog_('  monotonicity: sum ' + (prev.sit + prev.lost) + ' -> ' + (active + lost) + ' ✅');
+  } else {
+    paLog_('  monotonicity: no prior pair on the sheet — first write, gate skipped');
+  }
+
   [PA_TABS.tnt2, PA_TABS.lost].forEach(function (name) {
     var sh = ss.getSheetByName(name);
     if (!sh) { paLog_('  ⚠️ missing tab ' + name); return; }
@@ -462,6 +487,28 @@ function paRefreshOne_(shipWeek, dry, budget, allowAppend) {
   }
   return { shipWeek: shipWeek, age: age, total: total, twoDay: ot, threePlus: lt,
            arrived: arr, lost: lost, active: active };
+}
+
+/**
+ * Current on-sheet values of the two nested rows for `shipWeek`, for the monotonicity gate.
+ * 🔴 Matches each row by its FULL label — since the three-row change there are TWO `of which`
+ * rows, and a substring match grabs the first and silently compares the wrong pair.
+ */
+function paReadNested_(ss, shipWeek) {
+  var out = { sit: null, lost: null };
+  var sh = ss.getSheetByName(PA_TABS.tnt2);
+  if (!sh) return out;
+  var col = 0, headers = sh.getRange(1, 1, 1, Math.max(1, sh.getLastColumn())).getValues()[0];
+  for (var i = 0; i < headers.length; i++) if (String(headers[i]).trim() === shipWeek) col = i + 1;
+  if (!col) return out;
+  var rows = sh.getRange(1, 1, Math.max(1, sh.getLastRow()), col).getValues();
+  rows.forEach(function (r) {
+    var lab = String(r[0]).trim(), v = r[col - 1];
+    if (typeof v !== 'number') return;
+    if (lab === 'of which: 4+ Day, still in transit') out.sit = v;
+    else if (lab === 'of which: Lost in Transit') out.lost = v;
+  });
+  return out;
 }
 
 /** The cohort one week before `shipWeek`, if it has orders. '' when there is none. */

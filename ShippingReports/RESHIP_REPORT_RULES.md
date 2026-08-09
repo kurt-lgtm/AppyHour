@@ -457,6 +457,39 @@ self-heal they should not recur, and **a disagreement inside the 10-day window i
 an edit**. His day-of hand edits live on OTHER sheets (vF routing), not this one, and his own
 rows/notes here are label-skipped by the owned-row writer regardless.
 
+### D16 — THREE-ROW model under `3+ Day`, and the monotonicity invariant (Kurt 2026-08-07)
+
+Kurt cleared the single nested cell himself — *"i removed it because it kept changing"* — because the
+clock-recomputed lost number churned 49 → 39 → 40. His ruling: **the lost number "should go down,
+not up."** Approved shape: *"fine we go with tnt3, tnt4+, still in transit"*.
+
+```
+3+ Day Shipments                        111   (unchanged — delivered-late + ALL undelivered)
+   of which: 4+ Day, still in transit     1   (active: a real scan <24h — moving, not lost)
+   of which: Lost in Transit             40   (never-collected + gone-dark)
+```
+
+- Both rows are **INSIDE** `3+ Day` and **neither may be summed** into any total.
+- They **partition Not Arrived**: `still_in_transit + lost == Not Arrived` (LiT tab), asserted every
+  run against the live cells.
+- 🔴 **That SUM is monotone non-increasing within a cohort** — a box leaves only by DELIVERING, and
+  delivered cannot un-deliver. Assert `new_sum <= previous_sum`; **refuse to write** on a rise.
+- **Churn BETWEEN the two rows is expected and allowed.** A box going dark is a visible migration
+  moving → lost with the sum unchanged, so `lost` may rise **only** when still-in-transit falls by
+  at least as much — asserted separately so the log names the migration.
+- 24h remains the boundary between the two rows. B/C/D blank on the new row: matured cohorts are
+  never retro-classified.
+- 🔴 Match each nested row by its **full label**. There are now TWO `of which` rows and a substring
+  match grabs the first, silently comparing the wrong pair — that bug fired once, on the first
+  three-row write, and is why the cross-tab assert is full-label now.
+
+**The 39 → 40 that triggered this** (owed account): purely the 24h clock. Two OnTrac boxes crossed
+the boundary with **identical scan timestamps at both reads** — `#168209` (`1LSDBVC001514UE`,
+23.6h → 32.5h) and `#168332` (`1LSDBVC001514K4`, 21.2h → 30.1h) — while one previously-lost box
+delivered, netting +1. No data changed for either box; six other boxes delivered and left the
+undelivered set entirely. Under D16 that same event now shows as still-in-transit −2 / lost +2 with
+the sum flat, instead of an unexplained headline bump.
+
 ### Cutover checklist (once preconditions clear)
 
 (a) confirm Jdbc `SELECT 1` from GAS + RO user scoped; (b) implement the walk-forward current-column
