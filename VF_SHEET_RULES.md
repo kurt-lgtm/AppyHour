@@ -238,6 +238,29 @@ DecisionLookup). The owner metric is **lock → delivered sheet** (`.claude/code
   current on request: `apply_runner.py --apply` any time; it is idempotent and resumable.
   `--check` is the read-only SLA/status probe (no lock, no writes) for the sweep.
 
+### The queue carries a SCOPE — routing|ice|both (2026-08-09; ROUTING_RULES §18 owns the invariant)
+
+`apply.py --scope=routing|ice|both` composes with `--queue`, so the artifact gained one field. The
+routing/ice invariant itself (one-way split, ice add-only, the stale-ice stamp) lives in
+**ROUTING_RULES §18** — read it before changing scope behaviour; only the ARTIFACT contract is here.
+
+- 🔴 **`scope` is part of the plan's identity, but only when it is not `both`.** `plan_digest()` folds
+  `scope` into the hash for `routing`/`ice` and deliberately does NOT for `both`, so every queue
+  written before the split still hashes identically. Folding the default in would re-key an in-flight
+  Friday queue, and a digest mismatch is reported as *"the queue was modified after it was planned"* —
+  a scary, wrong message that refuses to write. Hand-editing `scope` on a queued artifact fails the
+  digest check and is refused, which is the point: scope changes how the runner reconciles.
+- 🔴 **An ice-scope queue MUST NOT be reconciled against routing tags.** An ice plan never touches a
+  routing tag, so `live_routing == intended_routing` is true for every row — the routing branch would
+  record the entire queue `reconciled-noop` and **silently drop every gel write**. `reconcile()`
+  branches on scope first and, for `ice`, re-derives the add set as *the planned gel tags not already
+  live*: add-only, no removes, and an operator's mid-window routing edit is simply irrelevant to gel.
+- 🔴 **The add-only assert runs on the FINAL write plan**, after reconcile and after `--limit`, inside
+  the runner — not only in the planner. A resume path is exactly where a bad remove would appear.
+- The scope is printed in the runner's header line and in `apply.py --queue`'s output. An operator
+  must never have to guess which tag class a queued plan will write.
+- A queue with no `scope` key (written before this change) reads as `both`, unchanged.
+
 ### The divergence gate MOVES — post-apply reconciliation, not a pre-sheet gate
 
 §5's three-way assert is unchanged in *what it checks* and changed in *when*: it runs **after the
