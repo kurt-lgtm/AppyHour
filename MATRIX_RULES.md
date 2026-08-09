@@ -329,5 +329,75 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
     `matrix_commander.py`, which is another session's claimed surface — routed, not silently
     edited.
 
+24. **ITEM-MATRIX editing on a BUILT vF is a validated, ledgered TOOL — never Excel**
+    (`AppyHour/scripts/vf_items.py`; the item-side sibling of `ShipRouting/scripts/vf_tags.py`,
+    which owns col L). Rules 19a/21/23 guard names at GENERATE time; **nothing guarded the edits
+    Kurt makes to the sheet afterwards**, and every burn below happened on that unguarded surface.
+    The submitted vF is THE AUTHORITY (RMFG picks from the sheet, not Shopify), so a post-generate
+    hand-edit lands on the floor with no gate in front of it.
+    **Failure modes this closes — each one shipped:**
+    (a) 🔴 **Invented MFG name** (2026-08-04): an agent derived *"Farmstead Smoked Cumin Gouda"*
+        from a **Shopify product TITLE** while `mfg_names_authoritative.csv` said *"Farmstead Cumin
+        Gouda"* — immediately after Kurt asked to check the names. Same class as the wk0803
+        `Frumage L'Ottavio` header that reached a SENT vF on 234 rows. **Rule:** every header this
+        tool writes — added, renamed, or produced by a find-and-replace — is the **verbatim** name
+        from `mfg_names_authoritative.csv`. Never a Shopify title, never `SKU_TO_NAME`, never the
+        bare SKU, never a "close enough" spelling. A rename cannot smuggle in a non-authoritative
+        name: the RESULT is re-validated, not just the input. Unknown SKU/name → **refuse and print
+        MISSING**, never guess. Reuses rule 21's `validate_mfg_names` — never reimplemented.
+    (a2) **Rule 23's fail-open is closed HERE.** `matrix_commander.py:401` and
+        `validate_vf_sheet.py:85` warn-and-skip when the authority is missing/empty — for a
+        submission-bound EDIT that is the silent-degrade class ("0 names checked" is
+        indistinguishable from "all names valid"). `vf_items` **fails closed**: an empty/missing
+        authority aborts. `--allow-missing-authority` exists for a machine without the snapshot and
+        is recorded in the ledger on every entry it touches.
+    (b) 🔴 **Malformed header shape** (wk0713): `Walnut, Honey & Extra Virgin Olive Oil Crackers`
+        (Shopify's comma form) vs the translator's `Walnut Honey & …` — **545 units** would have
+        failed RMFG's import mapping. **Rule:** shape is checked BEFORE membership so the message
+        names the defect: `AHB (S_REG): ` prefix, no comma, no tab/newline, no doubled or edge
+        whitespace, no smart punctuation (curly quotes / en-dash / NBSP = pasted, not exported —
+        rule 23a). Rule 15b's trailing-dot pairs (`Prairie Breeze.` ≠ `Prairie Breeze`) are
+        DIFFERENT products — the tool never normalizes punctuation to make a header pass, it
+        refuses.
+    (c) 🔴 **A swap must never put the same item twice in one order.** wk0810's real ask —
+        `CH-TETI → CH-ETX or CH-WWHO or CH-CARO, avoid duplicates` — is the shape of every swath
+        swap. A duplicated line item is a Matrixify import failure and a customer-visible
+        double-cheese box (the whole `matrixify-dupe-split` / `matrixify-import-dupe-check`
+        skill fallout). **Rule:** before writing, the tool checks the TARGET column on every
+        targeted row; any row already carrying that item **refuses the whole write and names the
+        rows/orders**. With multiple `--to` targets it assigns the least-used target that is FREE
+        on that row (deterministic, spreads demand); a row where **no** target is free is named
+        and refuses — it is never silently skipped and never doubled up. Duplicate = two different
+        columns resolving to the same SKU on one row, not merely a repeated header.
+    (d) 🔴 **Never overwrite a sent/dated file** ([[never-delete-prior-output-files]]) — `--write`
+        emits `<stem>_r2.xlsx`, `_r3.xlsx`, and refuses a collision. The input is opened
+        `data_only=False` so formulas round-trip as formulas.
+    (e) 🔴 **Audit the artifact that LEFT, not the fix you queued** (wk0713, 545 units). Every
+        write is followed by a **semantic preservation verify** — sheet names, row count, per-row
+        `OrderID`, and every `(row, header)` cell compared against the source; only the cells the
+        plan declared may differ. Structural ops are verified the same way by HEADER NAME, so an
+        add/drop/rename cannot silently shift a neighbouring column's values. Any discrepancy →
+        **the output file is deleted** and the run fails. Nothing is trusted because it was queued.
+    (f) **Col-D `Total` is RECOMPUTED, never carried** (rule 0) on any row whose product cells
+        changed; `Tags` (col L), `ProductionDay`, and every meta cell are byte-preserved. An item
+        edit touches items — the mirror of vf_tags §7.4 (a routing edit touches routing only).
+    (g) **Gift rows go through `merge_gift_xlsx`, never a second path** (rule 20): ONE vFGR per
+        sub-cohort, REPLACE-by-OrderID (wipe-then-refill, not additive), quantities exactly as the
+        vFGR states, `GiftMergeError` on an OID missing from the matrix. `vf_items gift` is a
+        dry-run-default, revisioned, ledgered wrapper around that chokepoint — it copies the source
+        first and never lets the merge write next to a sent file.
+    (h) **Selection may not be inferred.** Curation is NOT on the sheet (the box SKU never lands
+        there), so `--curation` does not exist — pass an order list. Deriving a curation from a
+        row would be the fabrication class one level up.
+    (i) **DRY-RUN BY DEFAULT; a REFUSED op writes NOTHING — no file, no ledger line.** Every
+        applied change is recorded exactly once in `_outputs/cache/vf_item_edits_<stem>.jsonl`
+        with before/after/reason; `revert` reads only that ledger and never guesses a prior value
+        (a structural op stores the dropped column's cells so its revert is exact).
+    `validate` is a first-class read-only command (mirrors vf_tags §7.9): it audits every product
+    header against the authority, the header shape, duplicate columns, per-row duplicate SKUs, and
+    `Total` drift. **Not enforced here:** routing/ice tags (vf_tags + `check_routing_and_ice` own
+    col L), MFG *onboarding* at the translator portal, and whether a SKU has a $0 in-box variant.
+    Tests: `tests/test_vf_items.py`.
+
 Linked from `AppyHour/CLAUDE.md`. Audit that produced this doc:
 `_outputs/reports/2026-07-02-matrix-tool-audit.md`.
