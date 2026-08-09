@@ -176,9 +176,189 @@ directions are test-pinned.
 - **Offline regen** (Q3=A: iteration speed): any rev-N patch loop reads ledger + local caches only;
   zero Shopify round-trips between verifier passes.
 
+## 5b. ASYNC APPLY — sheet first, tags in the background (Kurt 2026-08-09)
+
+🔴 **PRE-CHANGE GATE for §5b.** Code: `ShipRouting/lib/apply_queue.py` (queue/lock/SLA/status),
+`ShipRouting/scripts/apply_runner.py` (the ONE writer), `ShipRouting/lib/apply_writer.py` (the
+mutation layer, shared verbatim with `apply.py`). Kurt's directive: *"sheet now, apply while I look
+at it"*, *"we should be doing it async now"*.
+
+**Why:** one cycle is ~9 min of machine time (build 253s, sheet 46s, apply 3-5 min) and apply sat ON
+the critical path between cohort lock and the delivered sheet **for no reason**. RMFG prints labels
+from the SHEET; orders are not fulfilled until **Monday 05:00 EDT**. Routing tags are a historical
+record consumed days later (Fixed_Route pins, reship carrier derivation, `executed_lanes`,
+DecisionLookup). The owner metric is **lock → delivered sheet** (`.claude/codex-audit-ledger.md`,
+2026-08-08), so anything that is not the sheet gets off that span.
+
+### The contract, failure-first — every line below is a failure this closes
+
+- 🔴 **The sheet is the AUTHORITY; apply reconciles TO it, never the reverse.** If the queue and the
+  sent sheet disagree, the sheet is right and the tags are the thing that gets fixed. Never
+  regenerate a sent sheet to match what apply happened to write.
+- 🔴 **NEVER two writers.** Two apply processes racing the same cohort double-strip `_AHB!` tags and
+  the loser's read-back is garbage. `apply_queue.ApplyLock` writes **pid + start time + tag + argv**
+  and a second runner is **REFUSED** (exit 3) while that pid is alive. A lock whose pid is provably
+  dead is taken over *loudly*, never silently — and only because resume reconciles against live
+  first (below). Do not add a `--force` that skips the liveness check.
+- 🔴 **NEVER blind-retry a batch whose outcome is unknown.** A batch that died mid-flight may have
+  applied. On any resume the runner **re-reads live Shopify (READ-ONLY) first** and recomputes each
+  pending order's remove/add against *live*, so an already-applied order is recorded
+  `reconciled-noop` and never rewritten. Retrying from the frozen plan would re-strip tags a human
+  fixed in the async window — that window is exactly when Kurt is editing.
+- 🔴 **The queue artifact is IMMUTABLE and content-addressed.** `apply_queue_<ship-date>.json` carries
+  a `digest` over `{tag, ship_date, plan}`; the runner recomputes it and **refuses** a tampered or
+  swapped artifact, and refuses to resume when the results log's digest is from a different queue. A
+  queue edited by hand between plan and write is an unreviewed live mutation.
+- 🔴 **Per-order results are flushed as they land** (`apply_queue_<ship-date>.results.jsonl`,
+  append-only). A crash must never lose the record of what was written — that record is the only
+  thing that makes resume safe. apply.py's per-line ledger flush is unchanged.
+- 🔴 **A DRAINED queue requires a TERMINAL marker.** `apply_queue_<ship-date>.done.json` is written
+  only when every planned order has a terminal `ok`/`reconciled-noop` record. **Failures leave the
+  queue UNDRAINED** — "we tried" is not "it landed".
+- 🔴 **SLA = ship-day 05:00 America/New_York, computed as an ABSOLUTE UTC instant.** This machine's
+  clock is not ET; a naive "5am" fires at 1am his time and the alarm reads as fine while nothing is
+  written. `apply_queue.sla_deadline_utc()` converts the ET wall time to UTC (zoneinfo; a missing
+  tzdata falls back to fixed −04:00 **and says so loudly** — that fallback is wrong in EST months and
+  must not be trusted past the DST switch). Every comparison is against `datetime.now(timezone.utc)`.
+  Past the deadline with the queue undrained → **ALARM**: loud stdout block + `alarm: true` in
+  `_outputs/reports/apply_queue_status.json`, which the weekly freshness sweep reads. The alarm never
+  aborts the writes — the correct response to "late" is to finish, loudly.
+- 🔴 **Dry-run is the default everywhere.** `apply.py --queue` only PLANS (all existing guards — the
+  per-hub pallet cap check and `qc_gate` — still run before an artifact is ever written; a queue that
+  failed a guard is never created). `apply_runner.py` without `--apply` prints and writes nothing and
+  takes no lock. `--apply` is explicit, on both.
+- 🔴 **Never a background zombie.** The runner processes the queue ONCE and exits — there is no watch
+  loop. `--max-minutes` (default 30) is a hard wall, SIGINT finishes the in-flight batch then
+  releases the lock, and `--stop` drops a sentinel the runner checks between batches. THROTTLED
+  retries are depth-capped; an un-capped retry is how a live-write loop becomes unkillable.
+  **Kurt stops it:** `python scripts/apply_runner.py --stop` (graceful, next batch boundary), or
+  `Stop-Process -Id <pid>` using the pid printed in the status file / lock file. Killing it is always
+  safe: resume reconciles.
+- 🔴 **On-demand catch-up is first-class.** Dan compares orders mid-window, so tags must be
+  current on request: `apply_runner.py --apply` any time; it is idempotent and resumable.
+  `--check` is the read-only SLA/status probe (no lock, no writes) for the sweep.
+
+### The divergence gate MOVES — post-apply reconciliation, not a pre-sheet gate
+
+§5's three-way assert is unchanged in *what it checks* and changed in *when*: it runs **after the
+queue drains**, as reconciliation, not as a gate the sheet waits behind.
+
+🔴 **It must never report "clean" against a partially-written ledger.** A ledger mid-apply is missing
+entries that look exactly like `pending_apply`, so a naive verify would stamp `verified_at` on a
+half-written cohort and `presend_check` would wave the sheet through — the wk0703 class with extra
+steps. `vf_verify.py` therefore requires the terminal completion marker for the cohort (matching
+digest) before it will stamp anything; queue present + marker absent/mismatched/incomplete →
+**UNVERIFIED**, exit non-zero, no stamp. A cohort with no queue at all (legacy synchronous apply) is
+unaffected.
+
+### Sheet source in async mode
+
+`gen_rmfg_sheet` gains `VF_FROM_QUEUE=1` (default OFF): col L comes from the queue's
+**`projected_tags`** — the intent-first tag set (`live − remove + add`) computed at plan time from a
+fresh live fetch, for every covered order. This is what takes the sheet off apply's critical path
+without falling back to pre-apply live tags. Precedence: explicit `live=` arg > `VF_FROM_QUEUE` >
+`VF_FROM_LEDGER` > live fetch; a missing/mismatched queue falls through **loudly**, never silently.
+The projection is intent, so §5's divergence assert is what keeps it honest — it is load-bearing here
+for the same reason.
+
 ## 6. Editing discipline
 
 Hand-editing the vF is allowed, but: pull names from `mfg_names_authoritative.csv`, lanes/tags from
 the ROUTING authority, keep PO-box/zip/sort/tag syntax above, and **run Kori's QC (or an equivalent
 header/name validator) on the file after any edit** — the QC is the guard; a raw openpyxl edit that
 skips it is how an invented name or bad lane reaches a sent sheet.
+
+## 7. Routing-tag EDITING on a built vF — `ShipRouting/scripts/vf_tags.py` (SSOT for the edit path)
+
+🔴 **PRE-CHANGE GATE for §7.** The tool is `ShipRouting/scripts/vf_tags.py` (CLI + importable).
+**Never hand-edit col `Tags` with find-and-replace, and never hand-roll an openpyxl tag script.**
+Everything below is a real burn, written failure-first. Rules 1-8 are HARD CHECKS in the code; a
+rule that cannot be enforced is named as such at the bottom.
+
+**Why this exists:** the submitted vF is THE AUTHORITY — RMFG prints labels from the sheet, not from
+Shopify. wk0810 took ~290 hand corrections in Excel (western-LA reverts, MI→IL flips, NC/SC→Nashville)
+with zero validation. That is how **3 invented OnTrac-Chicago lanes** (#169610 VA 23030, #169696
+KY 41262, #169785) reached a SUBMITTED sheet, and how 53 promoted lanes were rejected at induction
+on wk0803 (`AHB_Failed Tags_8-3-26.xlsx`). Find-and-replace has no authority check; this tool does.
+
+### 7.1 Never overwrite a sent/existing file — write a NEW revision
+Dated/versioned output files have been clobbered before ([[never-delete-prior-output-files]]; a
+`-07-27` name written on a Tuesday destroyed the real day's file). `--write` emits
+`<stem>_r2.xlsx`, `_r3.xlsx`, … next to the source, **refusing** any path that already exists.
+In-place editing is not an option the CLI offers. Never `delete_rows`/`delete_cols` on a flow xlsx
+([[wk0727-shipping-run-lessons]]).
+
+### 7.2 NEVER INVENT A LANE — the OnTrac master CELL is the authority, not row presence
+🔴 The mechanism of the 3 invented lanes: a nationwide **zone/TNT** reference was read where a
+**serviceability footprint** belongs. All 7 leaked/rejected zips (60155, 41262, 23030, 76073, 75090,
+75103, 77531) are **absent from the master's per-hub column**. Every one.
+- Serviceability for OnTrac = `zip_loaders.load_ontrac()[zip5][HUB_CODE[hub]]` **NONBLANK**. A zip
+  being *present as a row* proves nothing — the master is mostly `None` per hub, by design.
+- **Import the loader.** Never re-open the master with your own column guesses; `NASC/ILSC/DASC/
+  COM/LTSC/UTA TNT` → hub mapping lives in `zip_loaders`, and a per-hub exception loader is exactly
+  what invented the lanes.
+- **Veho is GONE** (`CARRIER_HUBS["Veho"] == set()`, Kurt 2026-08-02 "never going back"). Any
+  POSITIVE Veho tag is an ERROR, not a warning.
+- FedEx/UPS legality = `features.CARRIER_HUBS` (config-effective, **not** the baseline literal).
+  Import it; never re-type the roster. 🔴 A lane legal ONLY via a settings override is reported as
+  `legal-by-override` so a stale toggle can't pass silently as physics.
+
+### 7.3 Tag grammar comes from `lib/canon.py` — never hand-write a tag regex
+Scattered hand-rolled regexes shipped the 378-order leaky fence (2026-07-03), and `(\w+)` patterns
+broke on the **first multi-word hub** ("Salt Lake City") in 5 places at once — `\w` excludes the
+space, so `!NO OnTrac - Salt Lake City_AHB!` silently reads as NOT BLOCKED. Use `canon.parse_tag`,
+`canon.validate_combo`, `canon.HUB_PAT/NO_LANE_RE/NO_LANE_FIND/ANY_RE`, and the `emit_*` builders.
+Hub roster = `lib/hubs.HUBS`.
+
+### 7.4 ICE/GEL TAGS ARE ADD-ONLY — a routing edit touches ONLY routing tags
+[[tray-ice-tags-never-remove]]. `!ExtraGel24oz!`, `!ExtraGel48oz!`, `!WeatherHold!`,
+`!WeatherHold_Origin!`, `Reship*`, `Fixed_Route`, `Gift Redemption` and every non-`_AHB!` token are
+**carried through verbatim, in original order and multiplicity** (a doubled `!ExtraGel48oz!,
+!ExtraGel48oz!` is a real 2×48oz upgrade — deduping it silently downgrades the ice). The rewrite
+replaces the `_AHB!` span only; the tool asserts the non-routing token multiset is unchanged and
+aborts the row if it is not.
+
+### 7.5 Fence coherence — an all-`!NO` fence must leave a NON-EMPTY, fully-legal survivor set
+Emitting a fence that leaves an **uncovered** lane open is precisely how an unserviceable lane
+reached RMFG's rate shop. For a row whose result is only `!NO` blocks, the tool computes the
+survivor set = every (carrier, hub) that is legal AND covered for that zip5, minus the blocks. It
+**FAILS** the row if the survivor set is empty (RMFG has nothing to pick) or if any survivor is
+uncovered/illegal. A bare `!ANY - <Hub>` (no courier) is checked the same way: every legal carrier at
+that hub must be covered for the zip, or it is a leak.
+
+### 7.6 PRESERVE THE REST OF THE WORKBOOK — verify after writing, don't assume
+openpyxl round-trips silently drop formatting, formulas, and widths. After `--write` the tool
+**re-opens both files** and asserts: identical sheet names, identical max_row/max_column, and every
+non-`Tags` cell value equal to source (plus every unedited `Tags` cell equal). A mismatch **deletes
+the output** and exits non-zero. Columns are located **by header name, never index** (§ header note;
+`Tags` is col L *today* — that is not a contract).
+
+### 7.7 Emit a LEDGER (jsonl) of every change — it is the reconciliation authority
+One line per changed row: `ts, sheet, order, zip, state, before, after, op, reason, rule, verdict`
+(+ `force_reason` when forced). Path `_outputs/cache/vf_tag_edits_<stem>.jsonl`, **append-only** —
+this is what `revert` reads to restore prior tags (the western-LA revert case), and it is the
+record class `lib/vf_divergence.py` reconciles against. Distinct file from the apply-time
+`vf_ledger_<ship-date>.json`; never write into that one.
+
+### 7.8 DRY-RUN BY DEFAULT; any failing row blocks the write
+No flag = print the per-row verdict table + counts, write **nothing** (not even the ledger).
+`--write` is explicit. **If ANY targeted row fails validation the write is refused entirely** —
+no partial application. `--force --reason "<text>"` overrides and logs the reason on every forced
+ledger line; `--force` without a reason is rejected.
+
+### 7.9 Validate-only is a FIRST-CLASS command, not a side effect
+`validate` audits **every** row's tags against the authority with no edit. This is the check that
+finds the invented lanes. It is the one command safe to run on a sent sheet.
+
+### Known result to regress against (do not "fix" the tool until this reproduces)
+`AHB_WeeklyProductionQuery_08-10-26_vF.xlsx` (2,253 rows): **exactly 3** invented OnTrac lanes —
+**#169610, #169696, #169785**, all `!OnTrac Ground - Chicago_AHB!` on zips absent from the master's
+`ILSC TNT` column — out of **1,521** positive OnTrac tags, and **0** positive Veho tags.
+
+### Not enforced by this tool (know the gap)
+- **Kori's full sheet QC** (PO box, zip-as-text, sort order, ProductionDay, MFG headers) is NOT run
+  here — §6 still applies: run Kori QC on the `_r2` before sending.
+- **Tuesday = Dallas-only** and the CA/FL 2Day-OneRate rule (§4) are cohort-level facts the sheet
+  does not carry; the tool cannot infer the ship day from the workbook and does not guess.
+- **Whether the edit is *right*** — the tool proves a lane is legal and covered, never that it is the
+  cheapest or fastest. That judgment stays with the engine and Kurt.
