@@ -284,13 +284,16 @@ function excLoadState_() {
   var sh = excSS_().getSheetByName(EXC_STATE_TAB);
   var st = {};
   if (!sh || sh.getLastRow() < 2) return st;
-  sh.getRange(2, 1, sh.getLastRow() - 1, 8).getValues().forEach(function (r) {
+  // 9 columns: the 9th (`logged_classes`) is the SHEET-RECORD dedup, separate from `alerted`.
+  // It must round-trip through state or the same exception is re-appended to the tab every sweep.
+  sh.getRange(2, 1, sh.getLastRow() - 1, 9).getValues().forEach(function (r) {
     if (!r[0]) return;
     st[String(r[0])] = {
       order: String(r[0]), cohort: r[1], customer: r[2], state: r[3], carrier: r[4],
       open: String(r[5]) === '1',
       alerted: String(r[6] || '').split(',').filter(String),
       last_seen: r[7],
+      logged: String(r[8] || '').split(',').filter(String),
     };
   });
   return st;
@@ -300,11 +303,12 @@ function excSaveState_(st) {
   var ss = excSS_();
   var sh = ss.getSheetByName(EXC_STATE_TAB) || ss.insertSheet(EXC_STATE_TAB);
   sh.clear();
-  var rows = [['order', 'cohort', 'customer', 'state', 'carrier', 'open', 'alerted_classes', 'last_seen']];
+  var rows = [['order', 'cohort', 'customer', 'state', 'carrier', 'open', 'alerted_classes',
+               'last_seen', 'logged_classes']];
   Object.keys(st).forEach(function (k) {
     var r = st[k];
     rows.push([r.order, r.cohort, r.customer, r.state, r.carrier, r.open ? '1' : '0',
-               r.alerted.join(','), r.last_seen || '']);
+               r.alerted.join(','), r.last_seen || '', (r.logged || []).join(',')]);
   });
   sh.getRange(1, 1, rows.length, 8).setValues(rows);
   sh.hideSheet();
