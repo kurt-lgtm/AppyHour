@@ -184,6 +184,13 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
     hand-edit a header to get past it — onboard at https://translator.robbinsmfginc.com/ and re-export.
     A `mfg_translations.csv` refresh is NOT proof of coverage: the 07-27 refresh (283 rows) ran the day
     before and still lacked AC-QUIC.
+    **Two invariants the tests lock (`test_generate_matrix.py`):** (a) the reject is identified BY TYPE
+    — `MfgOnboardingError` (a `ValueError`) carrying `.skus`; callers must catch the type and read
+    `.skus`, never match the message string (§13.5 degrades only the SHEET stages on this — a reword
+    silently reverts to failing whole jobs). (b) A **parent line** (`PR-CJAM-*`, `CEX-EC-*`, anything in
+    `SKIP_PREFIXES`) is never a pickable child: it is excluded from the column set, so it can neither
+    trip this reject nor render as a column — a parent can never be the SOURCE that names a child's
+    column (the wrong-source class, Kurt 2026-07-28 "you filled both in from CEX-EC not PR-CJAM").
 
 20. **Gift redemption vFGR = REPLACE, never skip-as-duplicate** (Kurt 2026-07-24, wk0727 done by
     hand — this rule automates it). **Failure mode:** gift redemption orders are UNEDITABLE in
@@ -283,6 +290,44 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
     `number_format='@'` on order#/zip/tracking columns; `check_zip_leading_zeroes` runs on BOTH the
     matrix and gift (vFGR) paths. Engine-side twin: ROUTING_RULES "ZIP INTEGRITY"; consolidated
     ledger in memory `zip-integrity-family`.
+
+23. **The AUTHORITY FILE ITSELF is validated — adding to MFG names must not pollute the export**
+    (Kurt 2026-08-09: *"we also have to take care to separate mfg names from other shit as to not
+    pollute our export when we add to mfg names."*). Rule 21 guards translations **against**
+    `mfg_names_authoritative.csv`. **Nothing guarded the csv.** That is the authority-registry
+    meta-rule in a second place: *a guard that reads the source it is guarding validates nothing
+    about that source* — a polluted row does not fail any check, it **becomes** the authority and
+    every downstream name check inherits it.
+    **Failure modes this closes (all silent):**
+    (a) a name pasted from a screenshot / Shopify title / meal-type PDF instead of the export —
+    the wk0803 `Frumage L'Ottavio` class, where a **curly apostrophe** is invisible in a csv and
+    reaches a sent vF as an un-pickable header;
+    (b) an extra column appended "just for reference" (notes, classification, count, source_file)
+    — the loader reads `col[1]`, so a shifted row silently changes what a name IS;
+    (c) the same SKU added twice with two spellings — the loader builds a dict, so the **last row
+    wins** and the authority becomes row-order dependent;
+    (d) pollution's mirror image — a **blind overwrite** with a fresh export that quietly DROPPED
+    items.
+    **Rule:** the authority file's schema is **name-columns only, exactly 2 columns
+    (`SKU,name`), no header row**; every name matches the export grammar `AHB (S_REG): <name>`;
+    SKU and name are both unique; SKU prefixes come from the product-rules taxonomy (a new prefix
+    is an onboarding decision, never a validator default); no smart punctuation (curly quotes /
+    en-dash / NBSP = pasted, not exported). Anything else belongs in a **separate file**.
+    Additions still come **only** from a fresh meal-type export (rule 21) — but are reviewed as an
+    **ADD/DROP/RENAME delta**, never a blind file swap. **A rename is not automatically safe: it
+    changes a vF header RMFG may already be picking from.**
+    ✅ Machine-checked 2026-08-09: `scripts/utilities/validate_mfg_authority.py` (validates the
+    file; `--diff-against <fresh_export.csv>` prints the delta and refuses to promote an export
+    that is itself polluted). Verified against the live 285-row file: 2 columns throughout, all
+    285 names on the `AHB (S_REG):` grammar, zero duplicate SKUs or names.
+    🔴 **OPEN — both name checks currently fail OPEN.** `matrix_commander.py:401-404` and
+    `scripts/utilities/validate_vf_sheet.py:85` both print a warning and **skip validation** when
+    the authority is missing/empty. Rule 21 blessed that ("not a hard stop on machines without
+    it"), but for a **submission-bound** run it is the silent-degrade class: an empty authority is
+    *more* dangerous than a missing one, because "0 names checked" is indistinguishable from "all
+    names valid". Hooking rule 23 into the generate path and closing the fail-open both land in
+    `matrix_commander.py`, which is another session's claimed surface — routed, not silently
+    edited.
 
 Linked from `AppyHour/CLAUDE.md`. Audit that produced this doc:
 `_outputs/reports/2026-07-02-matrix-tool-audit.md`.
