@@ -260,6 +260,17 @@ routing/ice invariant itself (one-way split, ice add-only, the stale-ice stamp) 
 - The scope is printed in the runner's header line and in `apply.py --queue`'s output. An operator
   must never have to guess which tag class a queued plan will write.
 - A queue with no `scope` key (written before this change) reads as `both`, unchanged.
+- 🔴 **THE SHEET IS THE ICE AUTHORITY; the Shopify ice tags an ice-scope queue writes are a LOSSY
+  PROJECTION of it.** Kurt 2026-08-09: *"we can't do duplicate tags on shopify, so there will always
+  be a mismatch in terms of ice at least."* A Shopify tag cannot appear twice on an order, so
+  **quantity is not expressible in Shopify tags** — an ice upgrade is two DIFFERENT tags, and a
+  doubled quantity like `2x48oz` exists **only on this sheet** ([[extra-ice-tags-shopify-vs-sheet]]).
+  So an `--scope=ice` queue applies only the tag-expressible subset, **a Shopify-vs-sheet ice
+  comparison ALWAYS shows a gap, that gap is EXPECTED, and it must never be "reconciled" — the sheet
+  wins.** This is why §5's divergence gate compares `_AHB!` tags only: `lib/vf_divergence.routing_tags`
+  drops `!ExtraGel*!` by construction because an ExtraGel difference is an ice decision, not a lane
+  divergence. Closing that gap re-introduces a false-anomaly class into the gate. Annotate ice
+  comparisons as expected-divergent; never equalise the two sides. Invariant detail: ROUTING_RULES §18.6.
 
 ### The divergence gate MOVES — post-apply reconciliation, not a pre-sheet gate
 
