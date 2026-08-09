@@ -58,6 +58,14 @@
 // its real ping later, which is the opposite of the failure this whole job exists to prevent.
 var EXC_DRY_RUN = true;
 
+// 🔴 SHEET-RECORD AND SLACK-POST ARE INDEPENDENTLY GATED (Kurt 2026-08-07: record _SHIP_2026-08-03's
+// exceptions on the tab, Slack stays silent). Recording while dry does NOT weaken the invariant
+// above, because it deliberately does NOT touch `alerted` and does NOT close the record: the row
+// lands on the Exceptions tab, and the real Slack ping still fires for that (order, class) on the
+// first live sweep. Tab-write dedup rides its OWN key (`rec.logged`), never `rec.alerted`.
+// Slack remains hard-blocked by EXC_DRY_RUN inside excSlackPost_ regardless of this flag.
+var EXC_RECORD_WHEN_SILENT = true;
+
 var EXC_HOST_SHEET_ID = '1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU';
 var EXC_CHANNEL = 'C0BLKKPAW8P';          // private #exceptions. NEVER SLACK_WEBHOOK (public #reships).
 var EXC_LOG_TAB = 'Exceptions';
@@ -481,7 +489,7 @@ function hourlyExceptionSweep() {
     }
 
     var stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
-    var posted = 0, wouldPost = [];
+    var posted = 0, recorded = 0, wouldPost = [];
     batch.forEach(function (on) {
       var rec = st[on], ship = pp.ships[on];
       // Only stamp orders PP actually answered for. Stamping an unreached order sends it to the
@@ -495,10 +503,20 @@ function hourlyExceptionSweep() {
       if (v.cls === 'DELIVERED') { rec.open = false; return; }
       if (!v.ping) return;
       if (rec.alerted.indexOf(v.cls) >= 0) return;   // dedup on (order, class)
-      if (EXC_DRY_RUN) {                             // stop-write: record, post nothing
+      if (EXC_DRY_RUN) {                             // Slack silent
         wouldPost.push('#' + rec.order + '  ' + excDisplay_(v.cls) + '  ' + rec.carrier +
                        '  ' + rec.state + '  ' + (v.eventAt || 'no scan time'));
-        return;                                      // no state mutation — see EXC_DRY_RUN note
+        if (EXC_RECORD_WHEN_SILENT) {
+          if (!rec.logged) rec.logged = [];          // tab-write dedup — NOT the alert dedup
+          if (rec.logged.indexOf(v.cls) < 0) {
+            excLog_(stamp, rec, v.cls, v.detail, v.eventAt);
+            rec.logged.push(v.cls);
+            recorded++;
+          }
+        }
+        // 🔴 `alerted` untouched and `open` left true ON PURPOSE: the Slack ping for this
+        // (order, class) must still fire on the first live sweep. See the EXC_DRY_RUN note.
+        return;
       }
       excSlackPost_(excMessage_(rec, v.cls, v.detail, v.eventAt));
       excLog_(stamp, rec, v.cls, v.detail, v.eventAt);
@@ -507,14 +525,20 @@ function hourlyExceptionSweep() {
       posted++;
     });
 
-    if (!EXC_DRY_RUN) excSaveState_(st);             // dry run persists nothing at all
+    // Persist when recording, so the tab-write dedup (`rec.logged`) survives the next sweep and the
+    // same exception is not appended hourly. `alerted` is still untouched while dry.
+    if (!EXC_DRY_RUN || EXC_RECORD_WHEN_SILENT) excSaveState_(st);
     var reached = Object.keys(pp.seen).length;
     var neverPolled = open.filter(function (k) { return !String(st[k].last_seen || '').trim(); }).length;
     Logger.log('exceptions sweep: reached ' + reached + ' of ' + batch.length + ' polled (' +
                open.length + ' open, ' + neverPolled + ' still never polled, throttled ' +
                pp.throttled + ', hard failures ' + pp.failed +
                (pp.budgetHit ? ', TIME BUDGET hit' : '') + '), posted ' + posted +
-               (EXC_DRY_RUN ? ' [DRY RUN — nothing posted, nothing saved]' : ''));
+               ', recorded ' + recorded +
+               (EXC_DRY_RUN ? (EXC_RECORD_WHEN_SILENT
+                  ? ' [SLACK SILENT — ' + recorded + ' row(s) written to the ' + EXC_LOG_TAB +
+                    ' tab; alerts still pending for the first live sweep]'
+                  : ' [DRY RUN — nothing posted, nothing saved]') : ''));
     if (EXC_DRY_RUN) {
       Logger.log('DRY RUN would post ' + wouldPost.length + ' alert(s):\n  ' +
                  wouldPost.slice(0, 25).join('\n  ') +
