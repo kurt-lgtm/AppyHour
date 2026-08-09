@@ -33,7 +33,7 @@ from tools.gorgias_sheets_sync import (  # noqa: E402
 )
 
 
-SHIPPING_DB = (os.environ.get("APPYHOUR_DB_PATH") or (r"C:\AppyHourData\shipping.db" if os.path.exists(r"C:\AppyHourData\shipping.db") else os.path.expandvars(r"%APPDATA%\AppyHour\shipping.db")))
+SHIPPING_DB = (os.environ.get("APPYHOUR_DB_PATH") or (r"C:\AppyHourData\shipping.db" if os.path.isdir(r"C:\AppyHourData") else os.path.expandvars(r"%APPDATA%\AppyHour\shipping.db")))  # dir-keyed 2026-07-22 (login-race split-brain guard)
 DOWNLOADS = Path(os.path.expandvars(r"%USERPROFILE%\Downloads"))
 SHIPROUTING = Path(r"C:\Users\Work\Claude Projects\ShipRouting")
 REPORTS_DIR = Path(r"C:\Users\Work\Claude Projects\_outputs\reports")
@@ -189,9 +189,11 @@ def build_cohort_report(tue: date, out_path: Path) -> dict:
             "gorgias_link": link,
         })
 
-    # 3. Shipment volume by carrier in pickup window
+    # 3. Shipment volume by carrier in pickup window — DISTINCT orders, not legs:
+    # delivery_status holds one row per shipment LEG (relabels/reships), and the leg count was
+    # published as the order-volume denominator (join-grain class, 2026-08-09 audit).
     cur.execute(
-        "SELECT carrier, COUNT(*) FROM delivery_status "
+        "SELECT carrier, COUNT(DISTINCT order_number) FROM delivery_status "
         "WHERE pickup_date>=? AND pickup_date<=? GROUP BY carrier",
         (pmin, pmax),
     )

@@ -108,8 +108,14 @@ def section_failures_by_bucket(db: sqlite3.Connection, ship_tag: str) -> str:
               ELSE NULL
             END AS bucket
           FROM feedback fb
-          LEFT JOIN fulfillments f ON TRIM(REPLACE(f.order_number,'#','')) = TRIM(REPLACE(fb.order_number,'#',''))
-          WHERE f.tags LIKE ?
+          -- EXISTS, not JOIN: fulfillments is PER-LEG (multi-fulfillment orders carry several
+          -- rows) and the old join duplicated each ticket once per leg (join-grain class,
+          -- scorecard 41-vs-40 burn 2026-08-09).
+          WHERE EXISTS (
+            SELECT 1 FROM fulfillments f
+            WHERE TRIM(REPLACE(f.order_number,'#','')) = TRIM(REPLACE(fb.order_number,'#',''))
+              AND f.tags LIKE ?
+          )
         )
         SELECT bucket, COUNT(*) n FROM bucketed WHERE bucket IS NOT NULL
         GROUP BY bucket ORDER BY n DESC
@@ -130,11 +136,19 @@ def section_warm_by_state(db: sqlite3.Connection, ship_tag: str) -> str:
     """Warm tickets grouped by state — state-level lift signal."""
     cur = db.execute(
         """
-        SELECT COALESCE(fb.state, f.dest_state, '?') AS state, COUNT(*) n
+        SELECT COALESCE(fb.state,
+                        (SELECT f.dest_state FROM fulfillments f
+                         WHERE TRIM(REPLACE(f.order_number,'#','')) = TRIM(REPLACE(fb.order_number,'#',''))
+                           AND f.dest_state IS NOT NULL LIMIT 1),
+                        '?') AS state, COUNT(*) n
         FROM feedback fb
-        LEFT JOIN fulfillments f ON TRIM(REPLACE(f.order_number,'#','')) = TRIM(REPLACE(fb.order_number,'#',''))
+        -- EXISTS, not JOIN (per-leg fulfillments duplicated warm tickets — join-grain class)
         WHERE (fb.issue_type LIKE '%Warm%' OR fb.issue_type LIKE '%Melted%')
-          AND f.tags LIKE ?
+          AND EXISTS (
+            SELECT 1 FROM fulfillments f
+            WHERE TRIM(REPLACE(f.order_number,'#','')) = TRIM(REPLACE(fb.order_number,'#',''))
+              AND f.tags LIKE ?
+          )
         GROUP BY state ORDER BY n DESC LIMIT 12
         """,
         (f"%{ship_tag}%",),
@@ -318,6 +332,7 @@ def section_service_mismatch(db: sqlite3.Connection, snapshot_id: str) -> str:
         WHERE kso.snapshot_id = ?
           AND kso.transit_type IS NOT NULL
           AND ds.service IS NOT NULL
+        GROUP BY kso.order_number  -- one row per ORDER: per-leg tables list a relabeled box twice
         """,
         (snapshot_id,),
     ).fetchall()
@@ -368,14 +383,21 @@ def section_transit_anomalies(db: sqlite3.Connection, ship_tag: str) -> str:
     """Shipments that exceeded TNT expectation — silent service downgrades."""
     cur = db.execute(
         """
-        SELECT ds.carrier, COUNT(*) n,
-               AVG(ds.transit_days) AS avg_transit,
-               SUM(CASE WHEN ds.transit_days > 2 THEN 1 ELSE 0 END) AS over_2day,
-               SUM(CASE WHEN ds.transit_days > 3 THEN 1 ELSE 0 END) AS over_3day
-        FROM delivery_status ds
-        JOIN fulfillments f ON f.tracking_number = ds.tracking_number
-        WHERE f.tags LIKE ? AND ds.transit_days IS NOT NULL
-        GROUP BY ds.carrier ORDER BY n DESC
+        SELECT carrier, COUNT(*) n,
+               AVG(t) AS avg_transit,
+               SUM(CASE WHEN t > 2 THEN 1 ELSE 0 END) AS over_2day,
+               SUM(CASE WHEN t > 3 THEN 1 ELSE 0 END) AS over_3day
+        FROM (
+          -- one row per ORDER (worst leg): delivery_status is per shipment LEG, and counting
+          -- legs double-counted relabeled boxes in the published anomaly table (join-grain
+          -- class, scorecard 41-vs-40 burn 2026-08-09)
+          SELECT f.order_number, ds.carrier, MAX(ds.transit_days) AS t
+          FROM delivery_status ds
+          JOIN fulfillments f ON f.tracking_number = ds.tracking_number
+          WHERE f.tags LIKE ? AND ds.transit_days IS NOT NULL
+          GROUP BY f.order_number, ds.carrier
+        )
+        GROUP BY carrier ORDER BY n DESC
         """,
         (f"%{ship_tag}%",),
     )

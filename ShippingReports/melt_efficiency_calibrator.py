@@ -76,7 +76,7 @@ def collect_dataset(db: sqlite3.Connection) -> tuple[list[dict], int]:
         SELECT kso.snapshot_id, kso.order_number, kso.predicted_risk,
                kso.predicted_config, kso.effective_btu, kso.margin_btu,
                kso.transit_type,
-               ds.transit_days,
+               MAX(ds.transit_days) AS transit_days,
                (
                  CASE WHEN EXISTS (
                    SELECT 1 FROM feedback fb
@@ -92,6 +92,8 @@ def collect_dataset(db: sqlite3.Connection) -> tuple[list[dict], int]:
           AND kso.margin_btu IS NOT NULL
           AND kso.effective_btu IS NOT NULL
           AND kso.effective_btu > 0
+        GROUP BY kso.snapshot_id, kso.order_number  -- per-leg joins duplicated orders, biasing
+                                                    -- n and the warm rate (join-grain class)
         """
     ).fetchall()
     n_cohorts = db.execute(
