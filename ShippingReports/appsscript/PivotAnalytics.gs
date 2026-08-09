@@ -88,6 +88,8 @@ function paBox_(skus) {
  * So: fullmatch each tag individually, DROP `NO `, and require EXACTLY ONE assignment.
  */
 var PA_AHB = /^!([^!]*?)\s*-\s*([A-Za-z]+)_AHB!$/;
+var PA_RESIDUAL_HUB = 'RMFG choice (2+ hubs open)';
+
 function paAssigned_(tags) {
   var picks = [];
   (tags || []).forEach(function (t) {
@@ -96,6 +98,47 @@ function paAssigned_(tags) {
   });
   if (picks.length !== 1) return { carrier: '', hub: PA_NO_TAG };
   return { carrier: paCarrier_(picks[0][1]), hub: String(picks[0][2]).trim() };
+}
+
+/**
+ * 🔴 HUB ATTRIBUTION FOR EXCLUSION-ONLY ORDERS (D17, Kurt 2026-08-07: "if its one hub open, then
+ * just put it in the hub category"). Subtract the order's `!NO` fences from the observed lane
+ * universe and count the hubs left standing:
+ *   exactly 1 open -> that hub. It is effectively assigned; parking it in a residual bucket hid
+ *                     real volume — all 64 wk0803 cases are Dallas, and those FedEx long-hauls
+ *                     were always Dallas's late boxes.
+ *   >= 2 open      -> PA_RESIDUAL_HUB: RMFG genuinely chose.
+ * Tag SHAPE is never special-cased — 9 orders carry an engine `!ANY - Dallas_AHB!` intent
+ * expressed on Shopify as a fence stack, and open-hub counting lands them correctly anyway.
+ */
+function paLanesFrom_(tags, lanes) {
+  (tags || []).forEach(function (t) {
+    var m = String(t).trim().match(PA_AHB);
+    if (!m) return;
+    var c = paCarrier_(String(m[1]).replace(/^(NO|ANY)\s+/i, ''));
+    // every <carrier, hub> in ANY tag — assignment OR fence — is a real lane. DERIVED, never
+    // hardcoded, so a new hub (NJ) falls in automatically.
+    if (c && c !== 'Unknown') lanes[c + '@' + String(m[2]).trim()] = 1;
+  });
+}
+
+function paOpenHubs_(tags, lanes) {
+  var fenced = {};
+  (tags || []).forEach(function (t) {
+    var m = String(t).trim().match(PA_AHB);
+    if (!m) return;
+    var pre = String(m[1]).trim();
+    if (pre.toUpperCase().indexOf('NO ') !== 0) return;
+    var c = paCarrier_(pre.substring(3));
+    if (c && c !== 'Unknown') fenced[c + '@' + String(m[2]).trim()] = 1;
+  });
+  var hubs = {}, out = [];
+  Object.keys(lanes).forEach(function (lane) {
+    if (fenced[lane]) return;
+    hubs[lane.split('@')[1]] = 1;
+  });
+  Object.keys(hubs).forEach(function (h) { out.push(h); });
+  return out.sort();
 }
 
 /** 🔴 Shopify happenedAt is UTC. Taking the date without converting to ET adds a phantom day to
@@ -122,13 +165,28 @@ function paFetchCohort_(shipWeek) {
     ' events(first:50, sortKey:HAPPENED_AT){ edges{ node{ status happenedAt } } } } } } } }';
   // 🔴 -tag:'Reship' — reships are a different population and must never enter cohort analytics.
   var qs = "tag:'" + shipWeek + "' -status:cancelled -tag:'Reship'";
-  var out = [], cursor = null;
+  var out = [], cursor = null, lanes = {};
   while (true) {
     var conn = shopifyGql_(q, { q: qs, cursor: cursor }).orders;
-    conn.edges.forEach(function (e) { out.push(paDerive_(e.node)); });
+    conn.edges.forEach(function (e) {
+      var rec = paDerive_(e.node);
+      rec.tags = e.node.tags || [];
+      paLanesFrom_(rec.tags, lanes);
+      out.push(rec);
+    });
     if (!conn.pageInfo.hasNextPage) break;
     cursor = conn.pageInfo.endCursor;
   }
+  // second pass: the lane universe is only complete once every order has been seen
+  var single = 0;
+  out.forEach(function (r) {
+    if (r.assigned.hub !== PA_NO_TAG) return;
+    var open = paOpenHubs_(r.tags, lanes);
+    if (open.length === 1) { r.assigned.hub = open[0]; single += 1; }
+    else r.assigned.hub = PA_RESIDUAL_HUB;
+  });
+  paLog_('  lane universe: ' + Object.keys(lanes).sort().join(', '));
+  paLog_('  exclusion-only orders resolved to a single open hub: ' + single);
   return out;
 }
 

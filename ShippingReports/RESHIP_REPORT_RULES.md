@@ -516,6 +516,42 @@ delivered, netting +1. No data changed for either box; six other boxes delivered
 undelivered set entirely. Under D16 that same event now shows as still-in-transit −2 / lost +2 with
 the sum flat, instead of an unexplained headline bump.
 
+### D17 — HUB ATTRIBUTION for exclusion-only orders (Kurt 2026-08-07)
+
+> "if its one hub open, then just put it in the hub category"
+
+An order with no assignment tag still carries its `!NO <carrier> - <Hub>_AHB!` fence stack.
+Subtract the fenced lanes from the observed lane universe and count the hubs left standing:
+
+- **exactly 1 hub open → that hub.** It is effectively assigned. Parking it in a residual bucket
+  hid real volume: all **64** wk0803 cases are **Dallas**, and their FedEx long-hauls were always
+  Dallas's late boxes (Dallas `3+ Day` 9 → 18 when they landed).
+- **≥2 hubs open → the residual row**, renamed from `Unknown` to **`RMFG choice (2+ hubs open)`** —
+  RMFG genuinely chose.
+
+🔴 **The lane universe is DERIVED, never hardcoded.** Every `<carrier, hub>` pair seen in ANY
+`_AHB!` tag across the cohort — assignment OR fence — is a lane, so a new hub (NJ next week) falls
+in automatically. wk0803 universe: FedEx@{Anaheim,Chicago,Dallas,Nashville},
+OnTrac@{Anaheim,Chicago,Dallas,Nashville}, UPS@Dallas — note UPS serves **only** Dallas, which is
+why an order fencing `!NO UPS - Dallas` loses UPS entirely.
+
+🔴 **Never special-case tag SHAPE.** 9 orders carry an engine `!ANY - Dallas_AHB!` intent expressed
+on Shopify as a fence stack; classifying purely by open-hub count lands them correctly.
+
+🔴 **The rename is SECTION-SCOPED.** `Unknown · …` exists in BOTH the By Hub and the By Carrier
+blocks. Only the By Hub rows are renamed — there is never an unknown CARRIER, and that row keeps
+its name and its zero. B/C/D on the renamed rows are preserved (matured cohorts are not
+re-attributed): `[11, 37, 678]` and `[1, 3, 26]` survived the rename untouched.
+
+**Validation against the analysis session's `_outputs/reports/2026-08-08-wk0803-unknown-bucket.csv`:
+209/209 in-cohort orders match exactly.** The CSV has 213 rows; the 4 extra (#166331, #166981,
+#168366, #168374) are tagged **`Reship`** and are excluded from the cohort by design, so the
+residual row reads **145**, not the 149 quoted from the CSV.
+
+**Result on the sheet:** Anaheim 468 · Chicago 307 · Dallas **584** (was 520) · Indianapolis 0 ·
+Nashville 801 · `RMFG choice (2+ hubs open)` **145** (was 209) — 2,305 total, By Hub still sums to
+`2 Day 2,194 / 3+ Day 111`.
+
 ### Cutover checklist (once preconditions clear)
 
 (a) confirm Jdbc `SELECT 1` from GAS + RO user scoped; (b) implement the walk-forward current-column
