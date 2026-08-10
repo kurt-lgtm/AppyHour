@@ -30,6 +30,13 @@ Excel re-save), and re-read the layout after any lock/save.
   blank/`0`/`None` guard (~2345).
 - **OrderIDs MUST be sorted ascending** (QC "Sort Order", ~2601) and **unique** — a repeated OrderID
   fails "Duplicate Orders" (~2595).
+- **RUN PIN — invisible, never a column** (2026-08-10; SSOT `ShipRouting/ROUTING_RULES.md` §19.1).
+  `gen_rmfg_sheet` stamps `AHB_RunId / AHB_RunTs / AHB_GitSha / AHB_GitDirty / AHB_ShipTag` as OOXML
+  **custom document properties** (`docProps/custom.xml`) so an audit scores the sheet against the run
+  that actually produced it — wk0810 was scored against the wrong re-run and read "136 diverged" when
+  the truth was 0; wk0803 matches NO run at all (best 7.2%). 🔴 **Never promote this to a visible
+  column or a cell.** The grid is what RMFG reads; a stray column is a sheet-reject vector, and QC
+  maps cells by header name so a property has nothing to collide with. Excel round-trip verified.
 
 ## 2. Names (columns)
 
@@ -384,6 +391,86 @@ ledger line; `--force` without a reason is rejected.
 `validate` audits **every** row's tags against the authority with no edit. This is the check that
 finds the invented lanes. It is the one command safe to run on a sent sheet.
 
+### 7.10 ICE EDITING IS DELIBERATE-ONLY — "never touch ice" became "never touch ice ACCIDENTALLY"
+§7.4 stays exactly as written for every ROUTING op: a routing edit rewrites the `_AHB!` span and
+nothing else, forever. §7.10 opens ONE narrow, loud door — the `ice` command — and nothing else in
+the tool may write a gel token. The failure this shape prevents: an ice change riding along inside a
+routing flip, invisible in the diff, in the exact column RMFG packs from.
+- **`ice` touches ONLY the gel span**, the exact mirror of §7.4: routing, `Reship*`, `Fixed_Route`,
+  `Gift Redemption`, `!WeatherHold*` and every other token carry through verbatim, in original order
+  and multiplicity. The tool asserts the non-gel multiset is unchanged and aborts the row if not.
+- **Vocabulary is IMPORTED, never typed**: `lib/qc_gate.GEL_MAX` + `qc_gate.split_tags`. A gel token
+  outside that vocabulary is an ERROR — the tool will not mint `!ExtraGel96oz!` because someone asked.
+- **Ceiling = the documented MAX configs** (`qc_gate`'s own max test: both `GEL_MAX` tags, or
+  `≥2 × !ExtraGel48oz!` = the sheet-only 3×48 upgrade). More than 2×48oz, or more than one 24oz, is
+  beyond ANY documented config and is refused unless `--force --reason`. There is no numeric ceiling
+  in the authority beyond this — do not invent one.
+- **REMOVING gel needs `--allow-ice-removal` AND `--reason`.** Standing doctrine is add-only
+  ([[tray-ice-tags-never-remove]]); this is a narrow, logged exception, not a repeal. Every removed
+  token is named in the ledger with the reason. Upgrades (`--to-max`, `--upgrade-48`) are the normal
+  path and need no destructive flag.
+- **The ACTIVE seasonal policy is named in the warning.** `MAX_ICE_PLUS` (live default ON,
+  ROUTING_RULES §0) is read through `lib/settings.flag` — the same read path the ice pass uses. An
+  edit that removes gel, or that leaves a non-tray row below max while the policy is ON, WARNS with
+  the policy named. A policy read that FAILS warns loudly; it never silently assumes a default.
+
+### 7.11 TRAY ROWS ARE REFUSED BY THE GEL BLOCK — and a tray is identified from the SKU authority
+RMFG packs trays with a fixed 2×96oz; a gel tag on a tray is noise at best
+(`qc_gate` `tray_has_gel`). A tray row in an ice selection is **REFUSED and NAMED**, never silently
+skipped — a silent skip is how an operator believes 668 rows moved when 405 did.
+🔴 **Never identify a tray by a `(Tray)` substring in the column header.** `TR-ROME` ships as
+`AHB (S_REG): When in Rome` — no `(Tray)` token — so the substring test misses **1 of 12** tray
+columns on the real 08-10 vF. Tray columns are resolved by mapping the header name to its SKU in
+`AppyHour/mfg_names_authoritative.csv` and testing the `TR-` prefix (the same authority that governs
+MFG names, [[never-fabricate]] / [[sku-mfg-name-validation-gate]]). A row is a tray if any tray
+column is non-empty/non-zero.
+🔴 **A guard that cannot fire is worse than none:** if ZERO tray columns resolve against the
+authority, the `ice` command REFUSES to run at all rather than proceed with an inert tray guard.
+
+### 7.12 FIND-AND-REPLACE / TAG MIGRATION — the result is re-validated, or the whole op is refused
+The wk0810 hand corrections were Excel find-and-replace with no authority check. This command is the
+replacement, so the one thing it may never do is smuggle a bad tag in through a rename:
+- **Every RESULTING tag list is validated by the same authority as a retag** (§7.2 lane legality +
+  OnTrac CELL coverage, §7.3 grammar, §7.5 fence coherence). **If any row's result fails, the ENTIRE
+  operation is refused and the failing rows are named** — never a partial migration.
+- **Newly-introduced tags get two extra checks a pre-existing tag does not**: a NEW positive
+  `!FedEx Home Delivery - <hub>` pin is an ERROR (`FENCE_FEDEX_HD`, ROUTING_RULES §10 — use
+  `!ANY FedEx`), and a NEW gel token is an ERROR (gel moves only through `ice`, §7.10). A tag that
+  was already on the row is left alone: this tool fails what the EDIT introduces, not what it found.
+- **Hub/service renames go through `canon`, never string surgery.** `--rename-hub "Salt Lake
+  City=Chicago"` parses each tag and re-emits it in the SAME form; multi-word hub tokens survive
+  because the grammar owns them (§7.3 — `(\w+)` broke on the first multi-word hub in 5 places at
+  once). A rename to a token `canon.HUBS` does not know produces an unparseable tag and is refused —
+  the tool cannot invent a hub.
+- **Deleting a token via an empty `--to` is allowed for non-gel tokens only**; deleting a gel token
+  requires `--allow-ice-removal` (§7.10).
+
+### 7.13 A 2,000-ROW MIGRATION IS REVIEWED AS ~10 LINES, NOT 2,000
+A per-row table nobody reads is not a preview. `replace` (and any op run with `--grouped`) previews
+**distinct before → after tag STRING with a count**, so a whole-cohort migration is reviewable at a
+glance. Failing rows are ALWAYS printed individually regardless of grouping — a failure must never be
+summarized away. `--detail` forces the per-row table back on.
+🔴 Selection safety: `ice` and `replace` REFUSE to run with no selector at all — matching every row
+in the cohort must be spelled `--all`, never inferred from an absent flag.
+
+### 7.14 RESHIPS ARE THE HAND-EDIT CLASS — select them as a class, never by eye
+🔴 Kurt, 2026-08-09: **"its usually reships that need hand editing."** Reships enter from CS *outside*
+the normal pipeline, so they are the rows most likely to be wrong — routing, ice, or items — and the
+rows an operator would otherwise pick out of a 2,253-row sheet by hand. `--reships` scopes any op to
+that class in one command; `--no-reships` is the complement (edit the pipeline cohort, leave CS's rows
+alone).
+- **Identity is `qc_gate.is_reship_tag`, IMPORTED.** The live taxonomy has TWO forms —
+  `Reship - <reason>` **and** the nested `Shipping::<reason>::<x>` (ROUTING_RULES §6 /
+  RESHIP_RECOVERY). 🔴 A hand-rolled `tag.startswith("Reship")` silently misses the nested form, so
+  a "fix all the reships" run would quietly skip a whole sub-population and report success. Never
+  re-derive this predicate; the tool imports the same one the engine and QC gate use.
+- The selector AND-combines with every other predicate, so `--reships --state MI` is "the MI reships"
+  and `--reships --from-hub Nashville` is "the reships currently routed out of Nashville".
+- 🔴 Reships interact with ice policy: MATRIX_RULES rule 16 makes a reship forecast-INDEPENDENT (a
+  reship IS a prior cold-chain failure — never re-ice it lighter). An `ice --reships --remove …` is
+  therefore the single most suspicious ice edit in the tool, and gets both the `--allow-ice-removal`
+  gate and the MAX_ICE_PLUS warning.
+
 ### Known result to regress against (do not "fix" the tool until this reproduces)
 `AHB_WeeklyProductionQuery_08-10-26_vF.xlsx` (2,253 rows): **exactly 3** invented OnTrac lanes —
 **#169610, #169696, #169785**, all `!OnTrac Ground - Chicago_AHB!` on zips absent from the master's
@@ -396,3 +483,10 @@ finds the invented lanes. It is the one command safe to run on a sent sheet.
   does not carry; the tool cannot infer the ship day from the workbook and does not guess.
 - **Whether the edit is *right*** — the tool proves a lane is legal and covered, never that it is the
   cheapest or fastest. That judgment stays with the engine and Kurt.
+- **Whether the ICE amount is right for the lane** — `ice` proves the gel tokens are legal vocabulary,
+  within the documented max config, not on a tray, and consistent with the ACTIVE seasonal policy. It
+  does NOT compute thermal sufficiency or DistVol slack; `scripts/ice_distvol_workflow.py` owns that.
+  A row with no DistVol space physically cannot take another pack and this tool cannot see that.
+- **`revert` is OP-AWARE, and that is a choice**: a routing op reverts the routing span, an `ice` op
+  reverts the gel span, a `replace` reverts the whole token list. Reverting an op that a LATER op
+  overwrote restores that op's span only — the ledger is append-only and read newest-first.
