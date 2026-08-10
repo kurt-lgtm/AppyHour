@@ -605,6 +605,11 @@ function paPreviousShipWeek_(shipWeek) {
  */
 function refreshCurrentColumn(shipWeek) {
   var dry = !paWriteArmed_();
+  // 🔴 A TIME-DRIVEN TRIGGER PASSES AN EVENT OBJECT as the first argument. Taking it as `shipWeek`
+  // made `cur` an object and killed the run at `shipWeek.replace(...)` in ~1s, before any fetch —
+  // two nights straight, while the menu path (no argument) kept working, which is exactly why
+  // manual testing never saw it. Only ever accept a real `_SHIP_YYYY-MM-DD` string.
+  if (typeof shipWeek !== 'string' || !/^_SHIP_\d{4}-\d{2}-\d{2}$/.test(shipWeek)) shipWeek = '';
   var cur = shipWeek || paCurrentShipWeek_();
   var age = paCohortAgeDays_(cur);
   paLog_('=== refreshCurrentColumn ' + cur + ' (age ' + age + 'd) — ' +
