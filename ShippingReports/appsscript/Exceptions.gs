@@ -389,6 +389,22 @@ var EXC_LOG_HEADERS = ['detected', 'event when', 'order', 'customer', 'carrier',
                        'class', 'carrier event'];
 
 /**
+ * 🔴 Canonical carrier name is OnTrac; LaserShip is the ALIAS (Kurt 2026-08-07). The rule was
+ * codified for the reship/analytics tabs and this writer never got it, so every row here read
+ * "LaserShip". Local `exc`-prefixed on purpose: Code.gs owns a `normCarrier_` that maps ontrac to
+ * its OWN bucket, and Apps Script shares one global scope — redefining it would silently change
+ * the hourly reship report.
+ */
+function excCarrier_(raw) {
+  var s = String(raw || '').toLowerCase();
+  if (s.indexOf('lasership') >= 0 || s.indexOf('ontrac') >= 0) return 'OnTrac';
+  if (s.indexOf('veho') >= 0) return 'Veho';
+  if (s.indexOf('fedex') >= 0) return 'FedEx';
+  if (s.indexOf('ups') >= 0) return 'UPS';
+  return raw ? String(raw) : '';
+}
+
+/**
  * Append one alert row.
  *
  * Two timestamps on purpose: `detected` = when this sweep ran and posted (shared by every row
@@ -408,8 +424,8 @@ function excLog_(stamp, rec, cls, detail, eventAt) {
     sh.getRange(1, 1, 1, width).setValues([EXC_LOG_HEADERS]).setFontWeight('bold');
   }
   // display label in the sheet; the internal token stays in _exc_state.alerted_classes
-  sh.appendRow([stamp, eventAt || '', '#' + rec.order, rec.customer, rec.carrier, rec.state,
-                excDisplay_(cls), detail]);
+  sh.appendRow([stamp, eventAt || '', '#' + rec.order, rec.customer, excCarrier_(rec.carrier),
+                rec.state, excDisplay_(cls), detail]);
 }
 
 // ---------------------------------------------------------------- entry point
@@ -511,7 +527,7 @@ function hourlyExceptionSweep() {
       rec.last_seen = stamp;
       if (!ship) return;
       var c = ship.carrier;
-      rec.carrier = (c && (c.name || c.code)) || rec.carrier || '';
+      rec.carrier = excCarrier_((c && (c.name || c.code)) || rec.carrier || '');
       var v = excClassify_(ship);
       if (v.cls === 'DELIVERED') { rec.open = false; return; }
       if (!v.ping) return;
