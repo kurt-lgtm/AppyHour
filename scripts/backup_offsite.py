@@ -39,13 +39,17 @@ def app_dir() -> Path:
 
 def db_path() -> Path:
     # Canonical since 2026-07-08: C:\AppyHourData (outside MSIX-virtualized %APPDATA%,
-    # REBUILD-WITH-AI.md §5.1). Legacy %APPDATA% path = transition fallback only.
+    # REBUILD-WITH-AI.md §5.1). Legacy %APPDATA% path = pre-migration fallback only.
+    # 2026-07-22: key on the canonical DIR, not the file — this runs at LOGON via
+    # sync_logon's post-ingest snapshot, and a transient file-invisibility at login
+    # must not silently snapshot the legacy path (same race that split-brained
+    # sync_logon for 9 days; see appyhour_lib/paths.py db_path docstring).
     override = os.environ.get("AH_DB_OVERRIDE", "")
     if override:
         return Path(override)
-    canonical = Path(r"C:\AppyHourData\shipping.db")
-    if canonical.exists():
-        return canonical
+    root = Path(r"C:\AppyHourData")
+    if root.exists():
+        return root / "shipping.db"
     return app_dir() / "shipping.db"
 
 
@@ -156,13 +160,44 @@ def zip_knowledge(dst: Path) -> int:
     return count
 
 
+# 🔴 THE TEST FOR SKIPPING SOMETHING IS NOT "IS IT REGENERABLE" (2026-08-10). It is: what does
+# regenerating COST, and what is broken while you regenerate? `carrier_tnt_cache.json` was skipped
+# here as a "regenerable cache" — true, and wrong: ~19,000 ShipEngine lanes at a measured 46% 429
+# rate is DAYS of wall clock, and for all of those days the cache is cold, which means unmeasured
+# lanes score `unproven`, lose to proven lanes at farther hubs, and reintroduce the misroute class
+# that put ~110 boxes on the wrong hub in wk0810. Same reasoning retires "regenerable" for the
+# lane_audit jsonl and the DistVol xlsx. Answer both questions in a comment before adding a skip.
+_CANON_DIR_SKIP = {
+    "shipping.db",            # snapshotted separately via snapshot_sqlite (live-safe sqlite backup)
+    "shipping.db-wal", "shipping.db-shm", "shipping.db.writelock",
+}
+
+
+def canonical_dir_files() -> list[Path]:
+    """Everything in `C:\\AppyHourData` except the DB (handled separately) and its sqlite sidecars.
+
+    🔴 ENUMERATE THE DIRECTORY, NEVER ONE FILENAME. `db_path()` looks for `shipping.db` by name, so
+    anything else landing beside it was unbacked BY CONSTRUCTION and silently — which is exactly
+    what happened when the carrier-TNT quote cache moved here on 2026-08-10 to escape the MSIX
+    `%APPDATA%` overlay split. Enumerating inverts the failure mode: forgetting to ADD something
+    no longer loses it; forgetting to SKIP something merely costs a little space."""
+    root = Path(r"C:\AppyHourData")
+    if not root.is_dir():
+        return []
+    return [p for p in sorted(root.glob("*"))
+            if p.is_file() and p.name not in _CANON_DIR_SKIP
+            and ".orphan-" not in p.name and ".MIGRATED-" not in p.name]
+
+
 def reference_files() -> list[Path]:
     """Single-copy reference data NOT in git that the engine hard-depends on — must not fall out of the
     backup set again (the DistVol lookup was recovered from the old SSD in the 2026-06 restore):
       - box-size DistVol lookup (box_simulation.py crashes without it),
       - carrier COVERAGE files = the routing serviceability AUTHORITY (Veho/OnTrac zip lists; lose these and
         the serviceability gate can't tell who serves a zip),
-      - mfg_translations.csv = RMFG product→column mapping (gitignored, so NOT in the code backup).
+      - mfg_translations.csv = RMFG product→column mapping (gitignored, so NOT in the code backup),
+      - everything else in the canonical data dir (see canonical_dir_files — currently the
+        carrier-TNT quote cache, ~19k lanes that cost days of rate-limited API time to rebuild).
     All non-secret → cleartext zip is fine. Flat-named in the zip, so keep filenames distinct."""
     desktop = Path.home() / "Desktop"
     routing = app_dir() / "routing"
@@ -173,7 +208,7 @@ def reference_files() -> list[Path]:
         routing / "ontrac_master.xlsx",
         REPO_ROOT / "mfg_translations.csv",
     ]
-    return [p for p in cands if p.exists()]
+    return [p for p in cands if p.exists()] + canonical_dir_files()
 
 
 def zip_reference(dst: Path) -> int:
@@ -193,6 +228,13 @@ def cred_files() -> list[Path]:
     portal_profiles/, plus the repo-root .env. (cut_order_server/.env is also
     checked but does not currently exist.)"""
     base = app_dir()
+    # 🔴 Before adding a name here, answer BOTH questions in the _CANON_DIR_SKIP comment above:
+    # what does regenerating cost, and what is broken while you regenerate? "Regenerable" alone
+    # is not the test — that reasoning is what left the quote cache unbacked.
+    # `carrier_tnt_cache.json` stays listed because the file MOVED to C:\AppyHourData on
+    # 2026-08-10 and is now backed up by canonical_dir_files(); the legacy %APPDATA% copy is a
+    # renamed .MIGRATED- corpse. `sync_heartbeat.json` is genuinely per-run state, rewritten
+    # every sync, and nothing downstream reads a historical value.
     _SKIP_JSON = {"carrier_tnt_cache.json", "sync_heartbeat.json"}
 
     def _is_junk(name: str) -> bool:
@@ -268,11 +310,20 @@ def encrypt_creds(dst: Path, passphrase: str) -> int:
 _drive_svc = None  # cached Drive service for this process
 
 
-def upload(path: Path) -> None:
-    """Upload one artifact to Google Drive. Primary path = the drive.file OAuth
-    token (gws-INDEPENDENT, via the sibling drive_backup_upload module). Falls
-    back to the gws CLI only if the OAuth path is unavailable, so a missing or
-    expired token degrades instead of silently dropping the offsite copy."""
+def upload(path: Path) -> dict:
+    """Upload one artifact to Google Drive and RETURN the Drive metadata.
+
+    Primary path = the drive.file OAuth token (gws-INDEPENDENT, via the sibling
+    drive_backup_upload module). Falls back to the gws CLI only if the OAuth
+    path is unavailable, so a missing or expired token degrades instead of
+    silently dropping the offsite copy.
+
+    The return value is what makes the run HONEST: ``run()`` re-reads Drive's
+    reported id+size for every artifact and hard-fails when an upload didn't
+    actually land (2026-08-09 — before this, the run logged "backup OK" off the
+    local zips alone and an upload that never happened was indistinguishable
+    from one that did).
+    """
     global _drive_svc
     try:
         sd = str(Path(__file__).resolve().parent)
@@ -282,8 +333,7 @@ def upload(path: Path) -> None:
 
         if _drive_svc is None:
             _drive_svc = dbu._drive()
-        dbu.upload(_drive_svc, path)
-        return
+        return dbu.upload(_drive_svc, path) or {}
     except Exception as exc:
         exe = shutil.which("gws")
         if not exe:
@@ -293,6 +343,49 @@ def upload(path: Path) -> None:
             file=sys.stderr,
         )
         subprocess.run([exe, "drive", "+upload", str(path)], check=True)
+        return _gws_lookup(exe, path.name)
+
+
+def _gws_lookup(exe: str, name: str) -> dict:
+    """Read back the just-uploaded file's id+size via gws so the fallback path is
+    verifiable too. `gws drive +upload` prints nothing we can trust, and an
+    unverifiable upload is exactly the silent-success this module must not have.
+    Returns {} on any failure -> the caller reports it as a problem."""
+    import json as _json
+
+    q = f"name = '{name}' and trashed = false"
+    params = _json.dumps({"q": q, "fields": "files(id,name,size)", "orderBy": "createdTime desc",
+                          "pageSize": 1, "supportsAllDrives": True, "includeItemsFromAllDrives": True})
+    try:
+        out = subprocess.run([exe, "drive", "files", "list", "--params", params],
+                             capture_output=True, text=True, timeout=120)
+        files = _json.loads(out.stdout).get("files", [])
+        return files[0] if files else {}
+    except Exception:
+        return {}
+
+
+def verify_uploads(uploaded: list[tuple[Path, dict]]) -> list[str]:
+    """Compare each artifact's LOCAL bytes against what Drive says it stored.
+
+    Catches, per acceptance 2026-08-09: a zero-byte artifact, an upload that
+    returned no id (never landed), and a truncated/partial resumable upload.
+    """
+    problems: list[str] = []
+    for path, res in uploaded:
+        if res.get("skipped"):
+            continue
+        local = path.stat().st_size if path.exists() else 0
+        if local == 0:
+            problems.append(f"{path.name}: local artifact is 0 bytes")
+            continue
+        if not res.get("id"):
+            problems.append(f"{path.name}: upload returned no Drive id (did NOT land offsite)")
+            continue
+        remote = int(res.get("size") or 0)
+        if remote != local:
+            problems.append(f"{path.name}: Drive size {remote} != local {local} (partial upload)")
+    return problems
 
 
 def prune_weekly_snapshots(backup_dir: Path, keep_days: int = 28, today: date | None = None) -> int:
@@ -336,19 +429,25 @@ def _self_check_and_log(result: dict, day: date) -> None:
         problems.append("knowledge bundle empty (vault/skills not found)")
     if result.get("creds_skipped"):
         problems.append(f"creds skipped: {result['creds_skipped']}")
+    # 2026-08-09: an OFFSITE backup that stayed on this machine is not a backup.
+    # Drive-verified bytes are part of the pass condition, not a nice-to-have.
+    upload_problems = list(result.get("upload_problems") or [])
+    problems.extend(upload_problems)
+    verified = sum(1 for _p, r in result.get("uploaded", []) if r.get("id"))
     status = "OK" if not problems else "DEGRADED"
     line = (
         f"{datetime.now():%Y-%m-%d %H:%M:%S} backup {status} "
         f"snapshot_bytes={snap_bytes} knowledge={result.get('knowledge_files', 0)} "
         f"creds={result.get('creds_files', 0)} reference={result.get('reference_files', 0)} "
-        f"docs={result.get('docs', 0)} pruned={result.get('pruned', 0)}"
+        f"docs={result.get('docs', 0)} pruned={result.get('pruned', 0)} "
+        f"drive_verified={verified}/{len(result.get('uploaded', []))}"
         + (f" problems={'; '.join(problems)}" if problems else "")
     )
     log_dir = REPO_ROOT / "_outputs" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     with (log_dir / f"backup-{day:%Y-%m-%d}.log").open("a", encoding="utf-8") as fh:
         fh.write(line + "\n")
-    if snap_bytes == 0:
+    if snap_bytes == 0 or upload_problems:
         raise RuntimeError("backup self-check FAILED: " + "; ".join(problems))
 
 
@@ -366,12 +465,20 @@ def run(today: date | None = None) -> dict:
     doc_count = zip_logic_docs(docs_zip)
     knowledge_count = zip_knowledge(knowledge_zip)
     reference_count = zip_reference(reference_zip)
-    upload(snapshot)
-    upload(docs_zip)
+
+    uploaded: list[tuple[Path, dict]] = []
+
+    def _up(path: Path) -> None:
+        # resolve `upload` at CALL time so --no-upload's monkeypatch still applies
+        res = globals()["upload"](path)
+        uploaded.append((path, res if isinstance(res, dict) else {}))
+
+    _up(snapshot)
+    _up(docs_zip)
     if knowledge_count:
-        upload(knowledge_zip)
+        _up(knowledge_zip)
     if reference_count:
-        upload(reference_zip)
+        _up(reference_zip)
 
     # Creds: encrypt-or-skip. Never upload secrets in plaintext, and never let a
     # missing passphrase fail the rest of the backup.
@@ -381,7 +488,7 @@ def run(today: date | None = None) -> dict:
     if passphrase:
         creds_count = encrypt_creds(creds_enc, passphrase)
         if creds_count:
-            upload(creds_enc)
+            _up(creds_enc)
     elif cred_files():
         creds_skipped = "AH_BACKUP_PASSPHRASE unset"
         print(
@@ -404,6 +511,8 @@ def run(today: date | None = None) -> dict:
         "creds_files": creds_count,
         "creds_skipped": creds_skipped,
         "pruned": pruned,
+        "uploaded": [(str(p), r) for p, r in uploaded],
+        "upload_problems": verify_uploads(uploaded),
     }
     _self_check_and_log(result, day)
     # Dead-man-switch (HEARTBEAT_RULES.md): success beat + optional external healthchecks ping.
@@ -542,7 +651,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.no_upload:
             original_upload = globals()["upload"]
-            globals()["upload"] = lambda path: None
+            globals()["upload"] = lambda path: {"skipped": True}
             try:
                 result = run()
             finally:
@@ -555,6 +664,8 @@ def main(argv: list[str] | None = None) -> int:
             f"docs={result['docs']} knowledge_files={result['knowledge_files']} "
             f"reference_files={result['reference_files']} creds_files={result['creds_files']}"
             f"{' (' + result['creds_skipped'] + ')' if result['creds_skipped'] else ''} "
+            f"drive_verified={sum(1 for _p, r in result['uploaded'] if r.get('id'))}/"
+            f"{len(result['uploaded'])} "
             f"pruned={result['pruned']}"
         )
         return 0
