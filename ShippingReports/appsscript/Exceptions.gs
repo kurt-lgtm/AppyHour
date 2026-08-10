@@ -370,13 +370,22 @@ var EXC_EMOJI_ = {
  * whole point of the wording.
  */
 var EXC_DISPLAY_ = {
-  NEVER_PICKED_UP: 'Lost in Transit (no scan)',   // Kurt 2026-08-07, verbatim
-  // LOST: intentionally NOT relabelled here — "Lost in Transit" was proposed for coherence but
-  // is not Kurt-approved yet. It renders as its token until it is.
+  // 🔴 Aligned to the D16 taxonomy on the analytics tabs (Kurt 2026-08-10): the same condition
+  // must not read two ways across tabs. Was 'Lost in Transit (no scan)'.
+  NEVER_PICKED_UP: 'never picked up by carrier',
 };
 
+/**
+ * Display label for a class token. The fallback title-cases the token rather than returning it
+ * raw: `String(cls).replace(/_/g,' ')` alone emitted 'ADDRESS ISSUE' while a mapped sibling
+ * emitted 'Address Issue', so the SAME class rendered two ways on the tab. Casing is not naming —
+ * an unmapped token still shows its own words, just consistently.
+ */
 function excDisplay_(cls) {
-  return EXC_DISPLAY_[cls] || String(cls || '').replace(/_/g, ' ');
+  if (EXC_DISPLAY_[cls]) return EXC_DISPLAY_[cls];
+  return String(cls || '').replace(/_/g, ' ').toLowerCase().replace(/[a-z]/g, function (ch) {
+    return ch.toUpperCase();
+  });
 }
 
 function excMessage_(rec, cls, detail, eventAt) {
