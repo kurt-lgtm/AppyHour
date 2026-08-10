@@ -66,6 +66,14 @@ var EXC_DRY_RUN = true;
 // Slack remains hard-blocked by EXC_DRY_RUN inside excSlackPost_ regardless of this flag.
 var EXC_RECORD_WHEN_SILENT = true;
 
+// 🔴 FORWARD-ONLY SEEDING (Kurt 2026-08-10: "from now I want just new shit to come in").
+// When true, a sweep classifies exactly as normal but records every hit into state as ALREADY
+// logged AND already alerted, appending NO row and posting NOTHING. That makes the whole current
+// backlog invisible to the tab and — when Slack unmutes — kills the 4,289-order burst, which was
+// the open decision. Never leave this on: with it set, genuinely new exceptions are swallowed too.
+// Set only by excSeedBacklogAsLogged(), which restores it in a finally block.
+var EXC_SEEDING = false;
+
 var EXC_HOST_SHEET_ID = '1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU';
 var EXC_CHANNEL = 'C0BLKKPAW8P';          // private #exceptions. NEVER SLACK_WEBHOOK (public #reships).
 var EXC_LOG_TAB = 'Exceptions';
@@ -532,6 +540,12 @@ function hourlyExceptionSweep() {
       if (v.cls === 'DELIVERED') { rec.open = false; return; }
       if (!v.ping) return;
       if (rec.alerted.indexOf(v.cls) >= 0) return;   // dedup on (order, class)
+      if (EXC_SEEDING) {                             // record as already-handled, emit nothing
+        if (!rec.logged) rec.logged = [];
+        if (rec.logged.indexOf(v.cls) < 0) { rec.logged.push(v.cls); recorded++; }
+        if (rec.alerted.indexOf(v.cls) < 0) rec.alerted.push(v.cls);
+        return;
+      }
       if (EXC_DRY_RUN) {                             // Slack silent
         wouldPost.push('#' + rec.order + '  ' + excDisplay_(v.cls) + '  ' + rec.carrier +
                        '  ' + rec.state + '  ' + (v.eventAt || 'no scan time'));
@@ -556,7 +570,7 @@ function hourlyExceptionSweep() {
 
     // Persist when recording, so the tab-write dedup (`rec.logged`) survives the next sweep and the
     // same exception is not appended hourly. `alerted` is still untouched while dry.
-    if (!EXC_DRY_RUN || EXC_RECORD_WHEN_SILENT) excSaveState_(st);
+    if (!EXC_DRY_RUN || EXC_RECORD_WHEN_SILENT || EXC_SEEDING) excSaveState_(st);
     var reached = Object.keys(pp.seen).length;
     var neverPolled = open.filter(function (k) { return !String(st[k].last_seen || '').trim(); }).length;
     Logger.log('exceptions sweep: reached ' + reached + ' of ' + batch.length + ' polled (' +
@@ -573,7 +587,7 @@ function hourlyExceptionSweep() {
                  wouldPost.slice(0, 25).join('\n  ') +
                  (wouldPost.length > 25 ? '\n  ...and ' + (wouldPost.length - 25) + ' more' : ''));
     }
-    return { posted: posted, wouldPost: wouldPost.length, reached: reached,
+    return { posted: posted, recorded: recorded, wouldPost: wouldPost.length, reached: reached,
              open: open.length, neverPolled: neverPolled, dryRun: EXC_DRY_RUN };
   } catch (e) {
     try {
@@ -713,4 +727,27 @@ function excSelfTest() {
 
   Logger.log(fails.length ? 'FAIL:\n' + fails.join('\n') : 'PASS: ' + (cases.length + 1) + ' cases');
   return fails;
+}
+
+/**
+ * ONE-SHOT: mark every exception the sweep can currently see as already logged AND already
+ * alerted, without touching the Exceptions tab or Slack. Run repeatedly until it reports
+ * `seeded 0` — the poll budget is ~1,200 orders per run against a queue of several thousand,
+ * so a single pass does NOT cover the backlog.
+ */
+function excSeedBacklogAsLogged() {
+  EXC_SEEDING = true;
+  try {
+    var r = hourlyExceptionSweep();
+    // 🔴 report `recorded`, not `wouldPost`: the seeding branch returns before wouldPost is
+    // populated, so reading that would print "SEEDED 0" on every run and look like a no-op.
+    var msg = 'SEEDED ' + r.recorded + ' exception(s) as already-handled; ' +
+              'polled ' + r.reached + ', still never polled ' + r.neverPolled +
+              '. Re-run until seeded reaches 0. No rows appended, nothing posted.';
+    Logger.log(msg);
+    try { SpreadsheetApp.getUi().alert('Seed backlog', msg, SpreadsheetApp.getUi().ButtonSet.OK); } catch (e) {}
+    return r;
+  } finally {
+    EXC_SEEDING = false;                            // never leave seeding armed
+  }
 }
