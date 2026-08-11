@@ -112,6 +112,32 @@ a new phrasing, means re-running the replay — not eyeballing the regex.
 
 ## Cadence
 
+### 🔴 WEEKLY RHYTHM — tab every day, Slack Wed–Sun only (Kurt 2026-08-10, committed to Dan)
+
+| | Mon | Tue | Wed | Thu | Fri | Sat | Sun |
+|---|---|---|---|---|---|---|---|
+| **Exceptions tab** | record | record | record | record | record | record | record |
+| **Slack #exceptions** | silent | silent | ping | ping | ping | ping | ping |
+
+Mon/Tue are labels-created-nothing-moving days — pinging them is noise. Those exceptions
+**accumulate silently and post on WEDNESDAY if still live**.
+
+🔴 **The day gate must be in TWO places, and the sweep one is the load-bearing half.**
+`excSlackPost_` only suppresses the HTTP call; the sweep stamps `rec.alerted` *after* that call
+returns. Gating only the post path would mark an exception alerted with nothing ever posted, and
+Wednesday would skip it — **silently swallowed, the exact failure this job exists to prevent.**
+So the sweep checks `excPingDayET_()` first: on Mon/Tue it records the row, leaves `alerted`
+untouched, and returns. `excSlackPost_` keeps its own gate as belt-and-braces for any future
+call site.
+
+Day-of-week is evaluated in **ET** (`Utilities.formatDate(..., 'America/New_York', 'EEE')`), not
+the script timezone, so a late-evening run cannot land on the wrong side of midnight.
+
+Ping classes are unchanged — not-picked-up, damaged, weather delays. The rhythm is a *day* gate,
+not a class filter.
+
+### Base schedule
+
 - **Hourly**, on the host sheet's existing time trigger (Dan accepted hourly as the fallback;
   Kurt: *"I'll look into that, if not, fallback to hourly status checks"*).
 - **Webhooks: investigated 2026-07-31, NOT adopted as the primary mechanism.** ParcelPanel does

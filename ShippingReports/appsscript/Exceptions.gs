@@ -74,6 +74,20 @@ var EXC_RECORD_WHEN_SILENT = true;
 // Set only by excSeedBacklogAsLogged(), which restores it in a finally block.
 var EXC_SEEDING = false;
 
+// 🔴 WEEKLY RHYTHM (Kurt 2026-08-10, committed to Dan): the TAB records every day, Mon-Sun; SLACK
+// pings only Wed-Sun. Mon/Tue are labels-created-nothing-moving days — pinging them is noise, so
+// those exceptions accumulate silently and post on WEDNESDAY if still live. No extra bookkeeping
+// makes that work: `alerted` is only stamped when a post actually happens, so a Mon/Tue hit stays
+// un-alerted and the Wednesday sweep picks it up naturally.
+// Day-of-week is evaluated in ET, not the script timezone, so a late-evening run cannot land on
+// the wrong side of midnight.
+var EXC_PING_DAYS = { Wed: 1, Thu: 1, Fri: 1, Sat: 1, Sun: 1 };
+var EXC_TZ = 'America/New_York';
+
+function excPingDayET_() {
+  return !!EXC_PING_DAYS[Utilities.formatDate(new Date(), EXC_TZ, 'EEE')];
+}
+
 var EXC_HOST_SHEET_ID = '1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU';
 var EXC_CHANNEL = 'C0BLKKPAW8P';          // private #exceptions. NEVER SLACK_WEBHOOK (public #reships).
 var EXC_LOG_TAB = 'Exceptions';
@@ -338,6 +352,12 @@ function excSlackPost_(text) {
   // the channel unreachable from ANY call site, including one added later by someone who did not
   // read the flag. Belt and braces on purpose — the cost of a stray post is Kurt's channel.
   if (EXC_DRY_RUN) { Logger.log('[DRY RUN] suppressed Slack post: ' + String(text).slice(0, 120)); return; }
+  // Second, INDEPENDENT gate. Mon/Tue never post; the row is already on the tab and `alerted` is
+  // left unstamped, so the same exception posts on Wednesday if it is still live.
+  if (!excPingDayET_()) {
+    Logger.log('[Mon/Tue] suppressed Slack post (records only): ' + String(text).slice(0, 120));
+    return;
+  }
   var token = PropertiesService.getScriptProperties().getProperty('SLACK_BOT_TOKEN');
   if (!token) throw new Error('SLACK_BOT_TOKEN missing — cannot post to #exceptions');
   var r = UrlFetchApp.fetch('https://slack.com/api/chat.postMessage', {
@@ -569,6 +589,20 @@ function hourlyExceptionSweep() {
         // 🔴 `alerted` untouched and `open` left true ON PURPOSE: the Slack ping for this
         // (order, class) must still fire on the first live sweep. See the EXC_DRY_RUN note.
         return;
+      }
+      // 🔴 Mon/Tue: RECORD but do not alert. The gate must be here as well as inside
+      // excSlackPost_ — that one only suppresses the HTTP call, while `alerted` is stamped right
+      // after it returns. Relying on the post-path gate alone would mark the exception alerted
+      // with nothing ever posted, and Wednesday would skip it: silently swallowed, which is the
+      // exact failure this job exists to prevent.
+      if (!excPingDayET_()) {
+        if (!rec.logged) rec.logged = [];
+        if (rec.logged.indexOf(v.cls) < 0) {
+          excLog_(stamp, rec, v.cls, v.detail, v.eventAt);
+          rec.logged.push(v.cls);
+          recorded++;
+        }
+        return;                                      // `alerted` untouched -> posts on Wednesday
       }
       excSlackPost_(excMessage_(rec, v.cls, v.detail, v.eventAt));
       excLog_(stamp, rec, v.cls, v.detail, v.eventAt);
