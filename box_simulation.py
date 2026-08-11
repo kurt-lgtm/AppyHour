@@ -274,12 +274,26 @@ def fetch_cancelled_tagged(base: str, hdr: dict, tag: str) -> list[dict]:
         cursor = data["orders"]["pageInfo"]["endCursor"]
 
 
-def fetch_all_orders(base: str, hdr: dict, tag: str) -> list[dict]:
+def fetch_all_orders(base: str, hdr: dict, tag: str, live: bool = False) -> list[dict]:
+    """Fetch a cohort's orders. `live=True` BYPASSES the response cache.
+
+    🔴 The default path is cached (`resource="default"` = 30 min, AppyHourMCP/tools/cache.py
+    CACHE_TTL). That is right for a build — the same cohort is fetched repeatedly inside one
+    run — and WRONG for anything whose purpose is to observe current Shopify state. Kurt hit
+    this on the console's Verify-tag step 2026-08-11: pressing it repeatedly returned the same
+    answer for half an hour while orders were being cancelled underneath it, so the gate kept
+    failing on data that no longer existed. The same trap produced a "0 of 108 tags landed"
+    false alarm the same day when a post-apply verification read went through this function.
+
+    Rule: a caller ASKING WHAT IS TRUE RIGHT NOW passes live=True. Only "orders-live" (any
+    resource absent from CACHE_TTL) bypasses; there is no shorter way to say it.
+    """
     q = cohort_query(tag)
+    res = "orders-live" if live else "default"
     cursor = None
     orders: list[dict] = []
     while True:
-        data = shopify_graphql(base, hdr, QUERY, {"cursor": cursor, "q": q})
+        data = shopify_graphql(base, hdr, QUERY, {"cursor": cursor, "q": q}, resource=res)
         edges = data["orders"]["edges"]
         for e in edges:
             n = e["node"]
@@ -288,7 +302,8 @@ def fetch_all_orders(base: str, hdr: dict, tag: str) -> list[dict]:
                 extra = []
                 sub_cursor = None
                 while True:
-                    d2 = shopify_graphql(base, hdr, DEEP_QUERY, {"id": n["id"], "cursor": sub_cursor})
+                    d2 = shopify_graphql(base, hdr, DEEP_QUERY, {"id": n["id"], "cursor": sub_cursor},
+                                        resource=res)
                     li = d2["order"]["lineItems"]
                     extra.extend([x["node"] for x in li["edges"]])
                     if not li["pageInfo"]["hasNextPage"]:
