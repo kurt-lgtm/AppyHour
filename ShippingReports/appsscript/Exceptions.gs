@@ -115,6 +115,92 @@ var EXC_TIME_BUDGET_MS = 240000;          // 4 min of fetching, leaving 2 min to
 var EXC_PP_FAIL_RATIO = 0.2;              // share of NON-throttle failures that means CRITICAL
 var EXC_COHORTS_BACK = 2;                 // current + previous ship week stay in the poll set
 
+// 🔴 PARCELPANEL WEEKLY BUDGET — 2,500 calls/week, ACCOUNT-WIDE (Kurt, standing). This job polls
+// hourly = 168 runs/week and was never measured against it. Measured 2026-08-10: 487 open orders
+// x 168 runs = 81,816 calls/week, THIRTY-THREE TIMES the cap, and a full fresh cohort (~2,300
+// open) would project 386k. The reship refresh's ~180/week was never the risk; this was.
+// Three controls, in order of how much they save:
+//   1. excResolveDelivered_ closes delivered orders using SHOPIFY (free) before PP is called at
+//      all — the same narrowing that took the analytics refresh from 2,300 to 45.
+//   2. a shared WEEKLY counter both jobs draw from, so total consumption is visible in one place.
+//   3. a per-run cap as a backstop.
+var EXC_PP_WEEKLY_BUDGET = 2000;          // leaves ~500/wk headroom for the reship refresh
+var EXC_PP_MAX_PER_RUN = 120;             // backstop; the weekly counter normally binds first
+var EXC_PP_BUDGET_PROP = 'PP_WEEK_USED';  // "<isoWeekKey>|<count>" — shared, not per-job
+
+/** ISO-ish week key in ET, e.g. 2026-W32. Resets the counter when it changes. */
+function excWeekKey_() {
+  var now = new Date();
+  var y = Utilities.formatDate(now, EXC_TZ, 'yyyy');
+  var w = Utilities.formatDate(now, EXC_TZ, 'ww');
+  return y + '-W' + w;
+}
+
+/**
+ * Reserve up to `want` ParcelPanel calls from the SHARED weekly budget. Returns how many are
+ * allowed. Loud when it bites: a silently truncated poll set reads as "no exceptions found",
+ * which is the failure mode this whole job exists to prevent.
+ */
+function excBudgetTake_(want) {
+  var props = PropertiesService.getScriptProperties();
+  var raw = String(props.getProperty(EXC_PP_BUDGET_PROP) || '');
+  var parts = raw.split('|');
+  var wk = excWeekKey_();
+  var used = (parts[0] === wk) ? (parseInt(parts[1], 10) || 0) : 0;
+  if (parts[0] !== wk && parts[0]) Logger.log('  PP budget: new week ' + wk + ', counter reset from ' + raw);
+  var left = Math.max(0, EXC_PP_WEEKLY_BUDGET - used);
+  var take = Math.min(want, left, EXC_PP_MAX_PER_RUN);
+  if (take < want) {
+    Logger.log('  🔴 PP BUDGET BIT: wanted ' + want + ', taking ' + take +
+               ' (used ' + used + '/' + EXC_PP_WEEKLY_BUDGET + ' this week, per-run cap ' +
+               EXC_PP_MAX_PER_RUN + '). Unpolled orders stay queued, NOT silently dropped.');
+  }
+  props.setProperty(EXC_PP_BUDGET_PROP, wk + '|' + (used + take));
+  Logger.log('  PP budget: ' + (used + take) + '/' + EXC_PP_WEEKLY_BUDGET + ' used this week (' + wk + ')');
+  return take;
+}
+
+/**
+ * 🔴 FILTER BEFORE CALLING PP (Kurt 2026-08-10). Shopify already knows which of these boxes are
+ * DELIVERED, and asking Shopify costs nothing against the ParcelPanel budget. Close them here so
+ * they leave the poll set permanently. A delivered box cannot become an exception.
+ * Returns the orders still worth polling.
+ */
+function excResolveDelivered_(orders, st) {
+  var alive = [], closed = 0;
+  for (var i = 0; i < orders.length; i += 100) {
+    var batch = orders.slice(i, i + 100);
+    var q = 'query($q:String!){orders(first:100, query:$q){edges{node{ name ' +
+            'fulfillments(first:10){ displayStatus events(first:50){edges{node{status}}} } }}}}';
+    var qs = batch.map(function (n) { return 'name:' + n; }).join(' OR ');
+    var d;
+    try {
+      d = shopifyGql_(q, { q: qs });
+    } catch (e) {
+      Logger.log('  ⚠️ delivered-filter batch failed, polling it anyway: ' + e);
+      alive = alive.concat(batch);
+      continue;
+    }
+    var delivered = {};
+    d.orders.edges.forEach(function (e) {
+      var num = String(e.node.name).replace(/^#/, '');
+      (e.node.fulfillments || []).forEach(function (f) {
+        if (f.displayStatus === 'DELIVERED') { delivered[num] = 1; return; }
+        (((f.events || {}).edges) || []).forEach(function (x) {
+          if (x.node.status === 'DELIVERED') delivered[num] = 1;
+        });
+      });
+    });
+    batch.forEach(function (n) {
+      if (delivered[n]) { if (st[n]) st[n].open = false; closed += 1; }
+      else alive.push(n);
+    });
+  }
+  Logger.log('  pre-PP filter: ' + orders.length + ' open -> ' + alive.length +
+             ' pollable (' + closed + ' already DELIVERED per Shopify, closed for good)');
+  return alive;
+}
+
 function excSS_() { return SpreadsheetApp.openById(EXC_HOST_SHEET_ID); }
 
 // ---------------------------------------------------------------- classification
@@ -541,7 +627,11 @@ function hourlyExceptionSweep() {
       var sa = String(st[a].last_seen || ''), sb = String(st[b].last_seen || '');
       return sa.localeCompare(sb);                             // never-polled ('') sorts first
     });
-    var batch = open.slice(0, EXC_MAX_POLL_PER_RUN);
+    // 🔴 narrow BEFORE spending ParcelPanel budget: Shopify is free, PP is capped.
+    var pollable = excResolveDelivered_(open.slice(0, EXC_MAX_POLL_PER_RUN), st);
+    var allowed = excBudgetTake_(pollable.length);
+    var batch = pollable.slice(0, allowed);
+    Logger.log('  PP: asked ' + batch.length);
 
     var pp = excPpFetch_(batch, new Date().getTime() + EXC_TIME_BUDGET_MS);
 
