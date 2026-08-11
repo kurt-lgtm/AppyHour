@@ -146,14 +146,17 @@ def _distvol_db() -> dict[str, float] | None:
     return {sku: float(dv) for sku, dv in rows}
 
 
-def build_lookup() -> dict[str, float]:
-    db_lookup = _distvol_db()
-    if db_lookup is not None:
-        # MANUAL_OVERRIDES still win on top — same semantics as the xlsx path below, and the code
-        # dict is the fresher authority between loads (wk0803 pattern: override lands in code first).
-        db_lookup.update(MANUAL_OVERRIDES)
-        return db_lookup
-    wb = load_workbook(XLSX_LOOKUP)
+def build_lookup(xlsx_path=None) -> dict[str, float]:
+    # Explicit xlsx_path (manual-upload ingest, phase 2b) bypasses the db-replica branch on
+    # purpose — an upload is being validated/loaded, so it must read the given file.
+    if xlsx_path is None:
+        db_lookup = _distvol_db()
+        if db_lookup is not None:
+            # MANUAL_OVERRIDES still win on top — same semantics as the xlsx path below, and the code
+            # dict is the fresher authority between loads (wk0803 pattern: override lands in code first).
+            db_lookup.update(MANUAL_OVERRIDES)
+            return db_lookup
+    wb = load_workbook(xlsx_path or XLSX_LOOKUP)
     ws = wb["Sheet1"]
     lookup: dict[str, float] = {}
     header = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
@@ -224,10 +227,55 @@ query($id: ID!, $cursor: String) {
 """
 
 
-def fetch_all_orders(base: str, hdr: dict, tag: str) -> list[dict]:
-    # RMFG_ tags mark fulfilled packs; _SHIP_ tags mark unfulfilled queues
+CANCELLED_NAMES_Q = """
+query($cursor: String, $q: String!) {
+  orders(first: 250, after: $cursor, query: $q) {
+    pageInfo { hasNextPage endCursor }
+    edges { node { name cancelledAt cancelReason } }
+  }
+}
+"""
+
+
+def cohort_query(tag: str) -> str:
+    """THE cohort search string. 🔴 A cohort is UNFULFILLED + OPEN (non-cancelled) orders only
+    (Kurt 2026-08-11: "the app should always take unfulfilled open orders only").
+
+    *What went wrong (2026-08-11, ROUTE_TEST_811):* Shopify STRIPS an order's `_SHIP_` tag when it
+    is cancelled but LEAVES the cohort tag on. Two cancelled orders (#171480, #171841) therefore
+    entered the cohort carrying no ship week, and the verify-tag gate reported "MIXED ship weeks"
+    — a true failure with a false diagnosis that sent the investigation hunting ship-week drift.
+    The fix belongs in the READ, never in the tags.
+
+    - `-status:cancelled`, NOT `status:open`: `status:open` also excludes ARCHIVED (closed) orders,
+      which is a different fact and would silently shrink a cohort. Cancelled is the one we mean.
+    - `status` / `financial_status` / `displayFulfillmentStatus` are three different fields —
+      never substitute one for another.
+    - The RMFG_ carve-out is DELIBERATE and unchanged: RMFG_ tags mark packs that are already
+      fulfilled, so filtering them to unfulfilled would empty the cut/matrix reads. Cancellation
+      exclusion applies to BOTH branches.
+    """
     status_filter = "" if tag.startswith("RMFG_") else " fulfillment_status:unfulfilled"
-    q = f"tag:{tag}{status_filter}"
+    return f"tag:{tag}{status_filter} AND -status:cancelled"
+
+
+def fetch_cancelled_tagged(base: str, hdr: dict, tag: str) -> list[dict]:
+    """Orders that STILL carry `tag` after being cancelled — a real (minor) hygiene signal, so it
+    gets surfaced as its own line rather than silently dropped by `cohort_query` (silence must fail
+    loudly). Read-only. Returns [{name, cancelledAt, cancelReason}]."""
+    cursor, out = None, []
+    q = f"tag:{tag} AND status:cancelled"
+    while True:
+        data = shopify_graphql(base, hdr, CANCELLED_NAMES_Q, {"cursor": cursor, "q": q},
+                               resource="orders-live")
+        out.extend(e["node"] for e in data["orders"]["edges"])
+        if not data["orders"]["pageInfo"]["hasNextPage"]:
+            return out
+        cursor = data["orders"]["pageInfo"]["endCursor"]
+
+
+def fetch_all_orders(base: str, hdr: dict, tag: str) -> list[dict]:
+    q = cohort_query(tag)
     cursor = None
     orders: list[dict] = []
     while True:
