@@ -74,6 +74,43 @@ real issues… sometimes you get a notification and they just changed the label.
 
 ---
 
+## 🔴 Two rules that killed an 87% false-positive rate (Kurt 2026-08-10)
+
+The tab filled with 1,798 rows, 898 of them `never picked up by carrier`. Applying both rules
+below to that same data leaves **2**.
+
+### 1. STRUCTURED FIELD BEATS FREE TEXT — and one feed is never enough
+
+**Never classify off checkpoint PROSE when a structured signal contradicts it, and never trust a
+single feed.** ParcelPanel's newest checkpoint keeps reading *"the package data was sent to OnTrac,
+but we have yet to receive the package"* long after the box has moved — that string is the
+`NEVER_PICKED_UP` trigger. Measured: **224 of 598** rows had a movement scan **already visible in
+Shopify at the moment the row was written**. The classifier now takes a `movedElsewhere` argument
+and returns `IN_NETWORK` when the other feed has any of `IN_TRANSIT` / `OUT_FOR_DELIVERY` /
+`ATTEMPTED_DELIVERY` / `READY_FOR_PICKUP` / `PICKED_UP` / `DELIVERED`.
+
+Same family as **`CONFIRMED` is not movement** (it fires at label creation) and as the reship
+refresh's union rule (**PP hid 224 deliveries; Shopify missed OnTrac's final scan on 2**). When the
+shared truth module lands, this belongs in it — three consumers now.
+
+🔴 **The union costs ZERO ParcelPanel budget.** It rides on the Shopify call
+`excResolveDelivered_` already makes to close delivered orders — one request, two jobs.
+
+### 2. `EXC_NEVER_PICKED_MIN_DAYS = 3` — a floor, because feeds lag
+
+Was **1 day**, and rows fired at ~32h while scans were still arriving. Measured: **299 of 598**
+rows had their first scan land **after** the row was written (one at +1.5h, one at +16h) — invisible
+to *every* feed at sweep time, so no union can catch them. Only patience can.
+
+🔴 **A floor cannot lose a real case.** The sweep re-polls hourly, so raising it **delays**
+detection rather than dropping it. The genuine wk0803 never-collected boxes were silent **7–33
+days**; a 3-day floor still catches every one, at worst two days later. An earlier analysis claimed
+a floor would cost 63 of 64 real detections — that was wrong: it treated *suppressed now* as *lost
+forever*.
+
+The two rules reinforce each other: by the time the floor lets a classification fire, both feeds
+have had three days to catch up, so the lag that caused the false positives has already resolved.
+
 ## Alert classes (Kurt 2026-07-30)
 
 **PING** — hard failures plus address/attempt issues:

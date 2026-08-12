@@ -113,6 +113,13 @@ var EXC_PP_BACKOFF_MS = 5000;             // one retry for a batch that came bac
 var EXC_MAX_POLL_PER_RUN = 1200;          // hard ceiling; the time budget normally binds first
 var EXC_TIME_BUDGET_MS = 240000;          // 4 min of fetching, leaving 2 min to write state
 var EXC_PP_FAIL_RATIO = 0.2;              // share of NON-throttle failures that means CRITICAL
+// 🔴 NEVER_PICKED_UP FLOOR (Kurt 2026-08-10). Was 1 day, which fired at ~32h while carrier scans
+// were still landing: of 598 not-picked-up rows on the tab, 299 had a movement scan arrive AFTER
+// the row was written (one at +1.5h, one at +16h) — pure feed lag, invisible to any feed at sweep
+// time. A floor cannot lose a real case: the sweep re-polls hourly, so raising it DELAYS detection
+// rather than dropping it, and the genuine wk0803 never-collected boxes were silent 7-33 DAYS.
+var EXC_NEVER_PICKED_MIN_DAYS = 3;
+
 var EXC_COHORTS_BACK = 2;                 // current + previous ship week stay in the poll set
 
 // 🔴 PARCELPANEL WEEKLY BUDGET — 2,500 calls/week, ACCOUNT-WIDE (Kurt, standing). This job polls
@@ -166,10 +173,18 @@ function excBudgetTake_(want) {
  * they leave the poll set permanently. A delivered box cannot become an exception.
  * Returns the orders still worth polling.
  */
+var EXC_MOVED_ = { IN_TRANSIT: 1, OUT_FOR_DELIVERY: 1, ATTEMPTED_DELIVERY: 1,
+                   READY_FOR_PICKUP: 1, PICKED_UP: 1, DELIVERED: 1 };
+var EXC_SHOPIFY_MOVED_ = {};   // order -> 1 when Shopify has a real movement scan (union input)
+
 function excResolveDelivered_(orders, st) {
+  EXC_SHOPIFY_MOVED_ = {};
   var alive = [], closed = 0;
   for (var i = 0; i < orders.length; i += 100) {
     var batch = orders.slice(i, i + 100);
+    // 🔴 ONE Shopify call serves BOTH jobs: closing delivered orders AND supplying the union's
+    // movement signal. The union therefore costs ZERO extra ParcelPanel budget — it rides on a
+    // request that was already being made.
     var q = 'query($q:String!){orders(first:100, query:$q){edges{node{ name ' +
             'fulfillments(first:10){ displayStatus events(first:50){edges{node{status}}} } }}}}';
     var qs = batch.map(function (n) { return 'name:' + n; }).join(' OR ');
@@ -185,9 +200,10 @@ function excResolveDelivered_(orders, st) {
     d.orders.edges.forEach(function (e) {
       var num = String(e.node.name).replace(/^#/, '');
       (e.node.fulfillments || []).forEach(function (f) {
-        if (f.displayStatus === 'DELIVERED') { delivered[num] = 1; return; }
+        if (f.displayStatus === 'DELIVERED') { delivered[num] = 1; }
         (((f.events || {}).edges) || []).forEach(function (x) {
           if (x.node.status === 'DELIVERED') delivered[num] = 1;
+          if (EXC_MOVED_[x.node.status]) EXC_SHOPIFY_MOVED_[num] = 1;   // union signal
         });
       });
     });
@@ -217,7 +233,15 @@ function excSS_() { return SpreadsheetApp.openById(EXC_HOST_SHEET_ID); }
  * Checkpoints with a null `status` are AppyHour storefront copy injected into the PP timeline
  * ("Orders are prepared fresh weekly"), not carrier scans — skip them.
  */
-function excClassify_(ship) {
+/**
+ * 🔴 STRUCTURED FIELD BEATS FREE TEXT (Kurt 2026-08-10) — and one feed is never enough.
+ * `movedElsewhere` is a movement scan seen in the OTHER feed (Shopify fulfillment events). PP's
+ * checkpoint PROSE keeps saying "we have yet to receive the package" after the box has moved, so
+ * classifying off that text alone invented 224 never-picked-up rows whose scan Shopify already
+ * held at sweep time. Same family as CONFIRMED-is-not-movement: never let narrative text outrank
+ * a structured signal, and never trust a single feed.
+ */
+function excClassify_(ship, movedElsewhere) {
   var cps = (ship && ship.checkpoints) || [];
   var carrierCps = cps.filter(function (c) { return c && c.status; });
   var pick = carrierCps.length ? carrierCps[0] : (cps.length ? cps[0] : null);
@@ -266,9 +290,10 @@ function excClassify_(ship) {
 
   // Never picked up: PP knows about the label but no pickup scan ever landed. Only meaningful
   // once the box has had a day to move — before that it is just a fresh label.
+  if (movedElsewhere) return r('IN_NETWORK', false);   // the other feed has a real scan
   if (!pickup && (status.indexOf('INFO') >= 0 || /shipment information sent|order created/.test(e))) {
     var ful = String((ship && (ship.fulfillment_date || ship.order_date)) || '').slice(0, 10);
-    if (ful && excDaysSince_(ful) >= 1) return r('NEVER_PICKED_UP', true);
+    if (ful && excDaysSince_(ful) >= EXC_NEVER_PICKED_MIN_DAYS) return r('NEVER_PICKED_UP', true);
     return r('PRE_TRANSIT', false);
   }
   return r('IN_NETWORK', false);
@@ -655,7 +680,7 @@ function hourlyExceptionSweep() {
       if (!ship) return;
       var c = ship.carrier;
       rec.carrier = excCarrier_((c && (c.name || c.code)) || rec.carrier || '');
-      var v = excClassify_(ship);
+      var v = excClassify_(ship, !!EXC_SHOPIFY_MOVED_[on]);
       if (v.cls === 'DELIVERED') { rec.open = false; return; }
       if (!v.ping) return;
       if (rec.alerted.indexOf(v.cls) >= 0) return;   // dedup on (order, class)
@@ -839,14 +864,28 @@ function excSelfTest() {
   });
   // display-label guard (Kurt 2026-08-07): the rename is render-time ONLY. If the internal token
   // ever leaks into the dedupe key, every already-alerted order re-fires and spams #exceptions.
-  if (excDisplay_('NEVER_PICKED_UP') !== 'Lost in Transit (no scan)') {
-    fails.push('NEVER_PICKED_UP must display as "Lost in Transit (no scan)"');
+  if (excDisplay_('NEVER_PICKED_UP') !== 'never picked up by carrier') {
+    fails.push('NEVER_PICKED_UP must display as "never picked up by carrier"');
   }
   if (excDisplay_('LOST') === excDisplay_('NEVER_PICKED_UP')) {
     fails.push('LOST and NEVER_PICKED_UP must stay distinct — different reasons, not a merge');
   }
   var npu = excClassify_({ checkpoints: [{ detail: 'Order created', status: 'INFO_RECEIVED' }],
                            status: 'INFO_RECEIVED', fulfillment_date: '2026-01-01' });
+  // union guard: the SAME shipment must NOT be never-picked-up once the other feed has a scan
+  var npu2 = excClassify_({ checkpoints: [{ detail: 'Order created', status: 'INFO_RECEIVED' }],
+                            status: 'INFO_RECEIVED', fulfillment_date: '2026-01-01' }, true);
+  if (npu2.cls === 'NEVER_PICKED_UP') {
+    fails.push('a movement scan in the other feed must suppress NEVER_PICKED_UP');
+  }
+  // floor guard: a fresh label is not an exception
+  var npu3 = excClassify_({ checkpoints: [{ detail: 'Order created', status: 'INFO_RECEIVED' }],
+                            status: 'INFO_RECEIVED',
+                            fulfillment_date: Utilities.formatDate(new Date(), EXC_TZ, 'yyyy-MM-dd') });
+  if (npu3.cls === 'NEVER_PICKED_UP') {
+    fails.push('a same-day label must not classify as NEVER_PICKED_UP (floor ' +
+               EXC_NEVER_PICKED_MIN_DAYS + 'd)');
+  }
   if (npu.cls !== 'NEVER_PICKED_UP') {
     fails.push('dedupe key must remain the token NEVER_PICKED_UP, got ' + npu.cls);
   }
