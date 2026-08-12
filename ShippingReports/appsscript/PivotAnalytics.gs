@@ -284,7 +284,7 @@ function paPpFetch_(orderNums, winLo, winHi) {
  * 🔴 Late is measured over the WHOLE cohort (survivorship): an undelivered past-SLA box is a miss,
  * not "pending", and Lost in Transit is INSIDE 3+ Day — never a bucket beside it.
  */
-function paUnion_(recs, pp) {
+function paUnion_(recs, pp, cohortAge) {
   recs.forEach(function (r) {
     var p = pp[r.order] || {};
     var ppD = !!(p.delivered && p.dl);
@@ -294,7 +294,14 @@ function paUnion_(recs, pp) {
     else r.tnt = null;
     r.moved = !!r.shMove || !!p.pk;
     r.ontime = r.arrived && r.tnt !== null && r.tnt <= PA_SLA;
-    r.late = !r.ontime;
+    // 🔴 MATURITY GATE ON THE LATE COUNT. Survivorship (undelivered = late) is only valid ONCE THE
+    // PROMISE DEADLINE HAS PASSED — feedback-ontime-denominator: before the deadline a still-out
+    // box is genuinely PENDING and reported separately; after it, it is a miss. Applying it to a
+    // 2-day-old cohort read 3+ Day 1,622 of 2,318 (70%) on _SHIP_2026-08-10 while 1,509 of those
+    // boxes were simply still moving, on time, and not yet due. A cohort is only judgeable once
+    // its age exceeds the 2-day promise.
+    r.late = !r.ontime && (r.arrived || cohortAge > PA_SLA);
+    r.pending = !r.arrived && cohortAge <= PA_SLA;   // not yet due — neither on-time nor late
     // lost vs active: a scan in the last 24h means the box is demonstrably MOVING (super-late, not
     // lost). Zero scans, or silent >=24h, stays LOST — unverified is not the same as known-not-lost.
     var age = paHoursSince_(r.lastScanIso);
@@ -502,13 +509,24 @@ function paRefreshOne_(shipWeek, dry, budget, allowAppend) {
     budget.left -= take.length;
     pp = paPpFetch_(take.map(function (r) { return r.order; }), lo, hi);
   }
-  paUnion_(recs, pp);
+  paUnion_(recs, pp, age);
 
   var total = recs.length;
   var ot = 0, lt = 0, arr = 0, lost = 0, active = 0;
   recs.forEach(function (r) { if (r.ontime) ot++; if (r.late) lt++; if (r.arrived) arr++; if (r.lost) lost++; if (r.active) active++; });
   // 🔴 asserts — every pass, before any write
-  if (ot + lt !== total) throw new Error('2 Day + 3+ Day (' + (ot + lt) + ') != Total ' + total);
+  // Pending boxes (undelivered, cohort not yet past the 2-day promise) belong to NEITHER bucket,
+  // so the partition is three-way until the cohort matures. Asserting the old two-way identity
+  // would throw on every young column.
+  var pend = 0;
+  recs.forEach(function (r) { if (r.pending) pend++; });
+  if (ot + lt + pend !== total) {
+    throw new Error('2 Day + 3+ Day + pending (' + (ot + lt + pend) + ') != Total ' + total);
+  }
+  if (pend) {
+    paLog_('  PENDING (not yet due, age ' + age + 'd <= ' + PA_SLA + 'd promise): ' + pend +
+           ' — excluded from BOTH 2 Day and 3+ Day until the cohort matures');
+  }
   if (lost + active !== total - arr) throw new Error('lost+active (' + (lost + active) + ') != Not Arrived ' + (total - arr));
   paLog_('cohort ' + total + '  2Day ' + ot + '  3+Day ' + lt + '  arrived ' + arr +
          '  notArrived ' + (total - arr) + '  lost ' + lost + '  active ' + active +
