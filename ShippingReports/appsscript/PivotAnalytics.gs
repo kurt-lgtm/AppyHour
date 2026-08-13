@@ -407,7 +407,14 @@ function paCurrentCol_(sheet, shipWeek, allowAppend) {
   var idx = headers.indexOf(shipWeek);
   if (idx < 0) {
     if (allowAppend === false) return 0;              // caller logs and skips
-    return lastCol + 1;                               // new week rolled → append to the right
+    // 🔴 WRITE THE HEADER ON APPEND. Returning the index without stamping row 1 left the new
+    // column headerless, so the NEXT run's headers.indexOf(shipWeek) missed again and appended
+    // ANOTHER one — TnT2 ended up with two headerless _SHIP_2026-08-10 columns (F 1,622 / G 0)
+    // and no way for the freeze assert to tell which was current. The header IS the identity of
+    // the column; a column without one is invisible to every lookup here.
+    var col = lastCol + 1;
+    sheet.getRange(1, col).setValue(shipWeek);
+    return col;
   }
   var col = idx + 1, rightmost = 1;
   for (var i = 0; i < headers.length; i++) {
