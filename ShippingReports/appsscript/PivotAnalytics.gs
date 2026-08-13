@@ -55,6 +55,64 @@ var PA_OBS = ['still moving (4+ days)',            // undelivered, a real scan <
  * makes every never-collected box look like it moved ("has events" is the wrong filter). */
 var PA_MOVE = { IN_TRANSIT: 1, OUT_FOR_DELIVERY: 1, ATTEMPTED_DELIVERY: 1, READY_FOR_PICKUP: 1, PICKED_UP: 1 };
 
+/**
+ * 🔴 COLUMN-CREATION PROCEDURE (Kurt 2026-08-13), in this order and no other:
+ *   1. copy the PREVIOUS column's formatting  2. stamp the header  3. write values  4. assert.
+ * Formatting FIRST so a failure at any later step leaves a column that at least LOOKS like the
+ * others rather than an unformatted orphan a reader can't tell from a scratch column. Copies
+ * number formats (counts NUMBER "0", rate rows PERCENT "0.00%"), font/bold, fills, borders,
+ * horizontal/vertical alignment, indent — plus the column WIDTH, which copyTo does not carry.
+ * `formatOnly` means no value is touched: the 65 rate-row formulas in the source column are NOT
+ * copied (they are per-column relative formulas and Kurt owns them), only their appearance.
+ */
+function paCopyFormatFromPrev_(sheet, col) {
+  if (col < 2) return;
+  var rows = Math.max(1, sheet.getMaxRows());
+  try {
+    sheet.getRange(1, col - 1, rows, 1).copyTo(sheet.getRange(1, col, rows, 1), { formatOnly: true });
+    sheet.setColumnWidth(col, sheet.getColumnWidth(col - 1));
+    paLog_('  format: ' + sheet.getName() + ' col ' + (col - 1) + ' -> ' + col + ' (formatOnly + width)');
+  } catch (e) {
+    // A format copy failing must not block the data write — but it must never be silent.
+    paLog_('  ⚠️ format copy failed on ' + sheet.getName() + ' col ' + col + ': ' + e);
+  }
+}
+
+/**
+ * 🔴 HARD ASSERTS, run BEFORE any write to a tab. Throws a NAMED error rather than writing.
+ * (a) every data column (2..lastCol) carries a row-1 header — a headerless column is invisible to
+ *     `headers.indexOf(shipWeek)`, which is exactly how TnT2 grew TWO wk0810 columns on 2026-08-12;
+ * (b) exactly ONE column per ship tag — a duplicate tag means a reader cannot tell which is current.
+ */
+function paAssertColumns_(sheet) {
+  var lastCol = Math.max(1, sheet.getLastColumn()), lastRow = Math.max(1, sheet.getLastRow());
+  var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(function (h) { return String(h).trim(); });
+  var grid = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+  var seen = {}, dup = [], headerless = [];
+  for (var c = 2; c <= lastCol; c++) {
+    var h = headers[c - 1];
+    if (h) {
+      if (seen[h]) dup.push(h + ' (cols ' + seen[h] + ' + ' + c + ')');
+      seen[h] = c;
+      continue;
+    }
+    var hasData = false;
+    for (var r = 1; r < lastRow; r++) {           // row 1 is the header row itself
+      if (String(grid[r][c - 1]).trim() !== '') { hasData = true; break; }
+    }
+    if (hasData) headerless.push(c);
+  }
+  if (headerless.length) {
+    throw new Error('PA_ASSERT_HEADERLESS_COLUMN: ' + sheet.getName() + ' column(s) ' +
+                    headerless.join(', ') + ' hold data with no row-1 header. Refusing to write — ' +
+                    'a headerless column is invisible to column lookup and the next run would append another.');
+  }
+  if (dup.length) {
+    throw new Error('PA_ASSERT_DUPLICATE_SHIP_TAG: ' + sheet.getName() + ' has more than one column ' +
+                    'for ' + dup.join('; ') + '. Refusing to write — exactly one column per ship tag.');
+  }
+}
+
 function paWriteArmed_() {
   return PropertiesService.getScriptProperties().getProperty('PIVOT_ANALYTICS_WRITE') === '1';
 }
@@ -412,8 +470,11 @@ function paCurrentCol_(sheet, shipWeek, allowAppend) {
     // ANOTHER one — TnT2 ended up with two headerless _SHIP_2026-08-10 columns (F 1,622 / G 0)
     // and no way for the freeze assert to tell which was current. The header IS the identity of
     // the column; a column without one is invisible to every lookup here.
+    // ORDER IS THE RULE (Kurt 2026-08-13): format-from-previous → header → values → assert.
     var col = lastCol + 1;
+    paCopyFormatFromPrev_(sheet, col);
     sheet.getRange(1, col).setValue(shipWeek);
+    SpreadsheetApp.flush();                             // header must be durable before we return
     return col;
   }
   var col = idx + 1, rightmost = 1;
@@ -528,13 +589,23 @@ function paRefreshOne_(shipWeek, dry, budget, allowAppend) {
   var pend = 0;
   recs.forEach(function (r) { if (r.pending) pend++; });
   if (ot + lt + pend !== total) {
-    throw new Error('2 Day + 3+ Day + pending (' + (ot + lt + pend) + ') != Total ' + total);
+    throw new Error('PA_ASSERT_TOTAL_PARTITION: 2 Day + 3+ Day + pending (' + (ot + lt + pend) +
+                    ') != Total ' + total);
   }
   if (pend) {
     paLog_('  PENDING (not yet due, age ' + age + 'd <= ' + PA_SLA + 'd promise): ' + pend +
            ' — excluded from BOTH 2 Day and 3+ Day until the cohort matures');
   }
-  if (lost + active !== total - arr) throw new Error('lost+active (' + (lost + active) + ') != Not Arrived ' + (total - arr));
+  if (lost + active !== total - arr) {
+    throw new Error('PA_ASSERT_NOTARRIVED_PARTITION: lost+active (' + (lost + active) +
+                    ') != Not Arrived ' + (total - arr));
+  }
+  // pending is a SUBSET of the still-moving observation, never a fourth bucket beside it — if it
+  // ever exceeds `active` the three observation rows no longer partition Not Arrived.
+  if (pend > active) {
+    throw new Error('PA_ASSERT_PENDING_SUBSET: pending ' + pend + ' > still-moving ' + active +
+                    ' — pending must sit inside the three observations, not beside them.');
+  }
   paLog_('cohort ' + total + '  2Day ' + ot + '  3+Day ' + lt + '  arrived ' + arr +
          '  notArrived ' + (total - arr) + '  lost ' + lost + '  active ' + active +
          '  lateRate ' + (lt / total * 100).toFixed(2) + '%');
@@ -554,7 +625,8 @@ function paRefreshOne_(shipWeek, dry, budget, allowAppend) {
   });
   PA_OBS.forEach(function (k) { newSum += obs[k]; });
   if (newSum !== total - arr) {
-    throw new Error('three observations sum ' + newSum + ' != Not Arrived ' + (total - arr));
+    throw new Error('PA_ASSERT_OBSERVATION_PARTITION: three observations sum ' + newSum +
+                    ' != Not Arrived ' + (total - arr));
   }
   var prev = paReadNested_(ss, shipWeek), prevKeys = Object.keys(prev), oldSum = 0;
   prevKeys.forEach(function (k) { oldSum += prev[k]; });
@@ -577,17 +649,21 @@ function paRefreshOne_(shipWeek, dry, budget, allowAppend) {
   [PA_TABS.tnt2, PA_TABS.lost].forEach(function (name) {
     var sh = ss.getSheetByName(name);
     if (!sh) { paLog_('  ⚠️ missing tab ' + name); return; }
+    paAssertColumns_(sh);                               // pre-existing damage — throw, never write onto it
     var col = paCurrentCol_(sh, shipWeek, allowAppend);
     if (!col) { paLog_('  ⚠️ ' + name + ': no column for ' + shipWeek + ' — skipped (never appended left)'); return; }
     paLog_('  ' + name + ' col ' + col);
     paWriteOwned_(sh, col, paValues_(recs, name), dry);
+    if (!dry) { SpreadsheetApp.flush(); paAssertColumns_(sh); }   // post-write: still exactly one, still headed
   });
   var rm = ss.getSheetByName(PA_TABS.routing);
   if (rm) {
+    paAssertColumns_(rm);
     var rc = paCurrentCol_(rm, shipWeek, allowAppend);
     if (rc) {
       paLog_('  ' + PA_TABS.routing + ' col ' + rc);
       paWriteOwned_(rm, rc, paRoutingValues_(recs), dry);
+      if (!dry) { SpreadsheetApp.flush(); paAssertColumns_(rm); }
     }
   }
   return { shipWeek: shipWeek, age: age, total: total, twoDay: ot, threePlus: lt,

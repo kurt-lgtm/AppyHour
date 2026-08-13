@@ -4,7 +4,7 @@ Analytics pipeline for subscription box shipping. Ingests carrier invoices (OnTr
 
 > 🔴 **Reship report** (HEADLESS, live): any change to it reads [`RESHIP_REPORT_RULES.md`](RESHIP_REPORT_RULES.md)
 > FIRST (constraints SSOT, APPROVED). Canonical = PIVOT sheet `1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU`,
-> bound Apps Script `appsscript/Code.gs` (hourly). Tabs: Raw Data · Triage · Product Mix · Product Mix (T)
+> bound Apps Script `appsscript/Code.gs` (hourly). Tabs: Raw Data · Triage · Product Mix · Reship (ex-`Product Mix (T)`)
 > · Daily; a **Reship Report** custom menu drives manual refreshes. Carrier = Parcel Panel (Script Property
 > `PARCELPANEL_API_KEY`). Local mirror = `scratchpad/rebuild_mix_triage.py`.
 

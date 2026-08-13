@@ -26,7 +26,8 @@
  * Assert the resulting file set and Code.gs's length after every push.
  *
  * 🔴 TAB SCOPE: this job owns exactly two tabs, Exceptions and _exc_state. Raw Data, Triage,
- * Product Mix, Product Mix (T), Daily, TnT2, Lost in Transit and Routing Match belong to the
+ * Product Mix, Reship (ex-`Product Mix (T)`, renamed by Dan 2026-08-12), Daily, TnT2, Lost in
+ * Transit and Routing Match belong to the
  * reship report — never read or written here.
  *
  * HISTORY worth keeping (both cost a live debugging cycle):
@@ -820,7 +821,7 @@ function onOpenExceptions() {
 }
 
 // 🔴 cleanupHostSheet() DELETED 2026-07-31, deliberately — do not reintroduce it.
-// It dropped tabs by name (Product Mix (T), Triage, Raw Data, _seed, _state) to strip a clone
+// It dropped tabs by name (Product Mix (T) - now `Reship`, Triage, Raw Data, _seed, _state) to strip a clone
 // back to purpose. Those same names are the REAL reship report on this sheet. Its only guard
 // was `if (ss.getId() !== EXC_HOST_SHEET_ID) throw` — so pointing EXC_HOST_SHEET_ID at the live
 // sheet, which is exactly what moving here does, turned that guard from a fence into an aim.

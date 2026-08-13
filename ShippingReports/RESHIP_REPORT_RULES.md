@@ -56,14 +56,14 @@ manual mirror (reads `shipments.db` for carrier/transit); GAS is authoritative, 
   (COUNTIFS over Raw Data) + Unresolved count/% (COUNTIFS over Triage). Then **Potential** (=all Reship
   + all Unresolved) and **Actual** (=reships only), both %-over-cohort-size. **All % cells are
   TEXT-formatted strings** (`"1.70%"`) so new cohort columns render without manual formatting.
-- **Product Mix (T)** — transpose (metrics as rows, cohorts as columns; A1 = "Ship Week"). Below the
+- **Reship** (renamed from `Product Mix (T)` by Dan 2026-08-12 — the ONLY write target; tab name lives in `PM_T_TAB`) — transpose (metrics as rows, cohorts as columns; A1 = "Ship Week"). Below the
   metrics, grouped breakdowns **By Issue · By Carrier · Arrived Warm by State · Delayed by State**, each
   emitted TWICE: a `── … (%) ──` section (÷ cohort size) then a discrete-count section. Built AFTER
   writeTriage_ (with `flush()`) so its Unresolved/Potential reflect the current Triage, not last cycle.
 - **Daily** — separate sheet `1VHzlyvFabVYUGpR71tgJfYDglI85KnCQOCYJFyZvGsI`.
 
 **Tool menu (this is the "tool"):** `onOpen` builds a **Reship Report** custom menu on the sheet →
-*Refresh now (full)* · *Refresh Product Mix + (T)* · *Refresh Triage only* · *Refresh Daily* ·
+*Refresh now (full)* · *Refresh Product Mix + Reship* · *Refresh Triage only* · *Refresh Daily* ·
 *Backfill Gorgias + enrich*. Each runs the matching GAS function; first click asks Kurt to authorize.
 
 **🔴 Carrier = Parcel Panel, NOT Shopify's fulfillment `tracking_company`** (that mislabels
@@ -206,6 +206,43 @@ metric groups (Total, then By Hub / Carrier / State / Box). Built originally by 
 builder (`build_dan_tabs.py` full rebuild of matured cohorts; `fill_E_0803.py` current-column fill
 from a cwill CSV + Shopify). The target end-state is a **headless GAS refresh** reading delivery
 telemetry from DO MySQL via Jdbc — NO local script, NO per-order ParcelPanel calls.
+
+### 🔴 COLUMN-CREATION PROCEDURE — format → header → values → assert (Kurt 2026-08-13)
+
+Applies to **TnT2 · Lost in Transit · Routing Match · Reship**. In this order, no other:
+
+1. **Copy the PREVIOUS column's formatting.** `prev.copyTo(new, {formatOnly:true})` over the FULL
+   column, plus `setColumnWidth` (copyTo does NOT carry width). Carries number formats (counts
+   NUMBER `"0"`, rate rows PERCENT `"0.00%"`), bold/font, fills, borders, alignment, indent.
+2. **Stamp the header** (`_SHIP_yyyy-mm-dd`), then `SpreadsheetApp.flush()`.
+3. **Write values** (owned-row-only, per cell, keyed off the column-A label).
+4. **Assert** — and assert again after the write.
+
+**Negatives — the failures this ordering exists to prevent:**
+- 🔴 **Header LAST = a self-replicating corruption.** `paCurrentCol_` used to append a column and
+  return its index without stamping row 1. A headerless column is invisible to
+  `headers.indexOf(shipWeek)`, so the NEXT run appended *another* one. TnT2 grew two headerless
+  `_SHIP_2026-08-10` columns (F: 3+ Day 1,622 pre-fix · G: 3+ Day 0 post-fix, hub/carrier 3+ cells
+  blank) and no assert could tell which was current. Fixed `fdc531a`; F:G deleted by hand.
+- 🔴 **Format LAST = an unformatted orphan on any partial failure.** Formatting first means a crash
+  between steps leaves a column that at least *looks* like its neighbours instead of a raw one a
+  reader can't distinguish from scratch space.
+- 🔴 **`formatOnly` is load-bearing** — a plain `copyTo` would clone the previous column's ~65 rate
+  formulas as relative refs. Those are Kurt-owned; copy their appearance, never their contents.
+- 🔴 **Never `insertSheet` a missing tab silently.** Dan renamed `Product Mix (T)` → `Reship`;
+  `writeTabTo_` minted an empty `Product Mix (T)` and fed the ghost for days while Dan's tab froze.
+  Creation is now loud (Slack). Tab name lives in `PM_T_TAB`, never inline.
+
+**Asserts that THROW before any write** (named `PA_ASSERT_*`, so a failure is greppable):
+
+| Name | Invariant |
+|---|---|
+| `PA_ASSERT_HEADERLESS_COLUMN` | every data column (2..lastCol) has a row-1 header |
+| `PA_ASSERT_DUPLICATE_SHIP_TAG` | exactly ONE column per ship tag |
+| `PA_ASSERT_TOTAL_PARTITION` | 2 Day + 3+ Day + pending == Total |
+| `PA_ASSERT_NOTARRIVED_PARTITION` | lost + still-active == Not Arrived |
+| `PA_ASSERT_OBSERVATION_PARTITION` | the three observation rows sum to Not Arrived |
+| `PA_ASSERT_PENDING_SUBSET` | pending sits INSIDE still-moving, never beside it |
 
 ### 🔴 BLOCKER / precondition gate — do NOT wire until BOTH clear (verify each, don't assume)
 
@@ -577,7 +614,7 @@ builder's numbers on a matured cohort** before trusting the headless path (ident
   — today manual/stale — and DO firewall allowlist + RO user for Apps Script Jdbc). Doc-before-code
   gate; no GAS wired yet (blocked on the ingest epic).
 - 2026-07-27 — added "Current shipped state" section: canonical = pivot sheet, Product Mix
-  (Reship/Unresolved/Potential/Actual), Product Mix (T) transpose + By Issue/Carrier/State breakdowns
+  (Reship/Unresolved/Potential/Actual), Reship (ex-Product Mix (T)) transpose + By Issue/Carrier/State breakdowns
   (%+discrete), Parcel Panel carrier (Script Property `PARCELPANEL_API_KEY`), Reship Report custom
   menu, and the two post-classification overrides (expedite-request guard `c495842`, late-supersedes-
   warm `a20950c`). SSOT now matches the live `Code.gs` + `scratchpad/rebuild_mix_triage.py`.

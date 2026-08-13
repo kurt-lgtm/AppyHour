@@ -50,7 +50,7 @@ function onOpen() {
     .createMenu('Reship Report')
     .addItem('Refresh now (full)', 'menuRefreshNow')
     .addSeparator()
-    .addItem('Refresh Product Mix + (T) only', 'menuRefreshProductMix')
+    .addItem('Refresh Product Mix + Reship only', 'menuRefreshProductMix')
     .addItem('Refresh Triage only', 'menuRefreshTriage')
     .addItem('Refresh Daily counts only', 'menuRefreshDaily')
     .addSeparator()
@@ -82,7 +82,7 @@ function menuRefreshNow() {
 
 function menuRefreshProductMix() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  ss.toast('Rebuilding Product Mix + (T)…', 'Reship Report', -1);
+  ss.toast('Rebuilding Product Mix + Reship…', 'Reship Report', -1);
   writeProductMix_(menuMondays_(), {}, menuStamp_());
   writeProductMixT_();
   ss.toast('Done.', 'Reship Report', 5);
@@ -93,7 +93,7 @@ function menuRefreshTriage() {
   ss.toast('Rebuilding Triage (resolves orders/Gorgias)…', 'Reship Report', -1);
   var mondays = menuMondays_();
   writeTriage_(loadState_(), mondays[mondays.length - 1], menuStamp_());
-  writeProductMixT_();  // (T) unresolved/potential depend on Triage — refresh it too
+  writeProductMixT_();  // Reship unresolved/potential depend on Triage — refresh it too
   ss.toast('Done.', 'Reship Report', 5);
 }
 
@@ -927,6 +927,13 @@ function writeProductMix_(mondays, denoms, stamp) {
   writeTabTo_(PIVOT_SHEET_ID, 'Product Mix', rows, true);
 }
 
+// 🔴 TAB IDENTITY (Kurt 2026-08-13). Dan renamed `Product Mix (T)` → `Reship`; that renamed tab is
+// the one he reads, so it is the ONLY write target. Because writeTabTo_ CREATES a tab it cannot
+// find, the rename silently made the writer mint a fresh empty `Product Mix (T)` and feed that
+// instead — Dan's tab went stale and nobody was told. Never hardcode the tab name below again; it
+// lives here so a rename is a one-line change. The non-transposed `Product Mix` tab keeps its name.
+var PM_T_TAB = 'Reship';
+
 // Transposed view (metrics as rows, cohorts as columns). MUST run AFTER writeTriage_
 // so the Unresolved/Potential COUNTIFS (which reference the Triage tab) have re-
 // evaluated — otherwise (T) lags Triage by one cycle. flush() forces recalc first.
@@ -944,10 +951,10 @@ function writeProductMixT_() {
   var sizeByCohort = {};
   data.forEach(function (r) { sizeByCohort[r[0]] = parseInt(String(r[1]).replace(/[^0-9]/g, ''), 10) || 0; });
   tp = tp.concat(productMixBreakdown_(cohortCols, sizeByCohort));
-  writeTabTo_(PIVOT_SHEET_ID, 'Product Mix (T)', tp, false);
+  writeTabTo_(PIVOT_SHEET_ID, PM_T_TAB, tp, false);
 }
 
-// grouped breakdown rows for Product Mix (T): By Issue, By Carrier, Arrived Warm /
+// grouped breakdown rows for the Reship tab: By Issue, By Carrier, Arrived Warm /
 // Delayed by ship-to State — emitted twice, a % (÷ cohort size) section then a
 // discrete-count section. Counts from Raw Data (Issue + Incoming week); State +
 // Carrier enriched from the original order's Shopify province / tracking_company.
@@ -1202,10 +1209,50 @@ function writeDaily_(state, stamp) {
 // ---- generic write helper for the extra sheets ----
 function writeTabTo_(sheetId, name, rows, userEntered) {
   var ss = SpreadsheetApp.openById(sheetId);
-  var sh = ss.getSheetByName(name) || ss.insertSheet(name);
-  sh.clearContents();
+  var sh = ss.getSheetByName(name);
+  if (!sh) {
+    // 🔴 SILENT TAB CREATION IS HOW A RENAME BECOMES A GHOST (2026-08-12). Dan renamed
+    // `Product Mix (T)` → `Reship`; this line then minted an empty `Product Mix (T)` and every
+    // subsequent run fed the ghost while Dan's tab sat frozen. Creation still happens (a fresh
+    // clone needs it) but it is now LOUD.
+    sh = ss.insertSheet(name);
+    slack_(':warning: Reship report CREATED a missing tab `' + name + '` — if a tab was just ' +
+           'RENAMED, this is a ghost and the writer is pointed at the wrong tab.', true);
+  }
+  // 🔴 COLUMN CREATION = FORMAT FROM THE PREVIOUS COLUMN FIRST (Kurt 2026-08-13). On the transposed
+  // tabs a new ship-week is a new COLUMN; without this it lands unformatted next to nine styled
+  // ones. formatOnly, so nothing below is overwritten by the copy — values come from setValues.
+  // ONLY the transposed cohort tab — there a column IS a ship week. On Raw Data / Triage / Daily a
+  // column is a field and row 1 is a banner, not a header row, so neither rule applies there.
+  var colsAreCohorts = (name === PM_T_TAB);
+  var prevCols = sh.getLastColumn();
   var w = Math.max.apply(null, rows.map(function (r) { return r.length; }).concat([1]));
+  if (colsAreCohorts && prevCols >= 2 && w > prevCols) {
+    var maxRows = sh.getMaxRows();
+    for (var c = prevCols + 1; c <= w; c++) {
+      try {
+        sh.getRange(1, c - 1, maxRows, 1).copyTo(sh.getRange(1, c, maxRows, 1), { formatOnly: true });
+        sh.setColumnWidth(c, sh.getColumnWidth(c - 1));
+      } catch (e) { Logger.log('format carry failed ' + name + ' col ' + c + ': ' + e); }
+    }
+  }
+  sh.clearContents();
   var padded = rows.map(function (r) { return r.concat(new Array(w - r.length).fill('')); });
   var rng = sh.getRange(1, 1, padded.length, w);
   if (userEntered) rng.setValues(padded); else rng.setValues(padded);
+  // assert: every data column carries a row-1 header (col 1 is the label column).
+  if (!colsAreCohorts) return;
+  var hdr = sh.getRange(1, 1, 1, w).getValues()[0];
+  var seenTag = {};
+  for (var i = 1; i < w; i++) {
+    var h = String(hdr[i]).trim();
+    if (seenTag[h]) {
+      throw new Error('PA_ASSERT_DUPLICATE_SHIP_TAG: ' + name + ' has two columns for ' + h + '.');
+    }
+    seenTag[h] = true;
+    if (String(hdr[i]).trim() === '' && padded.length > 1) {
+      throw new Error('PA_ASSERT_HEADERLESS_COLUMN: ' + name + ' column ' + (i + 1) +
+                      ' has no row-1 header after write.');
+    }
+  }
 }
