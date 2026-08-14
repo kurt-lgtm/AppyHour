@@ -2886,13 +2886,16 @@ def finalize_xlsx(
         # Fix OrderID: numeric
         ws.cell(r, oid_col).value = numeric_oid
 
-        # Fix Zip: text with leading zeroes
+        # Fix Zip: text with leading zeroes, ALWAYS stripped to zip5 (RMFG rejects ZIP+4 —
+        # wk0817 burn: 13 gift/hand-merged rows shipped "83340-7024"-style and the sheet bounced)
         if zip_col:
             raw_zip = row_vals[zip_col - 1]
             if raw_zip is not None:
                 z = str(raw_zip).strip().split("-")[0].split(".")[0]
-                if isinstance(raw_zip, (int, float)) or (z.isdigit() and len(z) < 5):
-                    ws.cell(r, zip_col).value = str(int(float(str(raw_zip)))).zfill(5)
+                z5 = z.zfill(5) if z.isdigit() else z
+                if z5 and str(raw_zip) != z5:
+                    ws.cell(r, zip_col).value = z5
+                    ws.cell(r, zip_col).number_format = "@"
                     zip_fixes += 1
 
     if zip_fixes:
