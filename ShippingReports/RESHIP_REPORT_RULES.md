@@ -642,6 +642,58 @@ them a Monday pickup**; the Tuesday leg (`boxAge` 2) was correctly pending. That
 "55 from Monday pickup" to within intraday timing. The sheet's own `220 = 2,318 − 2,098` — literally
 every undelivered box at that instant, which is the cohort clock's signature.
 
+### D19 — A NEW HUB'S ROWS ARE ADDED BY A HUMAN-INVOKED TOOL, NEVER BY THE REFRESH (2026-08-14)
+
+**D13 is UPHELD, not relaxed: the refresh writer still never inserts a row.** The general case is
+solved by making the insert a one-click *maintenance* action instead of a hand-edit.
+
+🔴 **The failure this exists to stop — a bucket that is computed, warned about, and written NOWHERE.**
+Swedesboro (the NJ hub, live for `_SHIP_2026-08-10`) fell out of the DERIVED lane universe correctly
+(`FedEx@Swedesboro`, `OnTrac@Swedesboro`) and `paValues_` emitted it correctly, but neither cohort tab
+had a `By Hub (assigned)` row for it. The dry run reported `hub → Swedesboro · 2 Day=569 · 3+ Day=12`
+(TnT2) and `· Arrived=570 · Not Arrived=34` (Lost in Transit) — **604 boxes, ~26% of the cohort,
+silently absent from every hub cut** while the tab still footed to Total. The warning was correct and
+was not enough: a warning in a log nobody opens is a silent failure with extra steps.
+
+**Why auto-insert on the refresh path is still forbidden.** The refresh runs unattended on a daily
+trigger. A structural edit there would (a) shift every reference below it while nobody is watching,
+(b) fire on a TYPO'd or one-off hub name straight out of a tag, minting a permanent row, and (c) make
+the tab's shape a function of one day's data. Row inserts stay a deliberate, observed action.
+
+**The tool** (`PivotAnalytics.gs`, generic over hub name — the next new hub needs no code change):
+
+| Function | Does |
+|---|---|
+| `previewAddSwedesboroRows()` | logs exactly where the rows land. Writes nothing. |
+| `addSwedesboroRows()` | inserts them. Idempotent — re-running finds the rows and no-ops. |
+| `auditRateRows()` | read-only integrity check of EVERY rate row on both tabs. |
+| `fillRateFormulasCurrentColumn(dry)` | fills MISSING rate formulas in the rightmost column only. |
+
+Rules it enforces, each one a way this could corrupt the tab:
+- **Placement:** real hubs alphabetical; `RMFG choice (2+ hubs open)` is the residual bucket and stays
+  LAST regardless of alphabet (it was `Unknown` before D17 renamed it — a catch-all, not a hub). So
+  Swedesboro lands after Nashville, BEFORE RMFG choice.
+- **History stays BLANK, never 0.** A `0` in a matured column asserts "this hub shipped nothing that
+  week"; the hub did not exist. Only the rightmost (live) cohort column gets the rate formula —
+  writing one into a frozen column puts a live formula inside Kurt-owned history.
+- **Formats cloned row-for-row from a sibling hub group** (counts NUMBER `"0"`, rate PERCENT
+  `"0.00%"`, indent/label style), never invented. Labels are `   {hub} · {grain}` — three leading
+  spaces, `·` = U+00B7 — because the writer keys on `trim()`ed column A and the key must match what
+  `paValues_` emits (`hub||Swedesboro · 2 Day`) or the next run warns again.
+- 🔴 **Rate-row verifier runs BEFORE and AFTER, and it reads the FORMULA TEXT** — a re-pointed
+  formula still looks right. It asserts every blank-label rate row references exactly the two rows
+  directly above it, in its own column. A pre-existing mis-point REFUSES the insert
+  (`PA_INSERT_PRE_AUDIT_FAILED`); a regression after it THROWS (`PA_INSERT_POST_AUDIT_FAILED`), as
+  does any rate-row loss (`PA_INSERT_ROW_COUNT`). `paAssertColumns_` runs both sides too.
+
+🔴 **Separate defect this surfaced — a freshly appended cohort column has NO rate formulas at all.**
+`paCopyFormatFromPrev_` copies `{formatOnly:true}` on purpose (a plain `copyTo` would clone ~65
+relative formulas Kurt owns), so the appended column inherits the rate rows' APPEARANCE and none of
+their contents. On column F (`_SHIP_2026-08-10`) **every** rate row on TnT2 and Lost in Transit is
+empty — the late-% column reads blank for every hub, carrier, state and box. `fillRateFormulasCurrentColumn()`
+closes it: rightmost column only, EMPTY cells only, never overwrites an existing formula, dry by
+default.
+
 ### Cutover checklist (once preconditions clear)
 
 (a) confirm Jdbc `SELECT 1` from GAS + RO user scoped; (b) implement the walk-forward current-column

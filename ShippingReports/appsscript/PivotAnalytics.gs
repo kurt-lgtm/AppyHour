@@ -829,6 +829,296 @@ function paCohortAgeDays_(shipWeek) {
   return paDayDiff_(mon, today);
 }
 
+// ------------------------------------------------- hub-row maintenance (D19, one-shot + verifier)
+
+/**
+ * 🔴 D13 STANDS: the REFRESH writer never inserts rows. A row insert shifts every reference below it,
+ * and the refresh runs unattended on a daily trigger — a structural edit does not belong on that
+ * path. What follows is a SEPARATE, human-invoked maintenance tool. It is generic over the hub name
+ * so the NEXT new hub is one menu click rather than a hand-edit, but it is still a deliberate,
+ * observed action with a verifier on both sides of it.
+ *
+ * Motivating gap (2026-08-14): Swedesboro (the NJ hub, live for wk0810) appeared in the lane
+ * universe and in `paValues_`, but had no row in `By Hub (assigned)` on either tab — so
+ * `hub → Swedesboro · 2 Day = 569` and `· 3+ Day = 12` (TnT2) and `· Arrived = 570` /
+ * `· Not Arrived = 34` (Lost in Transit) were computed, warned about, and written NOWHERE.
+ */
+
+/** good/bad row suffixes per tab — the same grains `paValues_` emits. */
+function paGrains_(tabName) {
+  return (tabName === PA_TABS.tnt2) ? ['2 Day', '3+ Day'] : ['Arrived', 'Not Arrived'];
+}
+
+/** Rows of the `By Hub (assigned)` block: {start, end} exclusive of the header row itself. */
+function paHubSection_(labels) {
+  var start = -1, end = labels.length;
+  for (var i = 0; i < labels.length; i++) {
+    if (start < 0) {
+      if (PA_SECTIONS[labels[i]] === 'hub') start = i + 1;   // first row AFTER the header
+    } else if (Object.prototype.hasOwnProperty.call(PA_SECTIONS, labels[i])) {
+      end = i; break;
+    }
+  }
+  return { start: start, end: end };
+}
+
+/**
+ * Parse the hub block into groups of three: `{hub} · {good}` / `{hub} · {bad}` / blank rate row.
+ * 🔴 FULL-label suffix match, never a substring `indexOf` — the recurring bug family on this sheet
+ * is "identify a row by a partial label match" (section collision, `of which` assert, the pair
+ * finder). `3+ Day` also ENDS WITH `Day`, so a loose match pairs the wrong rows.
+ */
+function paHubGroups_(labels, tabName) {
+  var g = paGrains_(tabName), sec = paHubSection_(labels), out = [];
+  if (sec.start < 0) return out;
+  for (var i = sec.start; i < sec.end; i++) {
+    var lab = labels[i];
+    var sufGood = ' · ' + g[0], sufBad = ' · ' + g[1];
+    if (lab.length <= sufGood.length || lab.slice(-sufGood.length) !== sufGood) continue;
+    var hub = lab.slice(0, lab.length - sufGood.length);
+    if (labels[i + 1] !== hub + sufBad) continue;
+    var rate = (labels[i + 2] === '') ? (i + 3) : 0;      // 1-based row of the rate row, 0 = none
+    out.push({ hub: hub, good: i + 1, bad: i + 2, rate: rate });   // 1-based sheet rows
+  }
+  return out;
+}
+
+/** Residual bucket sorts LAST regardless of alphabet — it is the catch-all, not a hub. */
+function paHubSortsBefore_(a, b) {
+  if (a === PA_RESIDUAL_HUB) return false;
+  if (b === PA_RESIDUAL_HUB) return true;
+  return a < b;
+}
+
+/**
+ * 🔴 INDEPENDENT RATE-ROW VERIFIER. Every blank-label rate row must reference EXACTLY the two rows
+ * directly above it, in its OWN column. A row insert is the one operation that can silently
+ * re-point these, so this runs before AND after any structural edit and reports a count, not a
+ * feeling. Reference rows are read out of the formula text — a formula that merely LOOKS right is
+ * not evidence.
+ */
+function paAuditRateRows_(sh) {
+  var lastRow = Math.max(1, sh.getLastRow()), lastCol = Math.max(1, sh.getLastColumn());
+  var labels = sh.getRange(1, 1, lastRow, 1).getValues().map(function (r) { return String(r[0]).trim(); });
+  var formulas = sh.getRange(1, 1, lastRow, lastCol).getFormulas();
+  var res = { rows: 0, cells: 0, ok: 0, bad: [] };
+  for (var i = 2; i < lastRow; i++) {                 // 0-based; a rate row needs two rows above it
+    if (labels[i] !== '' || labels[i - 1] === '' || labels[i - 2] === '') continue;
+    var any = false;
+    for (var c = 2; c <= lastCol; c++) {
+      var f = String(formulas[i][c - 1] || '');
+      if (!f) continue;
+      any = true; res.cells++;
+      var m = f.match(/\$?([A-Z]{1,3})\$?(\d+)/g) || [];
+      var rows = {}, cols = {};
+      m.forEach(function (ref) {
+        var p = ref.replace(/\$/g, '').match(/^([A-Z]{1,3})(\d+)$/);
+        cols[p[1]] = 1; rows[Number(p[2])] = 1;
+      });
+      var rk = Object.keys(rows).map(Number).sort(function (x, y) { return x - y; });
+      var ck = Object.keys(cols);
+      var self = sh.getRange(1, c).getA1Notation().replace(/\d+/, '');
+      // labels[i] is the blank rate row = SHEET row i+1, so its pair is sheet rows i-1 (good) and i (bad).
+      if (rk.length === 2 && rk[0] === i - 1 && rk[1] === i && ck.length === 1 && ck[0] === self) {
+        res.ok++;
+      } else {
+        res.bad.push(sh.getName() + '!' + self + (i + 1) + ' expects rows ' + (i - 1) + '+' + i +
+                     ' in col ' + self + ', got ' + f);
+      }
+    }
+    if (any) res.rows++;
+  }
+  return res;
+}
+
+/** Menu/editor entry: audit every rate row on both tabs. Read-only. */
+function auditRateRows() {
+  var ss = SpreadsheetApp.openById(PIVOT_SHEET_ID), total = 0, bad = 0;
+  [PA_TABS.tnt2, PA_TABS.lost].forEach(function (name) {
+    var sh = ss.getSheetByName(name);
+    if (!sh) { paLog_('⚠️ missing tab ' + name); return; }
+    var r = paAuditRateRows_(sh);
+    total += r.cells; bad += r.bad.length;
+    paLog_(name + ': ' + r.rows + ' rate row(s), ' + r.cells + ' formula cell(s), ' +
+           r.ok + ' correct, ' + r.bad.length + ' WRONG');
+    r.bad.slice(0, 40).forEach(function (b) { paLog_('  🔴 ' + b); });
+  });
+  paLog_(bad ? ('🔴 ' + bad + ' of ' + total + ' rate formulas are mis-pointed')
+             : ('✅ all ' + total + ' rate formulas point at their own pair'));
+  return { cells: total, bad: bad };
+}
+
+/** Rightmost `_SHIP_` column — the only one that is not frozen history. 0 if none. */
+function paRightmostCohortCol_(sh) {
+  var lastCol = Math.max(1, sh.getLastColumn()), out = 0;
+  var headers = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+  for (var i = 0; i < headers.length; i++) {
+    if (/^_SHIP_\d{4}-\d{2}-\d{2}$/.test(String(headers[i]).trim())) out = i + 1;
+  }
+  return out;
+}
+
+/**
+ * Insert `{hub} · good` / `{hub} · bad` / blank rate row into the `By Hub (assigned)` block of ONE
+ * tab, in sorted position, with formats cloned from a sibling hub group.
+ *
+ * 🔴 HISTORY STAYS BLANK, NEVER ZERO. A 0 in a matured column asserts "this hub shipped nothing that
+ * week"; the hub did not EXIST then. Only the rightmost (live) cohort column gets the rate formula —
+ * writing one into a frozen column would put a live formula inside Kurt-owned history.
+ */
+function paInsertHubRows_(sh, hub, dry) {
+  var name = sh.getName(), g = paGrains_(name);
+  var lastRow = Math.max(1, sh.getLastRow());
+  var labels = sh.getRange(1, 1, lastRow, 1).getValues().map(function (r) { return String(r[0]).trim(); });
+  var groups = paHubGroups_(labels, name);
+  if (!groups.length) throw new Error('PA_INSERT_NO_HUB_SECTION: ' + name + ' — no By Hub groups found');
+  for (var i = 0; i < groups.length; i++) {
+    if (groups[i].hub === hub) {
+      paLog_('  ' + name + ': ' + hub + ' already has rows (' + groups[i].good + '-' +
+             (groups[i].rate || groups[i].bad) + ') — nothing to do');
+      return { inserted: 0 };
+    }
+  }
+  // sorted position: the first existing group that sorts AFTER the new hub
+  var after = null;
+  for (var j = 0; j < groups.length; j++) {
+    if (paHubSortsBefore_(hub, groups[j].hub)) { after = groups[j]; break; }
+  }
+  var anchor = after ? after.good : (function () {
+    var last = groups[groups.length - 1];
+    return (last.rate || last.bad) + 1;
+  })();
+  // template = the group we are landing next to; formats are cloned from it row-for-row
+  var tmpl = after ? after : groups[groups.length - 1];
+  var where = after ? ('before ' + after.hub + ' (row ' + anchor + ')')
+                    : ('at the end of the hub block (row ' + anchor + ')');
+  paLog_('  ' + name + ': insert ' + hub + ' ' + where + ', formats from ' + tmpl.hub);
+  if (!tmpl.rate) {
+    paLog_('  ⚠️ ' + name + ': template group ' + tmpl.hub + ' has NO rate row — the new group ' +
+           'will get one anyway (D2: a rate row follows EVERY pair).');
+  }
+  if (dry) {
+    paLog_('  [dry] ' + name + '!A' + anchor + '  = "   ' + hub + ' · ' + g[0] + '"');
+    paLog_('  [dry] ' + name + '!A' + (anchor + 1) + '  = "   ' + hub + ' · ' + g[1] + '"');
+    paLog_('  [dry] ' + name + '!A' + (anchor + 2) + '  = blank-label rate row, formula in the ' +
+           'rightmost cohort column only; B..(rightmost-1) left EMPTY (blank ≠ zero)');
+    return { inserted: 0, anchor: anchor, dry: true };
+  }
+  var maxCols = Math.max(1, sh.getMaxColumns());
+  sh.insertRowsBefore(anchor, 3);
+  // rows at/after the anchor shifted down by 3 — re-derive the template's position
+  var t = { good: tmpl.good, bad: tmpl.bad, rate: tmpl.rate };
+  if (t.good >= anchor) { t.good += 3; t.bad += 3; if (t.rate) t.rate += 3; }
+  sh.getRange(t.good, 1, 1, maxCols).copyTo(sh.getRange(anchor, 1, 1, maxCols), { formatOnly: true });
+  sh.getRange(t.bad, 1, 1, maxCols).copyTo(sh.getRange(anchor + 1, 1, 1, maxCols), { formatOnly: true });
+  if (t.rate) {
+    sh.getRange(t.rate, 1, 1, maxCols).copyTo(sh.getRange(anchor + 2, 1, 1, maxCols), { formatOnly: true });
+  }
+  // 🔴 label style is byte-identical to its siblings: three leading spaces + ' · ' (U+00B7).
+  sh.getRange(anchor, 1).setValue('   ' + hub + ' · ' + g[0]);
+  sh.getRange(anchor + 1, 1).setValue('   ' + hub + ' · ' + g[1]);
+  var cur = paRightmostCohortCol_(sh);
+  if (cur) {
+    var a1 = sh.getRange(1, cur).getA1Notation().replace(/\d+/, '');
+    var good = a1 + anchor, bad = a1 + (anchor + 1);
+    sh.getRange(anchor + 2, cur)
+      .setFormula('=IF(' + good + '+' + bad + '>0,' + bad + '/(' + good + '+' + bad + '),"")')
+      .setNumberFormat('0.00%');
+    sh.getRange(anchor, cur, 2, 1).setNumberFormat('0');
+    paLog_('  ' + name + ': rate formula at ' + a1 + (anchor + 2) + ' over ' + good + '/' + bad);
+  } else {
+    paLog_('  ⚠️ ' + name + ': no cohort column found — rate row left empty');
+  }
+  SpreadsheetApp.flush();
+  return { inserted: 3, anchor: anchor };
+}
+
+/**
+ * Add a hub's rows to BOTH cohort tabs. Verifier runs before and after; a post-insert regression in
+ * ANY rate formula throws, because a silently re-pointed formula is the one way this corrupts a tab.
+ */
+function paAddHub_(hub, dry) {
+  var ss = SpreadsheetApp.openById(PIVOT_SHEET_ID);
+  paLog_('=== add hub rows: ' + hub + ' — ' + (dry ? 'DRY RUN (no writes)' : 'WRITING') + ' ===');
+  var out = {};
+  [PA_TABS.tnt2, PA_TABS.lost].forEach(function (name) {
+    var sh = ss.getSheetByName(name);
+    if (!sh) { paLog_('⚠️ missing tab ' + name); return; }
+    paAssertColumns_(sh);                                  // never edit a tab that is already damaged
+    var pre = paAuditRateRows_(sh);
+    paLog_('  ' + name + ' BEFORE: ' + pre.rows + ' rate rows, ' + pre.cells + ' formulas, ' +
+           pre.bad.length + ' wrong');
+    if (pre.bad.length) {
+      throw new Error('PA_INSERT_PRE_AUDIT_FAILED: ' + name + ' already has ' + pre.bad.length +
+                      ' mis-pointed rate formula(s) — fix those before inserting rows: ' +
+                      pre.bad.slice(0, 5).join(' | '));
+    }
+    out[name] = paInsertHubRows_(sh, hub, dry);
+    if (dry) return;
+    var post = paAuditRateRows_(sh);
+    paLog_('  ' + name + ' AFTER : ' + post.rows + ' rate rows, ' + post.cells + ' formulas, ' +
+           post.bad.length + ' wrong');
+    if (post.bad.length) {
+      throw new Error('PA_INSERT_POST_AUDIT_FAILED: ' + name + ' — the insert re-pointed ' +
+                      post.bad.length + ' rate formula(s): ' + post.bad.slice(0, 5).join(' | '));
+    }
+    if (post.rows !== pre.rows + 1 || post.cells < pre.cells) {
+      throw new Error('PA_INSERT_ROW_COUNT: ' + name + ' rate rows ' + pre.rows + ' -> ' + post.rows +
+                      ', formulas ' + pre.cells + ' -> ' + post.cells + ' (expected +1 row, no loss)');
+    }
+    paAssertColumns_(sh);
+    paLog_('  ' + name + ' ✅ rate integrity intact, +1 group');
+  });
+  paLog_('=== done (' + (dry ? 'DRY RUN — nothing written' : 'written') + ') ===');
+  return out;
+}
+
+/** 🔴 Kurt runs THIS first: logs exactly where the rows would land. Writes nothing. */
+function previewAddSwedesboroRows() { return paAddHub_('Swedesboro', true); }
+/** Then THIS: inserts the rows. Idempotent — re-running finds the rows and does nothing. */
+function addSwedesboroRows() { return paAddHub_('Swedesboro', false); }
+
+/**
+ * Fill MISSING rate formulas in the rightmost (live) cohort column across both tabs.
+ *
+ * Why this exists: `paCopyFormatFromPrev_` copies `{formatOnly:true}` on purpose (a plain copyTo
+ * would clone ~65 relative formulas), so a freshly appended cohort column has the rate rows'
+ * APPEARANCE and none of their formulas. Observed 2026-08-14: on column F (`_SHIP_2026-08-10`)
+ * every rate row on TnT2 and Lost in Transit is empty. Only EMPTY cells in the RIGHTMOST column are
+ * touched — an existing formula is never overwritten and frozen history is never entered.
+ */
+function fillRateFormulasCurrentColumn(dry) {
+  var ss = SpreadsheetApp.openById(PIVOT_SHEET_ID), filled = 0;
+  if (dry === undefined) dry = true;
+  paLog_('=== fillRateFormulasCurrentColumn — ' + (dry ? 'DRY RUN' : 'WRITING') + ' ===');
+  [PA_TABS.tnt2, PA_TABS.lost].forEach(function (name) {
+    var sh = ss.getSheetByName(name);
+    if (!sh) return;
+    var col = paRightmostCohortCol_(sh);
+    if (!col) { paLog_('  ⚠️ ' + name + ': no cohort column'); return; }
+    var a1 = sh.getRange(1, col).getA1Notation().replace(/\d+/, '');
+    var lastRow = Math.max(1, sh.getLastRow());
+    var labels = sh.getRange(1, 1, lastRow, 1).getValues().map(function (r) { return String(r[0]).trim(); });
+    var f = sh.getRange(1, col, lastRow, 1).getFormulas();
+    var n = 0;
+    for (var i = 2; i < lastRow; i++) {
+      if (labels[i] !== '' || labels[i - 1] === '' || labels[i - 2] === '') continue;
+      if (String(f[i][0] || '')) continue;                 // never overwrite an existing formula
+      var good = a1 + (i - 1), bad = a1 + i;               // rate row = sheet i+1; pair = i-1 / i
+      if (!dry) {
+        sh.getRange(i + 1, col)
+          .setFormula('=IF(' + good + '+' + bad + '>0,' + bad + '/(' + good + '+' + bad + '),"")')
+          .setNumberFormat('0.00%');
+      }
+      n++;
+    }
+    filled += n;
+    paLog_('  ' + name + ' col ' + a1 + ': ' + n + ' empty rate cell(s) ' + (dry ? 'would be' : '') + ' filled');
+  });
+  paLog_('=== ' + filled + ' total (' + (dry ? 'DRY RUN — nothing written' : 'written') + ') ===');
+  return filled;
+}
+
 /** Dry-run entry point for Kurt: run this, then read View → Logs. Writes nothing, ever. */
 function previewCurrentColumn() {
   var saved = PropertiesService.getScriptProperties().getProperty('PIVOT_ANALYTICS_WRITE');
