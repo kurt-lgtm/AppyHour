@@ -208,6 +208,10 @@ function paEtDate_(iso) {
 function paDayDiff_(a, b) {
   return Math.round((new Date(b + 'T00:00:00Z') - new Date(a + 'T00:00:00Z')) / 86400000);
 }
+/** Today in ET, as the same `yyyy-MM-dd` grain every other date here uses. */
+function paTodayEt_() {
+  return Utilities.formatDate(new Date(), PA_TZ, 'yyyy-MM-dd');
+}
 function paHoursSince_(iso) {
   return iso ? (new Date().getTime() - new Date(iso).getTime()) / 3600000 : null;
 }
@@ -343,6 +347,7 @@ function paPpFetch_(orderNums, winLo, winHi) {
  * not "pending", and Lost in Transit is INSIDE 3+ Day — never a bucket beside it.
  */
 function paUnion_(recs, pp, cohortAge) {
+  var src = { pp: 0, shopify: 0, none: 0, shopifyEarlier: [] };
   recs.forEach(function (r) {
     var p = pp[r.order] || {};
     var ppD = !!(p.delivered && p.dl);
@@ -350,22 +355,49 @@ function paUnion_(recs, pp, cohortAge) {
     if (r.shDlv && r.shMove) r.tnt = paDayDiff_(r.shMove, r.shDlv);
     else if (ppD && p.pk) r.tnt = paDayDiff_(p.pk, p.dl);
     else r.tnt = null;
-    r.moved = !!r.shMove || !!p.pk;
+    // 🔴 PICKUP AUTHORITY (standing doctrine, gotcha #5). ParcelPanel `pickup_date` is CANONICAL;
+    // Shopify's first movement scan is the fallback ONLY when PP has none. Both are already ET
+    // (`paEtDate_` converts Shopify's UTC `happenedAt` before any date math — a raw UTC `.date()`
+    // adds a phantom day to every evening event). PP is earlier than the Shopify scan on ~17% of
+    // boxes and NEVER later; a box where Shopify reads earlier means an upstream feed changed —
+    // logged by name, expected count zero.
+    if (p.pk) {
+      r.pickup = p.pk; r.pickupSrc = 'pp'; src.pp++;
+      if (r.shMove && r.shMove < p.pk) src.shopifyEarlier.push(r.order + '(' + r.shMove + '<' + p.pk + ')');
+    } else if (r.shMove) {
+      r.pickup = r.shMove; r.pickupSrc = 'shopify'; src.shopify++;
+    } else {
+      r.pickup = null; r.pickupSrc = ''; src.none++;
+    }
+    r.moved = !!r.pickup;
     r.ontime = r.arrived && r.tnt !== null && r.tnt <= PA_SLA;
-    // 🔴 MATURITY GATE ON THE LATE COUNT. Survivorship (undelivered = late) is only valid ONCE THE
-    // PROMISE DEADLINE HAS PASSED — feedback-ontime-denominator: before the deadline a still-out
-    // box is genuinely PENDING and reported separately; after it, it is a miss. Applying it to a
-    // 2-day-old cohort read 3+ Day 1,622 of 2,318 (70%) on _SHIP_2026-08-10 while 1,509 of those
-    // boxes were simply still moving, on time, and not yet due. A cohort is only judgeable once
-    // its age exceeds the 2-day promise.
-    r.late = !r.ontime && (r.arrived || cohortAge > PA_SLA);
-    r.pending = !r.arrived && cohortAge <= PA_SLA;   // not yet due — neither on-time nor late
+    // 🔴 THE CLOCK IS PER BOX, NOT PER COHORT (Kurt 2026-08-14: "This number is wrong. 55 from
+    // Monday pickup, reviewing Tuesday pickup"). Survivorship (undelivered = late) is only valid
+    // once THAT BOX's promise deadline has passed, and the deadline runs from the box's OWN pickup.
+    // A ship week is MULTI-LEG — a Monday pickup plus a Tuesday (Dallas) leg is standard here — so
+    // measuring every box on the cohort Monday's clock steals a full day from every Tuesday-leg box
+    // and flips it to late while it is still inside its 2-day promise. On _SHIP_2026-08-10 at
+    // cohort age 4d that reported 3+ Day 220 of 2,318 with Dallas (the Tuesday hub) alone at 87.
+    // A box with NO pickup anywhere has no clock at all and is `pending` — never late. It cannot be
+    // counted against a promise the carrier never started; it shows up on the
+    // `never picked up by carrier` observation row instead.
+    r.boxAge = r.pickup ? paDayDiff_(r.pickup, paTodayEt_()) : null;
+    r.late = !r.ontime && (r.arrived || (r.boxAge !== null && r.boxAge > PA_SLA));
+    r.pending = !r.arrived && !r.late;   // not yet due (or never picked up) — neither on-time nor late
     // lost vs active: a scan in the last 24h means the box is demonstrably MOVING (super-late, not
     // lost). Zero scans, or silent >=24h, stays LOST — unverified is not the same as known-not-lost.
     var age = paHoursSince_(r.lastScanIso);
     r.active = !r.arrived && age !== null && age < PA_ACTIVE_HRS;
     r.lost = !r.arrived && !r.active;
   });
+  paLog_('  pickup clock (per box, cohort age ' + cohortAge + 'd): PP ' + src.pp +
+         '  shopify-fallback ' + src.shopify + '  NO pickup anywhere ' + src.none +
+         ' (pending by definition — never late)');
+  if (src.shopifyEarlier.length) {
+    paLog_('  🔴 Shopify first scan EARLIER than PP pickup on ' + src.shopifyEarlier.length +
+           ' box(es) — expected ZERO; an upstream feed changed: ' +
+           src.shopifyEarlier.slice(0, 20).join(', '));
+  }
   return recs;
 }
 
@@ -593,17 +625,28 @@ function paRefreshOne_(shipWeek, dry, budget, allowAppend) {
                     ') != Total ' + total);
   }
   if (pend) {
-    paLog_('  PENDING (not yet due, age ' + age + 'd <= ' + PA_SLA + 'd promise): ' + pend +
-           ' — excluded from BOTH 2 Day and 3+ Day until the cohort matures');
+    paLog_('  PENDING (undelivered and inside its OWN 2-day promise, or never picked up): ' + pend +
+           ' — excluded from BOTH 2 Day and 3+ Day until that box\'s deadline passes');
   }
   if (lost + active !== total - arr) {
     throw new Error('PA_ASSERT_NOTARRIVED_PARTITION: lost+active (' + (lost + active) +
                     ') != Not Arrived ' + (total - arr));
   }
-  // pending is a SUBSET of the still-moving observation, never a fourth bucket beside it — if it
-  // ever exceeds `active` the three observation rows no longer partition Not Arrived.
-  if (pend > active) {
-    throw new Error('PA_ASSERT_PENDING_SUBSET: pending ' + pend + ' > still-moving ' + active +
+  // 🔴 pending sits INSIDE the three observations (which partition Not Arrived), never as a fourth
+  // bucket beside them. Under the cohort-wide clock the only pending boxes were still-moving ones,
+  // so this was bounded by `active`. Under the PER-BOX clock a never-picked-up box is also pending
+  // — it belongs to the `never picked up by carrier` observation, not to `still moving` — so the
+  // correct bound is Not Arrived. Keeping the old `pend > active` bound would throw on every
+  // multi-leg week. Both halves still hold: every pending box is undelivered, and pending can never
+  // exceed the not-arrived population it is drawn from.
+  var pendArrived = 0;
+  recs.forEach(function (r) { if (r.pending && r.arrived) pendArrived++; });
+  if (pendArrived) {
+    throw new Error('PA_ASSERT_PENDING_SUBSET: ' + pendArrived + ' pending box(es) are ARRIVED — ' +
+                    'pending must be a subset of Not Arrived.');
+  }
+  if (pend > total - arr) {
+    throw new Error('PA_ASSERT_PENDING_SUBSET: pending ' + pend + ' > Not Arrived ' + (total - arr) +
                     ' — pending must sit inside the three observations, not beside them.');
   }
   paLog_('cohort ' + total + '  2Day ' + ot + '  3+Day ' + lt + '  arrived ' + arr +

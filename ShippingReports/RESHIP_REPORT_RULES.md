@@ -589,6 +589,59 @@ residual row reads **145**, not the 149 quoted from the CSV.
 Nashville 801 · `RMFG choice (2+ hubs open)` **145** (was 209) — 2,305 total, By Hub still sums to
 `2 Day 2,194 / 3+ Day 111`.
 
+### D18 — THE PROMISE CLOCK IS PER BOX, FROM ITS OWN PICKUP (Kurt 2026-08-14)
+
+> **Kurt, annotating `TnT2!F3` (`_SHIP_2026-08-10`, `3+ Day Shipments` = 220):**
+> *"This number is wrong. 55 from Monday pickup, reviewing Tuesday pickup"*
+
+🔴 **What NOT to do:** never measure a box's 2-day promise from the COHORT's ship Monday. A ship week
+is **MULTI-LEG** — a Monday pickup plus a Tuesday (Dallas) leg is standard, not an exception — so the
+cohort clock steals a full day from every Tuesday-leg box and flips it to late while it is still
+inside its promise. `3342d84` added the survivorship maturity gate as `late = !ontime && (arrived ||
+cohortAge > PA_SLA)`; the gate was right, its clock was not.
+
+🔴 **A box with no pickup ANYWHERE is `pending`, never late.** Under the cohort clock every
+never-collected box scored as a miss — it cannot be counted against a promise the carrier never
+started. It is already visible on the `never picked up by carrier` observation row; counting it as
+late too double-narrates the same failure and inflates the headline the ops read.
+
+**The rule.** `late = !ontime && (arrived || boxAge > PA_SLA)`, `boxAge = todayET − that box's own
+pickup date`; everything undelivered and not late is `pending`.
+
+**Pickup authority (standing doctrine, do not re-derive):**
+1. ParcelPanel `pickup_date` is CANONICAL.
+2. The Shopify first-movement scan is the fallback **only when PP has none**.
+3. Convert to `America/New_York` BEFORE any date math (a raw UTC `.date()` adds a phantom day to
+   every evening event and once doubled the late rate).
+4. Movement = `IN_TRANSIT` · `OUT_FOR_DELIVERY` · `ATTEMPTED_DELIVERY` · `DELIVERED`.
+   **`CONFIRMED` is NOT movement** — it fires at label creation, so counting it makes every
+   never-collected box look like it moved.
+5. PP is earlier than the Shopify scan on ~17% of boxes and **never later**. Any box where Shopify
+   reads earlier is LOGGED BY NAME; the expected count is **zero**, and a moving counter means an
+   upstream feed changed — investigate, do not adjust the number.
+
+**Scope — the corrected clock applies to every derived figure:** TnT2 `2 Day` / `3+ Day` / pending,
+the three observation rows, and `moved` (which is now literally "has a pickup"). Lost in Transit's
+`Arrived` / `Not Arrived` are arrival measures and are clock-independent — they must NOT shift.
+
+**Assert change (same six named asserts, one bound corrected):** `PA_ASSERT_PENDING_SUBSET` was
+`pending <= still-moving`, which held only because the cohort clock could produce no other kind of
+pending box. Never-picked-up boxes are now pending too, and they live on a different observation row,
+so the bound is `pending <= Not Arrived` plus "no pending box is arrived". The old bound would throw
+on every multi-leg week.
+
+**Measured on `_SHIP_2026-08-10` (fresh Shopify pull 2026-08-14, one pull scored both ways):**
+
+| clock | 2 Day | 3+ Day | pending | late rate |
+|---|---|---|---|---|
+| cohort (old) | 2,216 | **102** | 0 | 4.40% |
+| per box (new) | 2,216 | **77** (61 Mon pickup · 16 Tue) | **25** (never picked up) | 3.32% |
+
+Replayed as of **2026-08-13**, the day the sheet's 220 was written: old 102 → **new 61, every one of
+them a Monday pickup**; the Tuesday leg (`boxAge` 2) was correctly pending. That reproduces Kurt's
+"55 from Monday pickup" to within intraday timing. The sheet's own `220 = 2,318 − 2,098` — literally
+every undelivered box at that instant, which is the cohort clock's signature.
+
 ### Cutover checklist (once preconditions clear)
 
 (a) confirm Jdbc `SELECT 1` from GAS + RO user scoped; (b) implement the walk-forward current-column
@@ -618,3 +671,12 @@ builder's numbers on a matured cohort** before trusting the headless path (ident
   (%+discrete), Parcel Panel carrier (Script Property `PARCELPANEL_API_KEY`), Reship Report custom
   menu, and the two post-classification overrides (expedite-request guard `c495842`, late-supersedes-
   warm `a20950c`). SSOT now matches the live `Code.gs` + `scratchpad/rebuild_mix_triage.py`.
+- 2026-08-14 — **D18: the 2-day promise clock is PER BOX, from that box's own pickup** (Kurt: "This
+  number is wrong. 55 from Monday pickup, reviewing Tuesday pickup"). Multi-leg ship weeks are
+  standard; the cohort-Monday clock aged every Tuesday-leg box by a day and flipped it to late, and
+  it counted never-picked-up boxes as late against a promise the carrier never started (they are
+  `pending`). Pickup authority = PP `pickup_date`, Shopify first movement scan only when PP is
+  absent, ET before any date math. `PA_ASSERT_PENDING_SUBSET` rebounded to `pending <= Not Arrived`.
+  Also recorded: the live Apps Script project was found holding ONLY `[appsscript, Code]` —
+  `Exceptions.gs` and `PivotAnalytics.gs` had been DELETED by an all-files PUT (gotcha #16 executed);
+  both restored, Exceptions from its last-deployed bytes.
