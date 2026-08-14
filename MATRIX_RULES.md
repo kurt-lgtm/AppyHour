@@ -280,6 +280,11 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
     `number_format='@'` on order#/zip/tracking columns; `check_zip_leading_zeroes` runs on BOTH the
     matrix and gift (vFGR) paths. Engine-side twin: ROUTING_RULES "ZIP INTEGRITY"; consolidated
     ledger in memory `zip-integrity-family`.
+    **ZIP+4 addendum (wk0817, 2026-08-14): RMFG also REJECTS zips longer than 5 digits.** 13
+    gift/hand-merged rows shipped `83340-7024`-style and the sent sheet bounced. The finalize
+    zip fix-pass now ALWAYS strips to zip5 (`split("-")[0]`, zfill(5), format `@`) — silent strip,
+    not a hard fail (Kurt 2026-08-14 "not hard fail, just strip"). Any path that appends rows to a
+    vF outside `matrix_commander` (hand-adds, sweeps) must normalize the same way at write time.
 
 23. **The AUTHORITY FILE ITSELF is validated — adding to MFG names must not pollute the export**
     (Kurt 2026-08-09: *"we also have to take care to separate mfg names from other shit as to not
