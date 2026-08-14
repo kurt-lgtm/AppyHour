@@ -45,6 +45,12 @@ MANUAL_OVERRIDES: dict[str, float] = {
     # CH prefix fallback (.20) over-sizes CH-OTTA (.15). Move to Sheet1 when it lands there.
     "AC-QUIC": 0.12,
     "CH-OTTA": 0.15,
+    # AC-FCROSE (Codex handoff 2026-08-14) — onboarded WITHOUT its DistVol landing anywhere
+    # (not Sheet1, not the db); AC prefix fallback (.12) silently sized it 4.6x small vs the
+    # canonical 0.55 (+0.43/unit -> SMALL misclassification near the 2.99 cap). Move to Sheet1
+    # when it lands there. Onboarding invariant: every new MFG/SKU name must arrive with its
+    # canonical DistVol atomically — MFG-acceptance without DistVol is incomplete onboarding.
+    "AC-FCROSE": 0.55,
     # CH-BOSI / AC-GLAW / AC-TOK / AC-BLUCAR / MT-COPPA / all MT-*
     # now live in Sheet1 directly (patched 2026-04-29)
 }
