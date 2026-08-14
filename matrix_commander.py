@@ -2525,6 +2525,11 @@ def _is_product_header(h: str) -> bool:
     return str(h or "").startswith("AHB (")
 
 
+def _mfg_name_from_header(h: str) -> str:
+    """Return the registered-name portion of an AHB product header."""
+    return str(h or "").partition(":")[2].strip() if _is_product_header(h) else ""
+
+
 # 🔴 Placeholder MFG names typed into the RMFG translator portal for NON-FULFILLABLE SKUs (Kurt
 # 2026-07-28): `remove` is the name he gave a BL- (bulk) SKU precisely so the column is obviously
 # disposable. BL- is in SKIP_PREFIXES — it never ships as a pick line. Any column named like this is
@@ -2593,94 +2598,82 @@ def merge_gift_xlsx(
     gift_path: str | Path,
     drop_oids: Optional[set[str]] = None,
 ) -> str:
-    """REPLACE gift redemption rows in the main matrix from the weekly vFGR (rule 20).
-
-    Gift redemption orders are UNEDITABLE in Shopify, so the matrix rows generated from
-    Shopify carry stale/too-few items for them — the vFGR is the ITEM-TRUTH. For each vFGR
-    OrderID present in the matrix: overwrite recipient/meta cells, wipe-then-refill ALL
-    product cells, PRESERVE the matrix row's Tags (engine col L) + ProductionDay, blank
-    Notes (rule 18), recompute Total (rule 0). Alignment is by HEADER with rule-15b
-    normalization (wk0720 walnut); gift-side bookkeeping columns (`remove`) are not unioned.
-    A-suffix twins are folded onto their parent first (rule 20a).
-
-    A vFGR OrderID missing from the matrix (e.g. a _HOLD order) raises GiftMergeError —
-    release it into the cohort and re-run, or pass its OID in drop_oids to explicitly
-    exclude it. Never silently include/exclude. Returns path to merged file.
-    """
+    """Replace only validated MFG item quantities; preserve every routing-app fixed cell."""
     drop_oids = {str(o).strip().lstrip("#") for o in (drop_oids or set())}
     main_wb = openpyxl.load_workbook(str(main_path))
     main_ws = main_wb["Access_LIVE"]
 
     gift_wb = openpyxl.load_workbook(str(gift_path), data_only=True, read_only=True)
     gift_ws = gift_wb["Access_LIVE"]
-    raw = [list(r) for r in gift_ws.iter_rows(values_only=True)]
+    raw = [list(row) for row in gift_ws.iter_rows(values_only=True)]
     gift_wb.close()
     if not raw:
+        main_wb.close()
         raise GiftMergeError(f"empty gift sheet: {gift_path}")
 
-    gift_headers = [_normalize_rule15b_header(str(h or "")) for h in raw[0]]
+    gift_headers = [_normalize_rule15b_header(str(header or "")) for header in raw[0]]
     gift_rows, folded = _fold_gift_twins(gift_headers, raw[1:])
 
-    # Normalize main headers in place (rule 15b) and index them
-    main_headers: list[str] = []
-    for c in range(1, main_ws.max_column + 1):
-        h = _normalize_rule15b_header(str(main_ws.cell(1, c).value or ""))
-        if h != str(main_ws.cell(1, c).value or ""):
-            main_ws.cell(1, c).value = h
-        main_headers.append(h)
-    main_idx = {h: i for i, h in enumerate(main_headers)}
+    # Normalize and collapse duplicate product columns. Fixed/meta duplicates are ambiguous; never
+    # guess which app-owned value is authoritative.
+    headers: list[str] = []
+    first: dict[str, int] = {}
+    duplicate_cols: list[int] = []
+    for column in range(1, main_ws.max_column + 1):
+        header = _normalize_rule15b_header(str(main_ws.cell(1, column).value or ""))
+        main_ws.cell(1, column).value = header
+        headers.append(header)
+        if header not in first:
+            first[header] = column
+        elif not _is_product_header(header):
+            main_wb.close()
+            raise GiftMergeError(f"duplicate fixed/meta matrix header after normalization: {header!r}")
+        else:
+            target = first[header]
+            for row_num in range(2, main_ws.max_row + 1):
+                values = (main_ws.cell(row_num, target).value,
+                          main_ws.cell(row_num, column).value)
+                quantity = sum(int(value) for value in values
+                               if isinstance(value, (int, float)) and value > 0)
+                main_ws.cell(row_num, target).value = quantity or None
+            duplicate_cols.append(column)
+    for column in reversed(duplicate_cols):
+        main_ws.delete_cols(column)
 
-    # Column union: append gift-only PRODUCT columns; never union gift bookkeeping cols.
-    # 🔴 A PLACEHOLDER-named column ("remove" — Kurt's stand-in MFG name for a BL- bulk SKU) is
-    # dropped FIRST and unconditionally, even if it were to arrive shaped like a product header.
-    # Today it lacks the "AHB (" prefix so it falls out anyway; that is an accident of the broken
-    # generator, not a guarantee. Name the intent so onboarding that BL- SKU properly can't
-    # silently push an unfulfillable column onto the sheet RMFG picks from.
-    placeholder_cols: list[str] = []
-    skipped_cols: list[str] = []
-    for h in gift_headers:
-        if not h or h in main_idx:
+    headers = [str(main_ws.cell(1, column).value or "")
+               for column in range(1, main_ws.max_column + 1)]
+    header_index = {header: index for index, header in enumerate(headers)}
+    authoritative = {
+        _normalize_name(_mfg_name_from_header(_normalize_rule15b_header(name))
+                        or _normalize_rule15b_header(name))
+        for name in load_mfg_translations(MFG_AUTHORITATIVE_PATH).values() if name
+    }
+    if not authoritative:
+        main_wb.close()
+        raise GiftMergeError("MFG name authority is unavailable; gift item merge refused")
+
+    def known_product(header: str) -> bool:
+        return (_is_product_header(header)
+                and _normalize_name(_mfg_name_from_header(header)) in authoritative)
+
+    # Unknown names, including literal `remove`, are silent omissions. Known gift-only names append
+    # once; duplicate normalized gift headers share that one destination column.
+    for header in gift_headers:
+        if header in header_index or _is_placeholder_header(header) or not known_product(header):
             continue
-        if _is_placeholder_header(h):
-            placeholder_cols.append(h)
-            continue
-        if not _is_product_header(h):
-            skipped_cols.append(h)
-            continue
-        main_idx[h] = len(main_headers)
-        main_headers.append(h)
-        main_ws.cell(1, len(main_headers)).value = h
+        header_index[header] = len(headers)
+        headers.append(header)
+        main_ws.cell(1, len(headers)).value = header
 
-    # 🔴 UNMAPPED META HEADER = a RENAME, and renames fail SILENTLY (QC pass 2026-07-28). Alignment is
-    # by header NAME: if the generator renames a meta column (`Zip` -> `ZIP`, `Address 2` -> `Address2`)
-    # it drops out of `gift_mapped` and the merge quietly LEAVES THE MATRIX'S STALE VALUE — no error,
-    # no log line. A rename of a PRODUCT column is visible (it unions in); a meta rename is invisible.
-    # Evidence for the strictness: across 8 weekly vFGRs the ONLY non-product header absent from the
-    # matrix was the `remove` placeholder, so anything else unmapped is a real deviation, not routine.
-    # `skipped_cols` was already computing exactly this set and merely PRINTING it at the end.
-    if skipped_cols:
-        raise GiftMergeError(
-            f"vFGR non-product column(s) not present in the matrix: {skipped_cols}. The merge aligns "
-            f"by header name, so a RENAMED meta column would silently stop being overwritten and the "
-            f"matrix's stale recipient data would ship. Fix the vFGR export header(s), or — if this is "
-            f"a disposable placeholder column — name it exactly one of {sorted(_GIFT_PLACEHOLDER_HEADERS)}."
-        )
+    product_cols = {index for index, header in enumerate(headers) if known_product(header)}
+    gift_product_cols = [(index, header) for index, header in enumerate(gift_headers)
+                         if known_product(header)]
 
-    gift_pos = [main_idx.get(h) if h else None for h in gift_headers]
-    prod_cols = {i for i, h in enumerate(main_headers) if _is_product_header(h)}  # 0-indexed
-    preserve = {
-        main_idx[h] for h in ("Tags", "ProductionDay") if h in main_idx
-    }  # engine col L + prod day stay (rule 20b)
-    notes_i = main_idx.get("Notes")
-    total_i = main_idx.get("Total")
-    _zip_i = next((i for i, h in enumerate(gift_headers) if h == "Zip"), None)   # index into GIFT row
-
-    # Index main rows by OrderID (sheet row number)
-    main_rownum: dict[str, int] = {}
-    for r in range(2, main_ws.max_row + 1):
-        oid = str(main_ws.cell(r, 1).value or "").strip().lstrip("#")
+    main_rows: dict[str, int] = {}
+    for row_num in range(2, main_ws.max_row + 1):
+        oid = str(main_ws.cell(row_num, 1).value or "").strip().lstrip("#")
         if oid:
-            main_rownum[oid] = r
+            main_rows[oid] = row_num
 
     replaced = 0
     dropped: list[str] = []
@@ -2692,52 +2685,17 @@ def merge_gift_xlsx(
         if oid in drop_oids:
             dropped.append(oid)
             continue
-        r = main_rownum.get(oid)
-        if r is None:
+        row_num = main_rows.get(oid)
+        if row_num is None:
             missing.append(oid)
             continue
-        # 🔴 ZIP VALIDATION before the overwrite (QC pass 2026-07-28). The matrix zip comes from
-        # Shopify and is correct; this merge REPLACES it from the vFGR with no check. A zip stored as
-        # a NUMBER loses its leading zero (07627 -> 7627) — the exact class `check_zip_leading_zeroes`
-        # exists for on the matrix path, with no equivalent here. The routing engine then rates and
-        # labels off the broken zip: a mis-routed or undeliverable cold-chain box, found after it
-        # ships. 8 weeks of vFGRs are clean, so this is a guard, not a fix — keep it loud.
-        if _zip_i is not None and _zip_i < len(row):
-            _z = row[_zip_i]
-            if isinstance(_z, (int, float)):
-                raise GiftMergeError(
-                    f"vFGR zip for #{oid} is NUMERIC ({_z!r}) — a leading zero is already lost "
-                    f"(e.g. 07627 reads as 7627). Re-export with Zip as TEXT; refusing to overwrite "
-                    f"the matrix's Shopify zip with it."
-                )
-            if _z is not None and not re.fullmatch(r"\d{5}(-\d{4})?", str(_z).strip()):
-                raise GiftMergeError(
-                    f"vFGR zip for #{oid} is malformed ({_z!r}) — refusing to overwrite the matrix's "
-                    f"Shopify zip with it."
-                )
-        # Re-slot gift row into union column order
-        out: list = [None] * len(main_headers)
-        for val, pos in zip(row, gift_pos):
-            if pos is not None:
-                out[pos] = val
-        gift_mapped = {pos for pos in gift_pos if pos is not None}
-        for c0 in range(len(main_headers)):
-            if c0 in preserve:
-                continue  # keep matrix Tags (engine col L) + ProductionDay
-            if c0 == notes_i:
-                main_ws.cell(r, c0 + 1).value = None  # Notes ships EMPTY (rule 18)
-            elif c0 in prod_cols:
-                main_ws.cell(r, c0 + 1).value = out[c0]  # item-truth: wipe-then-refill
-            elif c0 in gift_mapped:
-                main_ws.cell(r, c0 + 1).value = out[c0]  # recipient/meta from vFGR
-        # Total = recomputed sum of the row's product cells (rule 0) — never trusted
-        if total_i is not None:
-            tot = 0
-            for c0 in prod_cols:
-                v = main_ws.cell(r, c0 + 1).value
-                if isinstance(v, (int, float)):
-                    tot += int(v)
-            main_ws.cell(r, total_i + 1).value = tot
+        quantities: dict[str, int] = {}
+        for source_index, header in gift_product_cols:
+            value = row[source_index] if source_index < len(row) else None
+            if isinstance(value, (int, float)) and value > 0:
+                quantities[header] = quantities.get(header, 0) + int(value)
+        for column_index in product_cols:
+            main_ws.cell(row_num, column_index + 1).value = quantities.get(headers[column_index])
         replaced += 1
 
     if missing:
@@ -2745,28 +2703,22 @@ def merge_gift_xlsx(
         raise GiftMergeError(
             f"vFGR OrderID(s) NOT in the matrix (e.g. _HOLD): {sorted(missing)} — "
             "release into the cohort + re-run, or exclude explicitly with --gift-drop. "
-            "Never silently included/excluded (rule 20c)."
-        )
+            "Never silently included/excluded (rule 20c).")
     unknown_drops = drop_oids - set(dropped)
     if unknown_drops:
-        print(f"  {_YELLOW}--gift-drop OID(s) not in the vFGR (no-op): {sorted(unknown_drops)}{_RESET}")
+        print(f"  {_YELLOW}--gift-drop OID(s) not in the vFGR (no-op): "
+              f"{sorted(unknown_drops)}{_RESET}")
 
-    # Save merged file
-    src = Path(main_path)
-    out_path = src.parent / f"{src.stem}_MERGED{src.suffix}"
+    source = Path(main_path)
+    out_path = source.parent / f"{source.stem}_MERGED{source.suffix}"
     main_wb.save(str(out_path))
     main_wb.close()
-
-    print(f"  Gift merge (rule 20): {replaced} row(s) REPLACED from vFGR (col L preserved)")
+    print(f"  Gift merge (rule 20): {replaced} row(s) item-only replaced from vFGR")
     if folded:
         print(f"  A-twin fold: {', '.join(folded)}")
-    if placeholder_cols:
-        print(f"  {_YELLOW}placeholder gift column(s) DROPPED (non-fulfillable, e.g. a BL- SKU named "
-              f"'remove'): {placeholder_cols}{_RESET}")
     if dropped:
         print(f"  {_YELLOW}explicitly dropped via --gift-drop: {', '.join(dropped)}{_RESET}")
     print(f"  Saved: {_GREEN}{out_path.name}{_RESET}")
-
     return str(out_path)
 
 

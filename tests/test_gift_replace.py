@@ -22,7 +22,8 @@ META = ["OrderID", "Name", "Total", "Zip", "Tags", "Notes", "ProductionDay"]
 P1 = "AHB (S_REG): Montasio"
 P2 = "AHB (S_REG): Barista"
 P3 = "AHB (S_REG): Chorizo Seco"
-ENGINE_L = "!ExtraGel48oz!, !FedEx Home Delivery - Indianapolis_AHB!, Gift_Redemption"
+ENGINE_L = ("!ExtraGel48oz!, !ExtraGel48oz!, !FedEx Home Delivery - Indianapolis_AHB!, "
+            "Gift_Redemption, MaxIce, MaxIce")
 
 
 def _write_xlsx(path, headers, rows):
@@ -54,7 +55,7 @@ def _main(tmp_path):
     )
 
 
-def test_replace_overwrites_items_preserves_engine_col_l(tmp_path):
+def test_replace_changes_only_items_and_preserves_all_app_fields(tmp_path):
     gift = _write_xlsx(
         tmp_path / "gift.xlsx",
         META + [P1, P2],
@@ -63,13 +64,13 @@ def test_replace_overwrites_items_preserves_engine_col_l(tmp_path):
     headers, rows = _load(mc.merge_gift_xlsx(_main(tmp_path), gift))
     row = rows["164878"]
 
-    assert row[headers.index("Name")] == "True Recipient"           # meta from vFGR
+    assert row[headers.index("Name")] == "Old Stale Name"          # app metadata wins
     assert row[headers.index(P1)] is None                            # stale item WIPED
     assert row[headers.index(P2)] == 2                               # item-truth refilled
     assert row[headers.index("Tags")] == ENGINE_L                    # engine col L PRESERVED
     assert row[headers.index("ProductionDay")] == "SAT"
-    assert row[headers.index("Notes")] is None                       # rule 18: Notes blank
-    assert row[headers.index("Total")] == 2                          # rule 0: recomputed, not 99
+    assert row[headers.index("Notes")] == "junk note"
+    assert row[headers.index("Total")] == 1                          # fixed app cell unchanged
     # untouched regular order
     assert rows["150000"][headers.index(P1)] == 1
 
@@ -89,7 +90,7 @@ def test_twin_fold_sums_onto_parent_and_drops_a_row(tmp_path):
     row = rows["164878"]
     assert row[headers.index(P1)] == 3                               # 1 + 2 summed
     assert row[headers.index(P2)] == 1
-    assert row[headers.index("Total")] == 4
+    assert row[headers.index("Total")] == 1
     assert "remove" not in headers                                   # bookkeeping col not unioned
 
 
@@ -108,7 +109,7 @@ def test_no_a_row_means_nothing_is_folded(tmp_path):
     )
     headers, rows = _load(mc.merge_gift_xlsx(_main(tmp_path), gift))
     assert rows["164878"][headers.index(P1)] == 3                    # untouched, not doubled
-    assert rows["164878"][headers.index("Total")] == 3
+    assert rows["164878"][headers.index("Total")] == 1
 
 
 def test_placeholder_column_is_dropped_and_never_counted(tmp_path):
@@ -125,7 +126,7 @@ def test_placeholder_column_is_dropped_and_never_counted(tmp_path):
     headers, rows = _load(mc.merge_gift_xlsx(_main(tmp_path), gift))
     assert "remove" not in headers
     assert not any(str(h).strip().lower() in {"remove", "delete", "ignore"} for h in headers)
-    assert rows["164878"][headers.index("Total")] == 3               # the BL- 1 is NOT in the total
+    assert rows["164878"][headers.index("Total")] == 1               # app Total is untouched
 
 
 def test_placeholder_column_dropped_even_if_shaped_like_a_product(tmp_path):
@@ -159,7 +160,7 @@ def test_trailing_all_blank_row_is_ignored(tmp_path):
     assert "" not in rows and "None" not in rows
 
 
-def test_numeric_zip_is_refused(tmp_path):
+def test_gift_zip_is_ignored_even_when_numeric(tmp_path):
     """A zip stored as a NUMBER has already lost its leading zero — never overwrite Shopify's with it.
 
     07627 -> 7627 mis-routes a cold-chain box and is only found after it ships.
@@ -169,11 +170,11 @@ def test_numeric_zip_is_refused(tmp_path):
         META + [P1],
         [[164878, "Parent", 0, 7627, "", None, "SAT", 3]],
     )
-    with pytest.raises(GiftMergeError, match="NUMERIC"):
-        mc.merge_gift_xlsx(_main(tmp_path), gift)
+    headers, rows = _load(mc.merge_gift_xlsx(_main(tmp_path), gift))
+    assert rows["164878"][headers.index("Zip")] == "92026"
 
 
-def test_renamed_meta_header_is_loud_not_silent(tmp_path):
+def test_renamed_gift_meta_header_is_inert(tmp_path):
     """Alignment is by header name: a renamed meta column would silently stop being overwritten."""
     meta_renamed = [h if h != "Zip" else "ZIP " for h in META]
     gift = _write_xlsx(
@@ -181,8 +182,34 @@ def test_renamed_meta_header_is_loud_not_silent(tmp_path):
         meta_renamed + [P1],
         [[164878, "Parent", 0, "92026", "", None, "SAT", 3]],
     )
-    with pytest.raises(GiftMergeError, match="not present in the matrix"):
-        mc.merge_gift_xlsx(_main(tmp_path), gift)
+    headers, rows = _load(mc.merge_gift_xlsx(_main(tmp_path), gift))
+    assert rows["164878"][headers.index("Zip")] == "92026"
+
+
+def test_unknown_mfg_name_is_silently_omitted(tmp_path):
+    unknown = "AHB (S_REG): Definitely Not A Registered MFG Name"
+    gift = _write_xlsx(
+        tmp_path / "gift.xlsx", META + [P1, unknown, "remove"],
+        [[164878, "Gift Name", 99, "00000", "gift tags", "gift note", "TUE", 2, 7, 1]],
+    )
+    headers, rows = _load(mc.merge_gift_xlsx(_main(tmp_path), gift))
+    assert unknown not in headers and "remove" not in headers
+    assert rows["164878"][headers.index(P1)] == 2
+
+
+def test_duplicate_normalized_product_headers_collapse_and_sum(tmp_path):
+    main = _write_xlsx(
+        tmp_path / "main.xlsx", META + [P1, P1],
+        [[164878, "App Name", 9, "92026", ENGINE_L, "app note", "SAT", 1, 2]],
+    )
+    gift = _write_xlsx(
+        tmp_path / "gift.xlsx", META + [P1, P1],
+        [[164878, "Gift Name", 99, "00000", "gift tags", "gift note", "TUE", 3, 4]],
+    )
+    headers, rows = _load(mc.merge_gift_xlsx(main, gift))
+    assert headers.count(P1) == 1
+    assert rows["164878"][headers.index(P1)] == 7
+    assert rows["164878"][headers.index("Name")] == "App Name"
 
 
 def test_orphan_twin_row_is_loud_error(tmp_path):

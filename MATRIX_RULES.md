@@ -213,39 +213,29 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
         `BL-` is in `SKIP_PREFIXES` — not fulfillable, never a pick line — so `remove=1` is a
         QUANTITY of a bulk SKU and says nothing about twin folding. The flag was print-only, so no
         merge was ever wrong; but a log line asserting a false fact is how the false fact spreads.
-    (a3) **The vFGR's `Zip` is VALIDATED before it overwrites Shopify's** (QC pass 2026-07-28): a zip
-        arriving as a NUMBER has already lost its leading zero (`07627` → `7627`) — the exact class
-        `check_zip_leading_zeroes` guards on the matrix path, which the gift path had no equivalent
-        for. The matrix zip comes from Shopify and is correct; replacing it with a broken one gets
-        rated and labelled by the engine, and surfaces as a mis-routed cold-chain box AFTER it ships.
-        Numeric or non-5-digit → `GiftMergeError` naming the OrderID. 8 weeks of vFGRs are clean, so
-        this is a guard, not a fix — keep it loud rather than coercing the value.
-    (a4) **An unmapped non-product gift column is a LOUD error, because a rename fails silently.**
-        Alignment is by header NAME. A renamed meta column (`Zip` → `ZIP`) simply stops being
-        overwritten and the matrix's STALE recipient data ships — no error, no log. (A renamed
-        PRODUCT column is visible: it unions in.) Across 8 weekly vFGRs the only non-product header
-        absent from the matrix was the `remove` placeholder, so anything else unmapped is a real
-        deviation. This replaced a `print("gift bookkeeping column(s) not unioned: …")` that nobody
-        would read on a Friday afternoon. Verified: all 8 historical vFGRs still pass.
+    (a3) **Gift metadata is never read as authority.** The routing app's matrix row owns OrderID,
+        recipient/name/address/contact, Tags (including duplicate routing/ice/ability tokens),
+        Notes, ProductionDay, Total, and every other fixed/run field. The vFGR supplies only MFG
+        item quantities. A renamed or malformed gift meta header is inert.
     (a2) **Placeholder-named gift columns are DROPPED** (`remove` / `delete` / `ignore`, exact match,
         case-insensitive): the generating app is unreliable, so the merge does not depend on that
         column merely lacking the `AHB (` product shape — it is dropped BY NAME, before the shape
         check, and its qty never reaches the sheet or the col-D Total. Onboarding that `BL-` SKU with
         a real-looking MFG name must not be able to push an unfulfillable column onto the sheet RMFG
         picks from. Match is exact — a fuzzy "contains remove" would eat a real product eventually.
-    (b) **REPLACE by OrderID:** for each vFGR OrderID present in the matrix, overwrite the row's
-        recipient/meta cells and WIPE-then-REFILL all product cells from the vFGR (item-truth).
-        **PRESERVE the matrix row's `Tags` (engine col L — routing/gel/identity; gift rows carry no
-        routing) and `ProductionDay`; `Notes` ships EMPTY (rule 18); `Total` is RECOMPUTED** as the
-        sum of the row's product cells (rule 0) — never trusted from either side.
+    (b) **ITEM-ONLY REPLACE by OrderID:** WIPE-then-REFILL only validated MFG product cells from the
+        vFGR. Every non-product cell remains byte-for-cell from the routing app, including Total;
+        downstream canonical generation owns any derived totals. Gift input can never override
+        order/name/address/contact/Tags/Notes/ProductionDay/run fields.
     (c) **vFGR OrderID missing from the matrix = LOUD `GiftMergeError`** (e.g. a `_HOLD` order —
         wk0727 #165505), listing the OIDs — surface for Kurt's release/drop decision, NEVER
         silently include or exclude. Release = retag into the cohort + re-run; drop = the explicit
         `--gift-drop OID[,OID]` flag (generate/finalize/weekly_flow), which excludes the row and
         prints it. No silent-append of unknown orders.
-    (d) **Items map by registered MFG name** — header-based column union with rule-15b
-        normalization (never positional); gift-only PRODUCT columns (`AHB (…`) are appended,
-        gift-side bookkeeping columns (`remove` etc.) are NOT unioned into the matrix.
+    (d) **Items map only by registered MFG name** — header-based with rule-15b normalization, never
+        positional. A known gift-only MFG column may be appended once. Unknown names (including
+        literal `remove`) are silently omitted. Duplicate normalized headers on either input never
+        create duplicate output columns; duplicate gift quantities are summed deterministically.
     Chokepoint: `merge_gift_xlsx` — cmd_generate, cmd_finalize, and weekly_flow stage 1 all route
     through it; never fork a second gift-merge path. Post-apply, `check_routing_and_ice` /
     gen_rmfg self-QC still gate that every gift row got a routing tag.

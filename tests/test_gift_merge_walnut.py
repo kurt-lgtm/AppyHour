@@ -83,7 +83,7 @@ def test_merge_aligns_gift_rows_by_header_not_position(tmp_path):
     assert "AHB (S_REG): Glazed Walnuts" in headers  # gift-only PRODUCT column appended
     gift_row = next(r for r in rows if r[0] == 1001)
     assert gift_row[headers.index(WALNUT_15B)] == 5
-    assert gift_row[headers.index("Name")] == "G"
+    assert gift_row[headers.index("Name")] == "A"
     assert gift_row[headers.index("AHB (S_REG): Glazed Walnuts")] == 1
 
 

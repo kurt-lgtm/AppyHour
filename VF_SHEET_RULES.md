@@ -177,9 +177,11 @@ directions are test-pinned.
   ledger's post-apply read-back).
 - 🔴 **Verifier Shopify access is READ-ONLY GraphQL** — no sync writers (cloud ownership matrix,
   DATA_CANON). It must never write tags, orders, or the retired sync tables.
-- **Gift orders**: the vFGR merge (`merge_gift_xlsx`, MATRIX_RULES 20) still overrides ledger item
-  cells — vFGR remains item-truth for uneditable gift orders, and it must be swap-translated or
-  re-exported post-swap ([[vfgr-gift-order-replace]]).
+- **Gift orders**: the vFGR merge (`merge_gift_xlsx`, MATRIX_RULES 20) supplies MFG item quantities
+  only. The routing app remains authoritative for order/name/address/contact, routing and
+  max-ice/ability tags (including required duplicate tags), Notes, ProductionDay, Total, and all
+  other run fields. Unknown MFG names (including `remove`) are silently omitted and normalized
+  duplicate headers cannot create duplicate spreadsheet columns.
 - **Offline regen** (Q3=A: iteration speed): any rev-N patch loop reads ledger + local caches only;
   zero Shopify round-trips between verifier passes.
 
