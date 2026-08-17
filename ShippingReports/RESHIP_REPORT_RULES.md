@@ -681,6 +681,34 @@ Rules it enforces, each one a way this could corrupt the tab:
   `"0.00%"`, indent/label style), never invented. Labels are `   {hub} · {grain}` — three leading
   spaces, `·` = U+00B7 — because the writer keys on `trim()`ed column A and the key must match what
   `paValues_` emits (`hub||Swedesboro · 2 Day`) or the next run warns again.
+🔴 **D19a (2026-08-17) — A RATE ROW'S PAIR IS RESOLVED BY LABEL, NEVER BY POSITION.** "The pair is the
+two rows directly above the rate row" holds for every By-Hub / By-Carrier / By-State / By-Box block and
+is FALSE for the TnT2 top block, because D16 inserted the three observation rows between
+`3+ Day Shipments` (row 4) and its rate row (row 8). Rows 5–7 are a nested PARTITION of Not Arrived,
+not a rate pair.
+
+- **Symptom:** `paAuditRateRows_` reported `TnT2!B8..F8` as mis-pointed — **5 false positives, all five
+  formulas correct** — and that count refused the D19 hub insert with `PA_INSERT_PRE_AUDIT_FAILED`,
+  blocking a real maintenance action on a phantom. 🔴 **A verifier that cries wolf gets the insert
+  disabled, which costs the protection the verifier existed to give.**
+- 🔴 **The same assumption was on the WRITE side and was the dangerous one.**
+  `fillRateFormulasCurrentColumn` computed `good = i-1, bad = i` too. It only fills EMPTY cells, and a
+  freshly appended cohort column has NO rate formulas at all (D19), so the top-block cell IS empty and
+  eligible — it would have written the HEADLINE late rate as
+  `no-scan-24h / (no-scan-24h + never-picked-up)`. On column F that is **45.65% instead of 3.31%**.
+- **Damage check — NONE.** `TnT2!F8` renders **3.31% = 76/(2217+76)**, so it points at rows 3+4;
+  E8 4.82% = 111/(2194+111) likewise. A mis-pointed formula would render 45.65%. ⚠️ Verified from
+  RENDERED VALUES (the Sheets read available here cannot return formula text) — `auditRateRows()` now
+  checks the formula text itself and is the confirming run.
+- **The rule:** walk UP from the blank rate row past nested rows to the nearest BAD-grain row and
+  require a GOOD-grain row immediately above it. Grain is matched on the LABEL — `3+ Day Shipments`,
+  `Not Arrived`, or any `{key} · 3+ Day` / `{key} · Not Arrived` — so one resolver
+  (`paRatePairFor_`) serves the top block and every dimension block on both tabs with no special case.
+  Walk is bounded (`PA_PAIR_WALK_MAX = 6`); **unresolvable is REPORTED, never silently passed, and the
+  filler SKIPS rather than writing a guess.**
+- **Generalized:** the sheet's row order is DATA, not structure. Any rule of the form "row N−1 is X"
+  breaks the next time a directive adds a nested row — and D16 already did it once.
+
 - 🔴 **Rate-row verifier runs BEFORE and AFTER, and it reads the FORMULA TEXT** — a re-pointed
   formula still looks right. It asserts every blank-label rate row references exactly the two rows
   directly above it, in its own column. A pre-existing mis-point REFUSES the insert

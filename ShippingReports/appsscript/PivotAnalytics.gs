@@ -945,11 +945,55 @@ function paHubSortsBefore_(a, b) {
 }
 
 /**
- * 🔴 INDEPENDENT RATE-ROW VERIFIER. Every blank-label rate row must reference EXACTLY the two rows
- * directly above it, in its OWN column. A row insert is the one operation that can silently
- * re-point these, so this runs before AND after any structural edit and reports a count, not a
- * feeling. Reference rows are read out of the formula text — a formula that merely LOOKS right is
- * not evidence.
+ * 🔴 RESOLVE A BLANK-LABEL RATE ROW'S PAIR BY LABEL, NEVER BY POSITION (2026-08-17).
+ *
+ * The old rule — "the pair is the two rows directly above" — is true for every By-Hub / By-Carrier /
+ * By-State / By-Box block, and FALSE for the TnT2 top block, because D16 inserted the three
+ * observation rows between `3+ Day Shipments` and its rate row:
+ *
+ *     3  2 Day Shipments          <- good
+ *     4  3+ Day Shipments         <- bad
+ *     5     still moving (4+ days)          } D16 observations: a nested PARTITION of Not Arrived,
+ *     6     no scan in 24h+ (investigating) } NOT a rate pair. Nothing may be summed from them.
+ *     7     never picked up by carrier      }
+ *     8  (blank label)            <- rate row; its pair is 3+4, not 6+7
+ *
+ * That mis-assumption made `paAuditRateRows_` report 5 FALSE POSITIVES (TnT2!B8..F8, all correct)
+ * and refuse the D19 hub-row insert with PA_INSERT_PRE_AUDIT_FAILED — blocking a real maintenance
+ * action on a phantom. Worse, `fillRateFormulasCurrentColumn` carried the SAME assumption on the
+ * WRITE side: a freshly appended cohort column has no rate formulas at all (D19), so its top-block
+ * cell is empty and eligible, and it would have written the headline late rate as
+ * `no-scan-24h / (no-scan-24h + never-picked-up)` — a wrong HEADLINE number, silently.
+ *
+ * The resolver walks UP from the rate row past nested rows and stops at the nearest BAD-grain row,
+ * requiring a GOOD-grain row directly above it. Grain is matched on the LABEL (`3+ Day Shipments`,
+ * `Not Arrived`, or any `{key} · 3+ Day` / `{key} · Not Arrived`), so it is identical for the top
+ * block and every dimension block and needs no special case per tab. Returns 0-based
+ * `{good, bad}` indices, or null when it cannot resolve — and unresolvable stays a REPORTED
+ * failure, never a silent pass.
+ */
+var PA_PAIR_WALK_MAX = 6;      // observation rows are 3; a longer gap means the tab shape changed
+
+function paRatePairFor_(labels, i, tabName) {
+  var g = paGrains_(tabName);                       // ['2 Day','3+ Day'] | ['Arrived','Not Arrived']
+  function is(lab, grain) {
+    // top block: `3+ Day Shipments` (TnT2) or bare `Not Arrived` (Lost). dim block: `{key} · {grain}`.
+    return lab === grain || lab === grain + ' Shipments' || lab.slice(-(grain.length + 3)) === ' · ' + grain;
+  }
+  for (var b = i - 1, steps = 0; b >= 1 && steps < PA_PAIR_WALK_MAX; b--, steps++) {
+    if (labels[b] === '') return null;              // hit another rate row / a gap — shape is wrong
+    if (!is(labels[b], g[1])) continue;             // a nested observation row: skip it
+    return is(labels[b - 1], g[0]) ? { good: b - 1, bad: b } : null;
+  }
+  return null;
+}
+
+/**
+ * 🔴 INDEPENDENT RATE-ROW VERIFIER. Every blank-label rate row must reference EXACTLY its own
+ * good/bad pair (resolved by LABEL — see `paRatePairFor_`), in its OWN column. A row insert is the
+ * one operation that can silently re-point these, so this runs before AND after any structural edit
+ * and reports a count, not a feeling. Reference rows are read out of the formula text — a formula
+ * that merely LOOKS right is not evidence.
  */
 function paAuditRateRows_(sh) {
   var lastRow = Math.max(1, sh.getLastRow()), lastCol = Math.max(1, sh.getLastColumn());
@@ -958,6 +1002,12 @@ function paAuditRateRows_(sh) {
   var res = { rows: 0, cells: 0, ok: 0, bad: [] };
   for (var i = 2; i < lastRow; i++) {                 // 0-based; a rate row needs two rows above it
     if (labels[i] !== '' || labels[i - 1] === '' || labels[i - 2] === '') continue;
+    var pair = paRatePairFor_(labels, i, sh.getName());
+    if (!pair) {
+      res.bad.push(sh.getName() + ' row ' + (i + 1) + ': cannot resolve a good/bad pair above this ' +
+                   'blank-label rate row (nearest labels: ' + labels.slice(Math.max(0, i - 4), i).join(' | ') + ')');
+      continue;
+    }
     var any = false;
     for (var c = 2; c <= lastCol; c++) {
       var f = String(formulas[i][c - 1] || '');
@@ -972,12 +1022,14 @@ function paAuditRateRows_(sh) {
       var rk = Object.keys(rows).map(Number).sort(function (x, y) { return x - y; });
       var ck = Object.keys(cols);
       var self = sh.getRange(1, c).getA1Notation().replace(/\d+/, '');
-      // labels[i] is the blank rate row = SHEET row i+1, so its pair is sheet rows i-1 (good) and i (bad).
-      if (rk.length === 2 && rk[0] === i - 1 && rk[1] === i && ck.length === 1 && ck[0] === self) {
+      // 0-based pair indices -> SHEET rows are +1 each.
+      var gRow = pair.good + 1, bRow = pair.bad + 1;
+      if (rk.length === 2 && rk[0] === gRow && rk[1] === bRow && ck.length === 1 && ck[0] === self) {
         res.ok++;
       } else {
-        res.bad.push(sh.getName() + '!' + self + (i + 1) + ' expects rows ' + (i - 1) + '+' + i +
-                     ' in col ' + self + ', got ' + f);
+        res.bad.push(sh.getName() + '!' + self + (i + 1) + ' expects rows ' + gRow + '+' + bRow +
+                     ' (' + labels[pair.good] + ' / ' + labels[pair.bad] + ') in col ' + self +
+                     ', got ' + f);
       }
     }
     if (any) res.rows++;
@@ -1158,7 +1210,15 @@ function fillRateFormulasCurrentColumn(dry) {
     for (var i = 2; i < lastRow; i++) {
       if (labels[i] !== '' || labels[i - 1] === '' || labels[i - 2] === '') continue;
       if (String(f[i][0] || '')) continue;                 // never overwrite an existing formula
-      var good = a1 + (i - 1), bad = a1 + i;               // rate row = sheet i+1; pair = i-1 / i
+      // 🔴 Pair resolved BY LABEL, never by position. This used to be `i-1 / i`, which is right for
+      // every dimension block and WRONG for the TnT2 top block (D16's three observation rows sit
+      // between `3+ Day Shipments` and its rate row). Because a freshly appended column has NO rate
+      // formulas (D19), that cell is empty and eligible here — so the old code would have written
+      // the HEADLINE late rate as no-scan-24h/(no-scan-24h + never-picked-up). Skip loudly rather
+      // than write a guess.
+      var pair = paRatePairFor_(labels, i, name);
+      if (!pair) { paLog_('  ⚠️ ' + name + ' row ' + (i + 1) + ': unresolvable rate pair — SKIPPED'); continue; }
+      var good = a1 + (pair.good + 1), bad = a1 + (pair.bad + 1);
       if (!dry) {
         sh.getRange(i + 1, col)
           .setFormula('=IF(' + good + '+' + bad + '>0,' + bad + '/(' + good + '+' + bad + '),"")')
