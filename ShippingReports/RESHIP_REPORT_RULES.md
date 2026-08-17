@@ -838,6 +838,60 @@ reading nothing from them; (2) run a full recount and a cache-backed recount ove
 assert every figure identical, including the three observation rows; (3) only then let the cache
 suppress polling; (4) leave the weekly full recount permanently on.
 
+### D22 — `TNT1` IS A NESTED SUBSET OF `2 Day Shipments`, NEVER A SIBLING BUCKET (Kurt 2026-08-17)
+
+> Kurt, verbatim: **"I want to get TNT0 and TNT1 shipments in there (just label the row tnt1)"**
+
+**Definition (the only one).** `TNT1` = boxes DELIVERED with **TNT ≤ 1 calendar day**, measured
+per box as `delivery date − that box's OWN pickup date`, ET, on the **D18 per-box clock** — the same
+`r.tnt` every other row here uses (PP `pickup_date` authoritative, Shopify's first movement scan only
+when PP has none). **TNT 0 (same-day) is INCLUDED** — it is genuine on short intra-region lanes
+(42 boxes on `_SHIP_2026-08-10`) — and gets **no row of its own**, by Kurt's instruction.
+
+🔴 **The failure this prevents: reading TNT1 as a bucket beside 2 Day.** It is a strict SUBSET.
+`2 Day Shipments` still counts **TNT ≤ 2 including every TNT1 box** and is NOT changed; TNT1 is
+summed into NOTHING — same rule as the D16 observation rows. `PA_ASSERT_TNT1_SUBSET` throws before
+any write if `TNT1 > 2 Day`, because a TNT1 count that exceeded its parent would mean the clock or
+the threshold drifted, and the row would then misrepresent the headline.
+
+**On-sheet shape** (TnT2 top block, after the insert) — TNT1 sits at the same nesting level as the
+D16 observations, one indent under its parent:
+
+```
+   2 Day Shipments            <- TNT <= 2, UNCHANGED (includes the TNT1 boxes)
+        TNT1                  <- TNT <= 1 (incl. TNT 0). Subset. Summed into nothing.
+   3+ Day Shipments
+        still moving (4+ days) / no scan in 24h+ / never picked up   (D16 observations)
+   (blank-label rate row)     <- pair is still 2 Day + 3+ Day
+```
+
+🔴 **The insert lands BETWEEN a rate row's good and bad rows** — the first time that has happened.
+`paRatePairFor_` (D19a) previously required the good row to sit **directly above** the bad row; it now
+walks up past nested rows on **that side too**, skipping only labels on the explicit `PA_NESTED`
+allowlist (`PA_OBS` + `TNT1`). Skipping "anything that is not a grain row" was rejected: it would let
+the resolver stroll out of the block and pair rows from two different sections — the exact bug family
+this resolver exists to kill. Verified offline pre- and post-insert: the top-block pair resolves
+3+4 before and **3+5 after**, and every dimension block is unaffected.
+
+**Row insert = human-invoked, idempotent, verified on both sides (D13/D19 discipline).**
+`previewAddTnt1Row()` writes nothing and logs the landing row; `addTnt1Row()` inserts it. Pre- and
+post-insert `paAuditRateRows_` must pass (a pre-audit failure REFUSES the insert), and the post check
+requires rate rows **and** formula cells UNCHANGED — TNT1 adds a count row, not a pair. The unattended
+refresh still never inserts a row.
+
+**Which columns fill.** Values come from the normal refresh, into non-frozen columns only:
+`_SHIP_2026-08-10` (age 7d, still script-owned) and each new cohort from `_SHIP_2026-08-17` on.
+🔴 **Frozen/matured columns (age ≥ `PA_MATURITY_DAYS`) stay BLANK forever — never 0.** A 0 would
+assert "no box arrived in ≤1 day that week"; we simply never measured it. Kurt-owned, not rewritten.
+
+**Scope: top block only** (decided). Emitting TNT1 per hub/carrier/state/box would require ~100
+inserted rows across two tabs for a breakdown Kurt did not ask for. Adding it later is a one-line
+change in `paValues_` plus the rows.
+
+**Measured at adoption (`_SHIP_2026-08-10`, cached snapshot, ZERO new ParcelPanel calls):**
+cohort 2,318 · arrived 2,256 · 2 Day (TNT ≤ 2) 2,216 · **TNT1 (TNT ≤ 1) 1,302** — of which TNT 0 = 42.
+TNT distribution: 0→42, 1→1,260, 2→914, 3→40.
+
 ### Cutover checklist (once preconditions clear)
 
 (a) confirm Jdbc `SELECT 1` from GAS + RO user scoped; (b) implement the walk-forward current-column
@@ -885,3 +939,9 @@ builder's numbers on a matured cohort** before trusting the headless path (ident
   rejected with reasons. **D21: "poll only the undelivered" — design accepted, implementation HELD**
   pending a cached-vs-fresh parity run (verdict tab `_pa_verdicts`, key `shipWeek||order_number`,
   terminal-only caching, schema-version drop, mandatory weekly full recount).
+- 2026-08-17 — **D22: `TNT1` row on TnT2** (Kurt: "I want to get TNT0 and TNT1 shipments in there
+  (just label the row tnt1)"). TNT ≤ 1 calendar day on the D18 per-box clock, TNT 0 included, nested
+  UNDER `2 Day Shipments` as a strict subset (`2 Day` unchanged at TNT ≤ 2; `PA_ASSERT_TNT1_SUBSET`).
+  Human-invoked `previewAddTnt1Row` / `addTnt1Row` with the rate-row verifier on both sides;
+  `paRatePairFor_` extended to walk past nested rows BETWEEN the good and bad rows (allowlisted
+  labels only). Top block only. Frozen columns stay blank. wk0810: TNT1 = 1,302 of 2,216 2-Day.

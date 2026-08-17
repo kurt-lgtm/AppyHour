@@ -51,6 +51,21 @@ var PA_OBS = ['still moving (4+ days)',            // undelivered, a real scan <
               'no scan in 24h+ (investigating)',   // scanned, then silent >=24h
               'never picked up by carrier'];       // zero carrier scans ever
 
+/**
+ * 🔴 TNT1 (D22, Kurt 2026-08-17: "I want to get TNT0 and TNT1 shipments in there (just label the
+ * row tnt1)"). ONE nested row under `2 Day Shipments` counting delivered boxes whose TNT is
+ * <= 1 CALENDAR DAY measured from THAT BOX's OWN pickup (D18 per-box clock) — so same-day (TNT 0,
+ * ~42 boxes on wk0810, short intra-region lanes) is INCLUDED, not dropped and not given its own row.
+ *
+ * 🔴 SUBSET, NOT A SIBLING. `2 Day Shipments` is TNT <= 2 and KEEPS counting these; TNT1 is a strict
+ * subset of it and is summed into NOTHING. Same discipline as the D16 observations: a nested row
+ * partitions or refines its parent, it never adds to a total. Asserted (`PA_ASSERT_TNT1_SUBSET`).
+ */
+var PA_TNT1_LABEL = 'TNT1';
+var PA_TNT1_SLA = 1;
+/** Labels that are NESTED refinements of a grain row — skipped when resolving a rate-row pair. */
+var PA_NESTED = PA_OBS.concat([PA_TNT1_LABEL]);
+
 /** 🔴 A real carrier scan. CONFIRMED is emitted at LABEL CREATION and is NOT a scan — including it
  * makes every never-collected box look like it moved ("has events" is the wrong filter). */
 var PA_MOVE = { IN_TRANSIT: 1, OUT_FOR_DELIVERY: 1, ATTEMPTED_DELIVERY: 1, READY_FOR_PICKUP: 1, PICKED_UP: 1 };
@@ -371,6 +386,9 @@ function paUnion_(recs, pp, cohortAge) {
     }
     r.moved = !!r.pickup;
     r.ontime = r.arrived && r.tnt !== null && r.tnt <= PA_SLA;
+    // 🔴 D22 — TNT <= 1 on the SAME per-box clock as `ontime`; TNT 0 is genuine and counts here.
+    // Strict subset of `ontime` by construction (PA_TNT1_SLA < PA_SLA); asserted before any write.
+    r.tnt1 = r.arrived && r.tnt !== null && r.tnt <= PA_TNT1_SLA;
     // 🔴 THE CLOCK IS PER BOX, NOT PER COHORT (Kurt 2026-08-14: "This number is wrong. 55 from
     // Monday pickup, reviewing Tuesday pickup"). Survivorship (undelivered = late) is only valid
     // once THAT BOX's promise deadline has passed, and the deadline runs from the box's OWN pickup.
@@ -451,6 +469,10 @@ function paValues_(recs, tab) {
   // PARTITION Not Arrived, which is why churn between them is legitimate: a box going dark is a
   // visible migration from one row to the other with the sum unchanged.
   if (tab === PA_TABS.tnt2) {
+    // 🔴 D22 — nested UNDER `2 Day Shipments`, summed into nothing. Top-block only by decision:
+    // emitting it per hub/carrier/state/box would need ~100 inserted rows on two tabs for a number
+    // Kurt did not ask for. Adding the dimension later is a one-line change here plus the rows.
+    m[paKey_('', PA_TNT1_LABEL)] = n(function (r) { return r.tnt1; });
     m[paKey_('', PA_OBS[0])] = n(function (r) { return r.active; });
     m[paKey_('', PA_OBS[1])] = n(function (r) { return r.lost && r.moved; });
     m[paKey_('', PA_OBS[2])] = n(function (r) { return r.lost && !r.moved; });
@@ -639,6 +661,18 @@ function paRefreshOne_(shipWeek, dry, budget, allowAppend) {
   // correct bound is Not Arrived. Keeping the old `pend > active` bound would throw on every
   // multi-leg week. Both halves still hold: every pending box is undelivered, and pending can never
   // exceed the not-arrived population it is drawn from.
+  // 🔴 D22 — TNT1 is a strict SUBSET of `2 Day Shipments`, never a sibling bucket. If this ever
+  // exceeds the 2-Day count the clock or the threshold has drifted and the row would misrepresent
+  // the headline; refuse rather than publish it.
+  var tnt1 = 0;
+  recs.forEach(function (r) { if (r.tnt1) tnt1++; });
+  if (tnt1 > ot) {
+    throw new Error('PA_ASSERT_TNT1_SUBSET: TNT1 ' + tnt1 + ' > 2 Day ' + ot +
+                    ' — TNT<=1 must be a subset of TNT<=2.');
+  }
+  paLog_('  TNT1 (delivered, TNT<=' + PA_TNT1_SLA + ' from its OWN pickup): ' + tnt1 +
+         ' of 2 Day ' + ot + ' — subset, summed into nothing');
+
   var pendArrived = 0;
   recs.forEach(function (r) { if (r.pending && r.arrived) pendArrived++; });
   if (pendArrived) {
@@ -983,7 +1017,16 @@ function paRatePairFor_(labels, i, tabName) {
   for (var b = i - 1, steps = 0; b >= 1 && steps < PA_PAIR_WALK_MAX; b--, steps++) {
     if (labels[b] === '') return null;              // hit another rate row / a gap — shape is wrong
     if (!is(labels[b], g[1])) continue;             // a nested observation row: skip it
-    return is(labels[b - 1], g[0]) ? { good: b - 1, bad: b } : null;
+    // 🔴 D22 — the GOOD row is no longer guaranteed to sit directly above the BAD row either: the
+    // TNT1 row is nested UNDER `2 Day Shipments`, so the top block reads good / TNT1 / bad. Walk up
+    // past nested rows here too, but only past labels on the EXPLICIT nested allowlist (PA_NESTED) —
+    // skipping "anything that isn't a grain row" would let this stroll out of the block and pair
+    // rows from two different sections, which is the exact bug family this resolver exists to kill.
+    for (var gI = b - 1; gI >= 0 && b - gI <= PA_NESTED.length + 1; gI--) {
+      if (is(labels[gI], g[0])) return { good: gI, bad: b };
+      if (PA_NESTED.indexOf(labels[gI]) < 0) return null;   // not a known nested row — shape is wrong
+    }
+    return null;
   }
   return null;
 }
@@ -1183,6 +1226,114 @@ function paAddHub_(hub, dry) {
 function previewAddSwedesboroRows() { return paAddHub_('Swedesboro', true); }
 /** Then THIS: inserts the rows. Idempotent — re-running finds the rows and does nothing. */
 function addSwedesboroRows() { return paAddHub_('Swedesboro', false); }
+
+// ------------------------------------------------------ TNT1 row maintenance (D22, human-invoked)
+
+/**
+ * 🔴 D22 — insert the ONE `TNT1` row on TnT2, directly BENEATH `2 Day Shipments`, so the block reads
+ *     2 Day Shipments  /  TNT1 (its subset)  /  3+ Day Shipments  /  the three observations  /  rate.
+ *
+ * Same discipline as D19's hub insert and for the same reason: the unattended refresh writer NEVER
+ * inserts rows (D13) — a structural edit re-points every reference below it. This is a deliberate,
+ * human-invoked, idempotent maintenance action with the independent rate-row verifier on BOTH sides.
+ *
+ * 🔴 The insert lands BETWEEN the top block's good and bad rows, which is exactly what
+ * `paRatePairFor_` had to be taught (see the D22 note there). Sheets re-points the existing rate
+ * formula itself (B4 -> B5); the pre/post audit is what PROVES it, per cell, from the formula text.
+ *
+ * 🔴 HISTORY STAYS BLANK, NEVER ZERO. Only the current/non-frozen cohort columns are ever filled,
+ * and they are filled by the normal refresh — not here. A 0 in a matured column would assert "no box
+ * arrived in <=1 day that week"; we simply never measured it. Frozen columns (age >=
+ * PA_MATURITY_DAYS) are Kurt-owned and stay empty forever.
+ */
+function paAddTnt1_(dry) {
+  var ss = SpreadsheetApp.openById(PIVOT_SHEET_ID);
+  var name = PA_TABS.tnt2, sh = ss.getSheetByName(name);
+  paLog_('=== add TNT1 row on ' + name + ' — ' + (dry ? 'DRY RUN (no writes)' : 'WRITING') + ' ===');
+  if (!sh) throw new Error('PA_INSERT_NO_TAB: ' + name + ' not found');
+  paAssertColumns_(sh);                                  // never edit a tab that is already damaged
+
+  var lastRow = Math.max(1, sh.getLastRow());
+  var raw = sh.getRange(1, 1, lastRow, 1).getValues().map(function (r) { return String(r[0]); });
+  var labels = raw.map(function (s) { return s.trim(); });
+  if (labels.indexOf(PA_TNT1_LABEL) >= 0) {
+    paLog_('  ' + name + ': ' + PA_TNT1_LABEL + ' already present at row ' +
+           (labels.indexOf(PA_TNT1_LABEL) + 1) + ' — nothing to do');
+    return { inserted: 0 };
+  }
+  var g = paGrains_(name);                               // ['2 Day','3+ Day']
+  var good = labels.indexOf(g[0] + ' Shipments'), bad = labels.indexOf(g[1] + ' Shipments');
+  if (good < 0 || bad < 0) {
+    throw new Error('PA_INSERT_NO_TOP_BLOCK: ' + name + ' — could not find both "' + g[0] +
+                    ' Shipments" and "' + g[1] + ' Shipments" in column A');
+  }
+  if (bad !== good + 1) {
+    throw new Error('PA_INSERT_TOP_BLOCK_SHAPE: ' + name + ' — "' + g[1] + ' Shipments" (row ' +
+                    (bad + 1) + ') is not directly below "' + g[0] + ' Shipments" (row ' +
+                    (good + 1) + '); refusing to guess where TNT1 belongs');
+  }
+  // Format + indent template = the first D16 observation row: the SAME nesting level (a refinement
+  // of a grain row), so TNT1 matches its siblings byte-for-byte rather than by a guessed space count.
+  var tmpl = labels.indexOf(PA_OBS[0]);
+  if (tmpl < 0) throw new Error('PA_INSERT_NO_TEMPLATE: ' + name + ' — observation row "' + PA_OBS[0] +
+                                '" not found to clone formatting/indent from');
+  var indent = (raw[tmpl].match(/^\s*/) || [''])[0];
+  var anchor = bad + 1;                                  // 1-based sheet row to insert BEFORE
+
+  var pre = paAuditRateRows_(sh);
+  paLog_('  ' + name + ' BEFORE: ' + pre.rows + ' rate rows, ' + pre.cells + ' formulas, ' +
+         pre.bad.length + ' wrong');
+  if (pre.bad.length) {
+    throw new Error('PA_INSERT_PRE_AUDIT_FAILED: ' + name + ' already has ' + pre.bad.length +
+                    ' mis-pointed rate formula(s) — fix those before inserting rows: ' +
+                    pre.bad.slice(0, 5).join(' | '));
+  }
+  if (dry) {
+    paLog_('  [dry] insert 1 row before ' + name + '!A' + anchor + ' (directly under "' +
+           labels[good] + '", above "' + labels[bad] + '")');
+    paLog_('  [dry] ' + name + '!A' + anchor + ' = "' + indent + PA_TNT1_LABEL +
+           '"  (formats cloned from row ' + (tmpl + 1) + ': "' + labels[tmpl] + '")');
+    var rateRow = -1;                                    // first blank-label row BELOW the bad row
+    for (var q = bad + 1; q < labels.length; q++) { if (labels[q] === '') { rateRow = q; break; } }
+    paLog_('  [dry] the top-block rate row moves ' + (rateRow + 1) + ' -> ' + (rateRow + 2) +
+           '; Sheets re-points its own formula and the POST audit proves it, per cell, from the ' +
+           'formula text (expected pair after the insert: rows ' + (good + 1) + ' + ' + (bad + 2) + ')');
+    paLog_('  [dry] values: written by the normal refresh into non-frozen cohort columns ONLY; ' +
+           'frozen/matured columns stay BLANK (blank != zero)');
+    return { inserted: 0, anchor: anchor, dry: true };
+  }
+
+  var maxCols = Math.max(1, sh.getMaxColumns());
+  sh.insertRowsBefore(anchor, 1);
+  var t = (tmpl + 1) >= anchor ? tmpl + 2 : tmpl + 1;    // 1-based template row after the shift
+  sh.getRange(t, 1, 1, maxCols).copyTo(sh.getRange(anchor, 1, 1, maxCols), { formatOnly: true });
+  sh.getRange(anchor, 1).setValue(indent + PA_TNT1_LABEL);
+  var cur = paRightmostCohortCol_(sh);
+  if (cur) sh.getRange(anchor, cur).setNumberFormat('0');   // count, not a rate
+  SpreadsheetApp.flush();
+
+  var post = paAuditRateRows_(sh);
+  paLog_('  ' + name + ' AFTER : ' + post.rows + ' rate rows, ' + post.cells + ' formulas, ' +
+         post.bad.length + ' wrong');
+  if (post.bad.length) {
+    throw new Error('PA_INSERT_POST_AUDIT_FAILED: ' + name + ' — the insert re-pointed ' +
+                    post.bad.length + ' rate formula(s): ' + post.bad.slice(0, 5).join(' | '));
+  }
+  // A row insert must not create, destroy, or empty a rate row — TNT1 adds a COUNT row, not a pair.
+  if (post.rows !== pre.rows || post.cells !== pre.cells) {
+    throw new Error('PA_INSERT_ROW_COUNT: ' + name + ' rate rows ' + pre.rows + ' -> ' + post.rows +
+                    ', formulas ' + pre.cells + ' -> ' + post.cells + ' (expected both unchanged)');
+  }
+  paAssertColumns_(sh);
+  paLog_('  ' + name + ' ✅ TNT1 row at ' + anchor + ', rate integrity intact');
+  paLog_('=== done (written) ===');
+  return { inserted: 1, anchor: anchor };
+}
+
+/** 🔴 Kurt runs THIS first: logs exactly where the TNT1 row would land. Writes nothing. */
+function previewAddTnt1Row() { return paAddTnt1_(true); }
+/** Then THIS: inserts the row. Idempotent — re-running finds TNT1 and does nothing. */
+function addTnt1Row() { return paAddTnt1_(false); }
 
 /**
  * Fill MISSING rate formulas in the rightmost (live) cohort column across both tabs.
