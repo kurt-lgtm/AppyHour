@@ -177,9 +177,13 @@ function excBudgetTake_(want) {
 var EXC_MOVED_ = { IN_TRANSIT: 1, OUT_FOR_DELIVERY: 1, ATTEMPTED_DELIVERY: 1,
                    READY_FOR_PICKUP: 1, PICKED_UP: 1, DELIVERED: 1 };
 var EXC_SHOPIFY_MOVED_ = {};   // order -> 1 when Shopify has a real movement scan (union input)
+// order -> 1 when Shopify's fulfillment displayStatus is DELAYED. Same free ride as the movement
+// union: it comes off the request below, so the DELAYED class costs ZERO ParcelPanel budget.
+var EXC_SHOPIFY_DELAYED_ = {};
 
 function excResolveDelivered_(orders, st) {
   EXC_SHOPIFY_MOVED_ = {};
+  EXC_SHOPIFY_DELAYED_ = {};
   var alive = [], closed = 0;
   for (var i = 0; i < orders.length; i += 100) {
     var batch = orders.slice(i, i + 100);
@@ -202,6 +206,7 @@ function excResolveDelivered_(orders, st) {
       var num = String(e.node.name).replace(/^#/, '');
       (e.node.fulfillments || []).forEach(function (f) {
         if (f.displayStatus === 'DELIVERED') { delivered[num] = 1; }
+        if (f.displayStatus === 'DELAYED') { EXC_SHOPIFY_DELAYED_[num] = 1; }
         (((f.events || {}).edges) || []).forEach(function (x) {
           if (x.node.status === 'DELIVERED') delivered[num] = 1;
           if (EXC_MOVED_[x.node.status]) EXC_SHOPIFY_MOVED_[num] = 1;   // union signal
@@ -242,52 +247,136 @@ function excSS_() { return SpreadsheetApp.openById(EXC_HOST_SHEET_ID); }
  * held at sweep time. Same family as CONFIRMED-is-not-movement: never let narrative text outrank
  * a structured signal, and never trust a single feed.
  */
-function excClassify_(ship, movedElsewhere) {
+// 🔴 HOW MANY CHECKPOINTS THE CLASSIFIER SEES (Kurt 2026-08-17). Was ONE — `checkpoints[0]`, the
+// newest carrier scan. That is why #170893 (Lisa Olson, VA) never fired: FedEx stamped
+// "Delivery exception, Incorrect address, HERNDON VA 20171" on 8/14 19:53 and then a perfectly
+// benign "At local FedEx facility" on 8/15 09:31. One harmless later scan made a real failure
+// invisible forever, because the sweep only ever looked at the top of the list.
+// Five is deliberate: enough to see through a burst of routine facility scans (the observed gap
+// was ONE scan), small enough that a week-old resolved exception on a long-transit box cannot
+// resurface. Widening this without a replay is exactly the move EXCEPTIONS_ALERT_RULES.md forbids.
+var EXC_CP_SCAN = 5;
+
+// 🔴 DELAYED floor. Shopify stamps displayStatus DELAYED off routine carrier "Package Delayed"
+// scans that clear within a day, so firing on the flag alone would flood the channel with ordinary
+// in-transit noise — the one failure mode this job must never have. Three days is the same floor
+// and the same reasoning as EXC_NEVER_PICKED_MIN_DAYS: by then the 2-day promise is already broken,
+// so a still-DELAYED box is a real failure rather than feed lag, and because the sweep re-polls
+// hourly a floor DELAYS detection rather than dropping it. #169174 (Maria Wood, NY) sat 4 days
+// between label and pickup — it clears this floor comfortably.
+var EXC_DELAYED_MIN_DAYS = 3;
+
+/**
+ * The failure matcher, factored OUT of excClassify_ so it can be run over a WINDOW of checkpoints
+ * rather than only the newest one. Returns a class token, or '' when the text is not a failure.
+ *
+ * 🔴 Order inside here is load-bearing and must not be rearranged: "delivered" is a SUBSTRING of
+ * "unable to be delivered", so every failure class is tested before any caller applies the
+ * bare-text delivered suppress. Caught by excSelfTest under node, 2026-07-30.
+ * Phrasing varies a LOT by carrier. Every alternative below came off a real event — 5 genuine
+ * failures sat in IN_NETWORK until this was widened ("returned to the SELLER" not sender, "unable
+ * to DELIVER" not to be delivered, "unable to LOCATE your package"). When adding a carrier,
+ * replay before trusting the buckets.
+ */
+function excMatchFailure_(e) {
+  if (/unable to (be )?deliver(ed)?|cannot be delivered|undeliverable/.test(e)) return 'UNDELIVERABLE';
+  if (/\bdamaged\b|merchandise has been discarded/.test(e)) return 'DAMAGED';
+  if (/returning package to shipper|returned to a? ?veho warehouse|returned to the (sender|seller|shipper)|returned to shipper/.test(e)) {
+    return 'RETURNED';
+  }
+  if (/lost by driver|will be discarded|unable to locate your package/.test(e)) return 'LOST';
+  // Real OnTrac wording observed 2026-08-13: access-code requests are address/actionability
+  // failures. 🔴 WIDENED 2026-08-17: the predicate only knew OnTrac's "need additional information
+  // to complete" phrasing, so FedEx's "Delivery exception, Incorrect address, HERNDON VA 20171"
+  // (#170893) fell straight through to IN_NETWORK. One carrier's wording is never the class.
+  if (/need additional information to complete|lack of an access code|access code|incorrect address|address (is )?(incorrect|invalid)|delivery exception.*address/.test(e)) {
+    return 'ADDRESS_ISSUE';
+  }
+  // A closed recipient/business or an incomplete delivery is an attempted-delivery failure.
+  if (/was attempted but could not be completed|delivery attempt failed|unable to complete (your )?delivery|driver tried to deliver|business (was )?closed|recipient business closed|package not delivered\/?not attempted/.test(e)) {
+    return 'ATTEMPT_FAILED';
+  }
+  return '';
+}
+
+function excClassify_(ship, movedElsewhere, delayedElsewhere) {
   var cps = (ship && ship.checkpoints) || [];
   var carrierCps = cps.filter(function (c) { return c && c.status; });
   var pick = carrierCps.length ? carrierCps[0] : (cps.length ? cps[0] : null);
-  var detail = String((pick && (pick.detail || pick.description || pick.message)) || '').trim();
-  var e = detail.toLowerCase();
   var status = String((ship && (ship.delivery_status || ship.status)) || '').toUpperCase();
   var pickup = String((ship && ship.pickup_date) || '');
   var delivered = String((ship && ship.delivery_date) || '');
 
+  function textOf(c) {
+    return String((c && (c.detail || c.description || c.message)) || '').trim();
+  }
   // eventAt = when the CARRIER scanned it (checkpoint_time), which is the number that matters for
   // triage — "damaged since Tuesday 08:14" beats "a cron noticed at 16:00". Kept separate from the
   // sweep's own stamp; the gap between the two IS the feed latency, which is its own signal.
-  var eventAt = String((pick && pick.checkpoint_time) || '').replace('T', ' ').slice(0, 16);
-  function r(cls, ping) {
-    return { cls: cls, detail: detail, ping: ping, status: status, eventAt: eventAt };
+  // 🔴 It is the scan time of the checkpoint that CLASSIFIED, not of the newest one — otherwise a
+  // buried failure would be reported with the timestamp of the benign scan that hid it.
+  function r(cls, ping, cp) {
+    var c = (cp === undefined) ? pick : cp;
+    return {
+      cls: cls, detail: textOf(c), ping: ping, status: status,
+      eventAt: String((c && c.checkpoint_time) || '').replace('T', ' ').slice(0, 16),
+    };
   }
 
   // A real delivery_date is authoritative — nothing beats it.
   if (delivered) return r('DELIVERED', false);
 
-  // 🔴 Failure classes are tested BEFORE the bare-text "delivered" suppress, because the word
-  // "delivered" is a SUBSTRING of "unable to be delivered". Testing /\bdelivered\b/ first
-  // silently swallowed UNDELIVERABLE — the single largest ping class (15 of 36 on 6/29-7/20) —
-  // and a suppressed alert is invisible by definition. Caught by excSelfTest under node,
-  // 2026-07-30. Do not reorder these.
-  // Phrasing varies a LOT by carrier. Every alternative below came off a real event in the
-  // 6/29-7/20 replay — 5 genuine failures were sitting in IN_NETWORK until this was widened
-  // ("returned to the SELLER" not sender, "unable to DELIVER" not to be delivered, "unable to
-  // LOCATE your package"). When adding a carrier, replay before trusting the buckets.
-  if (/unable to (be )?deliver(ed)?|cannot be delivered|undeliverable/.test(e)) return r('UNDELIVERABLE', true);
-  if (/\bdamaged\b|merchandise has been discarded/.test(e)) return r('DAMAGED', true);
-  if (/returning package to shipper|returned to a? ?veho warehouse|returned to the (sender|seller|shipper)|returned to shipper/.test(e)) {
-    return r('RETURNED', true);
+  // 🔴 WINDOW SCAN, newest-first (Kurt 2026-08-17). Precedence, stated plainly:
+  //   walk the newest EXC_CP_SCAN carrier checkpoints from newest to oldest and stop at the first
+  //   one that decides. Within a single checkpoint, failure text is tested before the bare-text
+  //   "delivered" suppress (the substring trap above).
+  // The consequence that matters both ways:
+  //   • a benign scan NEWER than a failure no longer hides it (the #170893 bug), because the benign
+  //     scan decides nothing and the walk continues past it;
+  //   • a DELIVERED scan newer than a failure still suppresses, because it decides immediately.
+  //     That is what preserves the 23-of-71 already-delivered suppression that keeps this channel
+  //     trustworthy — Veho stamps an exception en route and never flips the bucket back, and those
+  //     boxes have the delivery scan on TOP. Removing that guard would re-import a ~32% false rate.
+  // Checkpoints with a null `status` are AppyHour storefront copy injected into the PP timeline
+  // ("Orders are prepared fresh weekly"), not carrier scans — carrierCps already dropped them.
+  var window_ = carrierCps.length ? carrierCps.slice(0, EXC_CP_SCAN)
+                                  : (pick ? [pick] : []);
+  for (var i = 0; i < window_.length; i++) {
+    var cp = window_[i];
+    var t = textOf(cp).toLowerCase();
+    var hit = excMatchFailure_(t);
+    if (hit) return r(hit, true, cp);
+    // ⚠️ KNOWN GAP: a box returned to origin can also read "Delivered, <origin city>" (order
+    // 154810, FedEx, dest AL, delivered back in Lebanon TN). v1 suppresses it. Catching that needs
+    // the event location compared against the destination state — see EXCEPTIONS_ALERT_RULES.md.
+    if (/\bdelivered\b/.test(t) || String(cp.status || '').toUpperCase() === 'DELIVERED') {
+      return r('DELIVERED', false, cp);
+    }
   }
-  if (/lost by driver|will be discarded|unable to locate your package/.test(e)) return r('LOST', true);
-  if (/need additional information to complete/.test(e)) return r('ADDRESS_ISSUE', true);
-  if (/was attempted but could not be completed|delivery attempt failed/.test(e)) return r('ATTEMPT_FAILED', true);
 
-  // Bare "Delivered" text with no delivery_date — the Veho case where the bucket never flipped
-  // back (23 of 71 on 6/29-7/20). Safe to suppress only now that every failure class above has
-  // already been ruled out.
-  // ⚠️ KNOWN GAP: a box returned to origin can also read "Delivered, <origin city>" (order 154810,
-  // FedEx, dest AL, delivered back in Lebanon TN). v1 suppresses it. Catching that needs the
-  // event location compared against the destination state — see EXCEPTIONS_ALERT_RULES.md.
-  if (/\bdelivered\b/.test(e)) return r('DELIVERED', false);
+  var e = textOf(pick).toLowerCase();
+
+  // 🔴 TRUST THE STRUCTURED FIELD (Kurt 2026-08-17). ParcelPanel's own `status` said
+  // FAILED_ATTEMPT on #170893 while this function classified purely off prose and threw the field
+  // away. Structured-beats-free-text was already the standing directive; it was parsed here and
+  // never read. Placed AFTER the window walk so a more specific failure text (damaged, returned,
+  // lost) still refines it and so a genuine delivery still suppresses — the directive means a
+  // structured failure must never be outranked by BENIGN narrative, which is exactly what a
+  // position above the in-network fallback guarantees.
+  if (status === 'FAILED_ATTEMPT') return r('ATTEMPT_FAILED', true);
+
+  // 🔴 DELAYED / STUCK (Kurt 2026-08-17). Signal is Shopify's fulfillment displayStatus, which
+  // rides the call excResolveDelivered_ already makes — ZERO extra ParcelPanel budget, same
+  // one-request-two-jobs trick as the movement union. #169174 (Maria Wood, NY) had displayStatus
+  // DELAYED / "Package Delayed." while its newest PP checkpoint was a benign IN_TRANSIT, so no
+  // text-based class could ever have caught it. Gated by EXC_DELAYED_MIN_DAYS — see that constant
+  // for why a floor cannot lose a real case. Tested BEFORE the movement union on purpose: a
+  // delayed box HAS moved, so the union would otherwise swallow every one of them.
+  if (delayedElsewhere) {
+    var fulD = String((ship && (ship.fulfillment_date || ship.order_date)) || '').slice(0, 10);
+    if (fulD && excDaysSince_(fulD) >= EXC_DELAYED_MIN_DAYS) return r('DELAYED', true);
+    return r('IN_NETWORK', false);
+  }
 
   // Never picked up: PP knows about the label but no pickup scan ever landed. Only meaningful
   // once the box has had a day to move — before that it is just a fresh label.
@@ -485,7 +574,7 @@ function excSlackPost_(text) {
 var EXC_EMOJI_ = {
   UNDELIVERABLE: ':x:', DAMAGED: ':boom:', RETURNED: ':leftwards_arrow_with_hook:',
   NEVER_PICKED_UP: ':no_entry:', LOST: ':question:', ADDRESS_ISSUE: ':house:',
-  ATTEMPT_FAILED: ':warning:',
+  ATTEMPT_FAILED: ':warning:', DELAYED: ':hourglass_flowing_sand:',
 };
 
 /**
@@ -505,6 +594,11 @@ var EXC_DISPLAY_ = {
   // 🔴 Aligned to the D16 taxonomy on the analytics tabs (Kurt 2026-08-10): the same condition
   // must not read two ways across tabs. Was 'Lost in Transit (no scan)'.
   NEVER_PICKED_UP: 'never picked up by carrier',
+  // 🔴 DISPLAY ONLY, same rule as above — the tokens ATTEMPT_FAILED / DELAYED stay the identity in
+  // alerted_classes and logged_classes. Renaming a token would make every previously-recorded row
+  // look new and re-spam the channel.
+  ATTEMPT_FAILED: 'delivery attempt failed',
+  DELAYED: 'delayed / stuck in transit',
 };
 
 /**
@@ -681,7 +775,7 @@ function hourlyExceptionSweep() {
       if (!ship) return;
       var c = ship.carrier;
       rec.carrier = excCarrier_((c && (c.name || c.code)) || rec.carrier || '');
-      var v = excClassify_(ship, !!EXC_SHOPIFY_MOVED_[on]);
+      var v = excClassify_(ship, !!EXC_SHOPIFY_MOVED_[on], !!EXC_SHOPIFY_DELAYED_[on]);
       if (v.cls === 'DELIVERED') { rec.open = false; return; }
       if (!v.ping) return;
       if (rec.alerted.indexOf(v.cls) >= 0) return;   // dedup on (order, class)
@@ -815,6 +909,8 @@ function onOpenExceptions() {
     .addItem(EXC_DRY_RUN ? 'Run sweep now (DRY RUN — no Slack)' : 'Run sweep now (LIVE — posts to Slack)',
              'hourlyExceptionSweep')
     .addItem('Replay classifier self-test', 'excSelfTest')
+    .addItem('Repair _exc_state (clear stale logged rows)', 'excRepairLoggedState')
+    .addItem('Mark recorded rows as alerted (do BEFORE unmuting)', 'excMarkRecordedAsAlerted')
     .addItem('Show scheduled triggers', 'excListTriggers')
     .addItem('Install/repair hourly trigger', 'installExceptionsTrigger')
     .addToUi();
@@ -849,7 +945,14 @@ function excSelfTest() {
     ['Shipment exception, Unable to deliver, BUFFALO NY', 'EXCEPTION', 'UNDELIVERABLE', true],
     ['Your package will be discarded. Please contact them for further assistance', 'EXCEPTION', 'LOST', true],
     ['We need additional information to complete your delivery and avoid a return', 'EXCEPTION', 'ADDRESS_ISSUE', true],
+    // 🔴 FedEx wording off #170893 (Lisa Olson, VA, 8/14 19:53). Fell through to IN_NETWORK until
+    // the ADDRESS_ISSUE predicate was widened past OnTrac's phrasing on 2026-08-17.
+    ['Delivery exception, Incorrect address, HERNDON VA 20171', 'EXCEPTION', 'ADDRESS_ISSUE', true],
+    ['The delivery of your package was attempted but could not be completed due to a lack of an access code.', 'EXCEPTION', 'ADDRESS_ISSUE', true],
     ['The delivery of your package was attempted but could not be completed', 'EXCEPTION', 'ATTEMPT_FAILED', true],
+    ["We're sorry but we were unable to complete your delivery. Please continue to check your tracking", 'EXCEPTION', 'ATTEMPT_FAILED', true],
+    ['The driver tried to deliver the package, but the business was closed. We will reattempt up to 3 times.', 'EXCEPTION', 'ATTEMPT_FAILED', true],
+    ['At local FedEx facility, Package not delivered/not attempted', 'EXCEPTION', 'ATTEMPT_FAILED', true],
     ['Delivered', 'EXCEPTION', 'DELIVERED', false],
     ['Delivered, Lebanon TN', 'EXCEPTION', 'DELIVERED', false],
     ['DELIVERED, SHILOH GA US', 'DELIVERED', 'DELIVERED', false],
@@ -898,6 +1001,53 @@ function excSelfTest() {
   ] });
   if (ordering.cls !== 'DAMAGED') fails.push('newest-first/null-status guard failed -> ' + ordering.cls);
 
+  // 🔴 WINDOW guard — the #170893 regression. A benign scan NEWER than the failure must not hide
+  // it, and the reported eventAt must belong to the failing checkpoint, not the benign one.
+  var buried = excClassify_({ checkpoints: [
+    { detail: 'At local FedEx facility, HERNDON VA', status: 'IN_TRANSIT', checkpoint_time: '2026-08-15T09:31:00' },
+    { detail: 'Delivery exception, Incorrect address, HERNDON VA 20171', status: 'EXCEPTION', checkpoint_time: '2026-08-14T19:53:00' },
+  ], status: 'FAILED_ATTEMPT' });
+  if (buried.cls !== 'ADDRESS_ISSUE' || !buried.ping) {
+    fails.push('a failure buried under a later benign scan must still classify -> ' + buried.cls);
+  }
+  if (buried.eventAt.indexOf('2026-08-14') !== 0) {
+    fails.push('eventAt must come from the classifying checkpoint, got ' + buried.eventAt);
+  }
+  // 🔴 The other direction, and the one that protects the channel: a DELIVERED scan NEWER than a
+  // failure still suppresses (23 of 71 on 6/29-7/20 were already delivered). Do not "fix" this.
+  var deliveredOnTop = excClassify_({ checkpoints: [
+    { detail: 'Delivered, SHILOH GA US', status: 'DELIVERED' },
+    { detail: 'Your package was unable to be delivered', status: 'EXCEPTION' },
+  ] });
+  if (deliveredOnTop.cls !== 'DELIVERED' || deliveredOnTop.ping) {
+    fails.push('a delivery scan newer than a failure must still suppress -> ' + deliveredOnTop.cls);
+  }
+  // structured-field guard: PP's own status is authoritative over benign prose
+  var structured = excClassify_({ status: 'FAILED_ATTEMPT',
+    checkpoints: [{ detail: 'In transit, MEMPHIS TN', status: 'IN_TRANSIT' }] });
+  if (structured.cls !== 'ATTEMPT_FAILED' || !structured.ping) {
+    fails.push('PP status FAILED_ATTEMPT must classify as ATTEMPT_FAILED -> ' + structured.cls);
+  }
+  // DELAYED guard + its floor (#169174, Maria Wood NY: label 8/10, pickup 8/14, benign newest scan)
+  var delayedOld = excClassify_({ status: 'IN_TRANSIT', fulfillment_date: '2026-01-01',
+    checkpoints: [{ detail: 'In transit, ELMSFORD NY', status: 'IN_TRANSIT' }] }, true, true);
+  if (delayedOld.cls !== 'DELAYED' || !delayedOld.ping) {
+    fails.push('Shopify DELAYED past the floor must classify as DELAYED -> ' + delayedOld.cls);
+  }
+  var delayedFresh = excClassify_({ status: 'IN_TRANSIT',
+    fulfillment_date: Utilities.formatDate(new Date(), EXC_TZ, 'yyyy-MM-dd'),
+    checkpoints: [{ detail: 'In transit, ELMSFORD NY', status: 'IN_TRANSIT' }] }, true, true);
+  if (delayedFresh.cls === 'DELAYED') {
+    fails.push('a same-day DELAYED flag must not fire (floor ' + EXC_DELAYED_MIN_DAYS + 'd)');
+  }
+  // display guards for the two new/renamed classes — display only, tokens unchanged
+  if (excDisplay_('ATTEMPT_FAILED') !== 'delivery attempt failed') {
+    fails.push('ATTEMPT_FAILED must display as "delivery attempt failed"');
+  }
+  if (excDisplay_('DELAYED') !== 'delayed / stuck in transit') {
+    fails.push('DELAYED must display as "delayed / stuck in transit"');
+  }
+
   Logger.log(fails.length ? 'FAIL:\n' + fails.join('\n') : 'PASS: ' + (cases.length + 1) + ' cases');
   return fails;
 }
@@ -923,4 +1073,94 @@ function excSeedBacklogAsLogged() {
   } finally {
     EXC_SEEDING = false;                            // never leave seeding armed
   }
+}
+
+// ---------------------------------------------------------------- state repair (manual)
+
+/**
+ * 🔴 STATE ROT REPAIR (Kurt 2026-08-17). `_exc_state` claimed ~1,839 orders had a `logged_classes`
+ * entry while the Exceptions tab held THREE rows: the false-positive purge cleared the tab but not
+ * the state, and `rec.logged` is the tab-write dedup — so every one of those (order, class) pairs
+ * could never be appended again. A genuine exception among them was permanently invisible, which
+ * is precisely the silent failure this job exists to prevent.
+ *
+ * WHAT IT DOES, exactly:
+ *   • reads the Exceptions tab and builds the set of (order, display-label) pairs actually PRESENT
+ *     (order normalised without '#', label lower-cased — historical rows carry both 'Address Issue'
+ *     and 'address issue' from a casing drift that was fixed later);
+ *   • for every state row, DROPS from `logged_classes` any token whose display label is not on the
+ *     tab, so that exception can be recorded again on the next sweep;
+ *   • touches NOTHING else — `alerted_classes`, `open`, `carrier`, `cohort` and `last_seen` are
+ *     copied through untouched. Dropping a `logged` entry cannot cause a duplicate Slack ping,
+ *     because Slack dedup rides `alerted`, which is a different column and is not modified here.
+ * Idempotent: a second run finds nothing to drop and reports 0. Read-only against ParcelPanel and
+ * against Slack — it makes no network call at all.
+ */
+function excRepairLoggedState() {
+  var ss = excSS_();
+  var sh = ss.getSheetByName(EXC_LOG_TAB);
+  var onTab = {};
+  if (sh && sh.getLastRow() > 1) {
+    sh.getRange(2, 1, sh.getLastRow() - 1, EXC_LOG_HEADERS.length).getValues().forEach(function (row) {
+      var ord = String(row[2] || '').replace(/^#/, '').trim();
+      var cls = String(row[6] || '').trim().toLowerCase();
+      if (ord && cls) onTab[ord + '|' + cls] = 1;
+    });
+  }
+  var st = excLoadState_();
+  var dropped = 0, rowsTouched = 0, kept = 0;
+  Object.keys(st).forEach(function (k) {
+    var rec = st[k];
+    var before = (rec.logged || []).slice();
+    if (!before.length) return;
+    rec.logged = before.filter(function (tok) {
+      var ok = !!onTab[String(rec.order) + '|' + excDisplay_(tok).toLowerCase()];
+      if (ok) kept++;
+      return ok;
+    });
+    if (rec.logged.length !== before.length) {
+      dropped += before.length - rec.logged.length;
+      rowsTouched++;
+    }
+  });
+  excSaveState_(st);
+  var msg = 'state repair: Exceptions tab holds ' + Object.keys(onTab).length +
+            ' (order,class) pair(s); cleared ' + dropped + ' stale logged_classes entr(ies) across ' +
+            rowsTouched + ' order(s), kept ' + kept + ' that are really on the tab. ' +
+            'alerted_classes / open / last_seen untouched. Re-run is a no-op.';
+  Logger.log(msg);
+  try { SpreadsheetApp.getUi().alert('Repair _exc_state', msg, SpreadsheetApp.getUi().ButtonSet.OK); } catch (e) {}
+  return msg;
+}
+
+/**
+ * 🔴 THE UNMUTE GUARD (Kurt 2026-08-17: sheet current tonight, Slack silent, unmute AFTERWARD).
+ * While EXC_DRY_RUN is true the sweep appends rows and stamps `logged` but deliberately leaves
+ * `alerted` empty, so that flipping EXC_DRY_RUN to false would post the ENTIRE recorded backlog in
+ * one burst — the 4,289-order dump this project has been avoiding since 2026-08-07.
+ *
+ * This closes that: for every state row it unions `logged_classes` into `alerted_classes`, so each
+ * (order, class) already sitting on the tab is treated as already pinged and the first live sweep
+ * posts only exceptions classified AFTER this ran. It appends no row, makes no Slack call, and
+ * spends no ParcelPanel budget. `open` is left alone on purpose — the order keeps being polled, so
+ * a DIFFERENT class on the same box can still fire, which is the behaviour we want.
+ * Idempotent. Run it AFTER the muted populate runs and BEFORE flipping EXC_DRY_RUN.
+ */
+function excMarkRecordedAsAlerted() {
+  var st = excLoadState_();
+  var marked = 0, orders = 0;
+  Object.keys(st).forEach(function (k) {
+    var rec = st[k], n = 0;
+    (rec.logged || []).forEach(function (tok) {
+      if (rec.alerted.indexOf(tok) < 0) { rec.alerted.push(tok); n++; }
+    });
+    if (n) { marked += n; orders++; }
+  });
+  excSaveState_(st);
+  var msg = 'unmute guard: marked ' + marked + ' recorded (order,class) pair(s) across ' + orders +
+            ' order(s) as already alerted. Flipping EXC_DRY_RUN to false now posts ONLY exceptions ' +
+            'classified from here on. Nothing appended, nothing posted, no ParcelPanel calls.';
+  Logger.log(msg);
+  try { SpreadsheetApp.getUi().alert('Mark recorded as alerted', msg, SpreadsheetApp.getUi().ButtonSet.OK); } catch (e) {}
+  return msg;
 }

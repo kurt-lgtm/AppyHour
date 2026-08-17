@@ -111,6 +111,68 @@ forever*.
 The two rules reinforce each other: by the time the floor lets a classification fire, both feeds
 have had three days to catch up, so the lag that caused the false positives has already resolved.
 
+## 🔴 Four fixes that ended the "it never fired" class (Kurt 2026-08-17)
+
+Two boxes Kurt flagged had failed in plain sight and never produced a row: **#170893** (Lisa Olson,
+VA — FedEx `status=FAILED_ATTEMPT`, checkpoint 8/14 19:53 *"Delivery exception, Incorrect address,
+HERNDON VA 20171"*, then a benign *"At local FedEx facility"* 8/15 09:31) and **#169174** (Maria
+Wood, NY — label 8/10, pickup 8/14, Shopify `displayStatus = DELAYED` / *"Package Delayed."*,
+newest PP checkpoint a benign IN_TRANSIT). Four independent holes, all four now closed:
+
+1. **NEVER read only `checkpoints[0]`.** The classifier saw one scan. A single later, harmless
+   facility scan hid a real failure *forever* — nothing re-surfaces it, because the newest
+   checkpoint only gets newer. It now walks the newest **`EXC_CP_SCAN = 5`** carrier checkpoints,
+   newest→oldest, stopping at the first that decides.
+   **Precedence, stated:** within one checkpoint, failure text is tested before the bare-text
+   `delivered` suppress (substring trap); across checkpoints, a **DELIVERED scan newer than a
+   failure still suppresses** — that is what preserves the 23-of-71 already-delivered suppression.
+   A *benign* newer scan decides nothing and the walk continues past it.
+   The reported `event when` is the classifying checkpoint's time, never the benign one's.
+2. **NEVER discard the structured field.** PP's `status` was parsed and never read.
+   `status === 'FAILED_ATTEMPT'` → `ATTEMPT_FAILED`. It sits after the window walk so a more
+   specific failure text (damaged/returned/lost) refines it and a genuine delivery still
+   suppresses — structured-beats-free-text means it must never lose to *benign* prose.
+3. **NEVER write a predicate from one carrier's wording.** `ADDRESS_ISSUE` knew only OnTrac's
+   "need additional information to complete", so FedEx's "Incorrect address" fell through to
+   IN_NETWORK. Widened to
+   `/need additional information to complete|lack of an access code|access code|incorrect address|address (is )?(incorrect|invalid)|delivery exception.*address/i`.
+4. **New `DELAYED` class** off Shopify `displayStatus === 'DELAYED'`. It rides the Shopify call
+   `excResolveDelivered_` already makes — **ZERO extra ParcelPanel budget**, same one-request-two-
+   jobs trick as the movement union. 🔴 **Floor `EXC_DELAYED_MIN_DAYS = 3`, and it is not
+   optional:** Shopify stamps DELAYED off routine carrier "Package Delayed" scans that clear within
+   a day, so firing on the flag alone floods the channel. Three days = the 2-day promise is already
+   broken, so it is a real failure rather than feed lag; and because the sweep re-polls hourly a
+   floor *delays* detection, it cannot lose a case. Tested BEFORE the movement union, because a
+   delayed box HAS moved and the union would otherwise swallow every one.
+
+Measured, not guessed — these are high precision, not a flood: **2 new hits in wk0810, 1 in wk0803,
+0 in wk0817.** `excSelfTest()` covers all four with the real carrier strings (25 cases, PASS).
+
+## 🔴 `_exc_state` rot, and the two manual repairs
+
+**A cleared tab does not clear the state, and that silently kills re-recording.** Found 2026-08-17:
+`_exc_state` claimed ~1,839 orders carried a `logged_classes` entry while the Exceptions tab held
+**3 rows** — the false-positive purge emptied the tab only. `rec.logged` is the tab-write dedup, so
+every one of those (order, class) pairs could never be appended again; a genuine exception among
+them was permanently invisible. **Any future tab purge must be paired with the repair below.**
+
+- **`excRepairLoggedState()`** — reads the Exceptions tab, builds the set of (order, display-label)
+  pairs actually present (order without `#`, label lower-cased: historical rows carry both
+  "Address Issue" and "address issue"), and drops from `logged_classes` any token whose label is
+  not on the tab. Touches nothing else — `alerted_classes`, `open`, `carrier`, `cohort`,
+  `last_seen` copy through untouched, so it cannot cause a duplicate Slack ping (Slack dedup rides
+  `alerted`). Idempotent, no network calls.
+- **`excMarkRecordedAsAlerted()` — the UNMUTE GUARD.** While `EXC_DRY_RUN` is true the sweep
+  appends rows and stamps `logged` but deliberately leaves `alerted` empty, so flipping the flag
+  would post the entire recorded backlog in one burst. This unions `logged_classes` into
+  `alerted_classes`, so the first live sweep posts **only** exceptions classified after it ran. It
+  appends no row, posts nothing, spends no PP budget. `open` is left alone on purpose — the box
+  keeps being polled, so a *different* class on it can still fire. Idempotent.
+  🔴 **Run it AFTER the muted populate runs and BEFORE flipping `EXC_DRY_RUN` to false.**
+
+The Wed–Sun day gate is unchanged and still enforced in both places (sweep + `excSlackPost_`):
+Mon/Tue record to the tab and never alert.
+
 ## Alert classes (Kurt 2026-07-30)
 
 **PING** — hard failures plus address/attempt issues:
@@ -122,8 +184,10 @@ have had three days to catch up, so the lag that caused the false positives has 
 | `RETURNED` | "returning package to shipper", "returned to a Veho warehouse", "returned to the sender" | 7 |
 | `NEVER_PICKED_UP` | status `info_received` w/ no pickup_date after 24h of ship date | 3 |
 | `LOST` | "lost by driver", "will be discarded" | 2 |
-| `ADDRESS_ISSUE` | "need additional information to complete your delivery" | 3 |
-| `ATTEMPT_FAILED` | "delivery was attempted but could not be completed" | 1 |
+| `ADDRESS_ISSUE` | "need additional information to complete your delivery", missing access code | 3 |
+| `ATTEMPT_FAILED` | attempted delivery, unable to complete delivery, recipient/business closed, **or PP `status = FAILED_ATTEMPT`** (display: "delivery attempt failed") | 1 |
+| `ADDRESS_ISSUE` (widened 8/17) | + "incorrect address", "address is invalid", "delivery exception … address" | — |
+| `DELAYED` (new 8/17) | Shopify `displayStatus = DELAYED`, ≥ `EXC_DELAYED_MIN_DAYS` (3) since fulfillment (display: "delayed / stuck in transit") | — |
 
 **SUPPRESS** — never ping:
 
