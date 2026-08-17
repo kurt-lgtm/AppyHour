@@ -431,14 +431,15 @@ The refresh runs on a **daily** time-trigger, not weekly — weekly was too slow
 
 | day | cohort age | what runs |
 |---|---:|---|
-| **Mon** (ship day) | 0 | **exits** — one log line, no writes, no fetch |
+| **Mon** (ship day) | 0 | **current leg** exits — one log line, no writes, no fetch. 🔴 **The previous-week reconcile leg STILL RUNS** (D20 — it used to exit the whole invocation, freezing last week's column every Monday) |
 | **Tue** (first real run) | 1 | Shopify-only; appends the new `_SHIP_` column |
 | **Wed** | 2 | Shopify-only |
 | **Thu–Sun** | 3+ | Shopify **+ PP rescue**, ≤200 calls/run, oldest-scan first |
 
 The trigger UI cannot express any of the following, so all four live in `refreshCurrentColumn`:
 
-- **Ship-day skip.** Cohort age `0` → log one line and exit. On a daily trigger the Monday run
+- **Ship-day skip.** Cohort age `0` → log one line and skip **the current leg only** (D20 — never
+  `return` out of the invocation). On a daily trigger the Monday run
   fires while boxes are still being handed to carriers: nothing has moved, so every box reads
   undelivered and — under the survivorship rule (D9) — **LATE**. Anchored on cohort **age**, not
   day-of-week, so a shifted ship day (holiday week) cannot defeat it.
@@ -694,6 +695,121 @@ empty — the late-% column reads blank for every hub, carrier, state and box. `
 closes it: rightmost column only, EMPTY cells only, never overwrites an existing formula, dry by
 default.
 
+### D20 — THE SHIP-DAY GUARD SKIPS THE CURRENT LEG, NEVER THE INVOCATION; AND A REFUSED RUN IS LOUD (2026-08-17)
+
+🔴 **The failure — every Monday silently froze last week's column for a day.** D14's ship-day skip was
+implemented as a `return` out of `refreshCurrentColumn`, evaluated on the CURRENT cohort *before* the
+D15 two-column reconciliation. Observed live Monday 2026-08-17:
+
+```
+=== refreshCurrentColumn _SHIP_2026-08-17 (age 0d) — WRITING ===
+SKIP — cohort ships today (age 0d); nothing to measure yet.
+```
+
+The whole run exited. `_SHIP_2026-08-10` — age 7d, still inside `PA_MATURITY_DAYS` and therefore still
+**script-owned and self-healing** — never executed. A brand-new cohort having nothing to measure says
+nothing about a 7-day-old one, and the reconcile leg is precisely what the maturity model exists for.
+
+**The rule.** On a ship day the run logs the skip for the CURRENT cohort and then proceeds to the
+previous-week leg exactly as on any other day: same `allowAppend=false`, same shared ParcelPanel
+budget, previous leg SECOND and non-fatal, per-leg timings logged. All six named asserts, the
+walk-forward freeze at `PA_MATURITY_DAYS`, format-copy-from-previous on column creation, label-keyed
+owned-row writes, Dan's rows and Kurt's note cells, and the PP per-run cap / weekly counter are
+unchanged. The D14 table's Monday row now reads **"current leg exits; previous-week reconcile still
+runs."** Tuesday remains the first run that touches the NEW column.
+
+🔴 **Generalized: a guard whose condition is about ONE leg must not be evaluated at the top of a
+multi-leg entry point.** Guard placement is a correctness property, not a style choice.
+
+#### D20b — the NOTE-COLUMN decision: keep the assert STRICT, make the refusal LOUD
+
+**The recurring problem.** Kurt annotates cells next to our data. A note in a column with no row-1
+header (`TnT2!G7` = "investigate", 2026-08-16) trips `PA_ASSERT_HEADERLESS_COLUMN`, which throws
+BEFORE any write — so the run refuses, the column keeps the previous run's numbers, and **nothing
+anywhere says so**. Stale and fresh numbers look identical. That is how wk0810 sat at Friday's
+figures across Saturday and Sunday.
+
+**Decision (implemented): option (c).** Not (a) "treat a text-only headerless column as a note column
+and warn", not (b) "a reserved `Notes` column". Rejected because:
+
+- (a) classifies a structural hazard by CELL CONTENT — the exact "close enough" inference this
+  operation has been burned by. It is also not sufficient: a note column sitting to the RIGHT of the
+  live cohort column defeats `paCurrentCol_`'s "rightmost or rightmost−1" freeze bound regardless of
+  what the cells contain, so the run would still refuse — while the assert that names the real cause
+  had been downgraded to a warning nobody reads.
+- (b) asks Kurt to change an annotation habit. Habit-dependent guardrails do not hold, and D19 already
+  recorded the lesson that *"a warning in a log nobody opens is a silent failure with extra steps."*
+- The assert itself is load-bearing: header-last once produced a **self-replicating** corruption (two
+  headerless `_SHIP_2026-08-10` columns, `fdc531a`). Relaxing it trades a loud, recoverable stall for
+  a quiet, compounding one. **A refusal to write is the correct behavior; the silence around it was
+  the defect.**
+
+**Mechanism.** `refreshCurrentColumn` is now a thin wrapper: any throw DMs Kurt privately via
+`slack_` (Code.gs — bot DM, email fallback; never the public `SLACK_WEBHOOK`), naming the matched
+`PA_*` invariant and, for `PA_ASSERT_HEADERLESS_COLUMN`, the fix ("clear the cell or give the column
+a row-1 header"), then **RETHROWS** so the execution still registers as failed. The previous-leg
+`catch` — which swallows by design so a reconcile failure cannot cost us the current column — alerts
+there too, or a previous column can freeze for its entire remaining window unnoticed. **No assert is
+weakened.** Detection latency becomes one daily run (same evening), not days.
+
+**Tradeoff, stated:** Kurt still cannot leave a note in a headerless column — the run still refuses
+while the cell is there. We buy visibility, not tolerance. If tolerance is later wanted, the right
+shape is a **deliberately headered** note column (a real row-1 header the writer's label-keyed
+owned-row logic skips anyway, placed LEFT of the cohort columns so the rightmost/rightmost−1 bound is
+untouched) — a structural, human-invoked change on the D19 maintenance path, never a content
+heuristic on the refresh path.
+
+### D21 — "POLL ONLY THE UNDELIVERED" (Kurt 2026-08-17) — DESIGN ACCEPTED, IMPLEMENTATION **HELD**
+
+**Kurt's observation is correct and it is the right optimization:** a DELIVERED box is TERMINAL. Its
+pickup date, delivery date and TNT bucket can never change, so re-polling it every night is pure
+waste. At ~2,300 orders/cohort and two legs, the current refresh pages nearly the whole cohort twice.
+
+**Status: designed, NOT implemented.** The gate is "totals must be provably identical to a full
+recount," and that cannot be established from here — Apps Script cannot be executed by an agent, so a
+cached-vs-fresh parity run is a Kurt click. Shipping a cache that silently drifts would corrupt the
+one number Dan reads. Implementation waits on the parity harness in the checklist below.
+
+**Design (settle these; do not re-derive):**
+
+- **Store = a hidden sheet tab `_pa_verdicts`, NOT Script Properties.** Properties cap at 9KB/property
+  and ~500KB total; 2,300 orders/week × several weeks does not fit. (Same reasoning that put `_state`
+  on a tab, R15.)
+- **Key = `shipWeek || order_number`.** 🔴 NEVER `tracking_number` — FedEx REUSES tracking numbers
+  (D12), and a reused number would import a stale verdict from another shipment.
+- **A verdict is written ONLY when the box is TERMINAL** — i.e. delivered under the D6 union. One row:
+  `shipWeek · order_number · delivered_at(ET) · pickup_date(ET) · pickup_source(pp|shopify) · tnt_days
+  · bucket(2 Day|3+ Day) · hub · carrier · state · box · verdict_written_at`. Undelivered boxes are
+  never cached: pending / still-moving / no-scan-24h / never-picked-up are all **clock-dependent**
+  (D10 recomputes recency every run and never caches the class), and a never-picked-up box acquiring
+  a pickup scan is exactly the transition the wk0810 recount just measured (23 of 25 moved in a week).
+- **Column totals = cached-final ∪ freshly-polled**, then EVERY existing assert runs against the
+  merged set unchanged. The merge is a union over the cohort's live membership, so an order that has
+  LEFT the cohort contributes nothing even if a verdict row survives for it.
+- **Invalidation — a cached verdict is dropped, not trusted, when:** the order is no longer in the
+  live cohort query (`tag:'_SHIP_…' -status:cancelled -tag:'Reship'`) — covers cancellation, a
+  `Reship` tag appearing, and cohort re-pinning (D12 #166740); the ship week's column is refused or
+  re-created; or the verdict predates a change to the bucketing rules. **Stamp a
+  `PA_VERDICT_SCHEMA_VERSION` in the tab and drop the whole cache on a bump** — a directive change
+  (D18's clock rewrite is the worked example) must never be served from a cache computed under the
+  old rule.
+- **Interaction with the walk-forward freeze:** the cache is an input to the refresh, so it can only
+  ever affect columns the script still owns (age < `PA_MATURITY_DAYS`). At freeze the cohort's rows
+  become inert; prune them once past maturity to bound tab growth.
+- 🔴 **Mandatory drift control — a WEEKLY FULL RECOUNT that ignores the cache and compares.** Any
+  disagreement is logged BY ORDER NUMBER and alerted via the D20b path; the fresh recount wins. Without
+  this the cache is unfalsifiable, and "an optimization you cannot falsify" is how a silent-degrade
+  bug lives for months (the PP leg failing invisibly on 2,303/2,305 orders is the precedent).
+- **Expected win — to be MEASURED, not asserted.** Directionally: Shopify order pages drop from
+  ~93/run toward the undelivered remainder (wk0810 today: 32 of 2,317 not arrived, ~1.4%), and the PP
+  rescue set shrinks with it. 🔴 The before/after must come from an instrumented run, not an estimate —
+  never optimize against an uninstrumented baseline.
+
+**Implementation checklist (do in this order):** (1) write verdict rows in SHADOW on the normal path,
+reading nothing from them; (2) run a full recount and a cache-backed recount over the same cohort and
+assert every figure identical, including the three observation rows; (3) only then let the cache
+suppress polling; (4) leave the weekly full recount permanently on.
+
 ### Cutover checklist (once preconditions clear)
 
 (a) confirm Jdbc `SELECT 1` from GAS + RO user scoped; (b) implement the walk-forward current-column
@@ -732,3 +848,12 @@ builder's numbers on a matured cohort** before trusting the headless path (ident
   Also recorded: the live Apps Script project was found holding ONLY `[appsscript, Code]` —
   `Exceptions.gs` and `PivotAnalytics.gs` had been DELETED by an all-files PUT (gotcha #16 executed);
   both restored, Exceptions from its last-deployed bytes.
+- 2026-08-17 — **D20: the ship-day guard skips the CURRENT LEG, not the invocation** (observed live
+  Monday 08-17: the run logged the age-0 skip for `_SHIP_2026-08-17` and exited, so `_SHIP_2026-08-10`
+  at age 7d — still script-owned inside `PA_MATURITY_DAYS` — never reconciled; every Monday silently
+  froze the previous week's column for a day). **D20b: the note-column decision — keep
+  `PA_ASSERT_HEADERLESS_COLUMN` strict, make the refusal LOUD** via a `slack_` DM on any throw from
+  `refreshCurrentColumn` plus the previous-leg `catch`; content-heuristic and reserved-column options
+  rejected with reasons. **D21: "poll only the undelivered" — design accepted, implementation HELD**
+  pending a cached-vs-fresh parity run (verdict tab `_pa_verdicts`, key `shipWeek||order_number`,
+  terminal-only caching, schema-version drop, mandatory weekly full recount).

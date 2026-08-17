@@ -743,11 +743,46 @@ function paPreviousShipWeek_(shipWeek) {
 }
 
 /**
+ * 🔴 D20 — A REFUSED RUN MUST BE LOUD. The asserts THROW before any write, which is correct: a
+ * column that cannot be trusted is not written. But a throw on an unattended daily trigger is
+ * INVISIBLE — the column simply keeps last night's numbers and looks fine. That is how
+ * `_SHIP_2026-08-10` sat at Friday's figures through the weekend (Kurt had typed "investigate" into
+ * `TnT2!G7`, a cell in a column with no row-1 header, so `PA_ASSERT_HEADERLESS_COLUMN` refused every
+ * run). Staleness has no visual signature — a frozen number and a fresh one look identical.
+ *
+ * So the entry point is wrapped: ANY throw DMs Kurt privately (`slack_`, Code.gs — bot DM with an
+ * email fallback) naming the assert and the run, then RETHROWS so the failure still registers as a
+ * failed execution. This does not weaken a single assert; it only removes the silence around one.
+ */
+function refreshCurrentColumn(shipWeek) {
+  try {
+    return paRefreshCurrentColumn_(shipWeek);
+  } catch (e) {
+    var msg = String(e && e.message ? e.message : e);
+    // The assert names are PA_ASSERT_* / PA_INSERT_* precisely so an alert can name the invariant.
+    var named = (msg.match(/PA_[A-Z_]+/) || ['(unnamed failure)'])[0];
+    var txt = 'Reship pivot refresh REFUSED TO WRITE — ' + named + '. The cohort column still holds ' +
+              'the PREVIOUS run\'s numbers and will keep doing so until this clears. ' +
+              (named === 'PA_ASSERT_HEADERLESS_COLUMN'
+                 ? 'Most common cause: a note typed into a cell in a column that has no header in ' +
+                   'row 1. Clear that cell (or give the column a row-1 header) and re-run. '
+                 : '') +
+              'Detail: ' + msg;
+    try {
+      if (typeof slack_ === 'function') slack_(txt, true);
+      else Logger.log('🔴 slack_ unavailable — ' + txt);
+    } catch (e2) { Logger.log('🔴 alert failed: ' + e2 + ' — original: ' + txt); }
+    paLog_('🔴 ' + txt);
+    throw e;                                   // still a failed execution; nothing is swallowed
+  }
+}
+
+/**
  * Daily entry point. Refreshes the current cohort, then RECONCILES the previous one while it is
  * still inside the maturity window (D15) — a box frozen as 3+ Day / Not Arrived can later prove
  * delivered, and without this the column freezes at a value we already know is wrong.
  */
-function refreshCurrentColumn(shipWeek) {
+function paRefreshCurrentColumn_(shipWeek) {
   var dry = !paWriteArmed_();
   // 🔴 A TIME-DRIVEN TRIGGER PASSES AN EVENT OBJECT as the first argument. Taking it as `shipWeek`
   // made `cur` an object and killed the run at `shipWeek.replace(...)` in ~1s, before any fetch —
@@ -763,17 +798,30 @@ function refreshCurrentColumn(shipWeek) {
   // handed to carriers: nothing has moved, so every box would read undelivered and, under the
   // survivorship rule, LATE. Anchored on cohort AGE rather than day-of-week so a shifted ship day
   // (holiday week) can't defeat it.
-  if (age <= 0) {
-    paLog_('SKIP — cohort ships today (age ' + age + 'd); nothing to measure yet.');
-    return { skipped: 'ship-day', shipWeek: cur, age: age };
+  //
+  // 🔴 THE GUARD SKIPS THE CURRENT LEG ONLY — NEVER THE INVOCATION. It used to `return` here, which
+  // took the PREVIOUS-week reconcile leg down with it: on Monday 2026-08-17 the run logged
+  // "SKIP — cohort ships today (age 0d)" and exited, so `_SHIP_2026-08-10` (age 7d, still inside
+  // the 10-day maturity window and therefore still script-owned) never refreshed and sat frozen at
+  // Friday's numbers for a full extra day. Every Monday silently froze last week's column. The
+  // reconcile leg is exactly what the maturity model exists for, and a brand-new cohort having
+  // nothing to measure says nothing about a 7-day-old one.
+  var skipCurrent = (age <= 0);
+  if (skipCurrent) {
+    paLog_('SKIP CURRENT LEG — cohort ships today (age ' + age + 'd); nothing to measure yet. ' +
+           'Continuing to the previous-week reconcile leg.');
   }
 
   var budget = { left: PA_PP_MAX_CALLS };             // shared across both legs
   var out = { dry: dry, current: null, previous: null };
+  if (skipCurrent) out.skipped = 'ship-day';
   var t0 = new Date().getTime();
-  out.current = paRefreshOne_(cur, dry, budget, true);
+  if (!skipCurrent) {
+    out.current = paRefreshOne_(cur, dry, budget, true);
+  }
   var tCur = new Date().getTime();
-  paLog_('leg timing: current ' + ((tCur - t0) / 1000).toFixed(1) + 's');
+  paLog_('leg timing: current ' + (skipCurrent ? 'skipped (ship day)'
+                                               : ((tCur - t0) / 1000).toFixed(1) + 's'));
 
   // ---- previous leg: SECOND, and never allowed to take the current column down with it ----
   var prev = paPreviousShipWeek_(cur);
@@ -788,10 +836,16 @@ function refreshCurrentColumn(shipWeek) {
       try {
         out.previous = paRefreshOne_(prev, dry, budget, false);
       } catch (e) {
-        // 🔴 loud, and NON-fatal: the current column is already written by this point. A previous-leg
-        // failure (6-min ceiling, a refused column) must never cost us the current refresh.
-        paLog_('🔴 reconcile leg FAILED for ' + prev + ' — current column is already written and is ' +
-               'unaffected. Error: ' + e);
+        // 🔴 loud, and NON-fatal: the current column is already written by this point (or was
+        // deliberately skipped on a ship day). A previous-leg failure (6-min ceiling, a refused
+        // column) must never cost us the current refresh.
+        var pmsg = '🔴 reconcile leg FAILED for ' + prev + ' — current column is ' +
+                   (skipCurrent ? 'not written on a ship day by design' : 'already written') +
+                   ' and is unaffected. Error: ' + e;
+        paLog_(pmsg);
+        // 🔴 D20 — this branch SWALLOWS the error by design, so the wrapper's alert never sees it.
+        // Alert here too, or a previous column can freeze for its whole remaining window in silence.
+        try { if (typeof slack_ === 'function') slack_(pmsg, true); } catch (e2) { paLog_('alert failed: ' + e2); }
       }
       paLog_('leg timing: previous ' + ((new Date().getTime() - tCur) / 1000).toFixed(1) + 's');
     }
