@@ -66,6 +66,19 @@ var PA_TNT1_SLA = 1;
 /** Labels that are NESTED refinements of a grain row — skipped when resolving a rate-row pair. */
 var PA_NESTED = PA_OBS.concat([PA_TNT1_LABEL]);
 
+/**
+ * 🔴 D22b (Kurt 2026-08-17: "we want tnt1 rows for these hubs too") — the same nesting exists per
+ * hub as `{hub} · TNT1`, sitting between `{hub} · 2 Day` and `{hub} · 3+ Day`. The nested test is
+ * therefore a PREDICATE, not a flat allowlist lookup: exact match on the top-block labels, or the
+ * explicit ` · TNT1` suffix. It is still an ALLOWLIST — "anything that is not a grain row" was
+ * rejected in D19a because it lets the pair resolver stroll out of its own block.
+ */
+function paIsNested_(lab) {
+  if (PA_NESTED.indexOf(lab) >= 0) return true;
+  var suf = ' · ' + PA_TNT1_LABEL;
+  return lab.length > suf.length && lab.slice(-suf.length) === suf;
+}
+
 /** 🔴 A real carrier scan. CONFIRMED is emitted at LABEL CREATION and is NOT a scan — including it
  * makes every never-collected box look like it moved ("has events" is the wrong filter). */
 var PA_MOVE = { IN_TRANSIT: 1, OUT_FOR_DELIVERY: 1, ATTEMPTED_DELIVERY: 1, READY_FOR_PICKUP: 1, PICKED_UP: 1 };
@@ -473,6 +486,36 @@ function paValues_(recs, tab) {
     // emitting it per hub/carrier/state/box would need ~100 inserted rows on two tabs for a number
     // Kurt did not ask for. Adding the dimension later is a one-line change here plus the rows.
     m[paKey_('', PA_TNT1_LABEL)] = n(function (r) { return r.tnt1; });
+    // 🔴 D22b (Kurt 2026-08-17: "we want tnt1 rows for these hubs too") — the SAME subset, at hub
+    // grain, under the existing `hub||{label} · {grain}` key convention so the ordinary refresh fills
+    // it with no further change. Only the HUB dimension: carrier/state/box were not asked for and
+    // would cost ~100 inserted rows (see D22b "Scope" in the rules doc).
+    //
+    // 🔴 Zero-filled for every hub that emitted a `· 2 Day` key, unlike the sibling dim rows which
+    // emit only non-zero. A count row that silently keeps LAST run's value is the stale-number bug;
+    // and a per-hub TNT1 with no parent 2-Day key is meaningless, so the parent set is the honest
+    // denominator. Hubs with no 2-Day boxes at all (Indianapolis, closed) emit nothing and their
+    // cells stay BLANK — never 0.
+    var hubTnt1 = {};
+    recs.forEach(function (r) {
+      if (!r.tnt1) return;
+      var hk = r.assigned.hub;
+      var hl = (hk === PA_NO_TAG) ? 'Unknown' : hk;
+      hubTnt1[hl] = (hubTnt1[hl] || 0) + 1;
+    });
+    Object.keys(m).forEach(function (k) {
+      if (k.indexOf('hub||') !== 0 || k.slice(-(' · 2 Day').length) !== ' · 2 Day') return;
+      var hl = k.slice('hub||'.length, k.length - ' · 2 Day'.length);
+      var v = hubTnt1[hl] || 0;
+      // 🔴 subset assert at HUB grain (D22b). The top-block assert can hold while a single hub's
+      // TNT1 exceeds its own 2 Day — that would mean the clock or the hub attribution drifted for
+      // that hub, and the row would misrepresent that hub's headline. Refuse rather than publish.
+      if (v > m[k]) {
+        throw new Error('PA_ASSERT_TNT1_SUBSET: hub ' + hl + ' TNT1 ' + v + ' > 2 Day ' + m[k] +
+                        ' — TNT<=1 must be a subset of TNT<=2 at every grain.');
+      }
+      m[paKey_('hub', hl + ' · ' + PA_TNT1_LABEL)] = v;
+    });
     m[paKey_('', PA_OBS[0])] = n(function (r) { return r.active; });
     m[paKey_('', PA_OBS[1])] = n(function (r) { return r.lost && r.moved; });
     m[paKey_('', PA_OBS[2])] = n(function (r) { return r.lost && !r.moved; });
@@ -964,9 +1007,16 @@ function paHubGroups_(labels, tabName) {
     var sufGood = ' · ' + g[0], sufBad = ' · ' + g[1];
     if (lab.length <= sufGood.length || lab.slice(-sufGood.length) !== sufGood) continue;
     var hub = lab.slice(0, lab.length - sufGood.length);
-    if (labels[i + 1] !== hub + sufBad) continue;
-    var rate = (labels[i + 2] === '') ? (i + 3) : 0;      // 1-based row of the rate row, 0 = none
-    out.push({ hub: hub, good: i + 1, bad: i + 2, rate: rate });   // 1-based sheet rows
+    // 🔴 D22b — the group is no longer always three contiguous rows: `{hub} · TNT1` may sit between
+    // the good and bad rows (nested subset of `· 2 Day`, TnT2 only). Tolerating it here is not
+    // cosmetic — `paInsertHubRows_` (adding the NEXT new hub) reads these groups, and a strict
+    // "bad is directly below good" test would report ZERO groups and throw PA_INSERT_NO_HUB_SECTION
+    // on a tab that is perfectly healthy.
+    var tnt1 = (labels[i + 1] === hub + ' · ' + PA_TNT1_LABEL) ? (i + 2) : 0;
+    var badI = tnt1 ? (i + 2) : (i + 1);
+    if (labels[badI] !== hub + sufBad) continue;
+    var rate = (labels[badI + 1] === '') ? (badI + 2) : 0;   // 1-based row of the rate row, 0 = none
+    out.push({ hub: hub, good: i + 1, tnt1: tnt1, bad: badI + 1, rate: rate });   // 1-based sheet rows
   }
   return out;
 }
@@ -1024,7 +1074,7 @@ function paRatePairFor_(labels, i, tabName) {
     // rows from two different sections, which is the exact bug family this resolver exists to kill.
     for (var gI = b - 1; gI >= 0 && b - gI <= PA_NESTED.length + 1; gI--) {
       if (is(labels[gI], g[0])) return { good: gI, bad: b };
-      if (PA_NESTED.indexOf(labels[gI]) < 0) return null;   // not a known nested row — shape is wrong
+      if (!paIsNested_(labels[gI])) return null;            // not a known nested row — shape is wrong
     }
     return null;
   }
@@ -1334,6 +1384,126 @@ function paAddTnt1_(dry) {
 function previewAddTnt1Row() { return paAddTnt1_(true); }
 /** Then THIS: inserts the row. Idempotent — re-running finds TNT1 and does nothing. */
 function addTnt1Row() { return paAddTnt1_(false); }
+
+// -------------------------------------------- PER-HUB TNT1 rows (D22b, human-invoked, TnT2 only)
+
+/**
+ * 🔴 D22b — a `{hub} · TNT1` row inside EVERY `By Hub (assigned)` group on TnT2, directly under that
+ * hub's `· 2 Day` row (mirroring the top block, where TNT1 sits under `2 Day Shipments` and above
+ * `3+ Day`). Kurt, on the hub block: **"we want tnt1 rows for these hubs too"**.
+ *
+ * 🔴 GENERIC OVER HUB NAME AND DRIVEN BY THE SHEET. The hub list comes from `paHubGroups_` — the rows
+ * actually present — never from a hardcoded roster, so the next new hub needs no code change here
+ * (it needs its 3 rows via `paAddHub_` first, then a re-run of this). `RMFG choice (2+ hubs open)`
+ * is included: it is a real bucket of boxes. Indianapolis is included too — the hub is closed, so its
+ * row simply stays empty, which is the honest rendering (blank ≠ 0).
+ *
+ * 🔴 THE RISK IS THE INSERT, NOT THE NUMBER. ~6-7 inserts each shift every reference below them.
+ * Three defences, all of which must hold:
+ *   1. **Bottom-up.** Groups are processed in DESCENDING row order, so an earlier insert can never
+ *      invalidate a later group's already-computed row numbers. (Top-down would silently write the
+ *      label into the wrong group by the third insert.)
+ *   2. **Rate-row verifier before AND after**, reading FORMULA TEXT — a re-pointed formula still
+ *      LOOKS right. A pre-existing mis-point REFUSES the whole run (`PA_INSERT_PRE_AUDIT_FAILED`);
+ *      a regression after THROWS. Rate-row count and formula-cell count must be UNCHANGED: this adds
+ *      COUNT rows, never a pair.
+ *   3. **Idempotent.** A group that already has its TNT1 row is skipped, so a re-run cannot
+ *      double-insert.
+ *
+ * TnT2 ONLY. The Lost in Transit tab's grains are Arrived / Not Arrived — arrival measures, with no
+ * transit-time meaning — so a TNT1 row there would be a category error.
+ *
+ * 🔴 HISTORY STAYS BLANK, NEVER ZERO. Values arrive from the ordinary refresh into non-frozen cohort
+ * columns only. A 0 in a matured column would assert "no box reached this hub's customers in <=1 day
+ * that week"; we never measured it.
+ */
+function paAddHubTnt1_(dry) {
+  var ss = SpreadsheetApp.openById(PIVOT_SHEET_ID);
+  var name = PA_TABS.tnt2, sh = ss.getSheetByName(name);
+  paLog_('=== add per-hub TNT1 rows on ' + name + ' — ' + (dry ? 'DRY RUN (no writes)' : 'WRITING') + ' ===');
+  if (!sh) throw new Error('PA_INSERT_NO_TAB: ' + name + ' not found');
+  paAssertColumns_(sh);                                  // never edit a tab that is already damaged
+
+  var lastRow = Math.max(1, sh.getLastRow());
+  var raw = sh.getRange(1, 1, lastRow, 1).getValues().map(function (r) { return String(r[0]); });
+  var labels = raw.map(function (s) { return s.trim(); });
+  var groups = paHubGroups_(labels, name);
+  if (!groups.length) throw new Error('PA_INSERT_NO_HUB_SECTION: ' + name + ' — no By Hub groups found');
+
+  var pre = paAuditRateRows_(sh);
+  paLog_('  ' + name + ' BEFORE: ' + pre.rows + ' rate rows, ' + pre.cells + ' formulas, ' +
+         pre.bad.length + ' wrong');
+  if (pre.bad.length) {
+    throw new Error('PA_INSERT_PRE_AUDIT_FAILED: ' + name + ' already has ' + pre.bad.length +
+                    ' mis-pointed rate formula(s) — fix those before inserting rows: ' +
+                    pre.bad.slice(0, 5).join(' | '));
+  }
+
+  var todo = groups.filter(function (gr) { return !gr.tnt1; });
+  groups.forEach(function (gr) {
+    if (gr.tnt1) paLog_('  ' + name + ': ' + gr.hub + ' already has its TNT1 row (' + gr.tnt1 + ') — skip');
+  });
+  if (!todo.length) {
+    paLog_('  ' + name + ': every hub group already has a TNT1 row — nothing to do');
+    paLog_('=== done (idempotent no-op) ===');
+    return { inserted: 0, hubs: [] };
+  }
+  // 🔴 BOTTOM-UP: descending anchor, so an insert never invalidates a not-yet-processed row number.
+  todo.sort(function (a, b) { return b.good - a.good; });
+
+  var cur = paRightmostCohortCol_(sh);
+  var hubs = [];
+  todo.forEach(function (gr) {
+    var anchor = gr.good + 1;                            // insert BEFORE this row = directly under `· 2 Day`
+    // label style byte-identical to its own siblings: the group's OWN indent, ' · ' = U+00B7.
+    var indent = (raw[gr.good - 1].match(/^\s*/) || [''])[0];
+    var label = indent + gr.hub + ' · ' + PA_TNT1_LABEL;
+    hubs.push({ hub: gr.hub, row: anchor, label: label });
+    if (dry) {
+      paLog_('  [dry] ' + name + '!A' + anchor + ' = "' + label + '"  (under "' + labels[gr.good - 1] +
+             '", above "' + labels[gr.bad - 1] + '"; formats cloned from row ' + gr.bad +
+             ' = "' + labels[gr.bad - 1] + '")');
+      return;
+    }
+    var maxCols = Math.max(1, sh.getMaxColumns());
+    sh.insertRowsBefore(anchor, 1);
+    // format template = this group's OWN `· 3+ Day` sibling (a count row at the same indent level);
+    // it sat at gr.bad and the insert pushed it down by one.
+    sh.getRange(gr.bad + 1, 1, 1, maxCols).copyTo(sh.getRange(anchor, 1, 1, maxCols), { formatOnly: true });
+    sh.getRange(anchor, 1).setValue(label);
+    if (cur) sh.getRange(anchor, cur).setNumberFormat('0');   // a count, not a rate
+  });
+  if (dry) {
+    paLog_('  [dry] ' + todo.length + ' row(s) would be inserted, bottom-up (highest row first)');
+    paLog_('  [dry] values: written by the normal refresh into non-frozen cohort columns ONLY; ' +
+           'frozen/matured columns stay BLANK (blank != zero)');
+    paLog_('=== done (DRY RUN — nothing written) ===');
+    return { inserted: 0, hubs: hubs, dry: true };
+  }
+  SpreadsheetApp.flush();
+
+  var post = paAuditRateRows_(sh);
+  paLog_('  ' + name + ' AFTER : ' + post.rows + ' rate rows, ' + post.cells + ' formulas, ' +
+         post.bad.length + ' wrong');
+  if (post.bad.length) {
+    throw new Error('PA_INSERT_POST_AUDIT_FAILED: ' + name + ' — the insert re-pointed ' +
+                    post.bad.length + ' rate formula(s): ' + post.bad.slice(0, 5).join(' | '));
+  }
+  if (post.rows !== pre.rows || post.cells !== pre.cells) {
+    throw new Error('PA_INSERT_ROW_COUNT: ' + name + ' rate rows ' + pre.rows + ' -> ' + post.rows +
+                    ', formulas ' + pre.cells + ' -> ' + post.cells + ' (expected both unchanged — ' +
+                    'TNT1 adds count rows, not pairs)');
+  }
+  paAssertColumns_(sh);
+  hubs.forEach(function (h) { paLog_('  ' + name + ' ✅ ' + h.hub + ' TNT1 row at ' + h.row); });
+  paLog_('=== done (' + todo.length + ' row(s) written, rate integrity intact) ===');
+  return { inserted: todo.length, hubs: hubs };
+}
+
+/** 🔴 Kurt runs THIS first: logs exactly where every per-hub TNT1 row lands. Writes nothing. */
+function previewAddHubTnt1Rows() { return paAddHubTnt1_(true); }
+/** Then THIS: inserts them. Idempotent — a group that already has its TNT1 row is skipped. */
+function addHubTnt1Rows() { return paAddHubTnt1_(false); }
 
 /**
  * Fill MISSING rate formulas in the rightmost (live) cohort column across both tabs.

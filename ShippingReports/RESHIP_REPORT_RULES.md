@@ -884,9 +884,82 @@ refresh still never inserts a row.
 🔴 **Frozen/matured columns (age ≥ `PA_MATURITY_DAYS`) stay BLANK forever — never 0.** A 0 would
 assert "no box arrived in ≤1 day that week"; we simply never measured it. Kurt-owned, not rewritten.
 
-**Scope: top block only** (decided). Emitting TNT1 per hub/carrier/state/box would require ~100
-inserted rows across two tabs for a breakdown Kurt did not ask for. Adding it later is a one-line
-change in `paValues_` plus the rows.
+**Scope: top block only** (decided) — ⚠️ **SUPERSEDED FOR HUBS by D22b below** (Kurt asked for the hub
+grain the same day). Carrier / State / Box remain top-block-only.
+
+#### D22b — the SAME nested TNT1 row per HUB (Kurt 2026-08-17)
+
+> Kurt, on a screenshot of the `By Hub (assigned)` block: **"we want tnt1 rows for these hubs too"**
+
+Every group in `By Hub (assigned)` on **TnT2** gains `   {hub} · TNT1`, directly under `{hub} · 2 Day`
+and above `{hub} · 3+ Day` — the same position, indent (3 leading spaces), separator (U+00B7) and
+semantics as the top block: TNT ≤ 1 calendar day on the **D18 per-box pickup clock**, TNT 0 included,
+a strict **SUBSET** of that hub's `2 Day`, summed into nothing.
+
+- **`PA_ASSERT_TNT1_SUBSET` now runs at HUB grain too** (in `paValues_`, before any write). The
+  top-block assert can hold while one hub's TNT1 exceeds its own `2 Day` — that would mean the clock
+  or the hub attribution drifted *for that hub*, and the row would misrepresent that hub's headline.
+- **Hub list comes from the SHEET, never a roster.** `paAddHubTnt1_` reads `paHubGroups_`, so the next
+  new hub needs no code change: give it its 3 rows with `paAddHub_`, then re-run `addHubTnt1Rows()`.
+  `RMFG choice (2+ hubs open)` is included (a real bucket of boxes); Indianapolis is included and its
+  row simply stays empty — the hub is closed. **Blank ≠ 0**, as everywhere else.
+- 🔴 **TnT2 ONLY.** Lost in Transit's grains are `Arrived` / `Not Arrived` — arrival measures with no
+  transit-time meaning — so a TNT1 row there is a category error, not a missing feature.
+- 🔴 **Zero-filled per hub, unlike its sibling dim rows.** `paValues_` emits `· 2 Day` / `· 3+ Day`
+  only when non-zero, so a bucket that empties keeps LAST run's number on the sheet. TNT1 emits `0`
+  for every hub that emitted a `· 2 Day` key (a TNT1 with no parent is meaningless, so the parent set
+  is the honest denominator) and emits NOTHING for a hub with no 2-Day boxes at all.
+
+🔴 **The risk is the INSERT, not the number** — ~6 inserts, each re-pointing every reference below it.
+Three defences, all required:
+
+1. **Bottom-up** (descending row order). Top-down would let the first insert invalidate every
+   not-yet-processed row number and silently write a label into the wrong hub group.
+2. **`paAuditRateRows_` before AND after**, reading **formula TEXT** — a re-pointed formula still
+   *looks* right. A pre-existing mis-point REFUSES the whole run (`PA_INSERT_PRE_AUDIT_FAILED`); a
+   regression after THROWS; rate-row count and formula-cell count must be **unchanged**
+   (`PA_INSERT_ROW_COUNT`) because this adds COUNT rows, never a pair.
+3. **Idempotent** — a group that already has its TNT1 row is skipped, so a re-run cannot double-insert.
+
+**Two resolver consequences, both real bugs if skipped:**
+
+- `paRatePairFor_`'s nested-row allowlist is now a PREDICATE (`paIsNested_`): exact match on the
+  top-block labels **or** the explicit ` · TNT1` suffix. Still an allowlist — "anything that is not a
+  grain row" stays rejected for the D19a reason (it lets the resolver stroll out of its own block).
+- `paHubGroups_` no longer assumes the bad row sits **directly** below the good row. It is what
+  `paInsertHubRows_` (adding the NEXT new hub) reads; a strict test would report **zero** groups and
+  throw `PA_INSERT_NO_HUB_SECTION` on a perfectly healthy tab.
+
+**Tool:** `previewAddHubTnt1Rows()` (writes nothing; logs each landing row and the BEFORE audit) then
+`addHubTnt1Rows()`. Values arrive from the ordinary refresh; the unattended refresh still never
+inserts a row (D13/D19).
+
+**Verified offline** (label-column simulation of TnT2, real `paRatePairFor_` / `paHubGroups_` pulled
+from the source): all 14 rate rows resolve to their own pair BEFORE and AFTER the insert, and all 7
+hub groups parse with the TNT1 row present. ⚠️ **Not executed against the live sheet** — GAS cannot be
+run from here; the pre/post audit inside `addHubTnt1Rows()` is the confirming run.
+
+**Measured per hub (`_SHIP_2026-08-10`, cached snapshot, ZERO ParcelPanel calls):**
+
+| hub | 2 Day | TNT1 | of which TNT0 | TNT1/2Day |
+|---|---|---|---|---|
+| Anaheim | 404 | 306 | 9 | 75.7% |
+| Chicago | 288 | 143 | 23 | 49.7% |
+| Dallas | 541 | 250 | 6 | 46.2% |
+| Nashville | 412 | 154 | 4 | 37.4% |
+| Swedesboro | 569 | 449 | 0 | 78.9% |
+| RMFG choice (2+ hubs open) | 2 | 0 | 0 | 0.0% |
+| **total** | **2,216** | **1,302** | **42** | 58.8% |
+
+Indianapolis is absent (closed — zero boxes), so its row stays BLANK. The totals reproduce D22's
+top-block figures exactly, which is the cross-check that the hub split is the same population.
+
+**Carrier / State / Box — NOT done, Kurt's call.** Same one-line `paValues_` change plus rows, but the
+row cost is ~4 carriers + ~45 states + 2 boxes ≈ **51 inserts on TnT2**, and mirroring it on Lost in
+Transit would be a category error (see above). Recommendation: **Carrier yes if he wants it** (4 rows,
+and "which carrier actually delivers next-day" is an operating question); **State no** (45 rows of a
+thin denominator — most states carry too few boxes for a 1-day rate to mean anything); **Box no**
+(size does not change transit time; it changes cost and hub choice, which are measured elsewhere).
 
 **Measured at adoption (`_SHIP_2026-08-10`, cached snapshot, ZERO new ParcelPanel calls):**
 cohort 2,318 · arrived 2,256 · 2 Day (TNT ≤ 2) 2,216 · **TNT1 (TNT ≤ 1) 1,302** — of which TNT 0 = 42.
@@ -945,3 +1018,10 @@ builder's numbers on a matured cohort** before trusting the headless path (ident
   Human-invoked `previewAddTnt1Row` / `addTnt1Row` with the rate-row verifier on both sides;
   `paRatePairFor_` extended to walk past nested rows BETWEEN the good and bad rows (allowlisted
   labels only). Top block only. Frozen columns stay blank. wk0810: TNT1 = 1,302 of 2,216 2-Day.
+- 2026-08-17 — **D22b: the same TNT1 row per HUB on TnT2** (Kurt, on the By Hub screenshot: "we want
+  tnt1 rows for these hubs too"). Hub list read from the sheet (generic over hub name);
+  `PA_ASSERT_TNT1_SUBSET` extended to hub grain; nested-row allowlist became the `paIsNested_`
+  predicate (` · TNT1` suffix) and `paHubGroups_` learned that a group may be 4 rows, without which
+  the NEXT hub's insert would throw `PA_INSERT_NO_HUB_SECTION`. Human-invoked
+  `previewAddHubTnt1Rows` / `addHubTnt1Rows`, bottom-up, idempotent, rate-row audit both sides.
+  Carrier/State/Box deliberately NOT inserted (~51 rows) — Kurt's call.
