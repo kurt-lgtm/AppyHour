@@ -70,6 +70,11 @@ SUBJECT_RE = re.compile(r"wrong .*address", re.I)
 ORDER_ID_RE = re.compile(r"/orders/(\d+)")
 INVALID_TAG = "invalid_address"
 HOLD_TAG = "_HOLD"
+# 2026-08-17: CS/Flow hold tags were split per Dan's _HOLD proposal — _FLOWHOLD (Flow),
+# _CSHOLD (agent), _UNRESOLVED (closed unresolved). Legacy _HOLD kept for pre-cutover
+# orders. Matching only "_HOLD" goes SILENT on the new tags ("_FLOWHOLD" does not
+# contain "_HOLD"), which would let this automation edit addresses on held orders.
+HOLD_TAGS = (HOLD_TAG, "_FLOWHOLD", "_CSHOLD", "_UNRESOLVED")
 
 # ── address heuristics ────────────────────────────────────────────────
 _PO_BOX_RE = re.compile(r"\b(p\.?\s*o\.?\s*box|post office box)\b", re.I)
@@ -175,8 +180,10 @@ def triage(addr: dict, tags: list[str]) -> tuple[str, str]:
     province = (addr.get("provinceCode") or "").strip()
     zip_ = (addr.get("zip") or "").strip()
 
-    if HOLD_TAG in tags or province in _MILITARY or "AA" == province or "AE" == province or "AP" == province:
-        return "HOLD", "military/APO or already _HOLD — leave for manual review"
+    held = [t for t in HOLD_TAGS if t in tags]
+    if held or province in _MILITARY or "AA" == province or "AE" == province or "AP" == province:
+        why = held[0] if held else "military/APO"
+        return "HOLD", f"military/APO or already held ({why}) — leave for manual review"
     if _PO_BOX_RE.search(a1) or _PO_BOX_RE.search(a2):
         return "NEEDS_FIX", "PO box — carrier may reject; confirm with customer"
     if not a1 or not _HAS_NUMBER_RE.search(a1):
@@ -356,7 +363,7 @@ def _write_digest(path, autofix, safe, needs, hold, gone, fixed, untagged,
         L.append("_None._")
     L.append("")
     if hold:
-        L.append("## HOLD — manual (military/APO or _HOLD)")
+        L.append("## HOLD — manual (military/APO or a hold tag)")
         for r in hold:
             L.append(f"- {r['name']}: {r['reason']}")
         L.append("")
