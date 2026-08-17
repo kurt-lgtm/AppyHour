@@ -965,6 +965,56 @@ thin denominator — most states carry too few boxes for a 1-day rate to mean an
 cohort 2,318 · arrived 2,256 · 2 Day (TNT ≤ 2) 2,216 · **TNT1 (TNT ≤ 1) 1,302** — of which TNT 0 = 42.
 TNT distribution: 0→42, 1→1,260, 2→914, 3→40.
 
+### D23 — `Routing Match` IS WRITE-ONCE PER COHORT; IT DOES **NOT** FOLLOW THE 10-DAY MATURITY MODEL (Kurt 2026-08-17)
+
+> Kurt, verbatim: *"for Routing match, let's do this walk forward or something 8/10 is already
+> matured. we shouldn't refresh this."* … *"matured on the carrier end. Shopify had the wrong tags so
+> the data is wrong."*
+
+**The failure this prevents (negatives first).** `Routing Match` measures **routing TAG vs EXECUTED
+CARRIER**. The executed carrier is settled at ship time — but the TAG is **mutable after ship**:
+corrective retagging runs after the cohort goes out (`_SHIP_2026-08-10` alone logged **376 tag writes**
+in `_outputs/logs/wk0810_corrective_delta.jsonl`), and RMFG / drift-in fixes land later still. So a
+recompute on day 5 or day 9 compares day-0 actuals against tags that are **no longer what the engine
+assigned at ship time**. Unlike the delivery tabs, this number **DEGRADES with age instead of
+converging** — a later refresh is not a better reading, it is a corrupted one. Precedent: the
+34 / 31 / 35 reconciliation in `_outputs/reports/HANDOFF-2026-08-07-reship-coordinator.md` — one rule
+measured at three different times, giving three different answers. That drift IS this bug.
+
+**Why this differs from D15.** TnT2 / Lost in Transit measure the box against the WORLD (did it
+arrive, when). The world only gets *more* known with age, so re-running self-heals and the 10-day
+window is correct there. Routing Match measures a **ship-time snapshot** against a mutable input, so
+its only valid reading is the first one. `PA_MATURITY_DAYS` stays **10** and still governs TnT2 /
+Lost in Transit **unchanged** — D23 is a per-tab rule, not a change to the maturity constant.
+
+**The rule.**
+1. A `Routing Match` cell holding a **MEASUREMENT** is **FROZEN** — never overwritten, never
+   blanked-and-rewritten, regardless of column age.
+2. A cell holding a **PLACEHOLDER** stays writable forever. Placeholder = blank, `n/a (immature)`
+   (the `Routing Matched - Hub` row's deliberate state — hub actuals need carrier invoices, ~1wk lag),
+   or `n/a` (nothing eligible to compare). Measurement = a number (these cells are percent-formatted,
+   so `98.0%` lands as `0.98`) or a bare numeric/percent string. **Freezing on "non-empty" would nail
+   the Hub row to `n/a (immature)` forever** — the exact opposite of what that placeholder means.
+3. A new cohort column is written **once**, on the first run that can measure it.
+4. Every run LOGS, per cell: written (with the prior placeholder) vs skipped-as-frozen (with the held
+   value).
+5. `PA_ASSERT_ROUTING_FROZEN` — a named throw, twice: pre-write (a measured cell may not be in the
+   write set) and post-flush (no measured cell may have changed). It **refuses**, never repairs: the
+   ship-time reading is unrecoverable once overwritten.
+
+**Implementation:** `paRoutingIsMeasured_` (the placeholder/measurement predicate), `paColumnByKey_`
+(reads the column keyed exactly as `paWriteOwned_` keys its writes, section-aware), and
+`paWriteRoutingFrozen_`, which replaces the direct `paWriteOwned_` call on the routing tab in
+`PivotAnalytics.gs`. `paCurrentCol_`'s D15 age gate is untouched — D23 sits INSIDE it, so a column
+that D15 still considers script-owned (wk0810 at age 7d) is nonetheless left alone here.
+
+**State at adoption:** `_SHIP_2026-07-13` 89.3% · `07-20` 91.6% · `07-27` 90.4% · `08-03` 98.00% ·
+`08-10` 100.00% (Carrier row, all frozen). The Hub row is `n/a (immature)` on `07-27`/`08-03`/`08-10`
+and remains writable.
+
+**Open, NOT built (recommendation only):** stamping WHEN each column was measured. See "measured-at"
+in the change-log entry below.
+
 ### Cutover checklist (once preconditions clear)
 
 (a) confirm Jdbc `SELECT 1` from GAS + RO user scoped; (b) implement the walk-forward current-column
@@ -1025,3 +1075,15 @@ builder's numbers on a matured cohort** before trusting the headless path (ident
   the NEXT hub's insert would throw `PA_INSERT_NO_HUB_SECTION`. Human-invoked
   `previewAddHubTnt1Rows` / `addHubTnt1Rows`, bottom-up, idempotent, rate-row audit both sides.
   Carrier/State/Box deliberately NOT inserted (~51 rows) — Kurt's call.
+- 2026-08-17 — **D23: `Routing Match` is WRITE-ONCE per cohort** (Kurt: "for Routing match, let's do
+  this walk forward or something 8/10 is already matured. we shouldn't refresh this." … "matured on
+  the carrier end. Shopify had the wrong tags so the data is wrong."). Tag-vs-executed-carrier is a
+  ship-time snapshot measured against a MUTABLE input (376 corrective tag writes on wk0810 alone), so
+  it degrades with age rather than converging — the opposite of the delivery tabs. First measurement
+  wins forever; `PA_MATURITY_DAYS` stays 10 for TnT2 / Lost in Transit. Placeholders (`blank`,
+  `n/a (immature)`, `n/a`) stay writable so the Hub row cannot freeze as a placeholder.
+  `PA_ASSERT_ROUTING_FROZEN` refuses pre-write and post-flush. **Measured-at timestamp: recommended,
+  NOT built** — recommendation is ONE footnote row at the bottom of the tab, `Measured at (ship-time
+  snapshot)`, filled with the same write-once rule, rather than per-cell notes (invisible until
+  hovered, lost on copy) or a per-column extra row (doubles the tab's height). It needs a human-invoked
+  row insert (D19: the refresh never adds rows) and Kurt's approval, so it is parked as a one-row ask.

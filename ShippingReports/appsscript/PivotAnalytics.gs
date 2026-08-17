@@ -537,6 +537,99 @@ function paRoutingValues_(recs) {
   return m;
 }
 
+/**
+ * 🔴 D23 — `Routing Match` IS WRITE-ONCE, NOT 10-DAY-MATURING (Kurt 2026-08-17:
+ * "for Routing match, let's do this walk forward or something 8/10 is already matured. we shouldn't
+ * refresh this." … "matured on the carrier end. Shopify had the wrong tags so the data is wrong.").
+ *
+ * WHY THIS TAB DIFFERS FROM THE DELIVERY TABS. TnT2 / Lost in Transit measure the box against the
+ * WORLD (did it arrive, when) — the world only gets more known with age, so re-running at day 5
+ * CONVERGES and D15's 10-day window is right. Routing Match measures ROUTING TAG vs EXECUTED
+ * CARRIER, and the TAG is mutable after ship: corrective retagging (wk0810 alone logged 376 tag
+ * writes in `_outputs/logs/wk0810_corrective_delta.jsonl`) plus later RMFG/drift-in fixes rewrite
+ * the very thing the measurement compares against. So a recompute days later scores the actuals
+ * against tags that are no longer what the engine assigned at ship time: this number DEGRADES with
+ * age instead of converging. It is only valid as a SHIP-TIME SNAPSHOT.
+ *
+ * THE RULE: first measurement wins, forever. `PA_MATURITY_DAYS` is untouched (still 10, still the
+ * law on TnT2 / Lost in Transit).
+ *
+ * PLACEHOLDER vs MEASUREMENT — the distinction the freeze turns on. A cell freezes only if it holds
+ * a MEASUREMENT: a number (these cells are percent-formatted, so `98.0%` lands as 0.98) or a bare
+ * numeric/percent string. Blank, `n/a (immature)` (the Hub row's deliberate state — hub actuals need
+ * carrier invoices, ~1wk lag) and `n/a` (nothing eligible to compare) are PLACEHOLDERS and stay
+ * writable forever. Freezing on "non-empty" would nail the Hub row to `n/a (immature)` for all time,
+ * which is the opposite of what it is there to say.
+ */
+function paRoutingIsMeasured_(v) {
+  if (typeof v === 'number') return true;                  // percent-formatted cell holds a number
+  var s = String(v === null || v === undefined ? '' : v).trim();
+  if (!s) return false;                                    // never measured
+  if (s === PA_IMMATURE) return false;                     // deliberate placeholder
+  if (s.toLowerCase() === 'n/a') return false;             // "nothing eligible" placeholder
+  return /^-?\d+(\.\d+)?\s*%?$/.test(s);                   // a measurement, and nothing else is
+}
+
+/** Current values of column `col` keyed EXACTLY as `paWriteOwned_` keys its writes (section-aware,
+ *  so a future sectioned Routing Match cannot silently key differently from the writer). */
+function paColumnByKey_(sheet, col) {
+  var lastRow = Math.max(1, sheet.getLastRow());
+  var grid = sheet.getRange(1, 1, lastRow, col).getValues();
+  var out = {}, dim = '';
+  for (var i = 0; i < grid.length; i++) {
+    var lab = String(grid[i][0]).trim();
+    if (Object.prototype.hasOwnProperty.call(PA_SECTIONS, lab)) { dim = PA_SECTIONS[lab]; continue; }
+    if (!lab) continue;
+    out[paKey_(dim, lab)] = grid[i][col - 1];
+  }
+  return out;
+}
+
+/**
+ * D23 write path for `Routing Match`: filter the value map down to cells that are NOT already
+ * measured, log write-vs-frozen per run, and verify after the flush that nothing measured moved.
+ * The guard throws `PA_ASSERT_ROUTING_FROZEN` rather than repairing — an overwrite here destroys the
+ * only ship-time reading that will ever exist for that cohort; it cannot be recomputed later.
+ */
+function paWriteRoutingFrozen_(sheet, col, vals, dry) {
+  var cur = paColumnByKey_(sheet, col);
+  var open = {}, frozen = [], writing = [];
+  Object.keys(vals).forEach(function (k) {
+    var name = k.replace('||', ' → ');
+    if (Object.prototype.hasOwnProperty.call(cur, k) && paRoutingIsMeasured_(cur[k])) {
+      frozen.push(name + ' held at ' + cur[k]);
+      return;
+    }
+    open[k] = vals[k];
+    writing.push(name + ': ' + JSON.stringify(cur[k] === undefined ? '' : cur[k]) + ' -> ' + vals[k]);
+  });
+  paLog_('  ' + PA_TABS.routing + ' D23 freeze — WRITE ' + writing.length +
+         (writing.length ? ' [' + writing.join('; ') + ']' : '') + ' | SKIPPED-AS-FROZEN ' +
+         frozen.length + (frozen.length ? ' [' + frozen.join('; ') + ']' : ''));
+  // belt-and-braces: nothing measured may be in the write set (unreachable by the filter above).
+  Object.keys(open).forEach(function (k) {
+    if (Object.prototype.hasOwnProperty.call(cur, k) && paRoutingIsMeasured_(cur[k])) {
+      throw new Error('PA_ASSERT_ROUTING_FROZEN: ' + k.replace('||', ' → ') + ' already holds the ' +
+                      'measured value ' + cur[k] + ' — Routing Match is a ship-time snapshot (D23) ' +
+                      'and is written exactly once per cohort.');
+    }
+  });
+  var res = paWriteOwned_(sheet, col, open, dry);
+  if (!dry) {
+    SpreadsheetApp.flush();
+    var after = paColumnByKey_(sheet, col);
+    Object.keys(cur).forEach(function (k) {
+      if (!paRoutingIsMeasured_(cur[k])) return;
+      if (String(after[k]) !== String(cur[k])) {
+        throw new Error('PA_ASSERT_ROUTING_FROZEN: ' + k.replace('||', ' → ') + ' changed ' + cur[k] +
+                        ' -> ' + after[k] + ' during this run. A measured Routing Match cell is ' +
+                        'immutable (D23).');
+      }
+    });
+  }
+  return res;
+}
+
 // ---------------------------------------------------------------- write
 
 /**
@@ -782,7 +875,8 @@ function paRefreshOne_(shipWeek, dry, budget, allowAppend) {
     var rc = paCurrentCol_(rm, shipWeek, allowAppend);
     if (rc) {
       paLog_('  ' + PA_TABS.routing + ' col ' + rc);
-      paWriteOwned_(rm, rc, paRoutingValues_(recs), dry);
+      // 🔴 D23: write-once. NOT paWriteOwned_ directly — a measured cell here never gets rewritten.
+      paWriteRoutingFrozen_(rm, rc, paRoutingValues_(recs), dry);
       if (!dry) { SpreadsheetApp.flush(); paAssertColumns_(rm); }
     }
   }
