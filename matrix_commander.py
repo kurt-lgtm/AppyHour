@@ -2362,7 +2362,12 @@ def generate_matrix_xlsx(
         ws.cell(row_num, 10).value = addr.get("provinceCode", "")
         ws.cell(row_num, 11).value = raw_zip
         ws.cell(row_num, 12).value = od["tags"]
-        ws.cell(row_num, 13).value = full.get("note", "") or ""
+        # 🔴 Notes ships EMPTY (MATRIX_RULES rule 18, Kurt 2026-07-10; restated 2026-08-18 "note
+        # shouldn't be pulled from shopify"). The rule was documented and never implemented: this
+        # line copied the Shopify order note verbatim, so internal text reached RMFG's sheet — the
+        # 08-18 cloud build carried "Order was held by Shopify Flow. Review customer orders: #162671".
+        # The COLUMN stays (RMFG's layout is fixed); only the value is blank.
+        ws.cell(row_num, 13).value = ""
         ws.cell(row_num, 14).value = ship_day.upper()
 
         # Product assignments
