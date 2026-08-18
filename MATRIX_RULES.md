@@ -224,9 +224,17 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
         a real-looking MFG name must not be able to push an unfulfillable column onto the sheet RMFG
         picks from. Match is exact — a fuzzy "contains remove" would eat a real product eventually.
     (b) **ITEM-ONLY REPLACE by OrderID:** WIPE-then-REFILL only validated MFG product cells from the
-        vFGR. Every non-product cell remains byte-for-cell from the routing app, including Total;
-        downstream canonical generation owns any derived totals. Gift input can never override
-        order/name/address/contact/Tags/Notes/ProductionDay/run fields.
+        vFGR. Every non-product cell remains byte-for-cell from the routing app. Gift input can never
+        override order/name/address/contact/Tags/Notes/ProductionDay/run fields.
+        🔴 **Total is the ONE exception — it is RECOUNTED from the row's post-merge quantities**
+        (Kurt 2026-08-18: *"FIX the total recount"*). Total was previously carried over with the
+        other app cells, so a merged row stated a count that contradicted its own cells: wk0818
+        #173489 read **Total 7 beside 10 merged items** on a sheet RMFG picks from. Total is not an
+        identity field like address or Tags — it is derived from exactly the cells this merge just
+        rewrote, so carrying it over preserves a stale figure rather than app authority. It is the
+        same defect class as rule 0's original burn (TR/PK quantities missing from the total, hand-
+        fixed 2026-07-10). Locate the column **by header, never by index** — a positional write put
+        an item count into Zip on the first attempt. Rows the vFGR does not name are untouched.
     (c) **vFGR OrderID missing from the matrix = LOUD `GiftMergeError`** (e.g. a `_HOLD` order —
         wk0727 #165505), listing the OIDs — surface for Kurt's release/drop decision, NEVER
         silently include or exclude. Release = retag into the cohort + re-run; drop = the explicit

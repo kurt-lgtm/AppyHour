@@ -70,7 +70,7 @@ def test_replace_changes_only_items_and_preserves_all_app_fields(tmp_path):
     assert row[headers.index("Tags")] == ENGINE_L                    # engine col L PRESERVED
     assert row[headers.index("ProductionDay")] == "SAT"
     assert row[headers.index("Notes")] == "junk note"
-    assert row[headers.index("Total")] == 1                          # fixed app cell unchanged
+    assert row[headers.index("Total")] == 2  # RECOUNTED from merged items (rule 0)
     # untouched regular order
     assert rows["150000"][headers.index(P1)] == 1
 
@@ -90,7 +90,7 @@ def test_twin_fold_sums_onto_parent_and_drops_a_row(tmp_path):
     row = rows["164878"]
     assert row[headers.index(P1)] == 3                               # 1 + 2 summed
     assert row[headers.index(P2)] == 1
-    assert row[headers.index("Total")] == 1
+    assert row[headers.index("Total")] == 4  # RECOUNTED from merged items (rule 0)   # 3 + 1
     assert "remove" not in headers                                   # bookkeeping col not unioned
 
 
@@ -109,7 +109,7 @@ def test_no_a_row_means_nothing_is_folded(tmp_path):
     )
     headers, rows = _load(mc.merge_gift_xlsx(_main(tmp_path), gift))
     assert rows["164878"][headers.index(P1)] == 3                    # untouched, not doubled
-    assert rows["164878"][headers.index("Total")] == 1
+    assert rows["164878"][headers.index("Total")] == 3  # RECOUNTED from merged items (rule 0)
 
 
 def test_placeholder_column_is_dropped_and_never_counted(tmp_path):
@@ -126,7 +126,7 @@ def test_placeholder_column_is_dropped_and_never_counted(tmp_path):
     headers, rows = _load(mc.merge_gift_xlsx(_main(tmp_path), gift))
     assert "remove" not in headers
     assert not any(str(h).strip().lower() in {"remove", "delete", "ignore"} for h in headers)
-    assert rows["164878"][headers.index("Total")] == 1               # app Total is untouched
+    assert rows["164878"][headers.index("Total")] == 3  # RECOUNTED from merged items (rule 0)
 
 
 def test_placeholder_column_dropped_even_if_shaped_like_a_product(tmp_path):

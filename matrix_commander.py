@@ -2671,6 +2671,8 @@ def merge_gift_xlsx(
         main_ws.cell(1, len(headers)).value = header
 
     product_cols = {index for index, header in enumerate(headers) if known_product(header)}
+    total_col = next((i for i, h in enumerate(headers) if str(h or "").strip().lower() == "total"),
+                     None)
     gift_product_cols = [(index, header) for index, header in enumerate(gift_headers)
                          if known_product(header)]
 
@@ -2701,6 +2703,17 @@ def merge_gift_xlsx(
                 quantities[header] = quantities.get(header, 0) + int(value)
         for column_index in product_cols:
             main_ws.cell(row_num, column_index + 1).value = quantities.get(headers[column_index])
+        # 🔴 Total (col D) is RECOUNTED from the row's post-merge quantities (rule 0: Total = sum of
+        # ALL product columns). The merge replaces every product cell on the row, so the row's item
+        # count changes and a Total carried over from the run is simply wrong — wk0818 #173489 read
+        # Total 7 next to 10 merged items on a sheet RMFG picks from. "Non-product cells come from
+        # the run" (rule 20b) governs identity — address, tags, ice, ProductionDay — not a figure
+        # derived from the cells this function just rewrote.
+        # 🔴 Located by HEADER, never by index: column 4 is Total in the canonical vF, but not in
+        # every workbook this function is handed, and a positional write puts an item count into
+        # whatever column happens to sit there (it landed in Zip on the first attempt).
+        if total_col is not None:
+            main_ws.cell(row_num, total_col + 1).value = sum(int(v) for v in quantities.values())
         replaced += 1
 
     if missing:
