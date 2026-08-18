@@ -10,12 +10,48 @@
  *
  * WHAT EACH ROW MEANS (interpretation — confirmed with Kurt where noted):
  *   Total Shipments / Arrived   — NOT OURS. Owned elsewhere; read-only here, used as denominator.
- *   Order Placed / Shipped / Delivered
+ *
+ *   🔴 ORDER PLACED IS NOT KLAVIYO (Kurt's ruling 2026-08-18). The order-confirmation mail is sent
+ *   by SHOPIFY, not by a Klaviyo flow — and the live flow list confirms it: 26 flows, 21 live /
+ *   5 draft, 0 archived, and NONE of them is an order-placed/confirmation flow. Sourcing that row
+ *   from a name-regex over Klaviyo would have silently matched something else. It is therefore read
+ *   from SHOPIFY ORDER EVENTS: every order carries a BasicEvent whose message is
+ *       "Order confirmation email was sent to <name> (<email>)."
+ *   (live-verified 2026-08-18 on _SHIP_2026-08-17 orders). That is a PER-ORDER fact, so the
+ *   Order Placed row is a count of ORDERS — the same grain as Total Shipments — NOT the
+ *   distinct-profile grain the two Klaviyo sections are stuck with. The two grains are labelled in
+ *   the log every run so the difference is never mistaken for a discrepancy.
+ *
+ *   Order Shipped / Order Delivered — KLAVIYO (Kurt's ruling: in-transit and delivered mail DO go
+ *   through Klaviyo). The flows are PINNED IN CODE, not regex-resolved:
+ *       Order Shipped   -> XYFE5N  "Shipping Notification - In Transit (Parcel Panel)"
+ *       Order Delivered -> Tu67r6  "Shipping Notification - Delivered (Shopify)"
+ *   Script properties KLAVIYO_FLOW_SHIPPED / KLAVIYO_FLOW_DELIVERED still override the pin.
+ *   VC8dJp "Shipping Notification - Out for Delivery (Shopify)" is deliberately NOT mapped to any
+ *   row; its counts are LOGGED as an informational line for Kurt to decide on later.
  *     Email Sent      = DISTINCT cohort profiles with a Klaviyo "Received Email" event whose
  *                       $flow is that section's flow, inside the cohort window.
- *     SMS Sent        = same, metric "Received SMS".
- *     SMS Engaged     = same, metric "Clicked SMS"  (Klaviyo exposes no reply metric; clicks are
- *                       the only engagement signal on SMS). Stated as an ASSUMPTION.
+ *     SMS Sent        = same, metric "Received Text Message".
+ *     SMS Engaged     = same, metric "Clicked Text Message"  (Klaviyo exposes no reply metric;
+ *                       clicks are the only engagement signal on SMS). Stated as an ASSUMPTION.
+ *
+ * 🔴 THE METRIC NAMES ARE ACCOUNT-SPECIFIC AND THE OBVIOUS GUESS IS WRONG (live burn 2026-08-18).
+ * This account has NO metric called "Received SMS" and NO metric called "Clicked SMS" — the first
+ * version of this file looked for both and would have written a silent 0 on every SMS row. The 199
+ * real metric names (from ntCheckKlaviyo) include "Received Text Message", "Sent Text Message",
+ * "Relayed Text Message", "Failed to Deliver Text Message", "Clicked Text Message", "Opened Text".
+ * Chosen, and WHY:
+ *   SMS Sent    -> "Received Text Message", NOT "Sent Text Message". "Sent" is dispatch to the
+ *                  carrier; "Received" is the handset actually taking delivery. Every other row on
+ *                  this tab counts a message that reached a customer (Email Sent = "Received
+ *                  Email"), and "Percent of Total" is only honest against the same basis. Choosing
+ *                  "Sent Text Message" would inflate the row by every carrier-level failure.
+ *   SMS Engaged -> "Clicked Text Message". CLICKS ONLY — Klaviyo publishes no reply/inbound-SMS
+ *                  metric, so a customer who texts back is invisible here. This row UNDERSTATES
+ *                  engagement and must never be read as "responded".
+ * Changing either name is a data-definition change: re-run ntCheckKlaviyo() first and confirm the
+ * name EXISTS before editing — an absent metric writes nothing, but a wrong-but-present one writes
+ * a plausible lie.
  *     Percent of Total= sent / `Total Shipments` on this same column, written as a TEXT "12.34%"
  *                       string (Product Mix precedent — new columns render without hand formatting).
  *   Time of Sending   — Kurt 2026-08-18: split of messages by the RECIPIENT'S LOCAL time at the
@@ -25,8 +61,10 @@
  *     These two PARTITION the sends. Anything whose zip cannot be resolved to ONE timezone is
  *     counted as MISSING and REPORTED — never silently bucketed (`NT_ASSERT_TIME_PARTITION`).
  *
- * 🔴 JOIN LIMITATION (read before trusting a number). Klaviyo's flow-message events
- * ("Received Email" / "Received SMS") do NOT carry a Shopify order number — they carry a profile
+ * 🔴 JOIN LIMITATION — APPLIES TO THE TWO KLAVIYO SECTIONS ONLY (Order Shipped / Order Delivered).
+ * Order Placed does NOT have this problem: it is read per-order off the order itself.
+ * Klaviyo's flow-message events
+ * ("Received Email" / "Received Text Message") do NOT carry a Shopify order number — they carry a profile
  * and a $flow. So the cohort join is:
  *      profile.email ∈ {emails of the cohort's Shopify orders}  AND  event in the cohort window
  *      AND  $flow == the section's flow id.
@@ -42,6 +80,36 @@
  * are UNQUOTED (a metric_id is quoted); quoting them 400s with "Verify your datetimes are not in
  * quotes." Every 400 from ntGet_ now prints the endpoint's declared paging mode, the size actually
  * sent, the revision, and the decoded query, so the next one of this class self-diagnoses.
+ *
+ * 🔴 THE EMAIL ROWS CANNOT BE FILLED FROM APPS SCRIPT — AND THAT IS A PROPERTY OF THE ACCOUNT, NOT
+ * A BUG (measured 2026-08-18, /metric-aggregates). /events/ has NO flow filter, so counting one
+ * flow's email sends means paging EVERY "Received Email" event: 206,381 events in a 28-day window,
+ * ~1,032 pages, measured at ~3.0s/page against this account = ~52 MINUTES. The Apps Script ceiling
+ * is 360s. The SMS metrics are 90 and 48 pages (~4.7 and ~2.1 min) and DO fit. So:
+ *     Order Shipped / Delivered  SMS Sent + SMS Engaged  -> measured, written
+ *     Order Shipped / Delivered  Email Sent + its %      -> DECLINED, left BLANK, note logged
+ *     Order Placed               Email Sent + its %      -> Shopify, cheap, written
+ * ntMetricVolume_ makes the decline explicit and instant instead of burning 4 minutes to fail.
+ * Do NOT "fix" this by raising NT_MAX_PAGES. If Kurt wants the two email rows, the honest options
+ * are (a) a local/cloud job with no 360s ceiling that writes the cells, or (b) Klaviyo's
+ * flow-series report, which is one cheap call but is ACCOUNT-WIDE PER WEEK and NOT cohort-joined —
+ * it must never be written into a cohort column as if it were.
+ *
+ * MEASURED 2026-08-18 (live, read-only; the numbers this file was validated against):
+ *   cohort _SHIP_2026-08-17  2324 orders / 2289 distinct emails / 34 repeats / 1 no-email
+ *     Order Placed  (Shopify order events, ORDER grain)  2291  (98.58% of orders)
+ *     Order Shipped   XYFE5N  SMS Sent 657   SMS Engaged 222
+ *     Order Delivered Tu67r6  SMS Sent 209   SMS Engaged  64   (cohort is 1 day old — expected low)
+ *   cohort _SHIP_2026-08-10  2316 orders / 2304 distinct emails
+ *     Order Placed  2285 (98.66%)
+ *     Order Shipped   XYFE5N  SMS Sent 938   SMS Engaged 354
+ *     Order Delivered Tu67r6  SMS Sent 954   SMS Engaged 290
+ *   Every value is <= its cohort size — the sends-cannot-exceed-cohort sanity check passes.
+ *   Cross-check against Klaviyo's own flow-series report (account-wide, weekly): In-Transit SMS
+ *   delivered 670 in the week of 08-17 vs our 657 in-cohort, and 969 in the week of 08-10 vs our
+ *   938. The mapping is right.
+ *   Out-for-Delivery VC8dJp: ZERO sends of any channel in August (no rows in the flow-series report,
+ *   0 SMS events in either window). It is live but silent — which is why it gets no row.
  *
  * BLANK ≠ ZERO. A section whose flow cannot be resolved, a cohort whose fetch did not complete,
  * and a cohort that predates a flow all write NOTHING. A 0 in this tab means Klaviyo answered 0.
@@ -61,8 +129,12 @@
  *   NOTIFICATIONS_WRITE = '1'    arms writes (own switch — a brand-new job does not ride on
  *                                PIVOT_ANALYTICS_WRITE).
  *   NOTIFICATIONS_BACKFILL = '1' additionally allows filling EMPTY cells of already-frozen columns.
- *   KLAVIYO_FLOW_PLACED / _SHIPPED / _DELIVERED — optional flow-id pins. Without them the flow is
- *                                resolved by name regex and the resolution is logged every run.
+ *   KLAVIYO_FLOW_SHIPPED / KLAVIYO_FLOW_DELIVERED — OPTIONAL overrides of the in-code flow pins
+ *                                (XYFE5N / Tu67r6). Unset is the normal state. There is no
+ *                                KLAVIYO_FLOW_PLACED: that row is Shopify's, not Klaviyo's.
+ *                                Whichever source wins is logged, with the flow's LIVE name, every
+ *                                run — and a pin that is not in the live flow list blanks its
+ *                                section instead of reading as zero.
  */
 
 // ------------------------------------------------------------------ config
@@ -100,18 +172,47 @@ var NT_DENOM_TOLERANCE = 0.02;           // cohort size vs the sheet's Total Shi
 var NT_KEY_CANDIDATES = ['KLAVIYO_API_KEY', 'KLAVIYO_PRIVATE_KEY', 'KLAVIYO_KEY',
                          'KLAVIYO_TOKEN', 'KLAVIYO_API_TOKEN', 'KLAVIYO_PRIVATE_API_KEY'];
 
-/** Metric names as Klaviyo ships them. Verified against /api/metrics by `ntCheckKlaviyo()`. */
-var NT_METRIC = { email: 'Received Email', sms: 'Received SMS', smsEngaged: 'Clicked SMS' };
+/**
+ * Metric names EXACTLY as THIS account ships them — live-verified against /api/metrics 2026-08-18
+ * (199 metrics). 🔴 "Received SMS" and "Clicked SMS" DO NOT EXIST here; both were wrong in the first
+ * version of this file. See the header block for why "Received Text Message" (delivered to handset)
+ * beats "Sent Text Message" (dispatched), and why SMS Engaged is CLICKS ONLY.
+ * Also present and NOT used: Sent/Relayed/Failed to Deliver Text Message, Opened Text, Opened Email,
+ * Clicked Email. Verify with ntCheckKlaviyo() before changing any of these.
+ */
+var NT_METRIC = { email: 'Received Email', sms: 'Received Text Message',
+                  smsEngaged: 'Clicked Text Message' };
+
+/**
+ * 🔴 Informational only — NOT a row on this tab. Kurt 2026-08-18: the Out-for-Delivery flow is real
+ * and firing, but it is not mapped to any row until he decides it deserves one. Its counts are
+ * LOGGED every run so the decision is made against numbers, and a future mapping is a one-line
+ * change here plus a row on the sheet — never a silent re-point of the Delivered row.
+ */
+var NT_FLOW_INFO = { id: 'VC8dJp', name: 'Shipping Notification - Out for Delivery (Shopify)' };
 
 /** Section header text on the sheet -> internal section key. */
 var NT_SECTIONS = { 'Order Placed': 'placed', 'Order Shipped': 'shipped',
                     'Order Delivered': 'delivered', 'Time of Sending': 'time' };
 
-/** Flow resolution: property pin first, then name regex. Logged every run, never guessed silently. */
+/**
+ * Flow resolution for the two KLAVIYO sections. Resolution order: script-property pin -> the
+ * PINNED-IN-CODE id below -> nothing. There is deliberately NO name regex any more.
+ *
+ * 🔴 WHY THE REGEX IS GONE. /ship(ped|ping|ment)/ matches FOUR live flows in this account
+ * ("… In Transit (Parcel Panel)", "… Delivered (Shopify)", "… Out for Delivery (Shopify)", and
+ * more), and /deliver/ matches both the Delivered and the Out-for-Delivery flow. A regex here is a
+ * coin flip that looks like a resolution, and the wrong side of it writes a number that is off by a
+ * whole notification stage without ever erroring. Kurt named the mapping; the mapping is the code.
+ *
+ * `placed` is absent ON PURPOSE — that row comes from Shopify (see header). Do not add it back
+ * hoping a flow will turn up; there is no order-placed flow in this account.
+ */
 var NT_FLOW_CFG = {
-  placed:    { prop: 'KLAVIYO_FLOW_PLACED',    re: /order\s*(placed|confirm)/i },
-  shipped:   { prop: 'KLAVIYO_FLOW_SHIPPED',   re: /ship(ped|ping|ment)/i },
-  delivered: { prop: 'KLAVIYO_FLOW_DELIVERED', re: /deliver/i }
+  shipped:   { prop: 'KLAVIYO_FLOW_SHIPPED',   pin: 'XYFE5N',
+               name: 'Shipping Notification - In Transit (Parcel Panel)' },
+  delivered: { prop: 'KLAVIYO_FLOW_DELIVERED', pin: 'Tu67r6',
+               name: 'Shipping Notification - Delivered (Shopify)' }
 };
 
 function ntLog_(m) { Logger.log(m); }
@@ -231,34 +332,45 @@ function ntFlows_(deadline) {
   var r = ntPaged_(NT_BASE + '/flows/' + (q2 ? '?' + q2 : ''), 20, deadline);
   if (!r.complete) throw new Error('NT_ASSERT_FLOWS_INCOMPLETE: ' + r.why);
   var out = [];
-  r.data.forEach(function (f) { out.push({ id: f.id, name: String(f.attributes.name) }); });
+  // status/archived are carried so ntCheckKlaviyo can PROVE the list is not status-filtered — the
+  // "there is no order-placed flow" conclusion rests on seeing drafts and archives too.
+  r.data.forEach(function (f) {
+    out.push({ id: f.id, name: String(f.attributes.name),
+               status: String(f.attributes.status), archived: !!f.attributes.archived });
+  });
   return out;
 }
 
 /**
- * section -> flow id. A pinned property wins. Otherwise the NAME regex must match EXACTLY ONE
- * live flow — 0 or 2+ is unresolved, and an unresolved section writes NOTHING rather than a guess.
+ * section -> flow id, for the KLAVIYO sections only. Property pin wins, else the in-code pin.
+ * The resolved id is CHECKED AGAINST THE LIVE FLOW LIST and its live name is logged: a pin that no
+ * longer exists (flow deleted / account switched) must not quietly return zero rows, so it
+ * unresolves the section and the section writes NOTHING. The name is logged, never matched on.
  */
 function ntResolveFlows_(flows) {
   var props = PropertiesService.getScriptProperties(), out = {};
+  var nameById = {};
+  flows.forEach(function (f) { nameById[f.id] = f.name; });
   Object.keys(NT_FLOW_CFG).forEach(function (sec) {
     var cfg = NT_FLOW_CFG[sec], pinned = props.getProperty(cfg.prop);
-    if (pinned && String(pinned).trim()) {
-      out[sec] = String(pinned).trim();
-      ntLog_('  flow ' + sec + ': PINNED ' + out[sec] + ' (' + cfg.prop + ')');
+    var id = (pinned && String(pinned).trim()) ? String(pinned).trim() : cfg.pin;
+    var src = (pinned && String(pinned).trim()) ? 'script property ' + cfg.prop : 'code pin';
+    if (!nameById.hasOwnProperty(id)) {
+      out[sec] = null;
+      ntLog_('  ⚠️ flow ' + sec + ': ' + id + ' (from ' + src + ') IS NOT IN THE LIVE FLOW LIST (' +
+             flows.length + ' flows). Expected "' + cfg.name + '". This section writes NOTHING — ' +
+             'a missing flow must not read as zero sends.');
       return;
     }
-    var hits = flows.filter(function (f) { return cfg.re.test(f.name); });
-    if (hits.length === 1) {
-      out[sec] = hits[0].id;
-      ntLog_('  flow ' + sec + ': ' + hits[0].name + ' (' + hits[0].id + ') by name');
-    } else {
-      out[sec] = null;
-      ntLog_('  ⚠️ flow ' + sec + ': UNRESOLVED — ' + hits.length + ' flows match ' + cfg.re +
-             (hits.length ? ' [' + hits.map(function (h) { return h.name; }).join(' | ') + ']' : '') +
-             '. Pin it with script property ' + cfg.prop + '. This section writes NOTHING.');
-    }
+    out[sec] = id;
+    ntLog_('  flow ' + sec + ': ' + id + ' "' + nameById[id] + '" (from ' + src + ')' +
+           (nameById[id] === cfg.name ? '' : '  ⚠️ live name differs from the documented "' +
+            cfg.name + '" — the flow may have been renamed or re-pointed; verify with Kurt'));
   });
+  // Not a row (Kurt 2026-08-18) — presence is logged so the informational counts can be trusted.
+  ntLog_('  flow (INFO, no row) ' + NT_FLOW_INFO.id + ': ' +
+         (nameById.hasOwnProperty(NT_FLOW_INFO.id) ? '"' + nameById[NT_FLOW_INFO.id] + '"'
+                                                   : 'NOT IN THE LIVE FLOW LIST'));
   return out;
 }
 
@@ -307,27 +419,91 @@ function ntEvents_(metricId, lo, hi, deadline) {
   return out;
 }
 
+/**
+ * 🔴 HOW BIG IS THE SWEEP? Ask BEFORE paging, not after the budget is gone (live burn 2026-08-18).
+ * /events/ has no flow filter, so counting "how many cohort profiles got the In-Transit email" means
+ * paging EVERY "Received Email" event in the account for the window. Measured on this account:
+ *     Received Email          206,381 events / 28d   -> ~1,032 pages   INFEASIBLE in 240s
+ *     Received Text Message    17,922 events / 28d   ->    ~90 pages   fine
+ *     Clicked Text Message      9,442 events / 28d   ->    ~48 pages   fine
+ * Marketing campaigns dominate the email metric; the handful we want is buried in them. A blind
+ * sweep therefore burns the whole budget, returns INCOMPLETE, and writes nothing — but only AFTER
+ * four minutes, every single run, forever.
+ * ONE cheap POST to /metric-aggregates/ gives the exact count first, so an impossible sweep is
+ * declined up front with a note that says WHY and WHAT the number would have cost.
+ * (This endpoint is a POST and is deliberately NOT in NT_PAGING — it returns one aggregate, no
+ * collection, no paging.)
+ */
+function ntMetricVolume_(metricId, lo, hi) {
+  var body = { data: { type: 'metric-aggregate', attributes: {
+    metric_id: metricId, measurements: ['count'], interval: 'week', timezone: 'UTC',
+    filter: ['greater-or-equal(datetime,' + lo.replace('Z', '') + ')',
+             'less-than(datetime,' + hi.replace('Z', '') + ')'] } } };
+  var resp = UrlFetchApp.fetch(NT_BASE + '/metric-aggregates/', {
+    method: 'post', contentType: 'application/json', payload: JSON.stringify(body),
+    muteHttpExceptions: true,
+    headers: { Authorization: 'Klaviyo-API-Key ' + ntKey_(), revision: NT_REV, accept: 'application/json' }
+  });
+  if (resp.getResponseCode() !== 200) {
+    ntLog_('  ⚠️ volume precheck failed (' + resp.getResponseCode() + ') — ' +
+           resp.getContentText().slice(0, 200) + '. Sweeping blind.');
+    return null;                                   // null = unknown, NOT zero
+  }
+  var rows = JSON.parse(resp.getContentText()).data.attributes.data || [], tot = 0;
+  rows.forEach(function (d) {
+    (d.measurements.count || []).forEach(function (v) { tot += Number(v) || 0; });
+  });
+  return tot;
+}
+
 // ------------------------------------------------------------------ cohort (Shopify)
 
 /**
- * The cohort population: order name, customer email, destination zip. Deliberately a LIGHT query —
- * PivotAnalytics' paFetchCohort_ pulls fulfillment event trees we do not need here.
+ * 🔴 The Shopify order-confirmation send, per order. Matches the BasicEvent message Shopify writes
+ * seconds after checkout: "Order confirmation email was sent to <name> (<email>)."
+ * Anchored to the START of the message so it can never catch the OTHER confirmation events on the
+ * same order — "Confirmation #ABC was generated for this order." and, from the RMFG app, "… sent a
+ * shipping confirmation email to …" (that one belongs to the SHIPPED stage and would double-count).
+ */
+var NT_PLACED_RE = /^order confirmation email was sent/i;
+
+/**
+ * The cohort population: order name, customer email, destination zip, AND whether Shopify sent the
+ * order-confirmation email. Deliberately a LIGHT query — PivotAnalytics' paFetchCohort_ pulls
+ * fulfillment event trees we do not need here.
  * 🔴 Same exclusions as every other cohort cut: not cancelled, not a Reship.
+ *
+ * 🔴 events() MUST BE ASKED FOR IN CREATED_AT ASCENDING ORDER (live burn 2026-08-18). The default
+ * ordering returns the NEWEST events first, so a `first:6` window on a months-old subscription
+ * order was filled with August fulfillment chatter and the June order-confirmation event fell off
+ * the end — the count came back 271/400 (68%) and looked like a real deliverability problem. With
+ * sortKey CREATED_AT ascending the same 400 orders answer 397. The order-confirmation event is
+ * always among the first few events of an order, so ascending + a small page is both correct and
+ * cheap. `query:"confirmation"` narrows the payload; the REGEX, not the search, decides the match.
+ * page size is 25 (not 50) because each node now carries an event list.
  */
 function ntFetchCohort_(shipWeek) {
-  var q = 'query($q:String!,$cursor:String){ orders(first:50, query:$q, after:$cursor){' +
+  var q = 'query($q:String!,$cursor:String){ orders(first:25, query:$q, after:$cursor){' +
           ' pageInfo{hasNextPage endCursor} edges{node{ name email' +
-          ' shippingAddress{ zip provinceCode } } } } }';
+          ' shippingAddress{ zip provinceCode }' +
+          ' events(first:10, sortKey:CREATED_AT, reverse:false, query:"confirmation")' +
+          '   { edges{ node{ createdAt message } } } } } } }';
   var qs = "tag:'" + shipWeek + "' -status:cancelled -tag:'Reship'";
   var out = [], cursor = null;
   while (true) {
     var conn = shopifyGql_(q, { q: qs, cursor: cursor }).orders;
     conn.edges.forEach(function (e) {
       var n = e.node;
+      var confirmAt = '';
+      ((n.events && n.events.edges) || []).forEach(function (ee) {
+        var msg = String((ee.node && ee.node.message) || '').trim();
+        if (!confirmAt && NT_PLACED_RE.test(msg)) confirmAt = ee.node.createdAt;
+      });
       out.push({
         order: n.name,
         email: String(n.email || '').toLowerCase(),
-        zip: String((n.shippingAddress && n.shippingAddress.zip) || '').replace(/[^0-9]/g, '')
+        zip: String((n.shippingAddress && n.shippingAddress.zip) || '').replace(/[^0-9]/g, ''),
+        confirmAt: confirmAt                      // '' = Shopify has no such event on this order
       });
     });
     if (!conn.pageInfo.hasNextPage) break;
@@ -549,8 +725,9 @@ function ntPct_(n, d) { return (d > 0) ? ((n / d) * 100).toFixed(2) + '%' : ''; 
 function ntMeasure_(shipWeek, sheetTotal, deadline) {
   var out = {}, notes = [];
   var cohort = ntFetchCohort_(shipWeek);
-  var emails = {}, dupes = 0, zoneByEmail = {};
+  var emails = {}, dupes = 0, zoneByEmail = {}, placedN = 0;
   cohort.forEach(function (o) {
+    if (o.confirmAt) placedN++;
     if (!o.email) return;
     if (emails[o.email]) dupes++;
     emails[o.email] = 1;
@@ -592,6 +769,22 @@ function ntMeasure_(shipWeek, sheetTotal, deadline) {
   ['email', 'sms', 'smsEngaged'].forEach(function (k) {
     var id = metrics[NT_METRIC[k]];
     if (!id) { ev[k] = null; return; }
+    // volume precheck — decline an impossible sweep instead of spending the budget discovering it.
+    var vol = ntMetricVolume_(id, lo, hi);
+    if (vol !== null) {
+      var pagesNeeded = Math.ceil(vol / NT_PAGE);
+      ntLog_('  volume "' + NT_METRIC[k] + '" in window: ' + vol + ' events -> ~' + pagesNeeded +
+             ' pages (cap ' + NT_MAX_PAGES + ')');
+      if (pagesNeeded > NT_MAX_PAGES) {
+        notes.push('SWEEP DECLINED for "' + NT_METRIC[k] + '": ' + vol + ' events in the window ' +
+                   'need ~' + pagesNeeded + ' pages, over the ' + NT_MAX_PAGES + '-page cap. ' +
+                   'Klaviyo /events has NO flow filter, so there is no cheaper cut — every row fed ' +
+                   'by this metric is left BLANK (blank != zero). Raising NT_MAX_PAGES does not fix ' +
+                   'it; the 360s Apps Script ceiling does not fit the sweep.');
+        ev[k] = null;
+        return;
+      }
+    }
     var r = ntEvents_(id, lo, hi, deadline);
     if (!r.complete) {
       notes.push('INCOMPLETE fetch of "' + NT_METRIC[k] + '" (' + r.why + ') — nothing derived from it');
@@ -603,10 +796,30 @@ function ntMeasure_(shipWeek, sheetTotal, deadline) {
   });
 
   var sendTimes = [];       // {iso, email} for every SEND we counted (email + sms, all sections)
-  ['placed', 'shipped', 'delivered'].forEach(function (sec) {
+
+  // ---- Order Placed: SHOPIFY, per ORDER (Kurt 2026-08-18). Not Klaviyo, not a flow. ----
+  // 🔴 GRAIN WARNING, stated every run: this row counts ORDERS; the two Klaviyo rows below count
+  // DISTINCT PROFILES. They are not comparable line-for-line and the gap is the repeat-customer
+  // count logged above — never "reconcile" one to the other.
+  out['placed||email||Email Sent'] = placedN;
+  if (denomOk) out['placed||email||Percent of Total'] = ntPct_(placedN, sheetTotal);
+  ntLog_('  placed Email Sent = ' + placedN + ' of ' + cohort.length + ' orders (SHOPIFY order ' +
+         'events, ORDER grain)' + (denomOk ? ' (' + ntPct_(placedN, sheetTotal) + ')' : ' (no %)'));
+  if (placedN > cohort.length) {
+    throw new Error('NT_ASSERT_PLACED_OVERCOUNT: ' + placedN + ' confirmation events on ' +
+                    cohort.length + ' orders — the per-order match is double-counting.');
+  }
+  if (cohort.length && (cohort.length - placedN) / cohort.length > 0.05) {
+    notes.push('ORDER PLACED GAP: ' + (cohort.length - placedN) + ' of ' + cohort.length +
+               ' cohort orders carry NO Shopify order-confirmation event. A few percent is normal ' +
+               '(POS/manual/no-email orders); a large gap usually means the events page window is ' +
+               'too small or the message wording changed — check before trusting this row.');
+  }
+
+  ['shipped', 'delivered'].forEach(function (sec) {
     var flowId = flows[sec];
     if (!flowId) return;                                    // unresolved -> blank, already logged
-    var chans = (sec === 'placed') ? ['email'] : ['email', 'sms'];
+    var chans = ['email', 'sms'];
     chans.forEach(function (ch) {
       var src = ev[ch];
       if (!src) return;
@@ -622,13 +835,23 @@ function ntMeasure_(shipWeek, sheetTotal, deadline) {
       if (denomOk) out[sec + '||' + (ch === 'email' ? 'email' : 'sms') + '||Percent of Total'] = ntPct_(n, sheetTotal);
       ntLog_('  ' + sec + ' ' + label + ' = ' + n + (denomOk ? ' (' + ntPct_(n, sheetTotal) + ')' : ' (no %)'));
     });
-    // SMS Engaged — clicks, same flow, same cohort filter.
-    if (sec !== 'placed' && ev.smsEngaged) {
+    // SMS Engaged — CLICKS ONLY, same flow, same cohort filter. Not replies: none exist.
+    if (ev.smsEngaged) {
       var eh = ev.smsEngaged.byFlow[flowId] || {}, k2 = 0;
       Object.keys(eh).forEach(function (em) { if (emails[em]) k2++; });
       out[sec + '||sms||SMS Engaged'] = k2;
-      ntLog_('  ' + sec + ' SMS Engaged (Clicked SMS) = ' + k2);
+      ntLog_('  ' + sec + ' SMS Engaged ("' + NT_METRIC.smsEngaged + '" — clicks only) = ' + k2);
     }
+  });
+
+  // ---- Out-for-Delivery: INFORMATIONAL, no row (Kurt 2026-08-18). Logged so the decision to give
+  // it a row (or not) is made against real numbers rather than a guess. NOTHING is written. ----
+  ['email', 'sms', 'smsEngaged'].forEach(function (ch) {
+    if (!ev[ch]) return;
+    var h = ev[ch].byFlow[NT_FLOW_INFO.id] || {}, c = 0;
+    Object.keys(h).forEach(function (em) { if (emails[em]) c++; });
+    ntLog_('  [INFO — no row] ' + NT_FLOW_INFO.name + ' (' + NT_FLOW_INFO.id + ') ' +
+           NT_METRIC[ch] + ' = ' + c + ' cohort profiles (' + Object.keys(h).length + ' account-wide)');
   });
 
   // ---- Time of Sending: partition of every counted send by RECIPIENT LOCAL hour ----
@@ -759,9 +982,37 @@ function ntCheckKlaviyo() {
   ['email', 'sms', 'smsEngaged'].forEach(function (k) {
     ntLog_('  need "' + NT_METRIC[k] + '" -> ' + (metrics[NT_METRIC[k]] ? 'OK' : '🔴 ABSENT'));
   });
+  // The names that were WRONG before 2026-08-18 — asserted absent so nobody "restores" them.
+  ['Received SMS', 'Clicked SMS'].forEach(function (bad) {
+    ntLog_('  legacy guess "' + bad + '" -> ' + (metrics[bad] ? 'exists (!) — re-read the header'
+                                                             : 'correctly ABSENT in this account'));
+  });
+  // What a sweep would COST right now (last 28 days) — the reason the email rows may be blank.
+  var vhi = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+  var vlo = new Date(new Date().getTime() - 28 * 86400000).toISOString().replace(/\.\d+Z$/, 'Z');
+  ['email', 'sms', 'smsEngaged'].forEach(function (k) {
+    var id = metrics[NT_METRIC[k]];
+    if (!id) return;
+    var v = ntMetricVolume_(id, vlo, vhi);
+    ntLog_('  volume(28d) "' + NT_METRIC[k] + '" = ' + (v === null ? 'UNKNOWN' : v) +
+           (v === null ? '' : ' events -> ~' + Math.ceil(v / NT_PAGE) + ' pages, cap ' +
+                              NT_MAX_PAGES + (Math.ceil(v / NT_PAGE) > NT_MAX_PAGES
+                                              ? '  🔴 SWEEP INFEASIBLE — rows stay BLANK' : '  OK')));
+  });
   var flows = ntFlows_(deadline);
-  ntLog_('FLOWS (' + flows.length + '):');
-  flows.forEach(function (f) { ntLog_('  ' + f.id + '  ' + f.name); });
+  ntLog_('FLOWS (' + flows.length + ') — 2026-08-18 live: 26 total, 21 live / 5 draft, 0 archived. ' +
+         '/flows returns EVERY status, so "no order-placed flow" is a fact about the account, not a ' +
+         'filter artifact:');
+  var byStatus = {};
+  flows.forEach(function (f) { byStatus[f.status] = (byStatus[f.status] || 0) + 1; });
+  ntLog_('  status mix: ' + JSON.stringify(byStatus) + ' | archived: ' +
+         flows.filter(function (f) { return f.archived; }).length);
+  flows.forEach(function (f) {
+    ntLog_('  ' + f.id + '  ' + f.status + (f.archived ? ' ARCHIVED' : '') + '  ' + f.name);
+  });
+  var placedish = flows.filter(function (f) { return /order\s*(placed|confirm)/i.test(f.name); });
+  ntLog_('  flows matching /order (placed|confirm)/i : ' + placedish.length +
+         ' — 0 is EXPECTED (Order Placed is a Shopify email, see header).');
   ntLog_('resolution:');
   ntResolveFlows_(flows);
   return { metrics: Object.keys(metrics).length, flows: flows.length };

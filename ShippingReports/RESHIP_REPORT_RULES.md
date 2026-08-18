@@ -1023,6 +1023,62 @@ refresh (`PivotAnalytics.gs`) reading telemetry via Jdbc + Shopify for assigned 
 builder's numbers on a matured cohort** before trusting the headless path (identical figures, not
 "it ran"). Deploy = same REST `updateContent`/`clasp push` path as `Code.gs`.
 
+### D24 — `Notifications` tab: WHERE EACH ROW'S NUMBER COMES FROM (Kurt 2026-08-18)
+
+Negatives first. Everything below was live-verified 2026-08-18; `appsscript/Notifications.gs` is the
+implementation and carries the same rules in its header.
+
+- 🔴 **`Order Placed` IS NOT KLAVIYO.** Kurt's ruling: the order-confirmation email is sent by
+  **Shopify**. The live flow list agrees — 26 flows, 21 live / 5 draft, **0 archived**, and none is
+  an order-placed flow, so this is a fact about the account and not a status-filtered listing. The
+  row is read from **Shopify order events**: the `BasicEvent` message
+  `"Order confirmation email was sent to <name> (<email>)."`. Never resolve this row from a Klaviyo
+  name regex — there is nothing to match and a regex would silently bind to a different stage.
+- 🔴 **That row is at ORDER grain; the Klaviyo rows are at DISTINCT-PROFILE grain.** They are not
+  reconcilable line-for-line and the gap is the repeat-customer count. Do not "fix" a difference.
+- 🔴 **`events()` on an order must be asked for `sortKey: CREATED_AT, reverse: false`.** The default
+  returns NEWEST first, so a small page on a months-old subscription order fills with August
+  fulfillment chatter and the June confirmation event falls off the end. That defect measured
+  **271/400 (68%)** and looked like a deliverability problem; ascending gives **397/400**.
+- 🔴 **The match regex is anchored** (`/^order confirmation email was sent/i`). Unanchored, it also
+  catches `"Confirmation #ABC was generated…"` and the RMFG app's
+  `"… sent a shipping confirmation email to …"` — the latter belongs to the SHIPPED stage.
+- 🔴 **`Order Shipped` / `Order Delivered` ARE Klaviyo, with the flows PINNED IN CODE** —
+  `XYFE5N` *Shipping Notification - In Transit (Parcel Panel)* and `Tu67r6` *Shipping Notification -
+  Delivered (Shopify)*. Script properties `KLAVIYO_FLOW_SHIPPED` / `KLAVIYO_FLOW_DELIVERED` override.
+  **The name regex was REMOVED**: `/ship(ped|ping|ment)/` matches four live flows and `/deliver/`
+  matches both the Delivered and the Out-for-Delivery flow — a coin flip dressed as a resolution.
+- 🔴 **`VC8dJp` *Out for Delivery (Shopify)* gets NO row** (Kurt's call). Its counts are LOGGED only.
+  Measured: **zero sends of any channel in August**, so it is live but silent.
+- 🔴 **THE METRIC NAMES ARE ACCOUNT-SPECIFIC AND THE OBVIOUS GUESS IS WRONG.** This account has **no
+  `Received SMS` and no `Clicked SMS`** — the first version of the file looked for both and would
+  have written a silent 0 on every SMS row. Correct: `SMS Sent` = **`Received Text Message`**
+  (delivered to the handset) — *not* `Sent Text Message`, which is dispatch and here counts only
+  1,479 events vs 17,922, so it is not even the superset it sounds like. `SMS Engaged` =
+  **`Clicked Text Message`**, **clicks only**: Klaviyo publishes no reply/inbound metric, so this row
+  UNDERSTATES engagement and must never be read as "responded".
+- 🔴 **The two `Email Sent` rows for Shipped/Delivered cannot be filled from Apps Script.**
+  `/events/` has no flow filter, so one flow's email count means paging every `Received Email` event:
+  **206,381 events / 28d ≈ 1,032 pages at ~3.0s/page ≈ 52 minutes** against a 360s ceiling. The SMS
+  metrics (90 and 48 pages) do fit. `ntMetricVolume_` prechecks with one `/metric-aggregates/` POST
+  and DECLINES an impossible sweep instantly instead of burning four minutes to fail. **Raising
+  `NT_MAX_PAGES` does not fix this.** If Kurt wants those rows: a job without the 360s ceiling, or
+  Klaviyo's flow-series report — which is **account-wide per week, NOT cohort-joined**, and must
+  never be written into a cohort column as though it were.
+
+**Measured 2026-08-18** (sends never exceed cohort size — the sanity gate passes):
+
+| | `_SHIP_2026-08-17` (2324 orders / 2289 emails) | `_SHIP_2026-08-10` (2316 / 2304) |
+|---|---|---|
+| Order Placed — Email Sent | **2291** (98.58%) | **2285** (98.66%) |
+| Order Shipped — SMS Sent / Engaged | **657 / 222** | **938 / 354** |
+| Order Delivered — SMS Sent / Engaged | **209 / 64** (cohort 1 day old) | **954 / 290** |
+| Order Shipped/Delivered — Email Sent | BLANK (sweep declined) | BLANK (sweep declined) |
+
+Cross-check vs Klaviyo's own flow-series report (account-wide, weekly): In-Transit SMS delivered
+**670** in the week of 08-17 vs our **657** in-cohort, and **969** in the week of 08-10 vs our
+**938** — the flow mapping is right.
+
 ## Non-goals
 
 - Not a refund tracker (refund requests ≠ reship issues — [[feedback_refund_not_issue]]).
