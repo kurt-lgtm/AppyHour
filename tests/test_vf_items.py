@@ -365,25 +365,36 @@ def test_gift_rows_are_replaced_not_merged_additively(tmp_path, authority, capsy
     assert ws.cell(r, hdr[H_ETX]).value == 2                 # exactly as the vFGR states
     assert ws.cell(r, hdr["Total"]).value == 3               # recomputed (rule 0)
     assert ws.cell(r, hdr["Tags"]).value == "Gift_Redemption"      # col L preserved
-    assert ws.cell(r, hdr["Name"]).value == "real recipient"
+    # rule 20(a3)/(b): gift metadata is NEVER read as authority — the routing app's row owns
+    # Name/address/Tags/etc.; the vFGR supplies only MFG item quantities, so its Name is inert.
+    assert ws.cell(r, hdr["Name"]).value == "stale"
     # the non-gift row is untouched
     r2 = next(x for x in range(2, ws.max_row + 1) if ws.cell(x, hdr["OrderID"]).value == 2002)
     assert ws.cell(r2, hdr[H_ETX]).value == 1
     wb.close()
 
 
-def test_gift_vfgr_with_an_invented_header_is_refused(tmp_path, authority, capsys):
-    """rule 20d unions gift-only PRODUCT columns in — they get the same name gate."""
+def test_gift_vfgr_with_an_invented_header_is_silently_omitted(tmp_path, authority, capsys):
+    """rule 20(d): items map only by REGISTERED MFG name — an unknown/invented gift header is
+    silently omitted and never becomes a vF column (rule 21's invariant holds by omission; the
+    cmd_gift 24a post-check backstops any invented header that does land on the merged sheet)."""
     main = _write_sheet(tmp_path / "vF.xlsx", [H_TETI],
-                        [{"OrderID": 2001, "Zip": "07627", "Tags": "", H_TETI: 1}])
+                        [{"OrderID": 2001, "Zip": "07627", "Tags": "", H_TETI: 2}])
     vfgr = _write_sheet(tmp_path / "vFGR.xlsx", [H_TETI, P + "Farmstead Smoked Cumin Gouda"],
                         [{"OrderID": 2001, "Zip": "07627", H_TETI: 1,
                           P + "Farmstead Smoked Cumin Gouda": 1}])
     assert vf_items.main(["gift", str(main), "--vfgr", str(vfgr), "--authority", str(authority),
-                          "--write"]) == 1
-    out = capsys.readouterr().out
-    assert "fail the MFG authority" in out and "Farmstead Smoked Cumin Gouda" in out
-    assert revisions(main) == []
+                          "--write"]) == 0
+    out = revisions(main)[0]
+    wb = openpyxl.load_workbook(out)
+    ws = wb[vf_items.SHEET]
+    headers = [c.value for c in next(ws.iter_rows(max_row=1))]
+    assert P + "Farmstead Smoked Cumin Gouda" not in headers   # never becomes a vF column
+    hdr = {h: i for i, h in enumerate(headers, start=1)}
+    r = next(x for x in range(2, ws.max_row + 1) if ws.cell(x, hdr["OrderID"]).value == 2001)
+    assert ws.cell(r, hdr[H_TETI]).value == 1                  # known column still replaced
+    assert ws.cell(r, hdr["Total"]).value == 1                 # recount excludes the omitted qty
+    wb.close()
 
 
 def test_gift_oid_missing_from_matrix_refuses(tmp_path, authority, capsys):
