@@ -9,7 +9,21 @@
  * print property NAMES only.
  *
  * WHAT EACH ROW MEANS (interpretation — confirmed with Kurt where noted):
- *   Total Shipments / Arrived   — NOT OURS. Owned elsewhere; read-only here, used as denominator.
+ *   Total Shipments / Arrived   — 🔴 SCRIPT-OWNED as of Kurt's ruling 2026-08-19. This REPLACES the
+ *   "NOT OURS / owned elsewhere / read-only here" note that stood here before, and supersedes the
+ *   same phrasing in D24. Both rows were hand-typed constants that no code wrote and that stopped
+ *   being updated after `_SHIP_2026-08-03` — and `Arrived` had already drifted 193 low on 08-03,
+ *   copied mid-flight and never refreshed. See ntMirrorCell_ for the full finding.
+ *     Total Shipments = RECOMPUTED here from `cohort.length`; `ntFetchCohort_` runs the identical
+ *                       query TnT2 is built from, so it is the same population at no extra cost.
+ *                       TnT2 is read only as an independent CROSS-CHECK.
+ *     Arrived         = MIRRORED from `Lost in Transit` by header + label (never index). It is a
+ *                       delivery fact derived from fulfillment trees + ParcelPanel, and this file's
+ *                       cohort query is deliberately light — recomputing it would duplicate that
+ *                       pipeline and spend the shared PP quota twice.
+ *   🔴 BOTH ROWS FILL BLANKS ONLY. A value a human typed is never overwritten on any column; if the
+ *   computed value disagrees it is REPORTED and the typed value kept, because the disagreement is
+ *   the evidence that the mirror drifted.
  *
  *   🔴 ORDER PLACED IS NOT KLAVIYO (Kurt's ruling 2026-08-18). The order-confirmation mail is sent
  *   by SHOPIFY, not by a Klaviyo flow — and the live flow list confirms it: 26 flows, 21 live /
@@ -872,41 +886,66 @@ function ntDayNight_(iso, zone) {
 // ------------------------------------------------------------------ sheet plumbing
 
 /**
- * 🔴 WHY THE PERCENT ROWS WERE UNREACHABLE, AND WHO OWNS `Total Shipments` (found 2026-08-19).
- * The 08-19 run logged "⚠️ Total Shipments is blank on this column — no percents written". The cause
- * is NOT a bug in this file and NOT a stale job:
- *   - `Notifications!Total Shipments` and `Notifications!Arrived` are HAND-TYPED CONSTANTS. Read
- *     back with valueRenderOption=FORMULA they are literal numbers, not formulas — nothing links
- *     them to anything.
- *   - NOTHING IN THE SCRIPT PROJECT WRITES THEM. `paValues_` (PivotAnalytics.gs) emits
- *     `Total Shipments`, but only onto `TnT2` and `Lost in Transit` (`PA_TABS`); the string
- *     `Total Shipments` does not occur in Code.gs or Exceptions.gs at all, and the header of this
- *     file has always declared the row "NOT OURS … read-only here".
- *   - So the row is a MANUAL MIRROR that someone stopped updating. Measured 2026-08-19:
- *       Notifications: 07-13 2025 | 07-20 2075 | 07-27 2227 | 08-03 2305 | 08-10 (blank) | 08-17 (blank)
- *       TnT2:          07-13 2025 | 07-20 2075 | 07-27 2227 | 08-03 2305 | 08-10 2316   | 08-17 2324
- *     Identical on all four overlapping columns, and TnT2 is script-filled for the two the
- *     Notifications tab is missing. The mirror simply stopped after 08-03.
- * FIX, deliberately the SMALLER one: when this tab's own cell is blank we READ the denominator from
- * `TnT2` for the SAME cohort column and log where it came from. We do NOT write the row — D24 and
- * this file's header both declare it somebody else's, and quietly taking ownership of a row a human
- * maintains is how two writers end up disagreeing. Filling it for real is a one-line change plus
- * Kurt's word on who owns it.
+ * 🔴 `Total Shipments` AND `Arrived` ARE SCRIPT-OWNED (Kurt 2026-08-19). This SUPERSEDES the old
+ * "NOT OURS / read-only here" note that stood at the top of this file and in D24.
+ *
+ * WHAT WAS FOUND (2026-08-19). Both rows were HAND-TYPED CONSTANTS — read back with
+ * valueRenderOption=FORMULA they are literal numbers, not formulas — and NOTHING in the script
+ * project wrote them: `paValues_` emits `Total Shipments` / `Arrived` only onto `TnT2` and
+ * `Lost in Transit` (`PA_TABS`), and neither string occurs in Code.gs or Exceptions.gs at all. They
+ * were a manual mirror that stopped after `_SHIP_2026-08-03`, and one of them had already GONE WRONG:
+ *     Notifications Arrived  08-03 = 2075
+ *     Lost in Transit Arrived 08-03 = 2268   (+193)
+ * — copied mid-flight and never refreshed as the cohort finished delivering, while `Total Shipments`
+ * matched on every overlapping column. That is the whole argument for owning these rows: a hand
+ * mirror of a STILL-MOVING number goes stale silently and nothing ever says so.
+ *
+ * 🔴 THE TWO ROWS GET DIFFERENT TREATMENT, AND THE REASON IS WHERE THE FACT LIVES.
+ *
+ * `Total Shipments` is RECOMPUTED, not mirrored. `ntFetchCohort_` already runs the IDENTICAL Shopify
+ * query TnT2 is built from — `tag:'<ship>' -status:cancelled -tag:'Reship'` (PivotAnalytics.gs
+ * `paFetchCohort_`, same string) — so `cohort.length` IS that population, in hand, at zero extra
+ * cost. Live proof: this file measured 2324 / 2316 and TnT2 published 2324 / 2316. Copying TnT2's
+ * cell would inherit that tab's write timing and break if its row ever moves; recomputing cannot.
+ * TnT2 is still READ, purely as an independent CROSS-CHECK, and a mismatch is reported.
+ *
+ * `Arrived` is MIRRORED from `Lost in Transit`, and mirroring is the SAFER choice for this row
+ * specifically: `arrived` is not a Shopify-only fact. PivotAnalytics derives it from fulfillment
+ * event trees plus ParcelPanel, whose quota is 2,500 calls/week ACCOUNT-WIDE (D28). This file's
+ * cohort query is deliberately light and fetches no fulfillments, so recomputing here would mean
+ * rebuilding that pipeline AND spending the shared PP quota a second time — and any drift between
+ * the two derivations would put two different numbers under the same label on two tabs. One
+ * derivation, published once, mirrored. `Lost in Transit` is refreshed by the same daily
+ * walk-forward job, so the mirror inherits a fresh value rather than a stale one.
+ *
+ * 🔴 THE MIRROR IS KEYED BY HEADER TEXT AND COLUMN-A LABEL, NEVER BY INDEX. Both the ship-week
+ * column and the row are looked up by name on every read, so inserting a row or a cohort column on
+ * the source tab cannot silently re-point this at the wrong number — it just fails to find it and
+ * writes nothing. A missing source, a missing column, or a blank source cell all return null and
+ * leave the cell BLANK: blank ≠ zero, and cohorts that predate the source tab must stay empty.
  */
-var NT_DENOM_MIRROR_TAB = 'TnT2';
+var NT_MIRROR = {
+  total: { tab: 'TnT2', label: 'Total Shipments' },
+  arrived: { tab: 'Lost in Transit', label: 'Arrived' }
+};
 
-function ntDenomFromMirror_(shipWeek) {
-  var sh = SpreadsheetApp.openById(EXC_HOST_SHEET_ID).getSheetByName(NT_DENOM_MIRROR_TAB);
-  if (!sh) return 0;
+/** One cell from another tab, resolved by ship-week HEADER + column-A LABEL. null = not available. */
+function ntMirrorCell_(tabName, label, shipWeek) {
+  var sh = SpreadsheetApp.openById(EXC_HOST_SHEET_ID).getSheetByName(tabName);
+  if (!sh) return null;
   var lastCol = Math.max(1, sh.getLastColumn()), lastRow = Math.max(1, sh.getLastRow());
-  var headers = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(function (h) { return String(h).trim(); });
+  var headers = sh.getRange(1, 1, 1, lastCol).getValues()[0]
+                  .map(function (h) { return String(h).trim(); });
   var col = headers.indexOf(shipWeek) + 1;
-  if (col < 1) return 0;
+  if (col < 1) return null;                       // no such cohort column on the source tab
   var labels = sh.getRange(1, 1, lastRow, 1).getValues()
                  .map(function (r) { return String(r[0]).replace(/\s+/g, ' ').trim(); });
-  var row = labels.indexOf('Total Shipments') + 1;
-  if (row < 1) return 0;
-  return Number(String(sh.getRange(row, col).getValue()).replace(/[^0-9.]/g, '')) || 0;
+  var row = labels.indexOf(label) + 1;
+  if (row < 1) return null;                       // the source tab's layout moved — fail, do not guess
+  var raw = String(sh.getRange(row, col).getValue()).trim();
+  if (raw === '') return null;                    // blank source stays blank here (blank != zero)
+  var n = Number(raw.replace(/[^0-9.]/g, ''));
+  return isFinite(n) ? n : null;
 }
 
 function ntCohortAgeDays_(shipWeek) {
@@ -958,7 +997,18 @@ function ntAssertColumns_(sheet) {
   }
 }
 
-function ntCurrentCol_(sheet, shipWeek, allowAppend) {
+/**
+ * 🔴 `allowOlder` EXISTS BECAUSE THE BACKFILL ENTRY POINT COULD NOT REACH A BACKFILL TARGET (found
+ * 2026-08-19). `ntBackfillFrozen` documents itself as "one-time fill of an already-frozen column
+ * (B–E)", but every one of those columns is by definition NOT the rightmost, so the
+ * NT_ASSERT_NOT_RIGHTMOST guard below rejected all of them — the function could only ever target the
+ * column it was written to avoid. It was unusable as shipped and nothing said so.
+ * The guard's real job is stopping the DAILY REFRESH from landing on an old column, and that job is
+ * untouched: `allowOlder` is passed ONLY by `ntBackfillFrozen`, which names its target explicitly,
+ * is double-gated on NOTIFICATIONS_BACKFILL=1 AND NOTIFICATIONS_WRITE=1, defaults to dry, and writes
+ * EMPTY cells only. On the refresh path the assert still fires exactly as before.
+ */
+function ntCurrentCol_(sheet, shipWeek, allowAppend, allowOlder) {
   var lastCol = Math.max(1, sheet.getLastColumn());
   var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(String);
   var idx = headers.indexOf(shipWeek);
@@ -975,7 +1025,7 @@ function ntCurrentCol_(sheet, shipWeek, allowAppend) {
   for (var i = 0; i < headers.length; i++) {
     if (/^_SHIP_\d{4}-\d{2}-\d{2}$/.test(headers[i].trim())) rightmost = i + 1;
   }
-  if (col === rightmost) return col;
+  if (col === rightmost || allowOlder === true) return col;
   throw new Error('NT_ASSERT_NOT_RIGHTMOST: refusing column ' + col + ' (' + shipWeek +
                   ') — the rightmost cohort column is ' + rightmost);
 }
@@ -1009,7 +1059,7 @@ function ntRowMap_(sheet) {
 
 /** The rows this file owns. Anything not here is somebody else's and is never touched. */
 function ntOwnedKeys_() {
-  var keys = [];
+  var keys = ['own||Total Shipments', 'own||Arrived'];
   ['placed', 'shipped', 'delivered'].forEach(function (sec) {
     keys.push(sec + '||email||Email Sent', sec + '||email||Percent of Total');
     if (sec !== 'placed') {
@@ -1022,7 +1072,6 @@ function ntOwnedKeys_() {
 
 function ntAssertShape_(map) {
   var missing = ntOwnedKeys_().filter(function (k) { return !map[k]; });
-  if (!map['own||Total Shipments']) missing.push('own||Total Shipments');
   if (missing.length) {
     throw new Error('NT_ASSERT_ROW_SHAPE: the ' + NT_TAB + ' tab is missing ' + missing.length +
                     ' expected row(s): ' + missing.join(' ; ') + '. The tab layout changed — ' +
@@ -1030,14 +1079,40 @@ function ntAssertShape_(map) {
   }
 }
 
+/**
+ * 🔴 FILL-BLANKS-ONLY ROWS (Kurt 2026-08-19, with the ownership handover). `Total Shipments` and
+ * `Arrived` are now script-OWNED, but a value already in the cell was typed by a human and is NEVER
+ * overwritten — on ANY column, current or frozen, not only in backfill mode. When what we compute
+ * DISAGREES with what is there, it is REPORTED and left alone: the disagreement is information, and
+ * silently correcting it destroys the evidence that a hand mirror drifted. Every other owned row
+ * keeps its existing refresh-in-place behaviour.
+ */
+var NT_BLANK_ONLY_KEYS = { 'own||Total Shipments': 1, 'own||Arrived': 1 };
+
 /** Per-cell, owned rows only, keyed. `emptyOnly` is the frozen-column backfill mode. */
 function ntWriteOwned_(sheet, col, map, values, dry, emptyOnly) {
-  var wrote = 0, skipped = 0;
+  var wrote = 0, skipped = 0, held = 0, notes = [];
   ntOwnedKeys_().forEach(function (k) {
     if (!Object.prototype.hasOwnProperty.call(values, k)) return;   // blank != zero: not computed
     var row = map[k], v = values[k];
     var cell = sheet.getRange(row, col);
-    if (emptyOnly && String(cell.getValue()).trim() !== '') { skipped++; return; }
+    var existing = String(cell.getValue()).trim();
+
+    if (NT_BLANK_ONLY_KEYS[k] && existing !== '') {
+      held++;
+      var have = Number(existing.replace(/[^0-9.]/g, ''));
+      if (typeof v === 'number' && isFinite(have) && have !== v) {
+        notes.push('DISAGREEMENT on "' + k.replace('own||', '') + '" (column ' + col + '): the sheet ' +
+                   'holds ' + have + ', this run computes ' + v + ' (' + (v - have > 0 ? '+' : '') +
+                   (v - have) + '). The typed value is KEPT — a human entered it and this row only ' +
+                   'fills blanks. Reported, not corrected: a hand mirror that drifted is evidence, ' +
+                   'and overwriting it hides how far it drifted. Clear the cell to hand the row to ' +
+                   'the script.');
+      }
+      return;
+    }
+    if (emptyOnly && existing !== '') { skipped++; return; }
+
     if (dry) { ntLog_('  [dry] ' + NT_TAB + '!' + cell.getA1Notation() + '  ' + k + ' = ' + v); }
     else {
       cell.setValue(v === null || v === undefined ? '' : v);
@@ -1046,7 +1121,8 @@ function ntWriteOwned_(sheet, col, map, values, dry, emptyOnly) {
     wrote++;
   });
   if (skipped) ntLog_('  backfill: ' + skipped + ' cell(s) already had a value — left alone (Kurt-owned)');
-  return wrote;
+  if (held) ntLog_('  fill-blanks-only: ' + held + ' cell(s) already had a value — left alone');
+  return { wrote: wrote, notes: notes };
 }
 
 // ------------------------------------------------------------------ the measurement
@@ -1075,22 +1151,44 @@ function ntMeasure_(shipWeek, sheetTotal, deadline) {
 
   // 🔴 denominator sanity: the sheet's Total Shipments is the published number. If our cohort
   // pull disagrees materially, REPORT — do not write a percent against a denominator we distrust.
-  var denomOk = true, denomSrc = NT_TAB + '!Total Shipments';
-  if (!sheetTotal) {
-    // The row is a hand-maintained mirror that stopped after 08-03 — see ntDenomFromMirror_.
-    sheetTotal = ntDenomFromMirror_(shipWeek);
-    if (sheetTotal) {
-      denomSrc = NT_DENOM_MIRROR_TAB + '!Total Shipments (this tab\'s own cell is blank — the row ' +
-                 'is hand-maintained and was last filled for _SHIP_2026-08-03)';
-      ntLog_('  denominator ' + sheetTotal + ' read from ' + denomSrc);
-      notes.push('Total Shipments is BLANK on this column of ' + NT_TAB + ' — that row is a manual ' +
-                 'mirror nobody has updated since _SHIP_2026-08-03, and no script writes it. The ' +
-                 'percent denominator was read from ' + NT_DENOM_MIRROR_TAB + ' instead (' +
-                 sheetTotal + '), which is script-filled. The row itself is still empty and is not ' +
-                 'this file\'s to fill.');
-    }
+  // ---- Total Shipments / Arrived: SCRIPT-OWNED as of Kurt 2026-08-19 -------------------------
+  // 🔴 blank != zero — a cohort that returns no orders writes NOTHING rather than a 0 that would
+  // then serve as a denominator and make every percent read 0.00%.
+  if (cohort.length > 0) out['own||Total Shipments'] = cohort.length;
+
+  // Independent cross-check. The denominator must not come from the thing being measured, so the
+  // published TnT2 value is read and COMPARED rather than trusted or copied.
+  var xcheck = ntMirrorCell_(NT_MIRROR.total.tab, NT_MIRROR.total.label, shipWeek);
+  if (xcheck !== null && cohort.length > 0 && xcheck !== cohort.length) {
+    notes.push('CROSS-CHECK: this run computes Total Shipments ' + cohort.length + ' but ' +
+               NT_MIRROR.total.tab + ' publishes ' + xcheck + ' for the same cohort tag from the ' +
+               'same Shopify query. They should be identical; a gap means one of the two tabs was ' +
+               'measured at a different moment or the cohort query drifted. Investigate before ' +
+               'trusting either percent.');
+  } else if (xcheck !== null && xcheck === cohort.length) {
+    ntLog_('  cross-check OK: ' + NT_MIRROR.total.tab + ' publishes the same Total Shipments (' + xcheck + ')');
   }
-  if (!sheetTotal) { denomOk = false; notes.push('Total Shipments is blank on this column AND on ' + NT_DENOM_MIRROR_TAB + ' — no percents written'); }
+
+  // `Arrived` is a delivery fact this file does not compute — mirrored by name from its authority.
+  var arrived = ntMirrorCell_(NT_MIRROR.arrived.tab, NT_MIRROR.arrived.label, shipWeek);
+  if (arrived !== null) {
+    out['own||Arrived'] = arrived;
+    ntLog_('  Arrived ' + arrived + ' mirrored from ' + NT_MIRROR.arrived.tab + ' (by header + label)');
+  } else {
+    notes.push('Arrived left BLANK: ' + NT_MIRROR.arrived.tab + ' has no value for ' + shipWeek +
+               ' (no such column, no such row, or the source cell is empty). Blank != zero.');
+  }
+
+  // 🔴 denominator sanity: prefer what is PUBLISHED on this tab; fall back to what we just computed
+  // for it. If a human typed a value we distrust, percents are refused rather than written against a
+  // denominator we would not stand behind.
+  var denomOk = true, denomSrc = NT_TAB + '!Total Shipments (published)';
+  if (!sheetTotal && cohort.length > 0) {
+    sheetTotal = cohort.length;
+    denomSrc = 'computed this run (same cohort query as ' + NT_MIRROR.total.tab + ') and written to the row';
+    ntLog_('  denominator ' + sheetTotal + ' — ' + denomSrc);
+  }
+  if (!sheetTotal) { denomOk = false; notes.push('Total Shipments is blank and the cohort is empty — no percents written'); }
   else {
     var drift = Math.abs(cohort.length - sheetTotal) / sheetTotal;
     if (drift > NT_DENOM_TOLERANCE) {
@@ -1334,13 +1432,13 @@ function ntMeasure_(shipWeek, sheetTotal, deadline) {
 
 // ------------------------------------------------------------------ entry points
 
-function ntRefreshOne_(shipWeek, dry, allowAppend, emptyOnly) {
+function ntRefreshOne_(shipWeek, dry, allowAppend, emptyOnly, allowOlder) {
   var sheet = SpreadsheetApp.openById(EXC_HOST_SHEET_ID).getSheetByName(NT_TAB);
   if (!sheet) throw new Error('NT_ASSERT_NO_TAB: no tab named ' + NT_TAB);
   ntAssertColumns_(sheet);
   var map = ntRowMap_(sheet);
   ntAssertShape_(map);                                 // throws BEFORE anything is written
-  var col = ntCurrentCol_(sheet, shipWeek, allowAppend);
+  var col = ntCurrentCol_(sheet, shipWeek, allowAppend, allowOlder);
   if (!col) { ntLog_('  ' + shipWeek + ': no column and append not allowed — skipped'); return null; }
 
   var totalRaw = sheet.getRange(map['own||Total Shipments'], col).getValue();
@@ -1350,10 +1448,14 @@ function ntRefreshOne_(shipWeek, dry, allowAppend, emptyOnly) {
   var res = ntMeasure_(shipWeek, sheetTotal, deadline);
   res.notes.forEach(function (n) { ntLog_('  ⚠️ ' + n); });
 
-  var wrote = ntWriteOwned_(sheet, col, map, res.values, dry, emptyOnly);
+  var w = ntWriteOwned_(sheet, col, map, res.values, dry, emptyOnly);
+  // 🔴 A disagreement between a hand-typed cell and the computed value is surfaced with the same
+  // ⚠️ prefix as every other note. It is found DURING the write, so it cannot be reported earlier.
+  w.notes.forEach(function (n) { ntLog_('  ⚠️ ' + n); });
+  var notes = res.notes.concat(w.notes);
   ntAssertColumns_(sheet);
-  ntLog_('  ' + shipWeek + ' col ' + col + ': ' + wrote + ' cell(s) ' + (dry ? 'previewed' : 'written'));
-  return { shipWeek: shipWeek, col: col, wrote: wrote, values: res.values, notes: res.notes };
+  ntLog_('  ' + shipWeek + ' col ' + col + ': ' + w.wrote + ' cell(s) ' + (dry ? 'previewed' : 'written'));
+  return { shipWeek: shipWeek, col: col, wrote: w.wrote, values: res.values, notes: notes };
 }
 
 /**
@@ -1404,7 +1506,8 @@ function ntBackfillFrozen(shipWeek, dry) {
                     'NOTIFICATIONS_WRITE=1 to write into a frozen column');
   }
   ntLog_('=== ntBackfillFrozen ' + shipWeek + ' — ' + (wet ? 'WRITING empty cells only' : 'DRY') + ' ===');
-  return ntRefreshOne_(shipWeek, !wet, false, true);
+  // allowOlder=true: a frozen column is never the rightmost one — see ntCurrentCol_.
+  return ntRefreshOne_(shipWeek, !wet, false, true, true);
 }
 
 // ------------------------------------------------------------------ diagnostics (no writes)

@@ -1033,6 +1033,11 @@ builder's numbers on a matured cohort** before trusting the headless path (ident
 Negatives first. Everything below was live-verified 2026-08-18; `appsscript/Notifications.gs` is the
 implementation and carries the same rules in its header.
 
+> 🔴 **AMENDED BY [D29c](#d29c--total-shipments-and-arrived-are-script-owned-kurt-2026-08-19) (2026-08-19):
+> `Total Shipments` and `Arrived` are SCRIPT-OWNED.** Where this section and the file header called
+> them "NOT OURS / owned elsewhere / read-only here", that is **superseded** — Kurt handed both rows to
+> the script. Everything else in D24 stands unchanged.
+
 - 🔴 **`Order Placed` IS NOT KLAVIYO.** Kurt's ruling: the order-confirmation email is sent by
   **Shopify**. The live flow list agrees — 26 flows, 21 live / 5 draft, **0 archived**, and none is
   an order-placed flow, so this is a fact about the account and not a status-filtered listing. The
@@ -1438,6 +1443,11 @@ serialize → chunk → sheet round-trip → resume, proving a resumed sweep equ
 
 ### D29b — `Notifications!Total Shipments` IS A HAND-TYPED MIRROR NOBODY OWNS (found 2026-08-19)
 
+> 🔴 **SUPERSEDED THE SAME DAY BY [D29c](#d29c--total-shipments-and-arrived-are-script-owned-kurt-2026-08-19).**
+> The *finding* below stands and is why D29c exists; the *conclusion* ("read, do not write — who owns
+> the row is a Kurt decision") was answered: **Kurt said the script owns it.** Read this for the
+> evidence, then D29c for the rule.
+
 The 08-19 run's `⚠️ Total Shipments is blank on this column — no percents written` is **not a bug in
 `Notifications.gs` and not a stale job**:
 
@@ -1459,3 +1469,64 @@ The 08-19 run's `⚠️ Total Shipments is blank on this column — no percents 
   filled: D24 and the file header both declare it somebody else's, and quietly taking ownership of a
   row a human maintains is how two writers end up disagreeing. **Who owns that row is a Kurt
   decision** — filling it for real is a one-line change once he says whose it is.
+
+### D29c — `Total Shipments` AND `Arrived` ARE SCRIPT-OWNED (Kurt 2026-08-19)
+
+**Kurt's decision, answering D29b:** *"the script should own the `Total Shipments` row on the
+Notifications tab (and `Arrived` too if that row is in the same hand-mirrored state) — stop
+reading-when-blank as a workaround and write it properly."* This **supersedes** the "NOT OURS / owned
+elsewhere / read-only here" framing in D24 and in the `Notifications.gs` header; both have been fixed.
+
+- 🔴 **`Arrived` WAS in the same state, and it had already SILENTLY GONE WRONG.** Both rows are
+  hand-typed literals (verified `valueRenderOption=FORMULA`) that no code wrote, and both stop after
+  `_SHIP_2026-08-03`. But unlike `Total Shipments`, the `Arrived` mirror had **drifted**:
+
+  | row | 07-13 | 07-20 | 07-27 | 08-03 | 08-10 | 08-17 |
+  |---|---|---|---|---|---|---|
+  | `Notifications!Arrived` (typed) | 2011 | 2066 | 2217 | **2075** | *(blank)* | *(blank)* |
+  | `Lost in Transit!Arrived` (script) | 2011 | 2066 | 2217 | **2268** | 2300 | 1063 |
+
+  **193 low on 08-03** — copied mid-flight and never refreshed as the cohort finished delivering.
+  That is the argument for owning these rows: *a hand mirror of a still-moving number goes stale
+  silently, and nothing ever says so.* `Total Shipments` matched on every overlapping column only
+  because it stops moving once the cohort is tagged.
+- 🔴 **`Total Shipments` IS RECOMPUTED, NOT COPIED.** `ntFetchCohort_` already runs the **identical**
+  Shopify query TnT2 is built from — `tag:'<ship>' -status:cancelled -tag:'Reship'`, the same string
+  in `paFetchCohort_` — so `cohort.length` **is** that population, already in hand, at zero extra
+  cost. Live proof: this file measured 2324 / 2316 where TnT2 published 2324 / 2316. A cell-copy
+  would inherit TnT2's write timing and break if its row moved; recomputing cannot. TnT2 is still
+  read, **purely as an independent cross-check**, and a mismatch is reported — the denominator must
+  not come from the thing being measured.
+- 🔴 **`Arrived` IS MIRRORED FROM `Lost in Transit`, AND MIRRORING IS THE SAFER CHOICE FOR THIS ROW.**
+  `arrived` is not a Shopify-only fact: PivotAnalytics derives it from fulfillment event trees **plus
+  ParcelPanel**, whose quota is 2,500 calls/week **account-wide** (D28). This file's cohort query is
+  deliberately light and fetches no fulfillments, so recomputing would mean rebuilding that pipeline
+  **and spending the shared PP quota a second time** — and any drift between two derivations would
+  put two different numbers under the same label on two tabs. One derivation, published once,
+  mirrored. `Lost in Transit` is refreshed by the same daily walk-forward job, so the mirror inherits
+  a fresh value, not a stale one.
+- 🔴 **KEYED BY HEADER TEXT + COLUMN-A LABEL, NEVER BY INDEX.** Both the ship-week column and the row
+  are looked up **by name on every read** (`ntMirrorCell_`), so inserting a row or a cohort column on
+  the source tab cannot silently re-point this at the wrong number — the lookup simply fails and
+  writes nothing.
+- 🔴 **FILL BLANKS ONLY; A DISAGREEMENT IS REPORTED, NEVER CORRECTED.** A value already in the cell was
+  typed by a human and is **never** overwritten — on any column, current or frozen, not just in
+  backfill mode (`NT_BLANK_ONLY_KEYS`). When the computed value differs, the run logs
+  `DISAGREEMENT on "Arrived" (column N): the sheet holds 2075, this run computes 2268 (+193)` and
+  **keeps the typed value**. Silently correcting it would destroy the evidence that the mirror
+  drifted, which is the most useful thing these two rows have to say. To hand a column to the script,
+  clear the cell.
+- 🔴 **BLANK ≠ ZERO.** An empty cohort writes no `Total Shipments` (a 0 would become a denominator and
+  make every percent read `0.00%`); a missing source column/row/cell leaves `Arrived` blank. Cohorts
+  that predate a source tab stay empty.
+- 🔴 **`ntBackfillFrozen` COULD NOT REACH A SINGLE ONE OF ITS DOCUMENTED TARGETS** (found while wiring
+  this). It advertises "one-time fill of an already-frozen column (B–E)", but every frozen column is
+  by definition **not** the rightmost, and `NT_ASSERT_NOT_RIGHTMOST` rejected all of them — the
+  function could only ever target the column it exists to avoid. It was unusable as shipped and
+  nothing said so. Fixed with an `allowOlder` flag passed **only** by `ntBackfillFrozen`, which names
+  its target explicitly, is double-gated on `NOTIFICATIONS_BACKFILL=1` **and** `NOTIFICATIONS_WRITE=1`,
+  defaults to dry, and writes empty cells only. **The daily-refresh path still asserts exactly as
+  before** — the guard's real job was stopping the refresh landing on an old column, and that is
+  untouched.
+- **The percent path needs no change.** `ntPct_` was always gated on `denomOk`; it was starved of a
+  denominator, not broken. Once `Total Shipments` exists the percents populate on their own.
