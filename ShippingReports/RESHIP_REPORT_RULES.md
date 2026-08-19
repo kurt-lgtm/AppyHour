@@ -1185,3 +1185,45 @@ still shouts and a blip no longer does.
 PivotAnalytics.gs:337) — a different API with per-request results, and `excPpFetch_` already
 carries its own throttle-aware backoff. Wrapping those means restructuring; do it deliberately, in
 its own change, or not at all.
+
+### D26 — A TRIAGE DECISION IS A CLOSED VOCABULARY, AND `no action` / `cs error` ARE NOT SHIPPING FAILURES (Kurt 2026-08-19)
+
+**The failure this prevents:** a bad CUSTOMER-SERVICE call — CS reshipped or credited when nothing
+was wrong with the shipment — counted as a reship and **overstated shipping failure**. Kurt:
+*"it was customer service making the wrong call … make sure its not counted."*
+
+**Second failure this prevents:** before today, **ANY** non-blank string in Triage col H suppressed
+the row. A typo (`no acton`, `resip`) therefore **silently deleted a live failure** from the
+unresolved count — an under-count with no signal anywhere.
+
+**Rules.**
+1. Col H accepts a CLOSED vocabulary, case-insensitive, whitespace/underscore-normalized
+   (`normalizeTriageDecision_`, Code.gs). Canonical values and their accepted synonyms:
+   - `reship` ← reship · reships · re ship · re-ship · reshipped · reship sent
+   - `refund` ← refund · refunded · refund issued
+   - `no action` ← no action · noaction · no-action · none · na · n/a
+   - `cs error` ← cs error · cs · cs mistake · cs-error · cserror · cs fault · cs issue ·
+     customer service error · customer service mistake
+2. **Unrecognized text is NOT a decision.** The row stays ACTIVE (still counted), and the run posts
+   a Slack `:warning:` naming the key and the text. Never silently suppress.
+3. **Counting.** Every reship/refund figure reaches Triage only through the UNRESOLVED path, and a
+   recognized decision removes the row from the tab, hence from all of it:
+   - `Product Mix` `Regular/Medium/Large Box Unresolved` (F/K/P) = COUNTIFS over `Triage`!E/F
+   - `Product Mix` `Potential Reship` (R) = reships + those unresolved
+   - `Reship` tab (ex-`Product Mix (T)`) = transpose of `Product Mix` — inherits both
+   - `Triage` col J/K "Unresolved reships by ship week" = the active entries only
+   - `Product Mix` `Actual Reship` (T) = COUNTIFS over `Raw Data` — **real reship orders, never
+     fed by col H**, so a `cs error` can never inflate it. Do not "fix" this by wiring H into it.
+4. `no action` and `cs error` are resolutions that are **NOT shipping failures** and must never be
+   counted as a reship or refund anywhere. `reship` / `refund` keep today's behavior.
+5. **`cs error` is tallied on its own** so the CS-error rate is visible rather than merely invisible:
+   `Triage` col J/K, below the Total row — per-value counts, resolved total, and
+   `CS error rate (of resolved)`. **No new tab** (Kurt).
+6. **Persistence** stays the existing hidden `_triage_decisions` tab (the mechanism that already
+   survives every refresh incl. the walk-forward freeze). Schema widened to
+   `A=key B=decision C=ship week D=issue E=decided-at`; 2-column legacy rows still load.
+7. **Walk-forward is asserted, not assumed:** `assertTriageOut_` throws BEFORE any write if a
+   resolved key was re-added to the active list, if a row is not 11 wide, or if the A/H header
+   labels moved.
+8. **Dry run:** menu → *Preview Triage decisions (writes NOTHING)* shows what would be removed,
+   the tally, and any unrecognized text, without touching the sheet. Run it before a refresh.

@@ -52,6 +52,7 @@ function onOpen() {
     .addSeparator()
     .addItem('Refresh Product Mix + Reship only', 'menuRefreshProductMix')
     .addItem('Refresh Triage only', 'menuRefreshTriage')
+    .addItem('Preview Triage decisions (writes NOTHING)', 'menuPreviewTriageDecisions')
     .addItem('Refresh Daily counts only', 'menuRefreshDaily')
     .addSeparator()
     .addItem('Backfill Gorgias + enrich reships', 'menuBackfillGorgias')
@@ -102,6 +103,48 @@ function menuRefreshDaily() {
   ss.toast('Rebuilding Daily counts…', 'Reship Report', -1);
   writeDaily_(loadState_(), menuStamp_());
   ss.toast('Done.', 'Reship Report', 5);
+}
+
+// 🔴 DRY RUN — reads Triage!H + _triage_decisions, writes NOTHING. Run this BEFORE a refresh
+// to see exactly which rows a decision will remove, what the CS-error tally will be, and which
+// col-H text is unrecognized (those rows stay counted).
+function menuPreviewTriageDecisions() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ps = SpreadsheetApp.openById(PIVOT_SHEET_ID);
+  var seen = {}, unknown = [], tally = {}, lines = [];
+  TRIAGE_DECISION_ORDER.forEach(function (d) { tally[d] = 0; });
+  function take(key, raw, ship, src) {
+    var n = normalizeTriageDecision_(raw);
+    if (n === null) { unknown.push(key + ' = "' + String(raw).trim() + '" (' + src + ')'); return; }
+    if (!n) return;
+    if (!seen[key]) { seen[key] = n; tally[n]++; lines.push(key + '  ' + (ship || '?') + '  → ' + n + ' (' + src + ')'); }
+  }
+  var tsh = ps.getSheetByName('Triage');
+  if (tsh && tsh.getLastRow() >= 3) {
+    tsh.getRange('A3:H' + tsh.getLastRow()).getValues().forEach(function (r) {
+      if (r[0] && String(r[7] == null ? '' : r[7]).trim()) take(String(r[0]), r[7], String(r[4] || ''), 'Triage!H');
+    });
+  }
+  var dsh = ps.getSheetByName('_triage_decisions');
+  if (dsh && dsh.getLastRow() >= 1) {
+    var dw = Math.max(2, Math.min(5, dsh.getMaxColumns()));
+    dsh.getRange(1, 1, dsh.getLastRow(), dw).getValues().forEach(function (r) {
+      if (r[0]) take(String(r[0]), r[1], String(r[2] || ''), 'persisted');
+    });
+  }
+  var total = 0;
+  TRIAGE_DECISION_ORDER.forEach(function (d) { total += tally[d]; });
+  var msg = 'PREVIEW ONLY — nothing was written.\n\n' +
+    TRIAGE_DECISION_ORDER.map(function (d) {
+      return d + ': ' + tally[d] + (TRIAGE_DECISION_NOT_A_FAILURE[d] ? '  (NOT counted as a shipping failure)' : '');
+    }).join('\n') +
+    '\nresolved total: ' + total +
+    '\nCS error rate (of resolved): ' + (total ? (tally['cs error'] / total * 100).toFixed(1) + '%' : 'n/a') +
+    '\n\nUNRECOGNIZED (NOT applied — rows stay counted): ' + (unknown.length ? '\n  ' + unknown.join('\n  ') : 'none') +
+    '\n\nRows that will be removed on the next refresh:\n  ' + (lines.length ? lines.join('\n  ') : 'none');
+  Logger.log(msg);
+  try { SpreadsheetApp.getUi().alert('Triage decisions — preview', msg, SpreadsheetApp.getUi().ButtonSet.OK); }
+  catch (e) { ss.toast('Preview logged (View > Executions).', 'Reship Report', 8); }
 }
 
 function menuBackfillGorgias() {
@@ -938,7 +981,7 @@ function fillRequestedFromSlack_(state, sinceDate) {
 function writeProductMix_(mondays, denoms, stamp) {
   var rows = [
     ['REFRESHED ' + stamp,
-     'sizes = live Shopify; Reship = COUNTIFS over Raw Data; Unresolved = COUNTIFS over Triage (open, no reship entered); blank box-type = Regular'],
+     'sizes = live Shopify; Reship = COUNTIFS over Raw Data; Unresolved = COUNTIFS over Triage (open, no reship entered); blank box-type = Regular. Triage rows resolved as no action / cs error are NOT counted here (see Triage col J tally)'],
     ['Cohort', 'Cohort size',
      'Regular Box', 'Regular Box Reship', 'Regular Box Reship %', 'Regular Box Unresolved', 'Regular Box Unresolved %',
      'Medium Tray', 'Medium Tray Reship', 'Medium Tray Reship %', 'Medium Tray Unresolved', 'Medium Tray Unresolved %',
@@ -1131,6 +1174,63 @@ function gorgiasForOrder_(orderName, postedIso) {
   return String(t.data[t.data.length - 1].id);
 }
 
+// ---- Triage DECISION vocabulary + counting contract (Kurt 2026-08-19) ----
+// 🔴 THE FAILURE THIS PREVENTS: a bad CUSTOMER-SERVICE call (CS reshipped/credited when
+// nothing was wrong with the shipment) counted as a shipping failure and OVERSTATED the
+// reship rate. `cs error` (and `no action`) are resolutions that are NOT shipping failures
+// and must never land in a reship/refund count.
+// 🔴 UNRECOGNIZED TEXT IS NOT A DECISION. Before today ANY non-blank string in col H
+// suppressed the row, so a typo ("no acton", "resip") silently deleted a live failure from
+// the unresolved count. Unknown text now leaves the row ACTIVE and is reported to Slack.
+//
+// WHERE COUNTS COME FROM (the whole surface — verified 2026-08-19):
+//   Product Mix `* Unresolved` (F/K/P)  = COUNTIFS over Triage!E/F   → resolved rows drop out
+//   Product Mix `Potential Reship` (R)  = D+I+N + F+K+P              → inherits the drop-out
+//   Product Mix `Actual Reship`   (T)   = D+I+N, COUNTIFS over Raw Data (REAL reship orders)
+//                                         → col H never feeds it; a `cs error` cannot inflate it
+//   Reship tab (ex-`Product Mix (T)`)   = transpose of Product Mix    → inherits both
+//   Triage col J/K                      = byWeek over the ACTIVE entries → resolved rows drop out
+// So: every reship/refund count is Triage-derived only through the UNRESOLVED path, and a
+// recognized decision removes the row from it. `no action` + `cs error` are additionally
+// tallied below so the CS-error rate is visible instead of merely invisible.
+var TRIAGE_DECISION_CANON = {
+  'reship': 'reship', 'reships': 'reship', 're ship': 'reship', 're-ship': 'reship',
+  'reshipped': 'reship', 'reship sent': 'reship',
+  'refund': 'refund', 'refunded': 'refund', 'refund issued': 'refund',
+  'no action': 'no action', 'noaction': 'no action', 'no-action': 'no action',
+  'none': 'no action', 'na': 'no action', 'n/a': 'no action',
+  'cs error': 'cs error', 'cs': 'cs error', 'cs mistake': 'cs error', 'cs-error': 'cs error',
+  'cserror': 'cs error', 'cs fault': 'cs error', 'cs issue': 'cs error',
+  'customer service error': 'cs error', 'customer service mistake': 'cs error'
+};
+// resolutions that are NOT a shipping failure — never counted as a reship/refund anywhere
+var TRIAGE_DECISION_NOT_A_FAILURE = { 'no action': true, 'cs error': true };
+var TRIAGE_DECISION_ORDER = ['reship', 'refund', 'no action', 'cs error'];
+
+// '' = blank/undecided · null = UNRECOGNIZED (must not act like a decision) · else canonical
+function normalizeTriageDecision_(raw) {
+  var s = String(raw == null ? '' : raw).trim().toLowerCase().replace(/[\s_]+/g, ' ');
+  if (!s) return '';
+  return Object.prototype.hasOwnProperty.call(TRIAGE_DECISION_CANON, s) ? TRIAGE_DECISION_CANON[s] : null;
+}
+
+// an 11-wide Triage row carrying only the right-hand J/K summary pair
+function triageSummaryRow_(j, k) { return ['', '', '', '', '', '', '', '', '', j, k]; }
+
+// 🔴 NAMED ASSERTS — throw BEFORE any write, so a shape regression never reaches Kurt's tab.
+function assertTriageOut_(out, entries, decided) {
+  if (!out || out.length < 2) throw new Error('assertTriageHasHeaders: Triage output has no header rows');
+  if (out[1][7] !== 'Decision') throw new Error('assertTriageDecisionColumn: H2 must be "Decision", got "' + out[1][7] + '"');
+  if (out[1][0] !== 'Key') throw new Error('assertTriageKeyColumn: A2 must be "Key", got "' + out[1][0] + '"');
+  for (var i = 0; i < out.length; i++) {
+    if (out[i].length !== 11) throw new Error('assertTriageRowWidth: row ' + i + ' width ' + out[i].length + ' != 11');
+  }
+  // WALK-FORWARD: a resolved key must NEVER be re-added to the active list.
+  entries.forEach(function (e) {
+    if (decided[e.key]) throw new Error('assertTriageWalkForward: resolved key ' + e.key + ' (' + decided[e.key] + ') was re-added');
+  });
+}
+
 // ---- Triage (Slack-only feed, requested-not-entered) ----
 function writeTriage_(state, oldest, stamp) {
   var originals = {};
@@ -1140,14 +1240,24 @@ function writeTriage_(state, oldest, stamp) {
   // preserve Decision (key->H), Gorgias id (order->G), Box Type (order->F),
   // Ship Week (order->E) so we don't re-hit Shopify/Gorgias for same rows hourly
   var prevDec = {}, gidByOrder = {}, shipByOrder = {}, boxByOrder = {}, orderByGid = {}, decided = {};
-  // persisted decisions (hidden _triage_decisions tab): a row with ANY Decision is
+  var decMeta = {};      // key -> {ship, issue, at} so the tally can be read back per ship week
+  var unknownDec = [];   // [key, rawText, source] — reported loudly, NEVER treated as resolved
+  // persisted decisions (hidden _triage_decisions tab): a row with a RECOGNIZED Decision is
   // "handled" and drops off the active list — Triage regenerates from Slack each run,
   // so the decision must live off-list or the row would just reappear (Kurt 2026-07-27).
+  // Schema A=key B=decision C=ship week D=issue E=decided-at (C-E added 2026-08-19; older
+  // 2-column rows still load — the extra fields default to '').
   try {
     var dsh = SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName('_triage_decisions');
     if (dsh && dsh.getLastRow() >= 1) {
-      dsh.getRange('A1:B' + dsh.getLastRow()).getValues().forEach(function (r) {
-        if (r[0]) decided[String(r[0])] = String(r[1] || 'x');
+      var dw = Math.max(2, Math.min(5, dsh.getMaxColumns()));
+      dsh.getRange(1, 1, dsh.getLastRow(), dw).getValues().forEach(function (r) {
+        if (!r[0]) return;
+        var dk = String(r[0]), dn = normalizeTriageDecision_(r[1]);
+        if (dn === null) { unknownDec.push([dk, String(r[1]), '_triage_decisions']); return; }
+        if (!dn) return;
+        decided[dk] = dn;
+        decMeta[dk] = { ship: String(r[2] || ''), issue: String(r[3] || ''), at: String(r[4] || '') };
       });
     }
   } catch (e) {}
@@ -1156,7 +1266,15 @@ function writeTriage_(state, oldest, stamp) {
     if (psh && psh.getLastRow() >= 3) {
       psh.getRange('A3:H' + psh.getLastRow()).getValues().forEach(function (row) {
         if (row[0]) prevDec[String(row[0])] = row[7];
-        if (row[0] && String(row[7] || '').trim()) decided[String(row[0])] = String(row[7]).trim();  // newly-typed Decision → suppress
+        // newly-typed Decision → suppress. Unknown text does NOT suppress (it is reported).
+        if (row[0] && String(row[7] == null ? '' : row[7]).trim()) {
+          var tk = String(row[0]), tn = normalizeTriageDecision_(row[7]);
+          if (tn === null) unknownDec.push([tk, String(row[7]).trim(), 'Triage!H']);
+          else if (tn) {
+            decided[tk] = tn;
+            decMeta[tk] = { ship: String(row[4] || ''), issue: String(row[2] || ''), at: stamp };
+          }
+        }
         var ord = String(row[3] || '').replace(/^#/, '');
         if (ord && row[4]) shipByOrder[ord] = String(row[4]);
         if (ord && row[5]) boxByOrder[ord] = String(row[5]);
@@ -1222,9 +1340,26 @@ function writeTriage_(state, oldest, stamp) {
     byWeek[w] = (byWeek[w] || 0) + 1;
   });
   var weeks = Object.keys(byWeek).sort();
+  // 🔴 LOUD: unrecognized col-H text is NOT applied — say so, or a typo silently under-counts.
+  if (unknownDec.length) {
+    Logger.log('TRIAGE unrecognized Decision values (rows stay ACTIVE): ' + JSON.stringify(unknownDec));
+    try {
+      slack_(':warning: Triage Decision column: ' + unknownDec.length + ' unrecognized value(s) — NOT applied, ' +
+             'those rows STAY in the unresolved count: ' +
+             unknownDec.map(function (u) { return '`' + u[0] + '`="' + u[1] + '" (' + u[2] + ')'; }).join(', ') +
+             '. Accepted: reship / refund / no action / cs error.', true);
+    } catch (e) {}
+  }
+  // decision tally (resolved rows — these are OFF the unresolved count by construction)
+  var tally = {};
+  TRIAGE_DECISION_ORDER.forEach(function (d) { tally[d] = 0; });
+  Object.keys(decided).forEach(function (k) { if (tally[decided[k]] != null) tally[decided[k]]++; });
+  var decidedTotal = 0;
+  TRIAGE_DECISION_ORDER.forEach(function (d) { decidedTotal += tally[d]; });
+  Logger.log('TRIAGE decisions: ' + JSON.stringify(tally) + ' (total ' + decidedTotal + '); active entries ' + entries.length);
   // main table A-H + gap I + by-ship-week summary J-K (to the right)
   var out = [
-    ['REFRESHED ' + stamp, 'Slack posts w/o an entered reship — Col H is YOURS: type reship / refund / no action to REMOVE the row (persists)',
+    ['REFRESHED ' + stamp, 'Slack posts w/o an entered reship — Col H is YOURS: type reship / refund / no action / cs error to REMOVE the row (persists); no action + cs error are NOT counted as a reship or refund anywhere; unknown text is ignored and reported',
      '', '', '', '', '', 'Decision', '', 'Unresolved reships by ship week', ''],
     ['Key', 'Posted', 'Issue', 'Order', 'Ship Week', 'Box Type', 'Gorgias', 'Decision', '', 'Ship Week', 'Count']];
   var n = Math.max(entries.length, weeks.length);
@@ -1236,10 +1371,25 @@ function writeTriage_(state, oldest, stamp) {
     var s = r2 < weeks.length ? [weeks[r2], byWeek[weeks[r2]]] : ['', ''];
     out.push(m.concat(['']).concat(s));
   }
-  out.push(['', '', '', '', '', '', '', '', '', 'Total', entries.length]);
+  out.push(triageSummaryRow_('Total', entries.length));
+  // ---- resolved-decision tally (J/K, under the unresolved summary) ----
+  // Lives HERE rather than on a new tab (Kurt: no new tabs). Every row below is already
+  // OFF the unresolved count; `no action` + `cs error` are additionally not shipping failures.
+  out.push(triageSummaryRow_('', ''));
+  out.push(triageSummaryRow_('Resolved decisions (removed from the counts above)', ''));
+  TRIAGE_DECISION_ORDER.forEach(function (d) {
+    out.push(triageSummaryRow_('  ' + d + (TRIAGE_DECISION_NOT_A_FAILURE[d] ? '  (NOT a shipping failure)' : ''), tally[d]));
+  });
+  out.push(triageSummaryRow_('  resolved total', decidedTotal));
+  out.push(triageSummaryRow_('CS error rate (of resolved)',
+    decidedTotal ? (tally['cs error'] / decidedTotal * 100).toFixed(1) + '%' : 'n/a'));
+  assertTriageOut_(out, entries, decided);
   writeTabTo_(PIVOT_SHEET_ID, 'Triage', out, false);
   // persist the suppressed decisions so they survive the next Slack-fed rebuild
-  var decRows = Object.keys(decided).map(function (k) { return [k, decided[k]]; });
+  var decRows = Object.keys(decided).map(function (k) {
+    var m = decMeta[k] || {};
+    return [k, decided[k], m.ship || '', m.issue || '', m.at || stamp];
+  });
   if (decRows.length) {
     writeTabTo_(PIVOT_SHEET_ID, '_triage_decisions', decRows, false);
     try { SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName('_triage_decisions').hideSheet(); } catch (e) {}
