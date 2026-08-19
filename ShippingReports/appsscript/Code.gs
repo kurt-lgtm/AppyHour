@@ -849,10 +849,20 @@ function ppDateStr_(s) { var m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})
 function ppDayDiff_(a, b) {
   return Math.round((new Date(b + 'T00:00:00Z') - new Date(a + 'T00:00:00Z')) / 86400000);
 }
+// 🔴 ONE ACCOUNTANT (Kurt 2026-08-19, directive P3 in EXCEPTIONS_ALERT_RULES.md). ParcelPanel's
+// quota is 2,500/week ACCOUNT-WIDE. This helper is UNCAPPED and runs with the hourly refresh plus
+// enrichTransitOverride_, and until now it reported NOTHING to the shared `PP_WEEK_USED` counter —
+// so that counter, which every pacing decision in the exceptions sweep is computed from, measured
+// one of at least four drains and read as complete. It now books what it spends.
+// 🔴 DELIBERATELY NOT CAPPED BY THE LEDGER. The reship report is a shipped surface Dan reads and a
+// missing carrier/transit silently corrupts it; the exceptions sweep can retry an hour later and
+// this cannot. So this one reports and is allowed to overdraw, and the sweep is what yields.
+// Reconsider the moment the ParcelPanel -> DigitalOcean webhook replaces polling.
 function ppLookup_(orderNums) {
   var out = {}, key = PropertiesService.getScriptProperties().getProperty('PARCELPANEL_API_KEY');
   if (!key || !orderNums || !orderNums.length) return out;
   var uniq = orderNums.filter(function (n, i) { return n && orderNums.indexOf(n) === i; });
+  var charged = 0;
   var reqs = uniq.map(function (n) {
     return { url: 'https://open.parcelwill.com/api/v2/tracking/order?order_number=' + encodeURIComponent(n),
              headers: { 'x-parcelpanel-api-key': key }, muteHttpExceptions: true };
@@ -860,7 +870,9 @@ function ppLookup_(orderNums) {
   for (var i = 0; i < reqs.length; i += 50) {
     var resp = UrlFetchApp.fetchAll(reqs.slice(i, i + 50));
     resp.forEach(function (r, k) {
-      if (r.getResponseCode() !== 200) return;
+      var code = r.getResponseCode();
+      if (code !== 429 && code !== 503) charged++;   // served, whatever it answered
+      if (code !== 200) return;
       try {
         var o = JSON.parse(r.getContentText());
         var ships = ((o.order || {}).shipments) || ((o.data || {}).shipments) || o.shipments || [];
@@ -876,6 +888,15 @@ function ppLookup_(orderNums) {
       } catch (e) {}
     });
   }
+  // Guarded: the accountant lives in Exceptions.gs. If it is ever absent the call must still
+  // return — but the under-count has to be SAID, never left as a number that looks complete.
+  try {
+    if (typeof excBudgetCharge_ === 'function') excBudgetCharge_(charged, 'rpt');
+    else Logger.log('⚠️ PP spend NOT recorded — excBudgetCharge_ missing (Exceptions.gs); the ' +
+                    'shared PP_WEEK_USED ledger is under-counting by ' + charged + ' call(s).');
+  } catch (eB) { Logger.log('⚠️ PP ledger charge failed: ' + eB); }
+  Logger.log('ppLookup_: ' + uniq.length + ' asked, ' + charged +
+             ' served and billed to the shared ParcelPanel ledger [rpt]');
   return out;
 }
 // "late supersedes warm": a box >2 transit days arrived warm BECAUSE it was delayed —

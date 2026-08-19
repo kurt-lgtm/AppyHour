@@ -235,6 +235,159 @@ ping day. Stale heartbeat ⇒ the trigger is gone (`installExceptionsTrigger()`)
 the fault is downstream. The Apps Script REST API cannot list triggers, so without this stamp the
 question has no answer short of opening the editor.
 
+## 🔴 PARCELPANEL BUDGET DIRECTIVE P1–P7 (Kurt GO, 2026-08-19) — SSOT for every PP call
+
+**Pacing (`edadb7b`, above) was never the whole fault and was never given a week to work** — it
+deployed 2026-08-19 10:19 ET, by which time week 34's counter already read 2,000/2,000. What the
+post-mortem actually found, measured on `_exc_state`, `C:\AppyHourData\shipping.db` and the live
+GAS source (ZERO ParcelPanel calls spent investigating):
+
+| evidence | value |
+|---|---|
+| orders polled Mon 8/17 · Tue 8/18 · Wed 8/19 | **0 · 0 · 0** |
+| orders polled in the whole of week 34 | **88**, all on Sun 8/16 (h20: 22, h21: 63) |
+| calls charged to `PP_WEEK_USED` in week 34 | **2,000** — so ~1,912 bought **no recorded observation** |
+| live cohort `_SHIP_2026-08-17`, 1,344 open | **never polled once** |
+
+🔴 **The rule the whole directive turns on: a call that ParcelPanel refuses or never receives is
+not spend, and a counter that bills it is worse than no counter — it is a wrong number that every
+pacing decision is computed from.**
+
+⏳ **This is INTERIM — weeks, not months.** A ParcelPanel → DigitalOcean webhook is being stood up
+separately and replaces polling outright (with a slow daily reconciliation poll as the permanent
+backstop). Do not build further on this ledger; retire it with the polling.
+
+### P1 — CHARGE FOR WHAT WAS SERVED, REFUND WHAT WAS NOT
+
+`excBudgetTake_` charged the counter **before** `excPpFetch_` ran and never credited anything back,
+so a run throttled out or killed at the 6-minute ceiling spent its full reservation on nothing —
+**and was indistinguishable from a clean run**, because a fully-throttled batch counts as
+`out.throttled`, never `out.failed`, so the `EXC_PP_FAIL_RATIO` throw cannot fire.
+
+The reservation still happens first (two concurrent runs must not spend the same balance), then
+**`excBudgetSettle_(reserved, pp.charged)` credits back the difference, before anything downstream
+can throw.** `pp.charged` counts only responses that were **not 429/503** — a request ParcelPanel
+actually served, whatever it answered. 🔴 Never bill on `pp.seen` instead: a 404 is a served call
+that yields no `seen` entry, and refunding it would under-count real spend.
+
+### P2 — ONE WEEK BOUNDARY: **Monday 00:00 ET → Sunday 24:00 ET**
+
+`excWeekKey_` used `formatDate(now, tz, 'ww')`. Java's `ww` is **locale** week-of-year and the US
+locale starts the week on **Sunday**, while `excRunsLeftThisWeek_` counts hours from a **Monday**
+start. Proof it really rolled on Sunday, not inference: week 33 was already drained (1,676 + 651 =
+2,327 ≥ 2,000) yet Sun 8/16 20:00 and 21:00 still stamped 22 and 63 orders.
+
+🔴 **With pacing deployed the mismatch gets WORSE:** on a Sunday `runsLeft = 24 − hr ≤ 24` against
+`left = 2000`, so `pace = ceil(2000/24) = 84` and **24 Sunday runs × 84 = 2,016 — the entire week's
+allowance legally spent on the one day**, recurring Sun 2026-08-23. The key is now that week's
+Monday ET date (`WK2026-08-17`), computed on a **UTC-noon anchor built from the ET calendar parts**
+so a DST transition cannot shift it a day (a naive `now − 6×86400000` formatted in ET lands on
+Saturday 23:00 for a Sunday-00:30 run in a fall-back week — covered by tests).
+
+### P3 — ONE ACCOUNTANT. And say out loud that it is still a LOWER BOUND
+
+`PP_WEEK_USED` was decremented by `Exceptions.gs` **only**, while three other consumers spent the
+same **account-wide 2,500/wk** quota silently. The property is now a ledger,
+`"<wkKey>|<total>|<exc>|<rpt>|<pa>"`:
+
+| consumer | cadence | counted? | capped by the ledger? |
+|---|---|---|---|
+| `Exceptions.gs excPpFetch_` | hourly | ✅ `exc` | ✅ yes — this is the consumer that yields |
+| `Code.gs ppLookup_` | hourly `refresh()` + `enrichTransitOverride_` | ✅ `rpt` | ❌ **deliberately not** |
+| `PivotAnalytics.gs paPpFetch_` | daily, 200/run | ✅ `pa` | ❌ **deliberately not** |
+| `ShipRouting/server/sync_delivery_status.py` | hourly on the cloud worker, `PP_CAP_PER_RUN=300` | ❌ **cannot** | ❌ |
+| ad-hoc local python probes | ad hoc | ❌ | ❌ |
+
+🔴 **`ppLookup_` and `paPpFetch_` report but are NOT starved.** They feed columns Dan reads, and a
+missing carrier/transit corrupts a number silently; the sweep can retry an hour later and they
+cannot. The sweep is fenced by **both** its own `EXC_PP_WEEKLY_BUDGET` (2,000) **and** the account
+`EXC_PP_ACCOUNT_QUOTA` (2,500) minus everything reported, so an overdrawing report throttles the
+sweep rather than the reverse.
+
+🔴 **The ledger is a LOWER BOUND and must always be described as one.** `sync_delivery_status.py`
+runs in a different runtime with no access to these Script Properties. **⚠️ UNVERIFIED: whether the
+App Platform env sets `DELIVERY_SYNC=1`.** If it does, that path alone projects up to 300 × 168 =
+50,400 calls/wk against a 2,500 cap and the quota is being spent entirely outside this project —
+which would also explain the throttling. **Kurt decision A, still open.**
+
+### P4 — A CRASH IS NOT A PING: failure alerts bypass the Wed–Sun gate
+
+`hourlyExceptionSweep`'s catch block posted through `excSlackPost_`, which applies the day gate — so
+**every Mon/Tue sweep failure posted absolutely nothing**, and Mon 8/17 / Tue 8/18 are exactly those
+days. It now posts through `excSlackHealth_`. The day gate exists to spare Dan customer noise, never
+to hide a broken sweep. 🔴 **Exception PINGS keep the gate; health and failure alerts never get it.**
+
+### P5 — POLL POLICY (a)+(b)+(c), Kurt-approved
+
+- **(a) Shopify triages, ParcelPanel confirms.** `excResolveDelivered_` already fetches fulfillment
+  `displayStatus` + events for the whole triage window on a request that was being made anyway —
+  free against this quota. ParcelPanel is asked **only** about the ambiguous remainder:
+  `DELAYED`, `ATTEMPTED_DELIVERY`, or **no movement scan at all** (`excShopifyFlagged_`).
+- **(b) At most once per calendar day per box, longest-unpolled first.**
+- **(c) Cohort age ≥ 3 days**, OR Shopify-flagged. Measured on mature cohorts (07-20, 07-27, 08-03,
+  08-10): **94–99% of a cohort is still legitimately in transit on day +1/+2, and no ping class can
+  fire then** (`EXC_NEVER_PICKED_MIN_DAYS = 3`, `EXC_DELAYED_MIN_DAYS = 3`). Polling the day-1/-2
+  mass is where the whole budget went and it can produce nothing.
+- 🔴 **But NOT zero on Mon/Tue.** `EXC_CP_SCAN = 5`: a Monday exception buried under more than five
+  routine facility scans by Wednesday is invisible forever — the exact `#170893` failure mode
+  `112ba5a` was written to fix. Mon/Tue keep a **thin sweep, Shopify-flagged only, hard 100/day**
+  (`EXC_THIN_DAY_CAP`).
+- 🔴 **An empty batch is now often CORRECT**, so the starvation alarm splits into two shapes it must
+  never confuse: **STARVED** (work was due, budget allowed none) and **BLINDSPOT** (nothing judged
+  due while open boxes have never been polled once — a policy bug, and the week-34 signature).
+- 🔴 **Log actual spend every run:** `reserved / served / refunded / answered` plus the ledger.
+
+**Projected weekly spend (why (a)+(b)+(c) fits and the alternatives do not):**
+
+| leg | calls/wk |
+|---|---|
+| current cohort, day +3…+7, 1×/day (201/198/280/169 measured across four cohorts) | 170–280 |
+| previous cohort, day +8…+14, 1×/day (`EXC_COHORTS_BACK = 2`; ~18–40/day) | 130–280 |
+| Tuesday Dallas leg (~110 boxes) | ~30 |
+| thin Mon/Tue sweep, 100/day × 2 | 200 |
+| retry/throttle headroom @ 25% | ~200 |
+| **TOTAL** | **≈ 730–990 of 2,000** |
+
+Under P1 the headroom row is now conservative: throttled retries are **refunded**, so they no longer
+consume the line they are budgeted for. Account-level, add `pa` ≈180/wk and `rpt` (uncapped, newly
+visible for the first time) — the first honest `rpt` figure is itself a deliverable of this change.
+🔴 **(b) alone does NOT fit** (1,500–2,300 open × 7 = 10,500–16,100); **(b)+(c) does not fit either**
+(5 ping days × 1,500–2,300 = 7,500–11,500). Only **(a)** removes the day-1/-2 mass, and the survival
+curve is what makes it cheap.
+
+### P6 — THE PACE FLOOR IS CONDITIONAL
+
+An unconditional `EXC_PP_MIN_PER_RUN` is not a floor, it is a second budget: 109 runs still left in
+a week × 10 = **1,090 calls pacing is powerless to prevent**, spent on a set the once-per-day tier
+says is not due. The floor applies **only while `left ≥ runsLeft × floor`** — i.e. only when the
+budget can afford it for every run still to come.
+
+### P7 — THE WEEK-34 COUNTER IS RESET TO ZERO, AND HERE IS WHY THAT IS SAFE
+
+The key **format** changes with this deploy (`2026-W34` → `WK2026-08-17`), so the first run after
+the push sees a key mismatch and rolls the ledger to `WK2026-08-17|0|0|0|0`. **Deliberate.**
+Leaving it exhausted means ~109 more dead runs this week for a balance that was charged for nothing.
+
+Why zeroing is defensible and not just convenient: (i) 1,912 of the 2,000 provably bought no
+recorded observation; (ii) under P1, if ParcelPanel's own quota really is depleted the sweep now
+throttles, **refunds**, and the 6-hourly `excSlackHealth_` alarm says so — the failure is loud
+instead of silent; (iii) the remaining Wed→Sun window at the new policy is ~400–600 calls.
+🔴 **What is NOT known: ParcelPanel's own quota state and its reset schedule.** The zero is a
+deliberate restart of *our* accounting, never a claim about *theirs*.
+
+Manual lever: **Shipping Exceptions → Reset ParcelPanel weekly ledger** (`excResetWeeklyBudget`).
+Use it only when the recorded spend is known to be fiction; it is never automatic.
+
+### Still open (Kurt decisions, not fixed here)
+
+- **A.** `DELIVERY_SYNC` on the cloud App Platform env — 0 or 1? If 1, P3's ledger cannot see the
+  dominant drain.
+- **B.** Re-consent clasp with `script.processes` so execution history (duration / `TIMED_OUT` /
+  throttle rate) is readable. Until then, **whether throttling or the 6-minute kill burned the
+  1,912 is UNVERIFIED** — P1 fixes both, which is why the deploy did not wait on it.
+- **C.** 2,000/wk still cannot poll a ~1,500-box open set hourly. Pacing feeds the ping window; it
+  does not make the set fresh. 🔴 **Do not silently raise `EXC_PP_WEEKLY_BUDGET` past the plan.**
+
 ## Alert classes (Kurt 2026-07-30)
 
 **PING** — hard failures plus address/attempt issues:

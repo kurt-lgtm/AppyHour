@@ -1333,3 +1333,34 @@ promise, and **zero** boxes on either cohort are actually still moving past thei
 ⏱️ `_SHIP_2026-08-10` freezes at age 10 on **2026-08-20** (D15). If the split is to appear in that
 column at all, the insert and a refresh must happen **before then**; after that the column is
 Kurt-owned forever and the new row stays blank there.
+
+### D28 — `ppLookup_` REPORTS ITS PARCELPANEL SPEND TO THE SHARED LEDGER, AND IS NOT CAPPED BY IT (Kurt GO 2026-08-19)
+
+🔴 **The failure this closes:** ParcelPanel's quota is **2,500 calls/week, ACCOUNT-WIDE**, and until
+now `Code.gs ppLookup_` — **uncapped**, one GET per order in 50-request `fetchAll` batches, running
+with the hourly `refresh()` **and** `enrichTransitOverride_` — reported **nothing**. The counter
+`PP_WEEK_USED` was decremented by `Exceptions.gs` alone, so the one number every pacing decision in
+the exceptions sweep is computed from measured one of at least four drains **and read as complete**.
+That is the whole class: *a number that looks total while being partial is worse than no number.*
+
+**The rule.** `ppLookup_` counts every response that is **not a 429/503** (a request ParcelPanel
+actually served, whatever it answered) and books it to the shared ledger under `rpt` via
+`excBudgetCharge_`. The ledger format and the reserve/settle contract are owned by
+[`EXCEPTIONS_ALERT_RULES.md`](EXCEPTIONS_ALERT_RULES.md) **directive P1–P7** — read it before
+touching any ParcelPanel call path in this project. Do not fork a second counter.
+
+🔴 **DELIBERATELY NOT CAPPED.** The reship report is a shipped surface Dan reads and a missing
+carrier / `transit_days` corrupts it silently; the exceptions sweep can retry an hour later and this
+cannot. So this consumer reports honestly and is allowed to overdraw, and the **sweep** is what
+yields — it is fenced by both its own 2,000 reservation and the 2,500 account quota minus everything
+reported here. Reversing that (starving the report to protect the sweep) trades a visible number for
+an invisible one and is exactly wrong.
+
+**The charge is guarded** (`typeof excBudgetCharge_ === 'function'`): the accountant lives in
+`Exceptions.gs`, and if it is ever absent the lookup still returns — but the under-count is **logged
+by size**, never left as a number that looks complete. ⚠️ The ledger remains a **lower bound**:
+`ShipRouting/server/sync_delivery_status.py` and ad-hoc probes spend the same account quota from
+runtimes that cannot reach these Script Properties.
+
+⏳ **Interim.** A ParcelPanel → DigitalOcean webhook replaces polling outright (slow daily
+reconciliation poll as the permanent backstop). Retire this metering with the polling, not before.

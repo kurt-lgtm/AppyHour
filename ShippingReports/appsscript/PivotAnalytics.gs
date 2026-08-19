@@ -360,7 +360,14 @@ function paPpFetch_(orderNums, winLo, winHi) {
   // total PP failure is invisible everywhere except those few orders — on the 2026-08-07 preview it
   // cost exactly 2 (#166228, #166660) out of 2,305 and looked like a rounding wobble. Count every
   // stage and shout if PP contributed nothing.
-  var stats = { asked: orderNums.length, ok: 0, http: {}, delivered: 0 };
+  // 🔴 ONE ACCOUNTANT (directive P3, 2026-08-19). This leg spent the shared 2,500/wk ParcelPanel
+  // account quota WITHOUT reporting a single call, so `PP_WEEK_USED` — the number every pacing
+  // decision in Exceptions.gs is computed from — was a fiction. `charged` counts requests
+  // ParcelPanel actually SERVED (anything that is not a 429/503 refusal) and books them to the
+  // shared ledger under 'pa'. This leg is NOT capped by the ledger: the analytics column is a
+  // shipped surface Dan reads, and starving it to protect the sweep trades a visible number for an
+  // invisible one. It reports honestly; the exceptions sweep is the consumer that yields.
+  var stats = { asked: orderNums.length, ok: 0, http: {}, delivered: 0, charged: 0 };
   if (!key) { paLog_('  🔴 PP SKIPPED — PARCELPANEL_API_KEY not set; union degraded to Shopify-only'); return out; }
   if (!orderNums.length) return out;
   for (var i = 0; i < orderNums.length; i += 50) {
@@ -372,6 +379,7 @@ function paPpFetch_(orderNums, winLo, winHi) {
     resp.forEach(function (r, k) {
       var code = r.getResponseCode();
       stats.http[code] = (stats.http[code] || 0) + 1;
+      if (code !== 429 && code !== 503) stats.charged++;   // served, whatever it answered
       if (code !== 200) return;
       stats.ok++;
       try {
@@ -392,8 +400,16 @@ function paPpFetch_(orderNums, winLo, winHi) {
       } catch (e) {}
     });
   }
+  // Book the spend to the shared weekly ledger. Guarded: Exceptions.gs owns the accountant, and a
+  // missing/renamed helper must degrade to an unreported call, never take the refresh down.
+  try {
+    if (typeof excBudgetCharge_ === 'function') excBudgetCharge_(stats.charged, 'pa');
+    else paLog_('  ⚠️ PP spend NOT recorded — excBudgetCharge_ missing (Exceptions.gs); ' +
+                'the shared PP_WEEK_USED ledger is under-counting by ' + stats.charged);
+  } catch (eB) { paLog_('  ⚠️ PP ledger charge failed: ' + eB); }
   paLog_('  PP: asked ' + stats.asked + '  http ' + JSON.stringify(stats.http) +
-         '  parsed ' + Object.keys(out).length + '  delivered ' + stats.delivered);
+         '  parsed ' + Object.keys(out).length + '  delivered ' + stats.delivered +
+         '  billed to shared ledger ' + stats.charged);
   if (!stats.ok) paLog_('  🔴 PP RETURNED NOTHING USABLE — union degraded to Shopify-only this run');
   return out;
 }
