@@ -205,19 +205,77 @@ function refreshPivotSheet_(state, mondays) {
   props.setProperty('PIVOT_WATERMARK', String(maxNum));
 }
 
+// ---------- transient-network retry (shared by every job in this project) ----------
+
+// 🔴 WHY: 2026-08-19 04:09 and 05:09 the hourly `refresh` died with
+// "Exception: Address unavailable: https://504ac4.myshopify.com/.../graphql.json" and alarmed Kurt
+// in Slack; the 08:08 run succeeded untouched. That string is NOT an HTTP status — UrlFetchApp
+// THROWS it when Google cannot reach the host at all, so `muteHttpExceptions` never sees it and
+// every response-code check downstream is skipped. One blip killed a whole run because nothing
+// retried. Bounded retry only: 3 attempts, ~1s/2s/4s plus jitter.
+// 🔴 CONNECTION-CLASS ONLY. A 400/401/403 is a REAL fault and must still fail loudly and
+// immediately — retrying it hides a broken token or a malformed query behind 7 seconds of silence.
+// Retryable = a thrown connection error, or an HTTP 429 / 5xx. Everything else returns/throws
+// unchanged, so callers that already handle 429 (shopifyGql_, ntGet_) keep their own logic.
+var NET_RETRY_ATTEMPTS = 3;
+var NET_RETRY_BASE_MS = 1000;
+
+/**
+ * True only for failures worth retrying. When the message carries an HTTP code, that code DECIDES
+ * (4xx => false, no exceptions) — the free-text test is reached only when there is no code, so a
+ * 400 whose response body happens to contain the word "unavailable" can never be mistaken for a
+ * connection failure.
+ */
+function netRetryable_(e) {
+  var m = String((e && e.message) || e || '');
+  var mm = m.match(/returned code (\d{3})/i);
+  if (mm) { var c = Number(mm[1]); return c === 429 || c >= 500; }
+  return /address unavailable|dns error|timed? ?out|timeout|connection (was )?(reset|refused|closed|aborted)|network error|service unavailable/i.test(m);
+}
+
+/**
+ * Drop-in for UrlFetchApp.fetch with bounded exponential backoff on connection-class failures.
+ * `tag` is a short label for the log line; the URL is logged with its query string stripped so a
+ * token in a query param can never reach the log.
+ * Every retry is LOGGED — a flaky window has to be visible afterwards, not silently smoothed over.
+ */
+function netFetch_(url, params, tag) {
+  var label = String(tag || url).split('?')[0];
+  for (var a = 0; a < NET_RETRY_ATTEMPTS; a++) {
+    var last = a === NET_RETRY_ATTEMPTS - 1;
+    try {
+      var r = UrlFetchApp.fetch(url, params);
+      var code = r.getResponseCode();
+      if (!last && (code === 429 || code >= 500)) {
+        Logger.log('  net retry ' + (a + 1) + '/' + (NET_RETRY_ATTEMPTS - 1) + ': HTTP ' + code + ' on ' + label);
+        Utilities.sleep(NET_RETRY_BASE_MS * Math.pow(2, a) + Math.floor(Math.random() * 400));
+        continue;
+      }
+      // Exhausted, or not retryable: hand the response back UNCHANGED so existing code-checks run.
+      return r;
+    } catch (e) {
+      if (last || !netRetryable_(e)) throw e;
+      Logger.log('  net retry ' + (a + 1) + '/' + (NET_RETRY_ATTEMPTS - 1) + ': ' +
+                 String(e).slice(0, 120) + ' on ' + label);
+      Utilities.sleep(NET_RETRY_BASE_MS * Math.pow(2, a) + Math.floor(Math.random() * 400));
+    }
+  }
+  throw new Error('netFetch_ fell through on ' + label);   // unreachable; never return undefined
+}
+
 // ---------- Shopify ----------
 
 function shopifyGql_(query, variables) {
   var props = PropertiesService.getScriptProperties();
   var url = 'https://' + props.getProperty('SHOPIFY_STORE') + '.myshopify.com/admin/api/2026-04/graphql.json';
   for (var attempt = 0; attempt < 6; attempt++) {
-    var resp = UrlFetchApp.fetch(url, {
+    var resp = netFetch_(url, {
       method: 'post',
       contentType: 'application/json',
       headers: { 'X-Shopify-Access-Token': props.getProperty('SHOPIFY_TOKEN') },
       payload: JSON.stringify({ query: query, variables: variables || {} }),
       muteHttpExceptions: true,
-    });
+    }, 'shopify graphql');
     if (resp.getResponseCode() === 429) { Utilities.sleep(2000); continue; }
     var d = JSON.parse(resp.getContentText());
     if (d.errors) {
@@ -298,14 +356,14 @@ function findOriginal_(customerGid, beforeIso, selfName, complaintDate) {
 function gorgiasGet_(path, params) {
   var props = PropertiesService.getScriptProperties();
   var qs = Object.keys(params || {}).map(function (k) { return k + '=' + encodeURIComponent(params[k]); }).join('&');
-  var resp = UrlFetchApp.fetch('https://appyhour.gorgias.com/api' + path + (qs ? '?' + qs : ''), {
+  var resp = netFetch_('https://appyhour.gorgias.com/api' + path + (qs ? '?' + qs : ''), {
     headers: {
       Authorization: 'Basic ' + Utilities.base64Encode(
         props.getProperty('GORGIAS_USER') + ':' + (props.getProperty('GORGIAS_KEY') || props.getProperty('GORGIAS_API_KEY'))),
       'User-Agent': 'AppyHourReshipReport/1.0', // default UA gets Cloudflare 1010
     },
     muteHttpExceptions: true,
-  });
+  }, 'gorgias api');
   Utilities.sleep(1200); // ~0.8 req/s pacing
   if (resp.getResponseCode() >= 400) return null;
   return JSON.parse(resp.getContentText());
@@ -641,12 +699,12 @@ function slack_(text, critical) {
   var token = PropertiesService.getScriptProperties().getProperty('SLACK_BOT_TOKEN');
   if (token) {
     try {
-      var r = UrlFetchApp.fetch('https://slack.com/api/chat.postMessage', {
+      var r = netFetch_('https://slack.com/api/chat.postMessage', {
         method: 'post', contentType: 'application/json',
         headers: { Authorization: 'Bearer ' + token },
         payload: JSON.stringify({ channel: KURT_SLACK_ID, text: pfx }),
         muteHttpExceptions: true,
-      });
+      }, 'slack chat.postMessage');
       if (JSON.parse(r.getContentText()).ok) return;
     } catch (e) { Logger.log('slack DM failed: ' + e); }
   }
@@ -841,7 +899,8 @@ function fetchSlackReship_(oldestEpoch) {
   do {
     var url = 'https://slack.com/api/conversations.history?channel=' + SLACK_CHANNEL +
               '&oldest=' + oldestEpoch + '&limit=200' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
-    var r = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true });
+    var r = netFetch_(url, { headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true },
+                      'slack conversations.history');
     var d = JSON.parse(r.getContentText());
     if (!d.ok) { Logger.log('slack history: ' + d.error); break; }
     (d.messages || []).forEach(function (m) {

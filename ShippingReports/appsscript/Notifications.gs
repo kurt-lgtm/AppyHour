@@ -266,11 +266,13 @@ function ntPageParam_(path) {
 /** One GET. Retries a 429 with the Retry-After Klaviyo sends. Never logs the Authorization header. */
 function ntGet_(url) {
   for (var attempt = 0; attempt < 4; attempt++) {
-    var resp = UrlFetchApp.fetch(url, {
+    // netFetch_ (Code.gs) absorbs connection-class blips + 5xx before this loop's own 429 handling
+    // sees the response; a 4xx still arrives here untouched and throws loudly below.
+    var resp = netFetch_(url, {
       method: 'get',
       muteHttpExceptions: true,
       headers: { Authorization: 'Klaviyo-API-Key ' + ntKey_(), revision: NT_REV, accept: 'application/json' }
-    });
+    }, 'klaviyo get');
     var code = resp.getResponseCode();
     if (code === 200) return JSON.parse(resp.getContentText());
     if (code === 429) {
@@ -439,11 +441,11 @@ function ntMetricVolume_(metricId, lo, hi) {
     metric_id: metricId, measurements: ['count'], interval: 'week', timezone: 'UTC',
     filter: ['greater-or-equal(datetime,' + lo.replace('Z', '') + ')',
              'less-than(datetime,' + hi.replace('Z', '') + ')'] } } };
-  var resp = UrlFetchApp.fetch(NT_BASE + '/metric-aggregates/', {
+  var resp = netFetch_(NT_BASE + '/metric-aggregates/', {
     method: 'post', contentType: 'application/json', payload: JSON.stringify(body),
     muteHttpExceptions: true,
     headers: { Authorization: 'Klaviyo-API-Key ' + ntKey_(), revision: NT_REV, accept: 'application/json' }
-  });
+  }, 'klaviyo metric-aggregates');
   if (resp.getResponseCode() !== 200) {
     ntLog_('  ⚠️ volume precheck failed (' + resp.getResponseCode() + ') — ' +
            resp.getContentText().slice(0, 200) + '. Sweeping blind.');

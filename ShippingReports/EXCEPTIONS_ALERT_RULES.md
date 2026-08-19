@@ -173,6 +173,68 @@ them was permanently invisible. **Any future tab purge must be paired with the r
 The Wed–Sun day gate is unchanged and still enforced in both places (sweep + `excSlackPost_`):
 Mon/Tue record to the tab and never alert.
 
+## 🔴 The weekly PP budget starved the ping window — and the starvation was SILENT (2026-08-19)
+
+Kurt: *"I need the exceptions to work."* It wasn't. Measured, not inferred:
+
+| evidence | value |
+|---|---|
+| `Exceptions` tab | **3 rows**, newest `2026-08-12 01:46` |
+| `_exc_state` | 9,333 rows · **1,537 open** · **1,451 of them in the live `_SHIP_2026-08-17` cohort NEVER polled** |
+| newest `last_seen` anywhere | **`2026-08-16 21:46`** (88 orders). 8/17, 8/18, 8/19 — nothing |
+| `#exceptions` Slack | silent since **2026-08-07**; no pings AND no `:rotating_light:` failures |
+| Google failure digests | name `refresh` and `refreshCurrentColumn` — **never `hourlyExceptionSweep`** |
+| ParcelPanel API | healthy when queried directly 8/19 |
+| `alerted_classes` populated | **3 orders** — so `excMarkRecordedAsAlerted()` did **not** over-suppress |
+
+**The classifier was never the fault.** Replayed against the real live PP payloads, as of 8/16:
+**#170893 → `ADDRESS_ISSUE`, ping, event `2026-08-14 19:53`** (found *under* the later benign
+"At local FedEx facility" scan — the 8/17 checkpoint-window fix working) and **#169174 →
+`DELAYED`, ping**. Both boxes have since delivered (8/17 17:55 and 8/18 11:51) and now correctly
+classify `DELIVERED`/suppress. They never pinged because **nothing polled them after the fix
+deployed**, not because they failed to classify.
+
+### 1. Pace the budget — the ping days were paying for the silent days
+
+`EXC_PP_WEEKLY_BUDGET` 2,000 ÷ 168 hourly runs ≈ **12 calls/run**, but `EXC_PP_MAX_PER_RUN` was
+**120** — so ~17 consecutive runs could drain the entire week. From `_exc_state.last_seen`, week 33:
+**Mon 8/11 polled 1,676 · Tue 8/12 polled 651 · Wed 8/13, Thu 8/14, Fri 8/15 polled ZERO.**
+Mon/Tue are exactly the days the day gate FORBIDS posting on. The two record-only days ate the
+whole allowance and the entire Wed–Sun ping window ran with nothing left.
+
+🔴 **A per-run cap is not a budget.** `excBudgetTake_` now takes at most its fair share of what
+REMAINS, spread over the runs still left in the week:
+`take = min(want, left, EXC_PP_MAX_PER_RUN, max(EXC_PP_MIN_PER_RUN, ceil(left / runsLeftThisWeek)))`,
+with `EXC_PP_MIN_PER_RUN = 10` (10 × 168 = 1,680 < 2,000, so the floor cannot itself drain the week)
+and `excRunsLeftThisWeek_()` counting hours to Sunday-midnight ET, because the week key rolls Monday.
+
+⚠️ **OPEN KURT DECISION, not fixed here:** 2,000 calls/week cannot poll a ~1,500-box open set
+hourly at all — pacing guarantees the ping window is *fed*, it does not make the set *fresh*.
+Raising the ParcelPanel plan, or widening `excResolveDelivered_`'s free Shopify narrowing, is the
+only way to poll a live cohort quickly. Do not silently raise `EXC_PP_WEEKLY_BUDGET` past the plan.
+
+### 2. A run that polls ZERO is not an all-clear
+
+Constraint 7 says a PP *outage* must not read as "no exceptions". This was the same hole one step
+earlier: with `take = 0` the sweep fetched nothing, classified nothing, threw nothing and posted
+nothing — **identical in every observable way to a clean week**. That is why three days of total
+silence produced no error anywhere. The sweep now posts a rate-limited health warning
+(`excSlackHealth_`, at most one per 6h) whenever it polls 0 boxes while any are open, naming how
+many are open, how many were never polled, and what the budget allowed.
+
+🔴 **`excSlackHealth_` deliberately IGNORES the Wed–Sun day gate** (it still honours
+`EXC_DRY_RUN`). Mon/Tue silence exists to spare Dan customer noise; it must never hide a broken
+sweep. It is rate-limited precisely so the alarm cannot become the noise that gets the channel muted.
+
+### 3. Heartbeat — "is the trigger even firing?" must be answerable without a sweep
+
+A dead trigger and a zero-budget run were indistinguishable from outside. `hourlyExceptionSweep`
+now stamps `EXC_LAST_RUN_AT` **before anything that can throw**, and the *Check properties* menu
+item prints the heartbeat, the `PP_WEEK_USED` counter, runs left this week, and whether today is a
+ping day. Stale heartbeat ⇒ the trigger is gone (`installExceptionsTrigger()`); fresh heartbeat ⇒
+the fault is downstream. The Apps Script REST API cannot list triggers, so without this stamp the
+question has no answer short of opening the editor.
+
 ## Alert classes (Kurt 2026-07-30)
 
 **PING** — hard failures plus address/attempt issues:

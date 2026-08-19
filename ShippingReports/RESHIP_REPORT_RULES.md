@@ -1143,3 +1143,45 @@ Cross-check vs Klaviyo's own flow-series report (account-wide, weekly): In-Trans
   snapshot)`, filled with the same write-once rule, rather than per-cell notes (invisible until
   hovered, lost on copy) or a per-column extra row (doubles the tab's height). It needs a human-invoked
   row insert (D19: the refresh never adds rows) and Kurt's approval, so it is parked as a one-row ask.
+
+### D25 — A TRANSIENT `Address unavailable` MUST NOT KILL A RUN; RETRY THE CONNECTION CLASS ONLY (Kurt 2026-08-19)
+
+**The burn.** 2026-08-19, Kurt's Slack:
+
+```
+4:09 AM  Reship report (Apps Script) FAILED: Exception: Address unavailable: https://504ac4.myshopify.com/admin/api/2026-04/graphql.json
+5:09 AM  (same)
+```
+
+The 08:08 run succeeded with no code change (`Triage` stamp `REFRESHED 2026-08-19T08:08:41`), and
+Google's own failure digest confirms the same class on 8/16 04:08 for `refresh`. This is
+Google-to-Shopify transient unreachability, **not a code fault** — but nothing retried, so one blip
+killed a whole run, alarmed Kurt, and cost an hour of coverage.
+
+🔴 **`Address unavailable` is NOT an HTTP status.** `UrlFetchApp.fetch` *throws* it when Google
+cannot reach the host at all, so `muteHttpExceptions: true` never sees it and every
+`getResponseCode()` check downstream is skipped. Any retry written as a response-code check is
+therefore blind to the exact failure it was written for — it has to be a `try`/`catch` around the
+fetch itself.
+
+**`netFetch_(url, params, tag)` in `Code.gs`** — drop-in for `UrlFetchApp.fetch`, 3 attempts,
+~1s/2s/4s plus jitter. Wired into the single-fetch helpers only: `shopifyGql_`, `gorgiasGet_`,
+`slack_`, the Slack `conversations.history` pull (Code.gs), `excSlackPost_` + `excSlackHealth_`
+(Exceptions.gs), `ntGet_` + `ntMetricVolume_` (Notifications.gs).
+
+🔴 **CONNECTION CLASS ONLY — a 4xx must still fail loudly and immediately.** Retryable = a thrown
+connection error (`Address unavailable`, DNS, timeout, connection reset/refused) **or** HTTP 429 /
+5xx. A 400/401/403 is a real fault — a broken token or a malformed query — and retrying it buries
+the diagnosis under 7 seconds of silence. `netRetryable_` reads the HTTP code out of the message
+FIRST and lets it decide, so a 400 whose *response body* happens to contain the word "unavailable"
+can never be mistaken for a connection failure.
+
+🔴 **Every retry is LOGGED** (`net retry N/2: ... on <label>`), URL query-string stripped so a token
+in a query param cannot reach the log. A flaky window must be visible afterwards, not silently
+smoothed over — the alert to Slack now fires only once retries are exhausted, so a real outage
+still shouts and a blip no longer does.
+
+**NOT applied to `UrlFetchApp.fetchAll` call sites** (Code.gs:760, Exceptions.gs `excPpFetch_`,
+PivotAnalytics.gs:337) — a different API with per-request results, and `excPpFetch_` already
+carries its own throttle-aware backoff. Wrapping those means restructuring; do it deliberately, in
+its own change, or not at all.

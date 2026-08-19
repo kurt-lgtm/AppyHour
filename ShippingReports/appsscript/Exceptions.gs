@@ -57,7 +57,7 @@
 // false is that decision, and nothing else should flip it.
 // Dry runs deliberately persist NOTHING: marking an order alerted here would silently swallow
 // its real ping later, which is the opposite of the failure this whole job exists to prevent.
-var EXC_DRY_RUN = true;
+var EXC_DRY_RUN = false;
 
 // 🔴 SHEET-RECORD AND SLACK-POST ARE INDEPENDENTLY GATED (Kurt 2026-08-07: record _SHIP_2026-08-03's
 // exceptions on the tab, Slack stays silent). Recording while dry does NOT weaken the invariant
@@ -135,6 +135,40 @@ var EXC_COHORTS_BACK = 2;                 // current + previous ship week stay i
 var EXC_PP_WEEKLY_BUDGET = 2000;          // leaves ~500/wk headroom for the reship refresh
 var EXC_PP_MAX_PER_RUN = 120;             // backstop; the weekly counter normally binds first
 var EXC_PP_BUDGET_PROP = 'PP_WEEK_USED';  // "<isoWeekKey>|<count>" — shared, not per-job
+// 🔴 THE BUDGET MUST BE PACED, NOT SPENT FIRST-COME (Kurt 2026-08-19). Measured on _exc_state's
+// own last_seen column for week 33: Mon 8/11 polled 1,676 orders and Tue 8/12 polled 651 — then
+// Wed 8/13, Thu 8/14 and Fri 8/15 polled ZERO. Mon/Tue are exactly the days this job is FORBIDDEN
+// to post on (record-only, per the Wed-Sun day gate), so the entire weekly ParcelPanel allowance
+// was consumed by the two silent days and the whole ping window ran starved. A run that takes 0
+// finds no exceptions, throws nothing and posts nothing — indistinguishable from a quiet week,
+// which is the exact failure this job exists to prevent.
+// The fix is arithmetic, not a bigger number: 2,000 calls / 168 hourly runs is ~12 per run, but
+// the per-run cap was 120, so ~17 consecutive runs could drain the week. Each run now takes at
+// most its fair share of what REMAINS, spread over the runs still left in the week.
+var EXC_PP_MIN_PER_RUN = 10;              // floor; 10 x 168 runs = 1,680 < the weekly budget
+// Heartbeat + silent-starvation alarm. A dead trigger and a zero-budget run look identical from
+// the outside — both are silence — so the sweep stamps every run and shouts when it polls nothing.
+var EXC_HEARTBEAT_PROP = 'EXC_LAST_RUN_AT';
+var EXC_SILENT_ALARM_PROP = 'EXC_LAST_SILENT_ALARM';
+var EXC_SILENT_ALARM_EVERY_MS = 6 * 60 * 60 * 1000;   // at most one starvation alarm per 6h
+
+/**
+ * How many hourly runs remain in this ET week, counting the current one. Monday-start, because
+ * the week key rolls on Monday; a Sunday-evening run must not think it has 168 runs left.
+ */
+/** Open orders that have never been polled once — the queue's starvation depth. */
+function excNeverPolled_(st, openKeys) {
+  return openKeys.filter(function (k) {
+    return !String((st[k] && st[k].last_seen) || '').trim();
+  }).length;
+}
+
+function excRunsLeftThisWeek_() {
+  var now = new Date();
+  var dow = Number(Utilities.formatDate(now, EXC_TZ, 'u'));   // 1=Mon .. 7=Sun
+  var hr = Number(Utilities.formatDate(now, EXC_TZ, 'H'));    // 0..23
+  return Math.max(1, (7 - dow) * 24 + (24 - hr));
+}
 
 /** ISO-ish week key in ET, e.g. 2026-W32. Resets the counter when it changes. */
 function excWeekKey_() {
@@ -157,7 +191,12 @@ function excBudgetTake_(want) {
   var used = (parts[0] === wk) ? (parseInt(parts[1], 10) || 0) : 0;
   if (parts[0] !== wk && parts[0]) Logger.log('  PP budget: new week ' + wk + ', counter reset from ' + raw);
   var left = Math.max(0, EXC_PP_WEEKLY_BUDGET - used);
-  var take = Math.min(want, left, EXC_PP_MAX_PER_RUN);
+  // Fair share of what REMAINS over the runs still left this week, floored so a run is never
+  // pointless while budget exists. See EXC_PP_MIN_PER_RUN for the week-33 measurement.
+  var runsLeft = excRunsLeftThisWeek_();
+  var pace = Math.max(EXC_PP_MIN_PER_RUN, Math.ceil(left / runsLeft));
+  var take = Math.min(want, left, EXC_PP_MAX_PER_RUN, pace);
+  Logger.log('  PP pace: ' + pace + '/run (' + left + ' left over ' + runsLeft + ' runs this week)');
   if (take < want) {
     Logger.log('  🔴 PP BUDGET BIT: wanted ' + want + ', taking ' + take +
                ' (used ' + used + '/' + EXC_PP_WEEKLY_BUDGET + ' this week, per-run cap ' +
@@ -561,12 +600,33 @@ function excSlackPost_(text) {
   }
   var token = PropertiesService.getScriptProperties().getProperty('SLACK_BOT_TOKEN');
   if (!token) throw new Error('SLACK_BOT_TOKEN missing — cannot post to #exceptions');
-  var r = UrlFetchApp.fetch('https://slack.com/api/chat.postMessage', {
+  var r = netFetch_('https://slack.com/api/chat.postMessage', {
     method: 'post', contentType: 'application/json',
     headers: { Authorization: 'Bearer ' + token },
     payload: JSON.stringify({ channel: EXC_CHANNEL, text: text, unfurl_links: false }),
     muteHttpExceptions: true,
-  });
+  }, 'slack chat.postMessage');
+  var d = JSON.parse(r.getContentText());
+  if (!d.ok) throw new Error('slack post failed: ' + d.error);
+}
+
+/**
+ * HEALTH posts only — the sweep telling on itself. Deliberately skips the Wed-Sun day gate,
+ * because "this job did nothing at all" is not an exception ping and must be visible on the day
+ * it happens; Mon/Tue silence is about customer noise, not about hiding a broken sweep.
+ * 🔴 Still hard-blocked by EXC_DRY_RUN, and rate-limited by the caller — an alarm that repeats
+ * hourly gets muted, and a muted channel is the failure this whole job exists to prevent.
+ */
+function excSlackHealth_(text) {
+  if (EXC_DRY_RUN) { Logger.log('[DRY RUN] suppressed health post: ' + String(text).slice(0, 160)); return; }
+  var token = PropertiesService.getScriptProperties().getProperty('SLACK_BOT_TOKEN');
+  if (!token) throw new Error('SLACK_BOT_TOKEN missing — cannot post to #exceptions');
+  var r = netFetch_('https://slack.com/api/chat.postMessage', {
+    method: 'post', contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + token },
+    payload: JSON.stringify({ channel: EXC_CHANNEL, text: text, unfurl_links: false }),
+    muteHttpExceptions: true,
+  }, 'slack chat.postMessage');
   var d = JSON.parse(r.getContentText());
   if (!d.ok) throw new Error('slack post failed: ' + d.error);
 }
@@ -713,6 +773,15 @@ function excCheckProperties() {
     var v = String(props.getProperty(p[0]) || '').trim();
     lines.push((v ? 'SET     (' + v.length + ' chars)  ' : 'MISSING              ') + p[0]);
   });
+  // 🔴 These three answer "is it running, and does it have budget left" WITHOUT another sweep.
+  // They are the only values printed verbatim here, and none of them is a secret.
+  lines.push('',
+    'last sweep run (heartbeat): ' + (props.getProperty(EXC_HEARTBEAT_PROP) || '(never — trigger may be gone)'),
+    'ParcelPanel weekly counter:  ' + (props.getProperty(EXC_PP_BUDGET_PROP) || '(unset)') +
+      '   [budget ' + EXC_PP_WEEKLY_BUDGET + ', pace floor ' + EXC_PP_MIN_PER_RUN +
+      ', runs left this week ' + excRunsLeftThisWeek_() + ']',
+    'Slack: ' + (EXC_DRY_RUN ? 'DRY RUN (muted)' : 'LIVE') +
+      ', today is a ' + (excPingDayET_() ? 'PING day' : 'record-only day (Mon/Tue)'));
   var all = props.getKeys().sort().join(', ');
   lines.push('', 'all keys on this project: ' + (all || '(none)'));
   var msg = lines.join('\n');
@@ -722,6 +791,17 @@ function excCheckProperties() {
 }
 
 function hourlyExceptionSweep() {
+  // 🔴 HEARTBEAT FIRST, before anything that can throw. "Is the trigger even firing?" was
+  // unanswerable on 2026-08-19: the tab's newest row was 8/12, _exc_state's newest last_seen was
+  // 8/16 21:46, #exceptions had been silent since 8/07 and Google's failure digests named
+  // `refresh` and `refreshCurrentColumn` but never `hourlyExceptionSweep` — so a dead trigger and
+  // a run that polls nothing produced identical evidence. This stamp separates them: if it is
+  // fresh, the trigger fires and the fault is downstream; if it is stale, the trigger is gone.
+  // Read it from the "Check properties" menu item.
+  try {
+    PropertiesService.getScriptProperties().setProperty(
+      EXC_HEARTBEAT_PROP, Utilities.formatDate(new Date(), EXC_TZ, 'yyyy-MM-dd HH:mm') + ' ET');
+  } catch (eHb) { Logger.log('heartbeat stamp failed: ' + eHb); }
   try {
     excPreflight_();
     var st = excLoadState_();
@@ -752,6 +832,27 @@ function hourlyExceptionSweep() {
     var allowed = excBudgetTake_(pollable.length);
     var batch = pollable.slice(0, allowed);
     Logger.log('  PP: asked ' + batch.length);
+
+    // 🔴 SILENCE MUST FAIL LOUDLY. Constraint 7 says a PP OUTAGE cannot read as "no exceptions";
+    // this is the same hole one step earlier — a run that polls ZERO boxes while boxes are open
+    // reports nothing, throws nothing, and looks exactly like a clean week. That is what happened
+    // Wed 8/13 through Fri 8/15 (weekly budget already drained by Mon+Tue) and it is why Kurt saw
+    // an alerter that "isn't working" with no error anywhere. Rate-limited to one alarm per 6h so
+    // the alarm itself can never become the noise that gets the channel muted.
+    if (!batch.length && open.length) {
+      var props_ = PropertiesService.getScriptProperties();
+      var lastAlarm = Number(props_.getProperty(EXC_SILENT_ALARM_PROP) || 0);
+      if (new Date().getTime() - lastAlarm > EXC_SILENT_ALARM_EVERY_MS) {
+        props_.setProperty(EXC_SILENT_ALARM_PROP, String(new Date().getTime()));
+        try {
+          excSlackHealth_(':warning: exceptions sweep polled 0 boxes while ' + open.length +
+            ' are still open (' + excNeverPolled_(st, open) + ' never polled once). ' +
+            'ParcelPanel budget allowed ' + allowed + ' of ' + pollable.length +
+            ' pollable. Nothing was checked, so this run is NOT an all-clear.');
+        } catch (eA) { Logger.log('silent-starvation alarm failed to post: ' + eA); }
+      }
+      Logger.log('  🔴 ZERO POLLED with ' + open.length + ' open — not an all-clear.');
+    }
 
     var pp = excPpFetch_(batch, new Date().getTime() + EXC_TIME_BUDGET_MS);
 
