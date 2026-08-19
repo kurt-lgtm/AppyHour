@@ -164,7 +164,18 @@ backfill/debug tool and its 12:18 schtask is DISABLED once the Apps Script trigg
   The ship-Monday-precedes-complaint attribution guard MUST be ported (misattribution bug,
   2026-07-08).
 - **Fail loud:** wrap main in try/catch → Slack webhook `[CRITICAL] reship report failed: …`;
-  Apps Script's own failure emails stay on as backup. Freshness cell `Summary!A1` timestamp
+  Apps Script's own failure emails stay on as backup.
+  🔴 **Destination (directive P8, `EXCEPTIONS_ALERT_RULES.md` — SSOT for the routing rule).** As
+  built this does NOT use the webhook: `slack_` posts to the **appyhour-ops-reader DM**
+  (`U08R19137UL` → `D0BG1541F0A`) via `chat.postMessage`, never the public `SLACK_WEBHOOK`
+  (#reships) and **never #exceptions** (`C0BLKKPAW8P` — Dan's customer-ping channel; infra noise
+  there gets it muted, and a muted #exceptions makes every real box problem silent). Every `slack_`
+  caller in `Code.gs`/`PivotAnalytics.gs` is ops-class: FAILED run, empty Raw Data, ghost-tab
+  creation, unrecognized Triage decision, breach warning, `PA_ASSERT_*` refusal. 🔴 **`Code.gs` has
+  no ping-class helper and must never get one** — it must have no way to reach #exceptions.
+  Destination resolves through `excChannelOps_()` (Exceptions.gs) behind a `typeof` guard, so
+  Script Property `EXC_CHANNEL_OPS` re-routes both files without a code push, and a project that
+  has lost `Exceptions.gs` still alerts. Unset → `KURT_SLACK_ID`, today's behavior. Freshness cell `Summary!A1` timestamp
   remains the reader-side assert; local `freshness_sweep.py` keeps watching the state cache
   mtime ONLY until cutover, then switches to reading `Summary!A1` via the Sheets API.
 - **Cutover checklist:** (1) seed `_state`, (2) dry-run menu item writes to a `TEST_` tab,

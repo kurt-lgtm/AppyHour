@@ -3,6 +3,11 @@
  * Constraints SSOT: ShippingReports/EXCEPTIONS_ALERT_RULES.md (repo). Read it before
  * changing anything here; the rules are authored there first.
  *
+ * 🔴 TWO SLACK CLASSES, TWO DESTINATIONS, TWO HELPERS (directive P8, Kurt 2026-08-19):
+ *   customer box problem  -> excSlackPost_ -> #exceptions            (Wed-Sun gate + EXC_DRY_RUN)
+ *   the job telling on itself -> excSlackOps_ -> appyhour-ops-reader DM (NO gates)
+ * Never add a third path to chat.postMessage; both go through excSlackSend_.
+ *
  * LIVES IN: the LIVE Running Reship project, scriptId
  * 15K0MrUssFqacWybQAToz6CeHTouRU4IeNY4-DzZ4NeE1rBCCNGpGjAjv, bound to the reship sheet
  * 1weQz0AO... — co-hosted with Code.gs, writing its two tabs onto that same sheet
@@ -90,7 +95,43 @@ function excPingDayET_() {
 }
 
 var EXC_HOST_SHEET_ID = '1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU';
-var EXC_CHANNEL = 'C0BLKKPAW8P';          // private #exceptions. NEVER SLACK_WEBHOOK (public #reships).
+// 🔴 `EXC_CHANNEL` DELETED 2026-08-19 (directive P8) — do not reintroduce it. A single constant
+// named "the channel" is exactly how an ops alert ends up in Dan's ping channel: it reads as
+// correct at every call site. There is no "the" channel any more. Use excChannelPings_() or
+// excChannelOps_(), and reach them only through excSlackPost_ / excSlackOps_.
+// NEVER SLACK_WEBHOOK for either — that property is bound to public #reships.
+
+// 🔴 TWO DESTINATIONS, ONE PER CLASS (directive P8 — Kurt 2026-08-19: "you should message failures
+// on the appyhour ops reader channel and not there"). He was looking at
+// ":rotating_light: exceptions sweep FAILED: ParcelPanel fetch failing: 9/19 hard failures" sitting
+// in #exceptions between two customer pings. Dan reads #exceptions for BOXES; an infra crash there
+// is noise to him and is exactly the kind of post that gets a channel muted — and a muted
+// #exceptions is the failure this whole job exists to prevent.
+//
+//   PINGS — a customer's box has a problem  -> #exceptions (private, C0BLKKPAW8P). Unchanged.
+//   OPS   — the job telling on itself       -> the appyhour-ops-reader DM (U08R19137UL resolves to
+//                                              DM D0BG1541F0A). Kurt only.
+//
+// 🔴 The ops destination is NOT a new channel and needs NO new Slack scope: `slack_` in Code.gs has
+// posted there with THIS SAME `SLACK_BOT_TOKEN` since 2026-07-13 (reship-report FAILED alerts, the
+// missing-tab warning). Posting a user id to chat.postMessage opens/reuses the bot DM. Verified by
+// reading D0BG1541F0A on 2026-08-19: it already holds this project's Code.gs failure alerts.
+//
+// Both are overridable by Script Property so routing can change WITHOUT a code push (a push here
+// takes the hourly reship report down with it if it lands wrong). 🔴 An unset property falls back
+// to the literal below — never to empty, which would post nowhere and lose the alert silently.
+var EXC_CHANNEL_PINGS_DEFAULT = 'C0BLKKPAW8P';   // private #exceptions — Kurt + Dan + the bot
+var EXC_CHANNEL_OPS_DEFAULT   = 'U08R19137UL';   // -> DM D0BG1541F0A with appyhour-ops-reader
+
+function excChannelPings_() {
+  return PropertiesService.getScriptProperties().getProperty('EXC_CHANNEL_PINGS') ||
+         EXC_CHANNEL_PINGS_DEFAULT;
+}
+
+function excChannelOps_() {
+  return PropertiesService.getScriptProperties().getProperty('EXC_CHANNEL_OPS') ||
+         EXC_CHANNEL_OPS_DEFAULT;
+}
 var EXC_LOG_TAB = 'Exceptions';
 var EXC_STATE_TAB = '_exc_state';
 // 🔴 PACING: ParcelPanel rate-limits hard and per-minute. The proven client
@@ -836,6 +877,33 @@ function excSaveState_(st) {
 
 // ---------------------------------------------------------------- Slack
 
+/**
+ * The ONLY function in this file that calls chat.postMessage. It takes the channel explicitly and
+ * applies NO gates of its own — every gate belongs to the class helper above it, so that reading
+ * one helper tells you the whole truth about when that class posts.
+ * 🔴 NOT to be called directly from sweep code. Call excSlackPost_ or excSlackOps_.
+ */
+function excSlackSend_(channel, text, what) {
+  var token = PropertiesService.getScriptProperties().getProperty('SLACK_BOT_TOKEN');
+  if (!token) throw new Error('SLACK_BOT_TOKEN missing — cannot post ' + what + ' to ' + channel);
+  var r = netFetch_('https://slack.com/api/chat.postMessage', {
+    method: 'post', contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + token },
+    payload: JSON.stringify({ channel: channel, text: text, unfurl_links: false }),
+    muteHttpExceptions: true,
+  }, 'slack chat.postMessage');
+  var d = JSON.parse(r.getContentText());
+  if (!d.ok) throw new Error('slack post failed (' + what + ' -> ' + channel + '): ' + d.error);
+}
+
+/**
+ * CLASS 1 — EXCEPTION PING. A customer's box has a problem. Goes to #exceptions, where Dan and Kurt
+ * watch for boxes. Keeps BOTH gates: the stop-write and the Wed–Sun rhythm.
+ * 🔴 ONE HELPER PER CLASS, NOT ONE HELPER WITH A BOOLEAN (directive P8). A `excSlackPost_(text,
+ * isFailure)` shape would let a future call site put an infra crash in Dan's ping channel — or,
+ * far worse, a real customer exception into a DM only Kurt reads — by getting one argument wrong.
+ * The destination is a property of WHICH function you call, and there is no argument that changes it.
+ */
 function excSlackPost_(text) {
   // 🔴 Last line of defence for the stop-write. Callers already check EXC_DRY_RUN, but this makes
   // the channel unreachable from ANY call site, including one added later by someone who did not
@@ -847,37 +915,41 @@ function excSlackPost_(text) {
     Logger.log('[Mon/Tue] suppressed Slack post (records only): ' + String(text).slice(0, 120));
     return;
   }
-  var token = PropertiesService.getScriptProperties().getProperty('SLACK_BOT_TOKEN');
-  if (!token) throw new Error('SLACK_BOT_TOKEN missing — cannot post to #exceptions');
-  var r = netFetch_('https://slack.com/api/chat.postMessage', {
-    method: 'post', contentType: 'application/json',
-    headers: { Authorization: 'Bearer ' + token },
-    payload: JSON.stringify({ channel: EXC_CHANNEL, text: text, unfurl_links: false }),
-    muteHttpExceptions: true,
-  }, 'slack chat.postMessage');
-  var d = JSON.parse(r.getContentText());
-  if (!d.ok) throw new Error('slack post failed: ' + d.error);
+  excSlackSend_(excChannelPings_(), text, 'exception ping');
 }
 
 /**
- * HEALTH posts only — the sweep telling on itself. Deliberately skips the Wed-Sun day gate,
- * because "this job did nothing at all" is not an exception ping and must be visible on the day
- * it happens; Mon/Tue silence is about customer noise, not about hiding a broken sweep.
- * 🔴 Still hard-blocked by EXC_DRY_RUN, and rate-limited by the caller — an alarm that repeats
- * hourly gets muted, and a muted channel is the failure this whole job exists to prevent.
+ * CLASS 2 — OPS / HEALTH. The sweep telling on itself: sweep FAILED, PP hard-failure ratio,
+ * starved/blindspot alarms, budget bits, refused asserts. Goes to the appyhour-ops-reader DM, NOT
+ * #exceptions (directive P8).
+ *
+ * 🔴 NO Wed–Sun day gate. "This job did nothing at all" is not an exception ping and must be visible
+ * on the day it happens; Mon/Tue silence is about sparing Dan customer noise, never about hiding a
+ * broken sweep. (This was already true of the old excSlackHealth_ — P4 — and stays true.)
+ *
+ * 🔴 NO EXC_DRY_RUN GATE EITHER — CHANGED 2026-08-19, deliberately. The old helper was hard-blocked
+ * by the dry-run flag. That flag is the stop-write on **#exceptions**, and its whole justification
+ * was "do not dump 4,289 customer exceptions into Kurt's channel yet" — a statement about customer
+ * pings, which no longer share a destination with failures. Meanwhile a crash during a muted period
+ * is PRECISELY the failure nobody would otherwise notice: the sweep is silent by design, so a
+ * broken sweep and a working one look identical, and the operator's only signal is this post. A
+ * mute that also mutes the smoke alarm is the silent-failure class this file exists to kill.
+ * The blast radius of getting this wrong is one DM to Kurt — not a channel Dan reads.
+ * If a future stop-write must cover ops alerts too, it gets its OWN flag; do not re-couple them.
+ *
+ * Rate-limiting is still the CALLER's job (EXC_SILENT_ALARM_EVERY_MS) — an alarm that repeats
+ * hourly gets muted, and a muted alarm is the same failure one level up.
+ */
+function excSlackOps_(text) {
+  excSlackSend_(excChannelOps_(), text, 'ops/health alert');
+}
+
+/**
+ * 🔴 COMPATIBILITY SHIM ONLY — the old name for CLASS 2, kept because it is referenced from the
+ * rules doc and from earlier commits. New call sites use excSlackOps_. Not a second class.
  */
 function excSlackHealth_(text) {
-  if (EXC_DRY_RUN) { Logger.log('[DRY RUN] suppressed health post: ' + String(text).slice(0, 160)); return; }
-  var token = PropertiesService.getScriptProperties().getProperty('SLACK_BOT_TOKEN');
-  if (!token) throw new Error('SLACK_BOT_TOKEN missing — cannot post to #exceptions');
-  var r = netFetch_('https://slack.com/api/chat.postMessage', {
-    method: 'post', contentType: 'application/json',
-    headers: { Authorization: 'Bearer ' + token },
-    payload: JSON.stringify({ channel: EXC_CHANNEL, text: text, unfurl_links: false }),
-    muteHttpExceptions: true,
-  }, 'slack chat.postMessage');
-  var d = JSON.parse(r.getContentText());
-  if (!d.ok) throw new Error('slack post failed: ' + d.error);
+  excSlackOps_(text);
 }
 
 var EXC_EMOJI_ = {
@@ -995,8 +1067,14 @@ var EXC_REQUIRED_PROPS = [
   ['SHOPIFY_STORE', 'cohort seed (shopifyGql_) + order links'],
   ['SHOPIFY_TOKEN', 'cohort seed (shopifyGql_)'],
   ['PARCELPANEL_API_KEY', 'exception polling (excPpFetch_)'],
-  ['SLACK_BOT_TOKEN', 'posting to #exceptions (excSlackPost_)'],
+  ['SLACK_BOT_TOKEN', 'posting pings to #exceptions (excSlackPost_) AND ops alerts to the ' +
+                      'appyhour-ops-reader DM (excSlackOps_) — one token, two destinations'],
 ];
+
+// 🔴 OPTIONAL, deliberately NOT in EXC_REQUIRED_PROPS: EXC_CHANNEL_PINGS / EXC_CHANNEL_OPS. They
+// exist so routing can be changed without a code push. Unset is the NORMAL state and falls back to
+// the literals at the top of this file — requiring them would turn "nobody set an override" into a
+// preflight crash that stops the sweep entirely.
 
 function excPreflight_() {
   var props = PropertiesService.getScriptProperties();
@@ -1034,8 +1112,13 @@ function excCheckProperties() {
       ' account quota and cannot report into this ledger.',
     '  thin Mon/Tue sweep today: ' + (EXC_THIN_DAY_CAP - excThinDayLeft_()) + '/' + EXC_THIN_DAY_CAP +
       ' used (' + (props.getProperty(EXC_THIN_DAY_PROP) || 'unset') + ')',
-    'Slack: ' + (EXC_DRY_RUN ? 'DRY RUN (muted)' : 'LIVE') +
-      ', today is a ' + (excPingDayET_() ? 'PING day' : 'record-only day (Mon/Tue)'));
+    'Slack PINGS -> ' + excChannelPings_() +
+      (props.getProperty('EXC_CHANNEL_PINGS') ? ' (property override)' : ' (default #exceptions)') +
+      ': ' + (EXC_DRY_RUN ? 'DRY RUN (muted)' : 'LIVE') +
+      ', today is a ' + (excPingDayET_() ? 'PING day' : 'record-only day (Mon/Tue)'),
+    'Slack OPS   -> ' + excChannelOps_() +
+      (props.getProperty('EXC_CHANNEL_OPS') ? ' (property override)' : ' (default appyhour-ops-reader DM)') +
+      ': ALWAYS LIVE — no day gate, and EXC_DRY_RUN does NOT mute it (directive P8)');
   var all = props.getKeys().sort().join(', ');
   lines.push('', 'all keys on this project: ' + (all || '(none)'));
   var msg = lines.join('\n');
@@ -1116,7 +1199,7 @@ function hourlyExceptionSweep() {
       if (new Date().getTime() - lastAlarm > EXC_SILENT_ALARM_EVERY_MS) {
         props_.setProperty(EXC_SILENT_ALARM_PROP, String(new Date().getTime()));
         try {
-          excSlackHealth_(':warning: exceptions sweep polled 0 boxes while ' + open.length +
+          excSlackOps_(':warning: exceptions sweep polled 0 boxes while ' + open.length +
             ' are still open (' + neverP_ + ' never polled once). ' +
             (starved_ ? 'ParcelPanel budget allowed ' + allowed + ' of ' + elig.length + ' due'
                       : 'The poll policy judged NOTHING due while boxes have never been polled ' +
@@ -1230,14 +1313,16 @@ function hourlyExceptionSweep() {
              reserved: allowed, charged: pp.charged, refunded: refunded, dryRun: EXC_DRY_RUN };
   } catch (e) {
     try {
-      // stop-write covers the failure alert too — it posts to the same channel
-      if (EXC_DRY_RUN) throw e;
-      // 🔴 excSlackHealth_, NOT excSlackPost_ (directive P4). excSlackPost_ applies the Wed-Sun
+      // 🔴 THE STOP-WRITE NO LONGER COVERS THIS (changed 2026-08-19, directive P8). It used to:
+      // `if (EXC_DRY_RUN) throw e;` sat here because the failure alert posted to the SAME channel
+      // the stop-write was protecting. It no longer does — failures go to the ops DM — and a crash
+      // during a muted period is exactly the one nobody would otherwise see. See excSlackOps_.
+      // 🔴 excSlackOps_, NOT excSlackPost_ (directive P4). excSlackPost_ applies the Wed-Sun
       // day gate, so EVERY Mon/Tue sweep failure posted absolutely nothing — Mon 8/17 and Tue 8/18
       // are exactly those days, and exactly the days that produced no evidence of anything wrong.
       // A crash is not an exception PING; the day gate exists to spare Dan customer noise, never
       // to hide a broken sweep. Exception pings keep the gate; this does not.
-      excSlackHealth_(':rotating_light: exceptions sweep FAILED: ' + e);
+      excSlackOps_(':rotating_light: exceptions sweep FAILED: ' + e);
     } catch (e2) {
       MailApp.sendEmail(Session.getEffectiveUser().getEmail(), '[exceptions] sweep failed', String(e));
     }

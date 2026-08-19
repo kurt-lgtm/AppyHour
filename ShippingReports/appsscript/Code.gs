@@ -33,8 +33,10 @@ var MAX_ENRICH_PER_RUN = 60; // Gorgias 429 guard
 // ---------- entry point ----------
 
 function refresh() {
-  // ALL Slack alerts (error + breach) go to the single SLACK_WEBHOOK = Kurt's
-  // channel only (Kurt 2026-07-13). Apps Script failure emails are the backup.
+  // ALL Slack alerts from this file (error + breach) are OPS-class and go to the
+  // appyhour-ops-reader DM via slack_ — never SLACK_WEBHOOK (public #reships) and never
+  // #exceptions (Kurt 2026-07-13; destination restated 2026-08-19, directive P8).
+  // Apps Script failure emails are the backup.
   try {
     build_();
   } catch (e) {
@@ -737,15 +739,30 @@ var KURT_SLACK_ID = 'U08R19137UL';
 // Alert Kurt PRIVATELY only (Kurt 2026-07-13: never a public channel). Bot DM
 // via chat.postMessage (SLACK_BOT_TOKEN prop, needs Bot chat:write); email
 // fallback. NEVER the SLACK_WEBHOOK — that's bound to public #reships.
+//
+// 🔴 THIS IS THE OPS CLASS (directive P8, Kurt 2026-08-19). Every caller of slack_ is the job
+// telling on itself — a FAILED run, a refused write, an empty Raw Data, a created-ghost tab, a
+// breach warning. None of them is a customer-facing exception ping, and none belongs in
+// #exceptions. This function was already pointed at the right place (the appyhour-ops-reader DM,
+// D0BG1541F0A) — 2026-08-19's change routed Exceptions.gs's failures HERE, not the reverse.
+// 🔴 There is NO ping-class helper in this file. Do not add one: exception pings live in
+// Exceptions.gs behind excSlackPost_, and this file must have no way to reach that channel.
+//
+// Destination resolves through excChannelOps_ (Exceptions.gs) so BOTH classes are re-routable
+// from Script Properties without a code push — a push here is the one that can take the hourly
+// report down. The typeof guard is not decoration: Exceptions.gs has been deleted from this
+// project once (2026-08-14, by a push carrying only [appsscript, Code]); an alert path must not
+// be the thing that breaks when it happens again. Unset property -> KURT_SLACK_ID, today's behavior.
 function slack_(text, critical) {
   var pfx = (critical ? ':rotating_light: ' : ':warning: ') + text;
+  var to = (typeof excChannelOps_ === 'function') ? excChannelOps_() : KURT_SLACK_ID;
   var token = PropertiesService.getScriptProperties().getProperty('SLACK_BOT_TOKEN');
   if (token) {
     try {
       var r = netFetch_('https://slack.com/api/chat.postMessage', {
         method: 'post', contentType: 'application/json',
         headers: { Authorization: 'Bearer ' + token },
-        payload: JSON.stringify({ channel: KURT_SLACK_ID, text: pfx }),
+        payload: JSON.stringify({ channel: to, text: pfx }),
         muteHttpExceptions: true,
       }, 'slack chat.postMessage');
       if (JSON.parse(r.getContentText()).ok) return;

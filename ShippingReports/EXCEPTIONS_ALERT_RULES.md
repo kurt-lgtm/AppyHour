@@ -67,6 +67,10 @@ real issues… sometimes you get a notification and they just changed the label.
 6. **NEVER post to `SLACK_WEBHOOK`.** That property is bound to public **#reships**. #exceptions is
    **private, `C0BLKKPAW8P`** — requires `SLACK_BOT_TOKEN` + the bot invited to the channel.
    Posting a customer-name-bearing failure into a public channel is a privacy regression.
+6b. **NEVER post an OPERATIONAL failure into #exceptions** (directive P8, Kurt 2026-08-19). That
+   channel is Dan's box-problem feed. Infra noise there is what gets it muted, and a muted
+   #exceptions converts every real customer exception into a silent one — constraint 3's failure
+   mode arriving by a different door. Failures go to the **appyhour-ops-reader DM**.
 7. **NEVER let a PP outage look like "no exceptions."** Zero findings on a run where the PP fetch
    errored must alert as a FAILURE, not pass silently as good news (fail-loud, per host job).
 8. **NEVER widen the poll set to all cohorts.** Apps Script has a 6-minute execution ceiling and PP
@@ -377,6 +381,76 @@ deliberate restart of *our* accounting, never a claim about *theirs*.
 
 Manual lever: **Shipping Exceptions → Reset ParcelPanel weekly ledger** (`excResetWeeklyBudget`).
 Use it only when the recorded spend is known to be fiction; it is never automatic.
+
+### P8 — TWO CLASSES, TWO CHANNELS, TWO HELPERS (Kurt 2026-08-19)
+
+> Kurt, verbatim: **"you should message failures on the appyhour ops reader channel and not there"** —
+> looking at `:rotating_light: exceptions sweep FAILED: Error: ParcelPanel fetch failing: 9/19 hard
+> failures (throttled: 0) — results suppressed rather than reported as all-clear` sitting in
+> **#exceptions** between two customer pings (posted 01:46 and 02:46 CST, 2026-08-20).
+
+**The suppression itself was correct and does not change.** Refusing to report an all-clear when half
+the fetches failed is constraint 7 working. **P8 changes the DESTINATION of the complaint and nothing
+else** — not the threshold, not the suppression, not the message.
+
+> 🔴 **Do not read a root cause into this directive.** P8 was written believing the 9/19 was a PP
+> outage. It was not: a parallel session reproduced it as **9 CANCELLED Shopify orders that
+> ParcelPanel legitimately 404s** — deterministic, the same nine every hour, forever. That is a
+> permanently-bad-record class, and it is **P9's** subject, not P8's. The routing rule is
+> independent of which of the two it was; the diagnosis here was wrong and is corrected there.
+
+| class | what it is | destination | day gate | `EXC_DRY_RUN` |
+|-------|-----------|-------------|----------|----------------|
+| **PING** (`excSlackPost_`) | a customer's box has a problem — never picked up, address issue, damaged, delayed, attempt failed | **#exceptions** `C0BLKKPAW8P` (private; Kurt + Dan + bot) | **YES**, Wed–Sun | **YES**, suppressed |
+| **OPS** (`excSlackOps_`) | the job telling on itself — sweep FAILED, PP hard-failure ratio, starved/blindspot alarm, budget bit, missing-tab warning, `PA_ASSERT_*` refusal | **appyhour-ops-reader DM** `U08R19137UL` → `D0BG1541F0A` (Kurt only) | **NO** | **NO** — still posts |
+
+🔴 **Why the ops channel is that DM and not a new channel.** No channel named "ops reader" exists in
+the workspace (searched 2026-08-19: only `#ops-strategy`, `#devops`, `#contara-appyhour`,
+`#appyhour_grip` — none plausible). `appyhour-ops-reader` is the **bot** (`U0BG153RTNW`), and the
+conversation Kurt sees under that name is its DM, `D0BG1541F0A`. That DM has been this project's ops
+feed since 2026-07-13 — it already holds `Code.gs`'s "Reship report (Apps Script) FAILED" alerts and
+the 8/19 missing-tab warning, opened by the message *"Reship report alerts will DM you here (private,
+not #reships)."* Failures were routed to where the other failures already were, not somewhere new.
+**No new Slack scope is needed:** `slack_` reaches it with this same `SLACK_BOT_TOKEN`.
+
+🔴 **`EXC_DRY_RUN` NO LONGER MUTES A FAILURE ALERT.** The old `excSlackHealth_` was hard-blocked by
+it, and the sweep's catch block additionally did `if (EXC_DRY_RUN) throw e;`. Both are gone. That
+flag is the stop-write on **#exceptions**, justified entirely by "do not dump 4,289 customer
+exceptions into the channel yet" — a statement about pings, which no longer share a destination with
+failures. A crash *during* a muted period is precisely the one nobody would otherwise notice: the
+sweep is silent by design, so broken and working look identical, and this post is the operator's only
+signal. **A mute that also mutes the smoke alarm is the silent-failure class this file exists to
+kill.** Blast radius of being wrong: one DM to Kurt. If a stop-write must ever cover ops alerts, it
+gets its **own** flag — do not re-couple them.
+
+🔴 **ONE HELPER PER CLASS — never one helper with a boolean.** `excSlackPost_(text, isFailure)`
+would let a future call site put an infra crash in Dan's channel, or a real customer exception into a
+DM only Kurt reads, by getting one argument wrong. Destination is a property of *which function you
+call*; no argument changes it. Both funnel through `excSlackSend_(channel, text, what)`, the only
+`chat.postMessage` caller in the file, which applies **no** gates of its own — so reading one class
+helper tells you the whole truth about when that class posts.
+
+🔴 **`EXC_CHANNEL` IS DELETED — do not reintroduce it.** A lone constant named "the channel" reads as
+correct at every call site, which is exactly how the miscategorization happens. There is no "the"
+channel any more: `excChannelPings_()` / `excChannelOps_()`.
+
+**Re-routable without a code push.** Script Properties `EXC_CHANNEL_PINGS` / `EXC_CHANNEL_OPS`
+override the literals. Deliberately **not** in `EXC_REQUIRED_PROPS` — unset is the normal state and
+falls back to the literals; requiring them would turn "nobody set an override" into a preflight crash
+that stops the sweep. 🔴 An unset **or empty** property falls back to today's behavior, never to
+empty-string (which would post nowhere and lose the alert silently). Reason a property exists at all:
+a push into this project takes the hourly reship report down with it if it lands wrong.
+
+**`Code.gs` needed no re-pointing** — every `slack_` caller is already ops-class (FAILED run, empty
+Raw Data, ghost-tab creation, breach warning) and already went to that DM. It now resolves its
+destination through `excChannelOps_()` behind a `typeof` guard, so one property moves both files, and
+a project that has lost `Exceptions.gs` (which happened 2026-08-14) still alerts. 🔴 **`Code.gs` has
+no ping-class helper and must never get one** — it must have no way to reach #exceptions.
+
+Verification, given Apps Script cannot be executed from here: `scratchpad/p8_route_test.js` loads
+`Exceptions.gs` into a stubbed context and asserts destination + gates per class — **9/9 PASS**
+(ping Thu→#exceptions; ping Mon→suppressed; ping dry→suppressed; ops Mon→DM; ops dry→**still posts**;
+legacy `excSlackHealth_` shim→DM; override wins; unset→literal; empty→literal).
 
 ### Still open (Kurt decisions, not fixed here)
 
