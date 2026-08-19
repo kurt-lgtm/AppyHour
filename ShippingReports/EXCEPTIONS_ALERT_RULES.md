@@ -557,6 +557,16 @@ A quarantined box is **an undelivered box we have stopped checking**. It is surf
 The cancelled-order close in rule 1 is **not** a quarantine and gets neither — a cancelled order was
 never a box, so announcing it would be noise. Only the count is logged.
 
+🔴 **THE ROW IS WRITTEN FIRST; THE BOX IS CLOSED ONLY IF THE ROW LANDED.** `excLog_` does sheet I/O
+and can throw. If it throws, the order is left **OPEN and still polled**, unlogged, to retry next
+run — it is never retired invisibly. Closing a box we then failed to surface is strictly worse than
+not quarantining it: that is the wk0803 shape exactly, an undelivered box nobody is checking and
+nobody knows about. The `try/catch` around that write is also load-bearing for a second reason —
+unguarded, it sits **above** `excSaveState_`, so one transient Sheets error would kill the sweep AND
+discard the `pp_dead` increment that had just been made, rendering the dead record permanent all
+over again. That is rule 6's bug reintroduced one function further down, and it was caught in review
+of this very change. **Any new throw added between the fetch and the save must be guarded.**
+
 #### Verification (2026-08-19)
 
 - `scratchpad/p9_dead_test.js` — **24/24 PASS**. Drives the real `excPpFetch_` from `Exceptions.gs`

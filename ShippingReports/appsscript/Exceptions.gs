@@ -1289,15 +1289,29 @@ function hourlyExceptionSweep() {
       // unstamped is what pinned it to the head of the longest-unpolled queue forever.
       rec.last_seen = stamp;
       if (rec.pp_dead >= EXC_PP_DEAD_QUARANTINE) {
-        rec.open = false;                              // stop polling it
-        quarantined.push(on);
         if (!rec.logged) rec.logged = [];
-        if (rec.logged.indexOf('PP_NO_RECORD') < 0) {  // surface ONCE, on the tab a human reads
+        if (rec.logged.indexOf('PP_NO_RECORD') >= 0) { rec.open = false; return; }  // already surfaced
+        // 🔴 WRITE THE ROW FIRST, CLOSE THE BOX ONLY IF IT LANDED (directive P9). Two failure modes
+        // are being closed here at once, and both are the mistakes this directive was written about:
+        //   (a) excLog_ does sheet I/O and CAN throw. Unguarded it sits ABOVE excSaveState_, so a
+        //       transient Sheets error would kill the sweep AND discard the pp_dead counter that
+        //       had just been incremented — making the dead record permanent all over again. That
+        //       is precisely the throw-above-the-save bug P9 exists to kill; do not reintroduce it.
+        //   (b) Quarantining is "we have STOPPED CHECKING an undelivered box" — the wk0803 class.
+        //       It may only happen once a human can SEE it. Closing the box and then failing to
+        //       write the row would silently retire it, which is worse than not quarantining at all.
+        // So: on any failure, leave it OPEN and unlogged. It costs one call per day and retries.
+        try {
           excLog_(stamp, rec, 'PP_NO_RECORD',
                   'ParcelPanel answered HTTP ' + pp.dead[on] + ' "order not found" on ' +
                   rec.pp_dead + ' consecutive polls. Quarantined — this box is NO LONGER BEING ' +
                   'CHECKED. Confirm it is cancelled/never shipped, or investigate.', '');
           rec.logged.push('PP_NO_RECORD');
+          rec.open = false;                            // stop polling it — now that it is visible
+          quarantined.push(on);
+        } catch (eL) {
+          Logger.log('  🔴 quarantine row for #' + on + ' FAILED to write (' + eL + ') — leaving ' +
+                     'the box OPEN and still polled rather than retiring it invisibly.');
         }
       }
     });
