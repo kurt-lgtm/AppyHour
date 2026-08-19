@@ -75,6 +75,9 @@ real issues… sometimes you get a notification and they just changed the label.
    errored must alert as a FAILURE, not pass silently as good news (fail-loud, per host job).
 8. **NEVER widen the poll set to all cohorts.** Apps Script has a 6-minute execution ceiling and PP
    is one GET per order. Poll only OPEN boxes in the live cohorts (see below).
+   🔴 **Directive P10 makes this structural:** the CANDIDATE SET is `cohort IN (current, previous)`,
+   derived from Shopify `_SHIP_` tags and ratcheted forward-only. Everything older is not polled,
+   not classified, not appended and not alerted — with the tradeoff stated there.
 
 ---
 
@@ -621,6 +624,167 @@ of this very change. **Any new throw added between the fetch and the save must b
   Not investigated; it is not in the failing set. If PP 404s it, P9 quarantines it in 3 days.
 - **E.** The cancelled-order close is a **poll-time** repair, not a backfill. The 9 close on the
   next sweep; older cancelled rows already `open=0` are untouched.
+
+### P10 — THE SWEEP IS SCOPED TO THE CURRENT COHORT AND THE PREVIOUS ONE (Kurt GO, 2026-08-19)
+
+> Kurt, on being handed `excSeedBacklogAsLogged` as the fix for stale re-appends: **"why do we need
+> to seed it? can't we just look for the latest current cohort?"** — then, on current + previous:
+> **"do it."**
+
+**The problem it deletes.** `_exc_state` holds **9,333 rows** going back to July. The false-positive
+purge cleared `logged_classes` so genuinely-new exceptions could record again — and the first
+working sweep therefore re-appended wk0727/wk0803 exceptions stamped `detected 2026-08-19` against
+an `event when 2026-07-31`. The workaround was `excSeedBacklogAsLogged`, and it is a bad one: its
+last run **seeded 9, polled 16, and left 476 never polled**, and it permanently silences REAL open
+exceptions along with stale ones. Scoping the CANDIDATE SET makes the whole class disappear —
+an old box is no longer a candidate, so there is nothing to seed.
+
+#### The rule
+
+**The sweep considers only orders whose cohort is the CURRENT `_SHIP_` cohort or the PREVIOUS one.**
+Everything older is out of scope: **not polled, not classified, not appended, not alerted.**
+
+- **The scope is a set-membership test on the cohort tag and nothing else — `cohort IN (current,
+  previous)`.** It is written as an in-memory filter today only because the state lives in a Sheet;
+  when the sweep reads `delivery_status` / `pp_webhook_events` out of MySQL it is the identical SQL
+  `WHERE` clause with no change of meaning. 🔴 Do not re-express it as a date-arithmetic predicate on
+  `last_seen`, `detected`, or a row age — those are not the same set and do not survive the cutover.
+- **The current cohort is DERIVED, never hardcoded:** walk back Mondays (ET) to the first `_SHIP_`
+  tag that has any non-cancelled order, 3-week lookback. It rolls forward on its own.
+  🔴 **MIRRORED from `PivotAnalytics.paCurrentShipWeek_`, not called.** Same definition, one
+  `orders(first:1)` Shopify probe (free against the ParcelPanel quota, normally exactly one call).
+  Calling across files was rejected: `Exceptions.gs` already depends on `Code.gs shopifyGql_`, and
+  `PivotAnalytics.gs` was **deleted from this project once** (2026-08-14) — a second cross-file
+  dependency would take the sweep down with it. If the two definitions ever diverge, this is the
+  known cost of that choice and it is deliberate.
+- 🔴 **THE WINDOW RATCHETS FORWARD AND CAN NEVER SLIDE BACK.** Without this, one Shopify probe
+  returning zero for the live tag (outage, or a cohort not yet tagged) walks back a week, pulls a
+  RETIRED cohort back into scope, and re-appends exactly the stale rows this directive exists to
+  stop. The newest tag ever in scope is persisted in `EXC_SCOPE_CURRENT`; a computed window older
+  than it is clamped and the clamp is logged. **This is what makes "an out-of-scope row never
+  silently reappears" a property of the code rather than a hope.**
+- **Multi-leg weeks are handled for free.** The Monday and Tuesday(Dallas) legs **share one `_SHIP_`
+  tag**, so scoping by tag keeps both legs of a week together and cannot split them. Verified in
+  `p10_scope_test.js` (membership is on the tag, never on a ship DATE).
+- **No cohort found and no stored ratchet ⇒ THROW**, which the sweep's catch turns into an ops-DM
+  alert. An empty scope must never be a silent all-clear — that is constraint 7 one level up.
+
+#### 🔴 WHY TWO COHORTS AND NOT ONE — Kurt's reasoning, kept
+
+wk0803's never-collected tote sat **7–33 days** before anyone noticed. **A one-cohort window would
+have missed it.** Two cohorts ≈ up to ~14 days of coverage, which is the shortest window that still
+catches the burn this alerter was built for.
+
+#### 🔴 WHAT THIS GIVES UP — the accepted tradeoff, stated plainly
+
+**An exception on a box older than two cohorts will NEVER be surfaced by this job.** Not delayed —
+never. If a box from three weeks ago is damaged, returned, or was never collected, this alerter is
+silent about it forever. **Kurt's decision, 2026-08-19, made with that consequence stated.** The
+mitigation is that two cohorts covers the 7–33 day window the real wk0803 case needed, and that a
+box still undelivered after 14 days has other surfaces (the reship report, CS tickets, the
+postmortem). It is not covered here.
+
+#### What happens to out-of-scope rows: LEFT OPEN AND IGNORED, never closed
+
+They keep `open = 1` and are skipped at the top of the sweep. **They are NOT closed**, because
+`open = 0` in this schema means delivered / cancelled / alerted — a box whose story ended — and
+flipping 41 undelivered boxes to `0` would launder *"we stopped looking"* into *"it was fine"*.
+That is the wk0803 shape, and it would also destroy the evidence that we stopped.
+
+They cannot come back: the forward-only ratchet above is the guarantee. And the count is **logged
+every single run**, with a per-cohort breakdown, so a shrinking window is visible rather than
+implicit:
+
+```
+scope: 478 open in _SHIP_2026-08-17 + _SHIP_2026-08-10; 41 open row(s) IGNORED as out of scope
+       (_SHIP_2026-08-03:29, _SHIP_2026-07-27:12). 🔴 An exception on a box older than 2 cohorts
+       is never surfaced — accepted tradeoff, Kurt 2026-08-19.
+```
+
+🔴 **Why they get no tab row and no Slack message, unlike a P9 quarantine.** A quarantine is
+*unexpected* — a specific box ParcelPanel permanently denies — so it is surfaced once, per box.
+Scope expiry is *expected, bulk, and by policy*: ~40 rows every week, forever. A row per box would
+turn the tab into the noise that gets the channel muted, which is the failure mode this whole file
+defends against. The per-run log line plus this section IS the visibility.
+
+#### The blindspot alarm had to be sharpened, or scoping would have made it cry wolf
+
+Found while measuring this change: the BLINDSPOT predicate (`nothing due while open boxes have
+never been polled once`) counted **every** never-polled box. With the candidate set scoped, a
+Tuesday run legitimately has **0 due and ~416 in-scope never-polled** — the live cohort is 2 days
+old, the age gate skips it ON PURPOSE, and no ping class can fire that early anyway (both floors
+are 3 days). The raw counter would have posted a "policy bug" ops alert every 6 hours forever.
+
+🔴 **The numerator is now never-polled AND past `EXC_POLL_MIN_AGE_DAYS`** (`excNeverPolledDue_`).
+Both numbers are still printed in the alert and the log, so the sharpening is visible and cannot be
+mistaken for the alarm being quietly weakened.
+
+#### Measured before the push (live `_exc_state` + Shopify, **zero ParcelPanel calls**)
+
+`scratchpad/scope_measure.py`, 2026-08-19, in-scope window `_SHIP_2026-08-17 + _SHIP_2026-08-10`:
+
+| | value |
+|---|---|
+| `_exc_state` rows | 9,333 |
+| open rows | **519** |
+| open **IN** scope | **478** (08-17: 460 · 08-10: 18) |
+| open **OUT** of scope | **41** (08-03: 29 · 07-27: 12) |
+| poll set today, OLD rule | **27** |
+| poll set today, NEW rule | **0** |
+| of the 27 the old rule would have polled today, how many were out of scope | **27 — every one** |
+
+🔴 **Every box the sweep would have called ParcelPanel about today was from a retired cohort.** That
+is the re-append machine measured directly, not argued.
+
+🔴 **CORRECTION to the premise this change was requested on.** The never-polled backlog is **NOT**
+out of scope. All **416** never-polled open boxes are in `_SHIP_2026-08-17` — the **live** cohort.
+They are never-polled because the cohort is 2 days old and the age gate skips it, not because they
+are stale. Scoping does not retire them; it protects them. From Wed (day +3) the in-scope due set
+is ~470 for that cohort, which the weekly budget still cannot poll in one day — **that is Kurt
+decision C (2,000/wk cannot make a live cohort fresh), unchanged by this directive** and now
+answered by the webhook rather than by pacing.
+
+#### `excSeedBacklogAsLogged` — KEPT, no longer needed for backlog control
+
+It is not deleted. Backlog control is now structural, so the seeder has no routine job; it stays as
+a **manual mute lever** for the one case scoping does not cover — a genuine flood *inside* the live
+window that Kurt wants recorded-not-pinged. Do not schedule it, and **do not delete it without
+saying so**: removing a lever is a decision, not cleanup.
+
+#### What becomes dead when the ParcelPanel webhook lands
+
+The webhook (`POST /webhooks/parcelpanel` on the DigitalOcean console, events landing in
+`pp_webhook_events`) is live and a deriver into `delivery_status` is being built. When the sweep
+reads that table instead of calling PP:
+
+- **Dead:** `excPpFetch_`'s HTTP layer, the whole `PP_WEEK_USED` ledger (P1/P2/P3/P6/P7), pacing
+  (`excBudgetTake_` / `excBudgetSettle_` / `excRunsLeftThisWeek_`), the thin Mon/Tue day cap, and
+  the once-per-day poll tier — all of them exist only to ration a metered GET.
+- **SURVIVES, and is the reason this directive is written as a predicate:** the scope rule itself
+  (`cohort IN (current, previous)` becomes the SQL WHERE clause), the classifier and every phrasing
+  it learned, the day gate, the two-channel split, the dedup on (order, class), and the P9
+  quarantine idea (a record the source has no answer for).
+- 🔴 **A webhook can never feed the classifier by itself** — the payload carries **no `checkpoints`
+  array**, the exception topics miss **38%** of real failures, and `substatus` is unusable
+  (`Exception_007` alone spans 22 delivered / 4 returned / 3 undeliverable / 1 lost). And two of our
+  classes are **absences, not events** — "never picked up" and "no scan in 24h+" — so no webhook
+  will ever fire for them; they stay derived queries over the scoped set.
+
+#### Verification
+
+- `scratchpad/p10_scope_test.js` — drives the REAL `Exceptions.gs` in a stubbed Apps Script context:
+  pure window (incl. a 7-day step across the **Nov 2 DST** boundary), the ratchet in all four
+  directions, live-shaped derivation (one probe), walk-back when the live tag is untagged,
+  **a bad probe failing to slide the window back**, empty scope throwing, tag membership
+  (multi-leg), the candidate filter itself, and both blindspot numerators. **ALL PASS.**
+  Collision check re-run against the **CURRENT LIVE bytes** of `Code` / `PivotAnalytics` /
+  `Notifications` (another session is pushing `Notifications.gs`): **NONE**.
+- `excSelfTest()` gains 10 assertions for the same pure helpers, so the check also exists inside the
+  project where a human can run it after an edit.
+- `scratchpad/p9_dead_test.js` **31/31 PASS**, `scratchpad/p8_route_test.js` **9/9 PASS**,
+  `scratchpad/gas_lint.js` SYNTAX OK ×4 + concat, COLLISIONS NONE — all unchanged by this edit.
+- 🔴 **NOT verified: any live execution.** Apps Script cannot be run from here; the sweep's own
+  numbers arrive on Kurt's next hourly run.
 
 ## Alert classes (Kurt 2026-07-30)
 

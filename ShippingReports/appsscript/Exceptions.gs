@@ -171,7 +171,33 @@ var EXC_PP_DEAD_QUARANTINE = 3;
 // rather than dropping it, and the genuine wk0803 never-collected boxes were silent 7-33 DAYS.
 var EXC_NEVER_PICKED_MIN_DAYS = 3;
 
+// 🔴 SCOPE: THE SWEEP CONSIDERS THE CURRENT COHORT AND THE PREVIOUS ONE, NOTHING OLDER
+// (Kurt 2026-08-19, directive P10). This is the CANDIDATE SET, not just the seed list — an order
+// outside the window is not polled, not classified, not appended and not alerted.
+// Why it exists: `_exc_state` holds ~9,300 rows and the tab purge cleared `logged_classes`, so the
+// first working sweep re-appended wk0727/wk0803 exceptions with `detected 2026-08-19` against an
+// `event when 2026-07-31`. `excSeedBacklogAsLogged` was the workaround and it is slow (seeded 9,
+// polled 16, 476 still never polled on its last run) and it permanently silences REAL open
+// exceptions along with stale ones. Scoping the candidate set makes the whole class disappear:
+// an old box stops being a candidate, so nothing to seed.
+// 🔴 WHY TWO COHORTS AND NOT ONE (Kurt): wk0803's never-collected tote sat 7-33 DAYS before anyone
+// noticed. A one-cohort window would have missed it. Two cohorts is ~14 days of coverage.
+// 🔴 THE ACCEPTED TRADEOFF, STATED: an exception on a box older than two cohorts will NEVER be
+// surfaced by this job. That is Kurt's call, not an oversight.
 var EXC_COHORTS_BACK = 2;                 // current + previous ship week stay in the poll set
+// How far back to walk looking for the CURRENT cohort tag. Mirrors PivotAnalytics `paCurrentShipWeek_`
+// (walk back Mondays to the first `_SHIP_` tag that has orders, 3-week lookback). MIRRORED, not
+// called: `Exceptions.gs` already depends on `Code.gs shopifyGql_`, and `PivotAnalytics.gs` has been
+// deleted from this project once (2026-08-14) — a second cross-file dependency would take the sweep
+// down with it. Same definition, one Shopify probe, no PivotAnalytics coupling.
+var EXC_COHORT_LOOKBACK_WEEKS = 3;
+// 🔴 THE WINDOW RATCHETS FORWARD AND CAN NEVER SLIDE BACK. Without this, one Shopify probe that
+// returns zero orders for the live tag (outage, or the cohort not yet tagged) would walk back a
+// week, pull a retired cohort back INTO scope, and re-append exactly the stale rows this directive
+// exists to stop. The newest tag ever in scope is persisted; a computed window older than it is
+// clamped. An out-of-scope row therefore cannot silently reappear.
+var EXC_SCOPE_PROP = 'EXC_SCOPE_CURRENT';
+var EXC_SCOPE_TAGS_ = null;               // memoized for the life of one execution
 
 // 🔴 PARCELPANEL WEEKLY BUDGET — 2,500 calls/week, ACCOUNT-WIDE (Kurt, standing). This job polls
 // hourly = 168 runs/week and was never measured against it. Measured 2026-08-10: 487 open orders
@@ -244,6 +270,26 @@ var EXC_SILENT_ALARM_EVERY_MS = 6 * 60 * 60 * 1000;   // at most one starvation 
 function excNeverPolled_(st, openKeys) {
   return openKeys.filter(function (k) {
     return !String((st[k] && st[k].last_seen) || '').trim();
+  }).length;
+}
+
+/**
+ * The subset of never-polled boxes the policy says SHOULD already have been polled — i.e. whose
+ * cohort has aged past `EXC_POLL_MIN_AGE_DAYS`. This is the BLINDSPOT numerator, and it is not the
+ * same number as `excNeverPolled_`.
+ * 🔴 Why the distinction is load-bearing (found while scoping, 2026-08-19): a fresh cohort is
+ * legitimately never-polled on day 0/1/2 — the age gate skips it ON PURPOSE, and no ping class can
+ * fire that early anyway (`EXC_NEVER_PICKED_MIN_DAYS` and `EXC_DELAYED_MIN_DAYS` are both 3). With
+ * the candidate set scoped to two cohorts, a Tuesday run legitimately has 0 due and ~400 in-scope
+ * never-polled, which the raw counter would report as a policy bug every 6 hours. An alarm that
+ * cries wolf is the failure this file exists to prevent — so the alarm counts only boxes that are
+ * BOTH never-polled AND past the age gate. Both numbers are still printed.
+ */
+function excNeverPolledDue_(st, openKeys) {
+  return openKeys.filter(function (k) {
+    var r = st[k];
+    if (!r || String(r.last_seen || '').trim()) return false;
+    return excCohortAgeDays_(r.cohort) >= EXC_POLL_MIN_AGE_DAYS;
   }).length;
 }
 
@@ -521,6 +567,93 @@ function excCohortAgeDays_(cohort) {
   var t = excStampDay_().split('-');
   var today = Date.UTC(Number(t[0]), Number(t[1]) - 1, Number(t[2]), 12, 0, 0);
   return Math.round((today - ship) / 86400000);
+}
+
+/**
+ * The `_SHIP_` tag for the Monday of the ET week `offsetWeeks` weeks back. Day arithmetic on a
+ * UTC-noon anchor built from the ET calendar parts, so a DST transition cannot shift it a day
+ * (same construction as `excWeekKey_`).
+ */
+function excMondayTag_(offsetWeeks) {
+  var now = new Date();
+  var dow = Number(Utilities.formatDate(now, EXC_TZ, 'u'));                 // 1=Mon .. 7=Sun
+  var ymd = Utilities.formatDate(now, EXC_TZ, 'yyyy-MM-dd').split('-');
+  var a = new Date(Date.UTC(Number(ymd[0]), Number(ymd[1]) - 1, Number(ymd[2]), 12, 0, 0));
+  a.setUTCDate(a.getUTCDate() - (dow - 1) - 7 * (Number(offsetWeeks) || 0));
+  return '_SHIP_' + Utilities.formatDate(a, 'UTC', 'yyyy-MM-dd');
+}
+
+/** PURE. The in-scope window (newest first) given the current cohort tag. Testable without I/O. */
+function excCohortWindow_(curTag) {
+  var m = String(curTag || '').match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return [];
+  var a = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0);
+  var out = [];
+  for (var i = 0; i < EXC_COHORTS_BACK; i++) {
+    out.push('_SHIP_' + Utilities.formatDate(new Date(a - i * 7 * 86400000), 'UTC', 'yyyy-MM-dd'));
+  }
+  return out;
+}
+
+/**
+ * PURE. The ratchet: the window may only ever move FORWARD. `_SHIP_yyyy-MM-dd` tags sort
+ * lexicographically in date order, so the comparison is the date comparison.
+ */
+function excScopeRatchet_(computed, stored) {
+  if (!stored) return String(computed || '');
+  if (!computed) return String(stored);
+  return computed > stored ? String(computed) : String(stored);
+}
+
+/**
+ * The CURRENT cohort tag: walk back Mondays (ET) to the first `_SHIP_` tag that has any
+ * non-cancelled order, then clamp with the forward-only ratchet. One `orders(first:1)` Shopify
+ * probe per week walked — free against the ParcelPanel quota, and normally exactly one.
+ * Throws if no cohort exists in the lookback: the sweep's catch turns that into an ops alert,
+ * which is the right shape — a sweep that cannot name its cohort must not run silently.
+ */
+function excCurrentCohortTag_() {
+  var probe = '';
+  for (var wk = 0; wk < EXC_COHORT_LOOKBACK_WEEKS; wk++) {
+    var tag = excMondayTag_(wk);
+    var edges = shopifyGql_('query($q:String!){orders(first:1, query:$q){edges{node{name}}}}',
+                            { q: "tag:'" + tag + "' -status:cancelled" }).orders.edges;
+    if (edges.length) { probe = tag; break; }
+    Logger.log('  no orders for ' + tag + ' — walking back a week');
+  }
+  var props = PropertiesService.getScriptProperties();
+  var stored = String(props.getProperty(EXC_SCOPE_PROP) || '').trim();
+  var eff = excScopeRatchet_(probe, stored);
+  if (!eff) {
+    throw new Error('no _SHIP_ cohort with orders found in the last ' +
+                    EXC_COHORT_LOOKBACK_WEEKS + ' weeks — refusing to sweep with no scope');
+  }
+  if (eff !== stored) props.setProperty(EXC_SCOPE_PROP, eff);
+  if (probe && eff !== probe) {
+    Logger.log('  🔴 cohort probe answered ' + probe + ' but the forward-only ratchet holds at ' +
+               eff + ' — a retired cohort is NOT being pulled back into scope.');
+  }
+  return eff;
+}
+
+/** The in-scope cohort tags, newest first. Memoized for the life of one execution. */
+function excScopeTags_() {
+  if (EXC_SCOPE_TAGS_) return EXC_SCOPE_TAGS_;
+  EXC_SCOPE_TAGS_ = excCohortWindow_(excCurrentCohortTag_());
+  Logger.log('  in-scope cohorts (' + EXC_COHORTS_BACK + '): ' + EXC_SCOPE_TAGS_.join(', '));
+  return EXC_SCOPE_TAGS_;
+}
+
+/**
+ * 🔴 THE SCOPE PREDICATE, deliberately expressed as a set-membership test on the cohort tag and
+ * nothing else — `cohort IN (current, previous)`. It is a filter here only because the state lives
+ * in a sheet; when the sweep reads `delivery_status`/`pp_webhook_events` out of MySQL it becomes
+ * the identical SQL WHERE clause with no change of meaning.
+ * Multi-leg weeks are handled for free: the Monday and Tuesday(Dallas) legs SHARE one `_SHIP_` tag,
+ * so scoping by tag keeps both legs of a week together and can never split them.
+ */
+function excInScope_(cohort) {
+  return excScopeTags_().indexOf(String(cohort || '').trim()) >= 0;
 }
 
 /**
@@ -835,12 +968,11 @@ function excPpFetch_(orderNums, deadline) {
 
 /** Order numbers + customer/state for the live ship cohorts, from Shopify. */
 function excSeedCohort_() {
-  var tags = [], d = new Date();
-  var mon = new Date(d); mon.setDate(mon.getDate() - ((mon.getDay() + 6) % 7));
-  for (var i = 0; i < EXC_COHORTS_BACK; i++) {
-    var m = new Date(mon); m.setDate(m.getDate() - 7 * i);
-    tags.push('_SHIP_' + Utilities.formatDate(m, Session.getScriptTimeZone(), 'yyyy-MM-dd'));
-  }
+  // 🔴 ONE definition of "in scope" (directive P10). This used to compute its own calendar-Monday
+  // tag list while the sweep's candidate set was every open row in `_exc_state` regardless of age —
+  // two different answers to "which cohorts is this job about", which is how July exceptions were
+  // re-appended in August. The seed list and the candidate set are now the SAME list.
+  var tags = excScopeTags_();
   var rows = [];
   tags.forEach(function (tag) {
     var cursor = null, page = 0;
@@ -1161,6 +1293,12 @@ function excCheckProperties() {
       ' account quota and cannot report into this ledger.',
     '  thin Mon/Tue sweep today: ' + (EXC_THIN_DAY_CAP - excThinDayLeft_()) + '/' + EXC_THIN_DAY_CAP +
       ' used (' + (props.getProperty(EXC_THIN_DAY_PROP) || 'unset') + ')',
+    'cohort scope (directive P10): ' +
+      (props.getProperty(EXC_SCOPE_PROP)
+        ? excCohortWindow_(props.getProperty(EXC_SCOPE_PROP)).join(' + ') +
+          '  [ratchet ' + props.getProperty(EXC_SCOPE_PROP) + ', forward-only]'
+        : '(unset — the next sweep derives it from Shopify and stamps it)') +
+      '. Older cohorts are ignored: open, never polled, never alerted.',
     'Slack PINGS -> ' + excChannelPings_() +
       (props.getProperty('EXC_CHANNEL_PINGS') ? ' (property override)' : ' (default #exceptions)') +
       ': ' + (EXC_DRY_RUN ? 'DRY RUN (muted)' : 'LIVE') +
@@ -1200,7 +1338,28 @@ function hourlyExceptionSweep() {
       }
     });
 
-    var open = Object.keys(st).filter(function (k) { return st[k].open; });
+    // 🔴 SCOPE THE CANDIDATE SET (directive P10) — current cohort + the previous one, nothing
+    // older. An out-of-scope row is left OPEN and simply IGNORED: not polled, not classified, not
+    // appended, not alerted. It is NOT closed, because `open = 0` in this schema means delivered /
+    // cancelled / alerted — a box whose story ended — and flipping 41 undelivered boxes to 0 would
+    // launder "we stopped looking" into "it was fine". That is the wk0803 shape, and writing it
+    // into the state would also destroy the evidence that we stopped.
+    // The count is logged EVERY run so a shrinking window is visible rather than implicit.
+    var openAll = Object.keys(st).filter(function (k) { return st[k].open; });
+    var open = openAll.filter(function (k) { return excInScope_(st[k].cohort); });
+    var ignoredOut = openAll.length - open.length;
+    var ignoredByCohort = {};
+    openAll.forEach(function (k) {
+      if (excInScope_(st[k].cohort)) return;
+      var c = String(st[k].cohort || '(blank)');
+      ignoredByCohort[c] = (ignoredByCohort[c] || 0) + 1;
+    });
+    Logger.log('  scope: ' + open.length + ' open in ' + excScopeTags_().join(' + ') + '; ' +
+               ignoredOut + ' open row(s) IGNORED as out of scope' +
+               (ignoredOut ? ' (' + Object.keys(ignoredByCohort).sort().reverse()
+                   .map(function (c) { return c + ':' + ignoredByCohort[c]; }).join(', ') + ')' : '') +
+               '. 🔴 An exception on a box older than ' + EXC_COHORTS_BACK +
+               ' cohorts is never surfaced — accepted tradeoff, Kurt 2026-08-19.');
 
     // 🔴 Priority: NEWEST cohort first, then never-polled, then oldest-seen. A pure oldest-seen
     // sort let a matured cohort compete with the live one for poll budget — on 2026-08-07 the
@@ -1240,8 +1399,11 @@ function hourlyExceptionSweep() {
     //   BLINDSPOT — nothing was judged due, yet open boxes have never been polled ONCE. That is a
     //               policy bug, not a quiet week, and it is exactly the week-34 signature.
     var neverP_ = excNeverPolled_(st, open);
+    // 🔴 The blindspot numerator is never-polled AND PAST THE AGE GATE (see excNeverPolledDue_).
+    // A day-0/1/2 cohort is never-polled on purpose and firing on it would make this alarm noise.
+    var neverDue_ = excNeverPolledDue_(st, open);
     var starved_ = (elig.length > 0 && !batch.length);
-    var blind_ = (!elig.length && neverP_ > 0);
+    var blind_ = (!elig.length && neverDue_ > 0);
     if (starved_ || blind_) {
       var props_ = PropertiesService.getScriptProperties();
       var lastAlarm = Number(props_.getProperty(EXC_SILENT_ALARM_PROP) || 0);
@@ -1249,7 +1411,9 @@ function hourlyExceptionSweep() {
         props_.setProperty(EXC_SILENT_ALARM_PROP, String(new Date().getTime()));
         try {
           excSlackOps_(':warning: exceptions sweep polled 0 boxes while ' + open.length +
-            ' are still open (' + neverP_ + ' never polled once). ' +
+            ' are still open in ' + excScopeTags_().join(' + ') + ' (' + neverP_ +
+            ' never polled once, ' + neverDue_ + ' of them past the ' + EXC_POLL_MIN_AGE_DAYS +
+            'd age gate). ' +
             (starved_ ? 'ParcelPanel budget allowed ' + allowed + ' of ' + elig.length + ' due'
                       : 'The poll policy judged NOTHING due while boxes have never been polled ' +
                         '— that is a policy bug, not a quiet week') +
@@ -1424,7 +1588,8 @@ function hourlyExceptionSweep() {
                '  [ledger ' + String(PropertiesService.getScriptProperties()
                                       .getProperty(EXC_PP_BUDGET_PROP) || '(unset)') + ']');
     Logger.log('exceptions sweep: reached ' + reached + ' of ' + batch.length + ' polled (' +
-               open.length + ' open, ' + neverPolled + ' still never polled, throttled ' +
+               open.length + ' open in scope, ' + ignoredOut + ' open out of scope and ignored, ' +
+               neverPolled + ' still never polled, throttled ' +
                pp.throttled + ', hard failures ' + pp.failed +
                (pp.budgetHit ? ', TIME BUDGET hit' : '') + '), posted ' + posted +
                ', recorded ' + recorded +
@@ -1438,7 +1603,8 @@ function hourlyExceptionSweep() {
                  (wouldPost.length > 25 ? '\n  ...and ' + (wouldPost.length - 25) + ' more' : ''));
     }
     return { posted: posted, recorded: recorded, wouldPost: wouldPost.length, reached: reached,
-             open: open.length, neverPolled: neverPolled, eligible: elig.length,
+             open: open.length, ignoredOutOfScope: ignoredOut, scope: excScopeTags_().slice(),
+             neverPolled: neverPolled, neverPolledDue: neverDue_, eligible: elig.length,
              reserved: allowed, charged: pp.charged, refunded: refunded, dryRun: EXC_DRY_RUN };
   } catch (e) {
     try {
@@ -1654,6 +1820,41 @@ function excSelfTest() {
     fails.push('DELAYED must display as "delayed / stuck in transit"');
   }
 
+  // ---- directive P10: cohort scope. Both helpers are PURE, so they are testable with no I/O.
+  var win = excCohortWindow_('_SHIP_2026-08-17');
+  if (win.join(',') !== '_SHIP_2026-08-17,_SHIP_2026-08-10') {
+    fails.push('cohort window must be current + previous -> ' + win.join(','));
+  }
+  if (excCohortWindow_('').length !== 0) fails.push('an unparseable cohort tag must yield no window');
+  // the window must step a whole week even across a DST boundary (Nov 2 2026 is the fall-back)
+  var dstWin = excCohortWindow_('_SHIP_2026-11-02');
+  if (dstWin.join(',') !== '_SHIP_2026-11-02,_SHIP_2026-10-26') {
+    fails.push('cohort window must step 7 whole days across a DST change -> ' + dstWin.join(','));
+  }
+  // the ratchet may only ever move FORWARD — this is what stops a retired cohort re-entering scope
+  if (excScopeRatchet_('_SHIP_2026-08-10', '_SHIP_2026-08-17') !== '_SHIP_2026-08-17') {
+    fails.push('ratchet must refuse an OLDER computed tag');
+  }
+  if (excScopeRatchet_('_SHIP_2026-08-24', '_SHIP_2026-08-17') !== '_SHIP_2026-08-24') {
+    fails.push('ratchet must accept a NEWER computed tag');
+  }
+  if (excScopeRatchet_('', '_SHIP_2026-08-17') !== '_SHIP_2026-08-17') {
+    fails.push('a failed probe must fall back to the stored tag, never to empty scope');
+  }
+  if (excScopeRatchet_('_SHIP_2026-08-17', '') !== '_SHIP_2026-08-17') {
+    fails.push('an unset ratchet must accept the computed tag');
+  }
+  // scope membership is set-membership on the tag — which is what keeps a multi-leg week together
+  var savedScope = EXC_SCOPE_TAGS_;
+  EXC_SCOPE_TAGS_ = ['_SHIP_2026-08-17', '_SHIP_2026-08-10'];
+  if (!excInScope_('_SHIP_2026-08-17') || !excInScope_('_SHIP_2026-08-10')) {
+    fails.push('current and previous cohort must both be in scope');
+  }
+  if (excInScope_('_SHIP_2026-08-03') || excInScope_('') || excInScope_(null)) {
+    fails.push('an older/blank cohort must NOT be in scope');
+  }
+  EXC_SCOPE_TAGS_ = savedScope;
+
   Logger.log(fails.length ? 'FAIL:\n' + fails.join('\n') : 'PASS: ' + (cases.length + 1) + ' cases');
   return fails;
 }
@@ -1663,6 +1864,16 @@ function excSelfTest() {
  * alerted, without touching the Exceptions tab or Slack. Run repeatedly until it reports
  * `seeded 0` — the poll budget is ~1,200 orders per run against a queue of several thousand,
  * so a single pass does NOT cover the backlog.
+ *
+ * 🔴 NO LONGER NEEDED FOR BACKLOG CONTROL — KEPT DELIBERATELY (directive P10, 2026-08-19).
+ * This existed because a purged `logged_classes` let the sweep re-append July exceptions dated
+ * August. Cohort scoping removes the candidate, so there is nothing to seed: on the live state the
+ * out-of-scope rows the seeder was chasing are simply no longer considered. It was also a poor fix —
+ * its last run seeded 9 and left 476 never polled, and it permanently silences REAL open exceptions
+ * along with stale ones.
+ * It stays as a MANUAL MUTE LEVER for the one case scoping does not cover: a genuine flood inside
+ * the live window that Kurt wants recorded-not-pinged. Do not call it on a schedule, and do not
+ * delete it without saying so — deleting a lever is a decision, not cleanup.
  */
 function excSeedBacklogAsLogged() {
   EXC_SEEDING = true;
