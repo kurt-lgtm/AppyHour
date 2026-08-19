@@ -123,10 +123,10 @@
  *     got ("pages 62/79, 78% — resuming next run"). A half-swept number looks finished and is a lie;
  *     blank is honest. Only `complete` sweeps produce cells.
  *   - The run is bounded by TIME first (NT_TIME_BUDGET_MS minus NT_SAVE_RESERVE_MS, so there is
- *     always room to checkpoint) and by pages second, so it exits cleanly instead of being killed
- *     mid-page by the 360s ceiling.
- *   - INVALIDATION: the state carries a signature of {version, cohort tag, window lo/hi, sorted
- *     tracked flow ids, metric names}. Any change discards the state and restarts — a set
+ *     always room to checkpoint) and by fetched EVENTS second, so it exits cleanly instead of being
+ *     killed mid-page by the 360s ceiling.
+ *   - INVALIDATION: the state carries a signature of {version, cohort tag, EVERY metric's window,
+ *     sorted tracked flow ids, metric names}. Any change discards the state and restarts — a set
  *     accumulated under different pins is not a partial answer to the new question, it is a wrong
  *     one. A COMPLETE result is reused for the rest of the SAME America/New_York calendar day and
  *     re-measured the next day: this tab is a daily walk-forward artifact, so "same day" is its
@@ -155,22 +155,61 @@
  *
  * 🔴 SHOPIFY EMITS NO DELIVERY EVENT — VERIFIED, NOT ASSUMED (2026-08-19). Every order event on both
  * cohorts was scanned for the substring "deliver": ZERO matches on 2,324 and 2,316 orders. So the
- * same trick does NOT work for `Order Delivered -> Email Sent`; that row remains Klaviyo's and stays
- * BLANK until a job without the 360s ceiling can sweep it.
+ * same trick does NOT work for `Order Delivered -> Email Sent`; that row is Klaviyo's, and the only
+ * way to it is paging the account's "Received Email" events.
  *
- * 🔴 THE REMAINING EMAIL ROW CANNOT BE FILLED FROM APPS SCRIPT — A PROPERTY OF THE ACCOUNT, NOT A
- * BUG (measured 2026-08-18, /metric-aggregates). /events/ has NO flow filter, so counting one
- * flow's email sends means paging EVERY "Received Email" event: 165,999 events in this cohort's
- * window, ~830 pages. The Apps Script ceiling is 360s. So:
+ * 🔴 `Order Delivered -> Email Sent`: THE SWEEP IS NOW ~4.9x CHEAPER, AND STILL NOT FREE (2026-08-19).
+ * Four candidate shortcuts were probed live before touching the transport. Three do not exist and
+ * are recorded here so nobody spends another evening rediscovering that:
+ *   1. A FLOW FILTER ON /events/. Does not exist, in ANY spelling. Every one of
+ *      equals($flow,…) / equals(flow_id,…) / equals(event_properties.$flow,…) / equals($flow_id,…) /
+ *      equals(properties.$flow,…) / equals(flow,…) returns 400 "not a filterable field for this
+ *      resource". The whole metric must be paged and ours picked out client-side. Settled.
+ *   2. /metric-aggregates/ WITH by:["$flow"]. This one DOES work — 0.6s for exact per-flow counts —
+ *      but it is ACCOUNT-WIDE. It answers "how many Delivered-flow emails went out", never "how many
+ *      of THIS COHORT's customers got one". It is a feasibility probe and a ceiling, never a cell.
+ *      (by:["$flow_id"] is a 400; by:["$message"] and by:["$attributed_flow"] do not carry the flow.)
+ *   3. /flow-values-reports/. Works, one call, per-flow-message `recipients` — and is likewise
+ *      account-wide, over a fixed timeframe key. Same disqualification. (/flows/{id}/flow-messages/
+ *      is a 404; that path does not exist on this revision.)
+ *   4. PARALLEL DAY-SLICED FETCHING (what UrlFetchApp.fetchAll would give us). Measured end to end:
+ *      65 pages sequential = 225s; the same population as 3 day-slices fetched concurrently = 166s.
+ *      1.36x, and it did NOT improve going from 3 to 6 workers — Klaviyo throttles this per account,
+ *      so the concurrency is not ours to take. Not worth the redesign of the checkpoint. Declined.
+ * What DID pay, all live-measured on this account, all in this file now:
+ *   a. page[size] = 1000, not 200. 200 was never a limit, just an untested assumption; 1000 is the
+ *      real ceiling (2000 -> 400 "Page size must be an integer <= 1000") and links.next carries it.
+ *   b. NO include=profile on the email metric — the recipient address is already IN the event, as
+ *      event_properties["Recipient Email Address"]. Verified against the profile join on 3,864
+ *      tracked-flow events: 100% present, 0 mismatches. The join was costing 2.2x the wall time.
+ *      (The SMS metrics DO still need it — 0 of 4,348 of their events carry any address.)
+ *   c. A SHORTER WINDOW FOR EMAIL ONLY. It feeds exactly one row now, and a Delivered notification
+ *      cannot precede the shipment, so it starts at ship-date-minus-1 instead of minus-9: 213,266
+ *      events -> 135,665 for _SHIP_2026-08-10. See NT_EMAIL_WIN_LEAD_DAYS.
+ *   Net: ~22.95 ms/event (the shape this file measured itself at in production) -> ~7.4 ms/event
+ *   estimated, over ~36% fewer events. A cohort's email sweep goes from ~115 runs to ~22.
+ * 🔴 IT IS STILL OVER THE CAP, ON PURPOSE. NT_MAX_EVENTS stays at 24,000 = exact parity with the old
+ * 120-pages-of-200, so this commit loosens NOTHING. At 135k-219k events a cohort, and only ~46s of
+ * paging per run once the Shopify cohort pull has taken its 169s (D30), filling the row still costs
+ * 22-36 runs. 4.9x cheaper is not the same as cheap. Whether to pay it — and whether to first take
+ * the frozen-column cohort cache that would cut it to 5-8 — is Kurt's call, not a tuning knob: see
+ * the table on NT_MAX_EVENTS.
  *     Order Placed               Email Sent + its %      -> Shopify order events, cheap, written
  *     Order Shipped              Email Sent + its %      -> Shopify order events, cheap, written
- *     Order Delivered            Email Sent + its %      -> Klaviyo, DECLINED, BLANK, note logged
+ *     Order Delivered            Email Sent + its %      -> Klaviyo; feasible at NT_MAX_EVENTS
+ *                                                           250000, DECLINED + BLANK below that
  *     Order Shipped / Delivered  SMS Sent + SMS Engaged  -> Klaviyo, resumable sweep (see below)
  * ntMetricVolume_ makes the decline explicit and instant instead of burning 4 minutes to fail.
- * Do NOT "fix" this by raising NT_MAX_PAGES. If Kurt wants the two email rows, the honest options
- * are (a) a local/cloud job with no 360s ceiling that writes the cells, or (b) Klaviyo's
- * flow-series report, which is one cheap call but is ACCOUNT-WIDE PER WEEK and NOT cohort-joined —
- * it must never be written into a cohort column as if it were.
+ * If Kurt would rather not pay the runs, the honest alternatives are (a) a local/cloud job with no
+ * 360s ceiling, or (b) a Klaviyo SEGMENT defined on "received message VgvYVz in the last N days",
+ * whose profiles page 100 at a time — cheap, but it is a WRITE to the Klaviyo account and it is
+ * rolling-window, so it could serve the current column and never a backfill. Both unbuilt.
+ *
+ * 🔴 KLAVIYO EVENT RETENTION IS NOT THE BLOCKER FOR THE BACKFILL — CHECKED, 2026-08-19. /events/
+ * returns page 1 with real data for every target window back to _SHIP_2026-07-13, and a probe at
+ * 2026-05-12 still returns events, so all five older columns are QUERYABLE. What stops them is the
+ * cost above, per column, not the availability of the data. (Retention is a plan-level setting that
+ * can change; re-probe before promising a backfill of anything older than this.)
  *
  * MEASURED 2026-08-18 (live, read-only; the numbers this file was validated against):
  *   cohort _SHIP_2026-08-17  2324 orders / 2289 distinct emails / 34 repeats / 1 no-email
@@ -229,26 +268,101 @@ var NT_BASE = 'https://a.klaviyo.com/api';
  * size lives HERE per path and `null` means "send nothing". Verified live per endpoint:
  *   /metrics/  size=null  cursor-only          page[size]=100 -> 400 ; bare -> 200, links.next present
  *   /flows/    size=50    page[size] + cursor  page[size]=50  -> 200 (26 flows, no next)
- *   /events/   size=200   page[size] + cursor  page[size]=200 -> 200, links.next present
+ *   /events/   size=1000  page[size] + cursor  page[size]=1000 -> 200, links.next present
  * links.next carries every param forward, so the size is set on the FIRST url only.
  * Adding an endpoint? Verify it live before assuming it takes a size — do not copy a neighbour.
+ *
+ * 🔴 /events/ TAKES 1000, NOT 200 — RE-VERIFIED LIVE 2026-08-19. The old 200 was not a limit, it
+ * was an assumption nobody had measured. Probed on this account, same filter, same window:
+ *     page[size]=200   -> 200 OK
+ *     page[size]=1000  -> 200 OK, 1000 rows returned, links.next carries page[size]=1000 forward
+ *     page[size]=2000  -> 400 "Page size must be an integer <= 1000"
+ *     page[size]=5000  -> 400 (same)
+ * 1000 is therefore the endpoint's real ceiling, and it is 5x fewer round trips for the same rows.
+ * Measured cost per EVENT on this account (median of 9 pages each, 2026-08-19):
+ *     size=200,  include=profile   2.15 s/page  =  10.75 ms/event
+ *     size=1000, include=profile   5.60 s/page  =   5.60 ms/event
+ *     size=1000, NO include        2.54 s/page  =   2.54 ms/event   <- what the email metric uses
+ * Sustained over a full 65-page sweep the no-include shape held 3.46 s/page (3.46 ms/event); that
+ * slower sustained figure is the one the cost notes quote, not the best-case median.
  */
 var NT_PAGING = {
   '/metrics/': { size: null, mode: 'CURSOR-ONLY (page[size] is rejected 400 by this resource)' },
   '/flows/':   { size: 50,   mode: 'page[size]<=50 + cursor' },
-  '/events/':  { size: 200,  mode: 'page[size]<=200 + cursor' }
+  '/events/':  { size: 1000, mode: 'page[size]<=1000 + cursor (1000 verified; 2000 is a 400)' }
 };
-var NT_PAGE = 200;                       // events page[size] — mirrors NT_PAGING['/events/'].size
+var NT_PAGE = 1000;                      // events page[size] — mirrors NT_PAGING['/events/'].size
 /**
- * 🔴 NT_MAX_PAGES IS THE FEASIBILITY CAP, AND IT IS NOW A TOTAL ACROSS RUNS — not a per-run limit.
- * Resumption exists to make a sweep that is ALREADY under this cap actually FINISH; it is not a
- * licence to raise the cap. At ~2s/page a 120-page metric is ~2 runs, which is a number of clicks
- * Kurt can live with. The 830-page email metric is still DECLINED up front by the volume precheck
- * and still leaves its rows blank — see the email block in the header. Raising this number is a
- * decision about how many runs a cohort costs, so it is Kurt's, not a tuning knob.
+ * 🔴 THE FEASIBILITY CAP IS COUNTED IN EVENTS, NOT PAGES — and that change is deliberate, not
+ * cosmetic. It used to be NT_MAX_PAGES = 120 pages at 200 rows a page, i.e. exactly 24,000 events.
+ * Raising the page size to 1000 while leaving a cap of "120 pages" in place would have quintupled
+ * the real budget to 120,000 events without anyone deciding to — a silent five-fold loosening
+ * hiding inside a transport tweak. Counting the thing the cap is actually about (events fetched)
+ * makes the budget independent of page size, so the next transport change cannot move it either.
+ *
+ * NT_MAX_EVENTS = 24000 is EXACT PARITY with the old cap. Nothing is loosened by this commit.
+ *
+ * 🔴 RAISING IT IS KURT'S DECISION, NOT A TUNING KNOB — it decides how many runs a cohort costs.
+ * Measured volumes (Klaviyo /metric-aggregates/, live 2026-08-19) and the run cost each implies at
+ * ~7.4 ms/event (NT_RATE_MS_PER_EVENT) over the ~46s a run really has for paging once the Shopify
+ * cohort pull has taken its 169s (NT_COHORT_PULL_MS). These are the same numbers ntRunsFor_
+ * computes — if you edit one, the self-test catches the other:
+ *     cohort              "Received Email"    runs as-is    runs if the cohort pull were cached
+ *     _SHIP_2026-08-17     ~135,000 (mature)      22                     5
+ *     _SHIP_2026-08-10      135,665               22                     5
+ *     _SHIP_2026-08-03      159,225               26                     6
+ *     _SHIP_2026-07-27      160,555               26                     6
+ *     _SHIP_2026-07-20      176,562               29                     7
+ *     _SHIP_2026-07-13      218,613               36                     8
+ * 🔴 READ THE FIRST COLUMN, NOT THE SECOND. As the code stands today NT_MAX_EVENTS = 250000 makes
+ * every cohort *finishable*, but at 22-36 runs each — ~161 runs to fill all six columns, i.e. months
+ * on the daily trigger. That is almost certainly not a price worth paying, and saying so is the
+ * point of this table.
+ * 🔴 THE SECOND COLUMN IS THE PROPOSAL, AND IT IS NOT TAKEN HERE. D30 measured that the cohort pull
+ * is 169s of every 240s run and listed caching it as one of two ways to buy the budget back, then
+ * deliberately declined both as Kurt's call — because caching the cohort FREEZES `Order Placed` and
+ * `Order Shipped` mid-day, which is the staleness class D29c exists to stop. 🔴 But that objection
+ * does NOT apply to a FROZEN column: a matured cohort's placed/shipped counts are final, so a
+ * backfill run has nothing to go stale. Caching the cohort pull FOR FROZEN COLUMNS ONLY is
+ * therefore the single highest-leverage change available here — 161 runs -> ~37 — and it is written
+ * down rather than done because D30 already ruled that this class of decision is Kurt's.
+ * The SMS metrics need 250000 too for the older columns (_SHIP_2026-08-03 is 34,640 "Received Text
+ * Message" events, already over the 24,000 cap today — that is why its SMS rows are blank); they
+ * are 2-6 runs each, which IS affordable as-is.
+ * Change this number only on Kurt's word, and say in the commit which cohorts it unblocks.
  */
-var NT_MAX_PAGES = 120;                  // TOTAL pages per metric per cohort, across runs
-var NT_MAX_PAGES_PER_RUN = 90;           // second bound inside ONE run (time is the first)
+var NT_MAX_EVENTS = 24000;               // TOTAL events fetched per metric per cohort, across runs
+/**
+ * Per-run backstop, also in events. 🔴 TIME BINDS FIRST AND ALWAYS HAS: at the measured rate a
+ * 240s fetch budget reaches ~32,000 events, so this number is a guard against a pathological
+ * fast-response run, not a throttle. It is set ABOVE what the clock can reach on purpose — the old
+ * NT_MAX_PAGES_PER_RUN = 90 pages x 200 = 18,000 events was likewise never the binding constraint
+ * (the clock stopped at ~10,500 events at the old rate), so nothing about which bound actually
+ * fires has changed. Stated explicitly so this is not mistaken for a quiet loosening.
+ */
+var NT_MAX_EVENTS_PER_RUN = 100000;
+/**
+ * Apps-Script-side cost of one fetched event, used ONLY to phrase run-count estimates in notes.
+ * 🔴 IT IS AN ESTIMATE, NOT A MEASUREMENT, and it is labelled as one everywhere it is printed.
+ * Derivation: this file measured itself in production at 4.59 s/page at size 200 = 22.95 ms/event.
+ * The same request shape measured from a workstation was 10.75 ms/event, so Apps Script runs this
+ * transport ~2.13x slower than a local client. The new no-include shape measures 3.46 ms/event
+ * locally over a sustained 65-page sweep; 3.46 x 2.13 = 7.4. Replace this with a real production
+ * figure the first time a full sweep completes and logs its own s/page.
+ */
+var NT_RATE_MS_PER_EVENT = 7.4;
+/**
+ * 🔴 THE SHOPIFY COHORT PULL EATS MOST OF THE RUN, AND ANY RUN-COUNT THAT IGNORES IT IS A FICTION.
+ * Measured wk0817 (D30): the `first:40` unfiltered order-events pull is 93 pages / **169.4s** and it
+ * runs EVERY invocation, before a single Klaviyo page. So of the 240s fetch budget, the sweep
+ * actually gets 240 - 169 - 25(checkpoint reserve) ~= 46s of paging — not 215s.
+ * This constant exists so ntRunsFor_ quotes the budget the sweep really has. Getting this wrong
+ * understates every run count by ~4.7x, which is the difference between "a few clicks" and "a month
+ * of the daily trigger" — precisely the number Kurt is being asked to approve.
+ * 🔴 IT IS NOT A LEVER. Lowering it does not create time; it only makes the estimate lie. Update it
+ * from a real run's `total …s of the 360s ceiling` log line, never to make a plan look affordable.
+ */
+var NT_COHORT_PULL_MS = 169000;
 var NT_TIME_BUDGET_MS = 240000;          // 4 min of fetching, leaving 2 min of the 360s ceiling
 /**
  * Held back from the fetch budget so a run ALWAYS has room to serialize + write its checkpoint.
@@ -258,6 +372,48 @@ var NT_TIME_BUDGET_MS = 240000;          // 4 min of fetching, leaving 2 min of 
 var NT_SAVE_RESERVE_MS = 25000;
 var NT_WIN_LEAD_DAYS = 9;                // order-placed mail fires up to ~a week before ship Monday
 var NT_WIN_TAIL_DAYS = 12;               // delivered mail trails the ship week
+/**
+ * 🔴 THE EMAIL METRIC GETS ITS OWN, SHORTER LEAD — because it now feeds exactly ONE row.
+ * The 9-day lead exists for the ORDER-PLACED mail, which fires up to a week before the ship Monday.
+ * Order Placed and Order Shipped both come from Shopify now, so the only row the "Received Email"
+ * sweep still feeds is `Order Delivered -> Email Sent`, and a DELIVERED notification cannot precede
+ * the shipment it is about. Sweeping the 9 pre-ship days for it is paging ~80,000 marketing emails
+ * to find zero of the thing we are looking for. Measured on this account (2026-08-19): the 21-day
+ * window is 213,266 "Received Email" events for _SHIP_2026-08-10 and the 13-day one is 135,665 —
+ * a 36% cut for rows that structurally cannot exist in the part removed.
+ *
+ * 🔴 IT IS 1, NOT 0. One day of slack absorbs UTC-vs-ET skew on the boundary and an early Sunday
+ * fulfilment; it is not there to catch a real pre-ship delivery, which would be a data problem, not
+ * a window problem. If the Delivered row ever reads implausibly low against `Arrived`, THIS
+ * CONSTANT IS THE FIRST SUSPECT — widen it before doubting the sweep.
+ * 🔴 SMS is NOT given the same treatment: `Received Text Message` / `Clicked Text Message` feed the
+ * SHIPPED rows too, which do fire early, so both keep the full 9-day lead.
+ */
+var NT_EMAIL_WIN_LEAD_DAYS = 1;
+/**
+ * 🔴 THE RECIPIENT ADDRESS IS IN THE EVENT — `include=profile` is not needed for email, and it is
+ * expensive. Klaviyo returns the address inside event_properties on "Received Email", so the
+ * profile side-join (the thing that makes a 1000-row page take 5.60s instead of 2.54s) can be
+ * dropped outright for that metric. VERIFIED, NOT ASSUMED, on 2026-08-19 against 3,864 tracked-flow
+ * "Received Email" events swept WITH the include still on, comparing both sources row by row:
+ *     carry "Recipient Email Address"          3,864 / 3,864  (100.00%)
+ *     equal to the joined profile email        3,864          mismatches: 0
+ *     only in properties / only on the profile 0 / 0          neither: 0
+ * 🔴 THE SMS METRICS DO NOT HAVE THIS. Measured the same run: 0 of 2,758 "Received Text Message"
+ * and 0 of 1,590 "Clicked Text Message" tracked-flow events carry any email address — they carry
+ * `To Number`, a phone. Those two metrics MUST keep include=profile; see ntNeedsProfileInclude_.
+ */
+var NT_RECIPIENT_PROP = 'Recipient Email Address';
+var NT_RECIPIENT_PROP_ALT = '$originating_email';
+/**
+ * 🔴 FAIL-CLOSED ON THE THING THAT WOULD FAIL SILENTLY. If Klaviyo ever stops populating the
+ * recipient property, every tracked-flow event becomes unattributable and the sweep would return a
+ * SMALLER number rather than an error — a quiet undercount on a published row is the worst possible
+ * outcome here. Measured miss rate today is 0 of 3,864, so anything above a rounding-error slice of
+ * the tracked events is a broken assumption, not noise, and it throws. The guard runs on the real
+ * response shape (tracked-flow events from the live metric), not on an injected fixture.
+ */
+var NT_PROP_MISS_TOLERANCE = 0.005;
 var NT_DENOM_TOLERANCE = 0.02;           // cohort size vs the sheet's Total Shipments
 
 /** Property names the Klaviyo key might live under. First one PRESENT wins. Never logged. */
@@ -327,7 +483,7 @@ var NT_FLOW_CFG = {
  * collide with the data (a comma or semicolon eventually would).
  */
 var NT_STATE_TAB = '_nt_sweep';
-var NT_STATE_VER = 2;                    // bump = every stored state is discarded on sight
+var NT_STATE_VER = 3;                    // bump = every stored state is discarded on sight
 var NT_STATE_COLS = ['key', 'kind', 'seq', 'payload'];
 var NT_CHUNK_CHARS = 40000;              // cell limit is 50,000 — headroom for the '#' and for slack
 
@@ -385,15 +541,21 @@ function ntSetSize_(sets) {
  * The tracked flow list is in here precisely because the sweep DROPS every untracked flow as it
  * reads: re-pointing a pin cannot be repaired by continuing, only by restarting.
  */
-function ntSig_(shipWeek, lo, hi, flowIds) {
-  return { ver: NT_STATE_VER, shipWeek: shipWeek, lo: lo, hi: hi,
+function ntSig_(shipWeek, wins, flowIds) {
+  // 🔴 EVERY metric's window goes in, not one shared pair. The email metric sweeps a shorter span
+  // than the SMS ones now, so a single lo/hi could not detect a change to the one that moved — and
+  // a checkpoint accumulated over a different span is a wrong answer, not a partial one.
+  var w = ['email', 'sms', 'smsEngaged'].map(function (k) {
+    return k + ':' + wins[k].lo + '..' + wins[k].hi;
+  }).join(' ');
+  return { ver: NT_STATE_VER, shipWeek: shipWeek, lo: wins.email.lo, hi: wins.email.hi, win: w,
            flows: flowIds.slice().sort().join(','),
            metrics: NT_METRIC.email + '|' + NT_METRIC.sms + '|' + NT_METRIC.smsEngaged };
 }
 
 function ntSigEq_(a, b) {
   if (!a || !b) return false;
-  return a.ver === b.ver && a.shipWeek === b.shipWeek && a.lo === b.lo && a.hi === b.hi &&
+  return a.ver === b.ver && a.shipWeek === b.shipWeek && a.win === b.win &&
          a.flows === b.flows && a.metrics === b.metrics;
 }
 
@@ -401,7 +563,7 @@ function ntSigWhy_(a, b) {
   if (!a) return 'no stored state';
   if (!b) return 'no signature computed';
   var d = [];
-  ['ver', 'shipWeek', 'lo', 'hi', 'flows', 'metrics'].forEach(function (k) {
+  ['ver', 'shipWeek', 'win', 'flows', 'metrics'].forEach(function (k) {
     if (a[k] !== b[k]) d.push(k + ' ' + a[k] + ' -> ' + b[k]);
   });
   return d.length ? d.join('; ') : 'unchanged';
@@ -657,13 +819,36 @@ function ntResolveFlows_(flows) {
  * BEHIND the cursor, so a resumed sweep walks all the way to the true end of the window. The set is
  * a union either way, so the sort never double-counts; it only decides what a resumed run can miss.
  */
-function ntEventsUrl_(metricId, lo, hi) {
+/**
+ * Which metrics still need the profile side-join. Email carries its recipient in the event body
+ * (NT_RECIPIENT_PROP); the two SMS metrics carry a phone number and nothing else, so they do.
+ * 🔴 Do NOT flip a metric to `false` on the strength of one spot check — the 100%/0% split above
+ * came from comparing both sources on thousands of live events, and that is the bar.
+ */
+function ntNeedsProfileInclude_(metricKey) { return metricKey !== 'email'; }
+
+function ntEventsUrl_(metricId, lo, hi, needProfile) {
   var q = ntPageParam_('/events/');
   return NT_BASE + '/events/?filter=' + encodeURIComponent(
            'and(equals(metric_id,"' + metricId + '"),greater-or-equal(datetime,' + lo +
            '),less-than(datetime,' + hi + '))') +
-         '&include=profile&fields[profile]=email' +
+         (needProfile ? '&include=profile&fields[profile]=email' : '') +
          '&fields[event]=datetime,event_properties&sort=datetime' + (q ? '&' + q : '');
+}
+
+/**
+ * The Klaviyo window for ONE metric. 🔴 NOT one window for all three any more — see
+ * NT_EMAIL_WIN_LEAD_DAYS for why the email metric starts at the ship date and the SMS metrics do
+ * not. Both windows go into the state signature, so a change to either discards the checkpoint
+ * rather than continuing a sweep that was accumulating over a different span.
+ */
+function ntWindowFor_(shipWeek, metricKey) {
+  var ship = new Date(shipWeek.replace('_SHIP_', '') + 'T00:00:00Z').getTime();
+  var lead = (metricKey === 'email') ? NT_EMAIL_WIN_LEAD_DAYS : NT_WIN_LEAD_DAYS;
+  return {
+    lo: new Date(ship - lead * 86400000).toISOString().replace(/\.\d+Z$/, 'Z'),
+    hi: new Date(ship + NT_WIN_TAIL_DAYS * 86400000).toISOString().replace(/\.\d+Z$/, 'Z')
+  };
 }
 
 /**
@@ -681,19 +866,23 @@ function ntEventsUrl_(metricId, lo, hi) {
  * cursor so the next run continues; deriving a count from it would publish a number that is missing
  * however many pages are left, indistinguishable on the sheet from a finished one.
  */
-function ntSweepMetric_(metricId, lo, hi, tracked, prev, deadline) {
+function ntSweepMetric_(metricKey, metricId, lo, hi, tracked, prev, deadline) {
+  var needProfile = ntNeedsProfileInclude_(metricKey);
   var st = {
     sets: (prev && prev.sets) || {},
     pages: (prev && prev.pages) || 0,
     events: (prev && prev.events) || 0,
+    fetched: (prev && prev.fetched) || 0,       // rows PULLED — what the cap is counted in
+    trackedSeen: (prev && prev.trackedSeen) || 0,
+    noEmail: (prev && prev.noEmail) || 0,       // tracked-flow rows with no resolvable address
     next: (prev && prev.next) || '',
     complete: false, why: ''
   };
-  var next = st.next || ntEventsUrl_(metricId, lo, hi);
+  var next = st.next || ntEventsUrl_(metricId, lo, hi, needProfile);
   var thisRun = 0;
   while (next) {
-    if (st.pages >= NT_MAX_PAGES) { st.next = next; st.why = 'total page cap ' + NT_MAX_PAGES; return st; }
-    if (thisRun >= NT_MAX_PAGES_PER_RUN) { st.next = next; st.why = 'per-run page cap ' + NT_MAX_PAGES_PER_RUN; return st; }
+    if (st.fetched >= NT_MAX_EVENTS) { st.next = next; st.why = 'total event cap ' + NT_MAX_EVENTS; return st; }
+    if (thisRun >= NT_MAX_EVENTS_PER_RUN) { st.next = next; st.why = 'per-run event cap ' + NT_MAX_EVENTS_PER_RUN; return st; }
     if (new Date().getTime() > deadline) { st.next = next; st.why = 'time budget'; return st; }
     var j = ntGet_(next);
     var emailById = {};
@@ -701,13 +890,24 @@ function ntSweepMetric_(metricId, lo, hi, tracked, prev, deadline) {
       if (p.type === 'profile') emailById[p.id] = String((p.attributes && p.attributes.email) || '').toLowerCase();
     });
     (j.data || []).forEach(function (e) {
+      st.fetched++;
       var props = e.attributes.event_properties || {};
       var flow = props['$flow'] || props['$flow_id'] || '';
       if (!flow || !tracked[flow]) return;      // campaign send, or a flow no row depends on
-      var pid = e.relationships && e.relationships.profile && e.relationships.profile.data &&
-                e.relationships.profile.data.id;
-      var em = emailById[pid] || '';
-      if (!em) return;
+      st.trackedSeen++;
+      // 🔴 The address comes from the event body when we did not pay for the profile join, and from
+      // the joined profile when we did. Never a mix of "whichever is present" — the source is the
+      // one this metric's request shape actually asked for, so a missing value is visible as a miss
+      // instead of being silently papered over by the other source.
+      var em = '';
+      if (needProfile) {
+        var pid = e.relationships && e.relationships.profile && e.relationships.profile.data &&
+                  e.relationships.profile.data.id;
+        em = emailById[pid] || '';
+      } else {
+        em = String(props[NT_RECIPIENT_PROP] || props[NT_RECIPIENT_PROP_ALT] || '').toLowerCase();
+      }
+      if (!em) { st.noEmail++; return; }
       if (!st.sets[flow]) st.sets[flow] = {};
       var sec = Math.floor(new Date(e.attributes.datetime).getTime() / 1000);
       var prevSec = st.sets[flow][em];
@@ -721,6 +921,28 @@ function ntSweepMetric_(metricId, lo, hi, tracked, prev, deadline) {
   st.next = '';
   st.complete = true;
   return st;
+}
+
+/**
+ * 🔴 THE UNDERCOUNT GUARD. A tracked-flow event we cannot put an address on is a customer this row
+ * will not count, and nothing else in this file would ever say so — the sweep would just return a
+ * smaller number. Throws on the LIVE response shape (real tracked-flow events from the real
+ * metric), which is the only shape that can actually regress; a fixture would pass forever.
+ */
+function ntAssertAddressCoverage_(metricKey, st) {
+  if (!st || !st.trackedSeen) return;
+  var miss = (st.noEmail || 0) / st.trackedSeen;
+  if (miss > NT_PROP_MISS_TOLERANCE) {
+    throw new Error('NT_ASSERT_ADDRESS_COVERAGE: "' + NT_METRIC[metricKey] + '" — ' + st.noEmail +
+      ' of ' + st.trackedSeen + ' tracked-flow events (' + (miss * 100).toFixed(2) + '%) carry no ' +
+      'resolvable recipient address, over the ' + (NT_PROP_MISS_TOLERANCE * 100).toFixed(1) +
+      '% tolerance. Source for this metric is ' +
+      (ntNeedsProfileInclude_(metricKey) ? 'the included profile record' :
+        'event_properties["' + NT_RECIPIENT_PROP + '"]') +
+      '. Measured 0 of 3,864 on 2026-08-19, so this is a changed payload, not noise — every missing ' +
+      'address is a cohort customer this row would silently fail to count. Do NOT relax the ' +
+      'tolerance; find out what Klaviyo stopped sending.');
+  }
 }
 
 /** epoch seconds (how the checkpoint stores a send) -> the ISO string ntDayNight_ parses. */
@@ -778,7 +1000,7 @@ function ntMetricVolume_(metricId, lo, hi) {
  *     metric names move, so the cached number is never answering a stale question. There is no
  *     separate TTL because there is no separate way for it to go stale.
  *   - SKIPPED ENTIRELY once that metric's sweep is under way or finished. The volume's only job is
- *     the feasibility decision (pages needed vs NT_MAX_PAGES); once pages are banked the decision
+ *     the feasibility decision (events needed vs NT_MAX_EVENTS); once pages are banked the decision
  *     has already been taken and re-taking it can only cost time or, worse, flip mid-sweep.
  *   - A probe that FAILS caches nothing (null = unknown, not zero) and the sweep proceeds blind,
  *     exactly as before — bounded now by the caps rather than by the unknown.
@@ -792,6 +1014,21 @@ function ntVolumeCached_(key, metricId, lo, hi, state) {
   var v = ntMetricVolume_(metricId, lo, hi);
   if (v !== null) state.vol[key] = { events: v, at: new Date().toISOString() };
   return v;
+}
+
+/**
+ * How many runs a sweep of `events` events would take, at the ESTIMATED Apps Script rate.
+ * 🔴 Every caller prints this next to the word "estimated" — see NT_RATE_MS_PER_EVENT. It exists so
+ * a decline or a resume says what it would COST rather than just that it is too big, and so the
+ * number Kurt is asked to approve is stated in the unit he actually pays in: clicks.
+ */
+function ntRunsFor_(events) {
+  if (!events || events >= 1e9) return '?';
+  // 🔴 The cohort pull is subtracted because it is spent BEFORE any Klaviyo page — see
+  // NT_COHORT_PULL_MS. What is left is all the sweep ever gets.
+  var budget = NT_TIME_BUDGET_MS - NT_COHORT_PULL_MS - NT_SAVE_RESERVE_MS;
+  if (budget <= 0) return '?';
+  return Math.max(1, Math.ceil((events * NT_RATE_MS_PER_EVENT) / budget));
 }
 
 // ------------------------------------------------------------------ cohort (Shopify)
@@ -1294,12 +1531,13 @@ function ntMeasure_(shipWeek, sheetTotal, deadline) {
   });
   var flows = ntResolveFlows_(ntFlows_(deadline));
 
-  var ship = shipWeek.replace('_SHIP_', '');
-  var lo = new Date(new Date(ship + 'T00:00:00Z').getTime() - NT_WIN_LEAD_DAYS * 86400000)
-             .toISOString().replace(/\.\d+Z$/, 'Z');
-  var hi = new Date(new Date(ship + 'T00:00:00Z').getTime() + NT_WIN_TAIL_DAYS * 86400000)
-             .toISOString().replace(/\.\d+Z$/, 'Z');
-  ntLog_('  klaviyo window ' + lo + ' .. ' + hi);
+  // 🔴 ONE WINDOW PER METRIC. The email metric feeds only the Delivered row, so it starts at the
+  // ship date; the SMS metrics feed the Shipped rows too and keep the full 9-day lead.
+  var wins = {};
+  ['email', 'sms', 'smsEngaged'].forEach(function (k) { wins[k] = ntWindowFor_(shipWeek, k); });
+  ntLog_('  klaviyo windows: email ' + wins.email.lo + ' .. ' + wins.email.hi +
+         ' (lead ' + NT_EMAIL_WIN_LEAD_DAYS + 'd — a Delivered mail cannot precede the shipment) | ' +
+         'sms ' + wins.sms.lo + ' .. ' + wins.sms.hi + ' (lead ' + NT_WIN_LEAD_DAYS + 'd)');
 
   // ---- resumable sweep: load the checkpoint, validate it, continue or restart ----------------
   // 🔴 The tracked flow set is the two PINNED flows plus the informational one. Nothing else is
@@ -1307,7 +1545,7 @@ function ntMeasure_(shipWeek, sheetTotal, deadline) {
   var tracked = {};
   ['shipped', 'delivered'].forEach(function (s) { if (flows[s]) tracked[flows[s]] = s; });
   tracked[NT_FLOW_INFO.id] = 'info';
-  var sig = ntSig_(shipWeek, lo, hi, Object.keys(tracked));
+  var sig = ntSig_(shipWeek, wins, Object.keys(tracked));
 
   var state = ntLoadState_(shipWeek);
   if (!ntSigEq_(state.sig, sig)) {
@@ -1334,28 +1572,30 @@ function ntMeasure_(shipWeek, sheetTotal, deadline) {
     }
   });
 
-  // 🔴 ORDER BY COST, CHEAPEST FIRST. With a hard budget, sweeping the 830-page metric first would
-  // starve two 40/79-page metrics that fit — the whole point of resuming is that the runs that can
-  // finish, do. Unknown volume sorts last: it might be the expensive one.
+  // 🔴 ORDER BY COST, CHEAPEST FIRST. With a hard budget, sweeping the biggest metric first would
+  // starve the two that fit — the whole point of resuming is that the runs that can finish, do.
+  // Unknown volume sorts last: it might be the expensive one. Cost is now in EVENTS, the same unit
+  // as the cap, so nothing has to be converted through a page size to be compared to it.
   var order = ['email', 'sms', 'smsEngaged'].filter(function (k) { return !!metrics[NT_METRIC[k]]; });
   var costOf = {};
   order.forEach(function (k) {
     var m = state.metrics[k];
     // 🔴 the probe is SKIPPED once a sweep is under way or done — the decision it feeds is taken.
-    if (m && (m.pages > 0 || m.complete || m.declined)) {
-      costOf[k] = m.total || (m.pages || 0);
+    if (m && (m.fetched > 0 || m.complete || m.declined)) {
+      costOf[k] = m.total || (m.fetched || 0);
       return;
     }
-    var vol = ntVolumeCached_(k, metrics[NT_METRIC[k]], lo, hi, state);
-    costOf[k] = (vol === null) ? 1e9 : Math.ceil(vol / NT_PAGE);
+    var vol = ntVolumeCached_(k, metrics[NT_METRIC[k]], wins[k].lo, wins[k].hi, state);
+    costOf[k] = (vol === null) ? 1e9 : vol;
     if (vol !== null) {
-      ntLog_('  volume "' + NT_METRIC[k] + '" in window: ' + vol + ' events -> ~' + costOf[k] +
-             ' pages (cap ' + NT_MAX_PAGES + ' total, ' + NT_MAX_PAGES_PER_RUN + '/run)');
+      ntLog_('  volume "' + NT_METRIC[k] + '" in its window: ' + vol + ' events -> ~' +
+             Math.ceil(vol / NT_PAGE) + ' pages of ' + NT_PAGE + ', ~' +
+             ntRunsFor_(vol) + ' run(s) at the estimated rate (cap ' + NT_MAX_EVENTS + ' events)');
     }
   });
   order.sort(function (a, b) { return costOf[a] - costOf[b]; });
   ntLog_('  sweep order (cheapest first): ' + order.map(function (k) {
-    return NT_METRIC[k] + ' ~' + (costOf[k] >= 1e9 ? '?' : costOf[k]) + 'p';
+    return NT_METRIC[k] + ' ~' + (costOf[k] >= 1e9 ? '?' : costOf[k]) + ' events';
   }).join(' -> '));
 
   // ---- work the metrics in order, banking progress; TIME is the first bound ------------------
@@ -1366,22 +1606,29 @@ function ntMeasure_(shipWeek, sheetTotal, deadline) {
     var m = state.metrics[k] || null;
 
     if (m && m.complete) {
+      ntAssertAddressCoverage_(k, m);        // a banked sweep is re-checked before it is reused
       ev[k] = { byFlow: m.sets, n: m.events };
-      ntLog_('  "' + NT_METRIC[k] + '": COMPLETE from state (' + m.pages + ' pages, ' +
-             ntSetSize_(m.sets) + ' profiles, swept ' + m.updatedAt + ') — no fetch this run');
+      ntLog_('  "' + NT_METRIC[k] + '": COMPLETE from state (' + (m.fetched || 0) + ' events over ' +
+             m.pages + ' pages, ' + ntSetSize_(m.sets) + ' profiles, swept ' + m.updatedAt +
+             ') — no fetch this run');
       return;
     }
 
     // feasibility decline — unchanged semantics, now recorded so it is decided once per cohort.
-    if (!m && costOf[k] < 1e9 && costOf[k] > NT_MAX_PAGES) {
-      state.metrics[k] = { declined: true, complete: false, total: costOf[k], pages: 0, events: 0,
-                           sets: {}, day: today, why: 'over the ' + NT_MAX_PAGES + '-page cap' };
-      notes.push('SWEEP DECLINED for "' + NT_METRIC[k] + '": ~' + costOf[k] + ' pages, over the ' +
-                 NT_MAX_PAGES + '-page total cap. Klaviyo /events has NO flow filter, so there is ' +
-                 'no cheaper cut — every row fed by this metric is left BLANK (blank != zero). ' +
-                 'Resuming does not fix this either: it would take ~' +
-                 Math.ceil(costOf[k] / NT_MAX_PAGES_PER_RUN) + ' runs. Raising NT_MAX_PAGES is a ' +
-                 'decision about how many runs a cohort costs — Kurt\'s, not a tuning knob.');
+    if (!m && costOf[k] < 1e9 && costOf[k] > NT_MAX_EVENTS) {
+      state.metrics[k] = { declined: true, complete: false, total: costOf[k], pages: 0, fetched: 0,
+                           events: 0, sets: {}, day: today,
+                           why: 'over the ' + NT_MAX_EVENTS + '-event cap' };
+      notes.push('SWEEP DECLINED for "' + NT_METRIC[k] + '": ' + costOf[k] + ' events in its ' +
+                 'window, over the ' + NT_MAX_EVENTS + '-event total cap. Klaviyo /events has NO ' +
+                 'flow filter — re-verified live 2026-08-19, every spelling of $flow/flow_id is a ' +
+                 '400 "not a filterable field" — so the whole metric must be paged to find ours. ' +
+                 'The transport is already at its cheapest proven shape (page[size]=1000, the ' +
+                 'endpoint ceiling, and no profile join on email). Every row fed by this metric is ' +
+                 'left BLANK (blank != zero). Resuming does not fix this: it would take ~' +
+                 ntRunsFor_(costOf[k]) + ' runs of ~4 minutes each. Raising NT_MAX_EVENTS to ' +
+                 '250000 unblocks every cohort back to _SHIP_2026-07-13 — that is a decision about ' +
+                 'how many runs a column costs, so it is Kurt\'s, not a tuning knob.');
       ev[k] = null;
       return;
     }
@@ -1390,8 +1637,9 @@ function ntMeasure_(shipWeek, sheetTotal, deadline) {
     // gap — which is how a deliberate decline gets mistaken for a broken job.
     if (m && m.declined) {
       notes.push('SWEEP DECLINED for "' + NT_METRIC[k] + '" (decided for this cohort on ' +
-                 m.day + '): ~' + m.total + ' pages, over the ' + NT_MAX_PAGES + '-page total cap. ' +
-                 'Rows fed by this metric stay BLANK (blank != zero).');
+                 m.day + '): ' + m.total + ' events, over the ' + NT_MAX_EVENTS + '-event total ' +
+                 'cap (~' + ntRunsFor_(m.total) + ' runs). Rows fed by this metric stay BLANK ' +
+                 '(blank != zero). Raising NT_MAX_EVENTS is Kurt\'s call.');
       ev[k] = null;
       return;
     }
@@ -1403,27 +1651,33 @@ function ntMeasure_(shipWeek, sheetTotal, deadline) {
       return;
     }
 
-    var before = (m && m.pages) || 0;
-    var r = ntSweepMetric_(id, lo, hi, tracked, m, sweepDeadline);
+    var before = (m && m.fetched) || 0;
+    var r = ntSweepMetric_(k, id, wins[k].lo, wins[k].hi, tracked, m, sweepDeadline);
     r.total = (m && m.total) || costOf[k];
     r.day = today;
     state.metrics[k] = r;
+    // 🔴 Runs BEFORE the checkpoint is trusted for a write, and on every run — a coverage collapse
+    // must stop the number, not be discovered after it is on the sheet.
+    ntAssertAddressCoverage_(k, r);
 
     var tot = (r.total >= 1e9) ? 0 : r.total;
-    var pctDone = tot ? Math.min(100, Math.round((r.pages / tot) * 100)) : 0;
+    var pctDone = tot ? Math.min(100, Math.round((r.fetched / tot) * 100)) : 0;
     if (r.complete) {
       ev[k] = { byFlow: r.sets, n: r.events };
-      ntLog_('  "' + NT_METRIC[k] + '": COMPLETE — ' + r.pages + ' pages (' + (r.pages - before) +
-             ' this run), ' + r.events + ' tracked-flow events, ' + ntSetSize_(r.sets) + ' profiles');
+      ntLog_('  "' + NT_METRIC[k] + '": COMPLETE — ' + r.fetched + ' events fetched over ' +
+             r.pages + ' pages (' + (r.fetched - before) + ' events this run), ' + r.events +
+             ' tracked-flow sends, ' + ntSetSize_(r.sets) + ' profiles');
     } else {
       ev[k] = null;
       resumed.push(k);
-      notes.push('IN PROGRESS "' + NT_METRIC[k] + '": pages ' + r.pages + '/' +
-                 (tot ? tot : '?') + (tot ? ', ' + pctDone + '%' : '') + ' — stopped on ' + r.why +
-                 ', checkpointed, resuming next run. Its rows stay BLANK (blank != zero); a ' +
+      notes.push('IN PROGRESS "' + NT_METRIC[k] + '": ' + r.fetched + '/' + (tot ? tot : '?') +
+                 ' events' + (tot ? ', ' + pctDone + '%' : '') + ' — stopped on ' + r.why +
+                 ', checkpointed, resuming next run (~' + ntRunsFor_(Math.max(0, tot - r.fetched)) +
+                 ' more at the estimated rate). Its rows stay BLANK (blank != zero); a ' +
                  'partial count would look finished.');
-      ntLog_('  "' + NT_METRIC[k] + '": pages ' + r.pages + '/' + (tot ? tot : '?') +
-             (tot ? ', ' + pctDone + '%' : '') + ' — resuming next run (' + r.why + ')');
+      ntLog_('  "' + NT_METRIC[k] + '": ' + r.fetched + '/' + (tot ? tot : '?') + ' events' +
+             (tot ? ', ' + pctDone + '%' : '') + ' over ' + r.pages + ' pages — resuming next run (' +
+             r.why + ')');
     }
   });
 
@@ -1666,9 +1920,10 @@ function ntCheckKlaviyo() {
     if (!id) return;
     var v = ntMetricVolume_(id, vlo, vhi);
     ntLog_('  volume(28d) "' + NT_METRIC[k] + '" = ' + (v === null ? 'UNKNOWN' : v) +
-           (v === null ? '' : ' events -> ~' + Math.ceil(v / NT_PAGE) + ' pages, cap ' +
-                              NT_MAX_PAGES + (Math.ceil(v / NT_PAGE) > NT_MAX_PAGES
-                                              ? '  🔴 SWEEP INFEASIBLE — rows stay BLANK' : '  OK')));
+           (v === null ? '' : ' events -> ~' + Math.ceil(v / NT_PAGE) + ' pages of ' + NT_PAGE +
+                              ', ~' + ntRunsFor_(v) + ' run(s) est., cap ' + NT_MAX_EVENTS +
+                              ' events' + (v > NT_MAX_EVENTS
+                                           ? '  🔴 SWEEP INFEASIBLE — rows stay BLANK' : '  OK')));
   });
   var flows = ntFlows_(deadline);
   ntLog_('FLOWS (' + flows.length + ') — 2026-08-18 live: 26 total, 21 live / 5 draft, 0 archived. ' +
@@ -1699,7 +1954,7 @@ function ntCheckSweepState(shipWeek) {
   var st = ntLoadState_(cur);
   ntLog_('=== sweep state for ' + cur + ' (tab ' + NT_STATE_TAB + ') ===');
   if (!st.sig) { ntLog_('  no stored state — the next run starts from page 0'); return st; }
-  ntLog_('  signature: ver ' + st.sig.ver + ' | window ' + st.sig.lo + ' .. ' + st.sig.hi +
+  ntLog_('  signature: ver ' + st.sig.ver + ' | windows ' + (st.sig.win || '(pre-v3 state)') +
          ' | flows ' + st.sig.flows);
   Object.keys(st.vol).forEach(function (k) {
     ntLog_('  volume cache "' + NT_METRIC[k] + '": ' + st.vol[k].events + ' events (probed ' +
@@ -1709,10 +1964,13 @@ function ntCheckSweepState(shipWeek) {
     var m = st.metrics[k];
     if (!m) { ntLog_('  "' + NT_METRIC[k] + '": nothing stored'); return; }
     var tot = m.total || 0;
+    var got = m.fetched || 0;
     ntLog_('  "' + NT_METRIC[k] + '": ' + (m.complete ? 'COMPLETE' : m.declined ? 'DECLINED' : 'IN PROGRESS') +
-           '  pages ' + m.pages + '/' + (tot || '?') +
-           (tot ? ' (' + Math.min(100, Math.round((m.pages / tot) * 100)) + '%)' : '') +
-           '  profiles ' + ntSetSize_(m.sets || {}) + '  chunks ' + m.chunks +
+           '  events ' + got + '/' + (tot || '?') +
+           (tot ? ' (' + Math.min(100, Math.round((got / tot) * 100)) + '%, ~' +
+                  ntRunsFor_(Math.max(0, tot - got)) + ' run(s) left est.)' : '') +
+           '  pages ' + m.pages + '  profiles ' + ntSetSize_(m.sets || {}) + '  chunks ' + m.chunks +
+           '  no-address ' + (m.noEmail || 0) + '/' + (m.trackedSeen || 0) +
            '  day ' + m.day + '  ' + (m.why || '') + (m.next ? '  [cursor stored]' : ''));
   });
   return st;

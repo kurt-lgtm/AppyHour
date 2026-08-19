@@ -1669,3 +1669,111 @@ close to a hard 360s kill we run, and D29 already says that class of call is Kur
    staleness class D29c exists to stop. Would need the same matured-vs-current scoping.
 
 The first live run settles the arithmetic — read `total …s of the 360s ceiling` next to `pages n/79`.
+
+---
+
+### D31 — THE KLAVIYO SWEEP'S TRANSPORT WAS 4.9× MORE EXPENSIVE THAN IT NEEDED TO BE, AND THE RUN COUNTS WERE STILL 4.7× OPTIMISTIC (measured live 2026-08-19)
+
+🔴 **Everything in D29's cost model was measured against an untested `page[size]=200` and a profile
+side-join nobody had checked was necessary.** Neither was a limit; both were assumptions. This
+directive records what the endpoint actually does, what does NOT exist so nobody re-derives it, and
+why `Order Delivered → Email Sent` is still blank after all of it.
+
+#### What does NOT exist — probed live, do not look again
+
+| candidate | result |
+|---|---|
+| flow filter on `/events/` — `equals($flow,…)`, `equals(flow_id,…)`, `equals(event_properties.$flow,…)`, `equals($flow_id,…)`, `equals(properties.$flow,…)`, `equals(flow,…)` | **all 400** `"… is not a filterable field for this resource"` |
+| `/flows/{id}/flow-messages/` | **404** — not a path on revision `2024-10-15` |
+| `/metric-aggregates/` `by:["$flow_id"]` | **400** `"not a valid choice for 'by'"` |
+| parallel day-sliced fetching (`UrlFetchApp.fetchAll` shape) | works, **1.36×**, and does **not** improve from 3→6 workers — Klaviyo throttles per account. Same result byte-for-byte as the sequential sweep, so it is correct, just not worth the checkpoint redesign. Declined. |
+
+Two account-wide endpoints DO work and are **still not usable as cell values**:
+`/metric-aggregates/` with `by:["$flow"]` (0.6s, exact per-flow counts) and `/flow-values-reports/`
+(per-flow-message `recipients`). Both answer *"how many Delivered-flow emails went out"* and neither
+can answer *"how many of THIS COHORT'S customers got one"*. 🔴 **Never write either into a cohort
+column.** They are feasibility probes and ceilings only.
+
+#### What did pay — all live-measured, all now in the file
+
+1. **`page[size]` is 1000, not 200.** `2000` → 400 `"Page size must be an integer <= 1000"`, and
+   `links.next` carries the size forward. 5× fewer round trips for the same rows.
+2. **The email metric does not need `include=profile` at all.** The recipient is already in the
+   event as `event_properties["Recipient Email Address"]`. Verified against the profile join on
+   **3,864 tracked-flow events: 100% present, 0 mismatches, 0 gaps either way.** 🔴 The SMS metrics
+   are the opposite — **0 of 2,758** `Received Text Message` and **0 of 1,590** `Clicked Text
+   Message` tracked-flow events carry any address (they carry `To Number`, a phone), so those two
+   keep the join. `ntNeedsProfileInclude_` is the one place that decides.
+3. **A shorter window for the email metric only.** It feeds exactly one row now (`Order Delivered →
+   Email Sent`), and a Delivered notification cannot precede the shipment, so it starts at
+   ship-date−1 instead of ship-date−9: **213,266 → 135,665 events** for `_SHIP_2026-08-10`.
+
+| request shape | s/page | ms/event |
+|---|---|---|
+| `size=200`, `include=profile` (what shipped before) | 2.15 | 10.75 |
+| `size=1000`, `include=profile` | 5.60 | 5.60 |
+| **`size=1000`, no include** | **2.54** (3.46 sustained over 65 pages) | **2.54** |
+
+Production is ~2.13× slower than the workstation these were measured on (this file measured *itself*
+at 4.59 s/page at size 200 = 22.95 ms/event), so the shipped shape is estimated at **~7.4 ms/event**
+— `NT_RATE_MS_PER_EVENT`. Net: **~22.95 → ~7.4 ms/event over ~36% fewer events ≈ 4.9× cheaper.**
+
+#### 🔴 The cap is now counted in EVENTS, and nothing was loosened
+
+`NT_MAX_PAGES = 120` at 200 rows a page was exactly **24,000 events**. Raising the page size to 1000
+while leaving "120 pages" in place would have quintupled the real budget to 120,000 without anyone
+deciding to — a silent 5× loosening hidden inside a transport tweak. So the cap is now
+**`NT_MAX_EVENTS = 24000`**, which is exact parity, and it is immune to the next transport change.
+
+#### 🔴 AND THE RUN COUNTS WERE STILL WRONG — the cohort pull is charged first
+
+D30 measured that the Shopify cohort pull is **169.4s of every 240s run**, before a single Klaviyo
+page. Any run-count computed against the whole fetch budget is therefore **4.7× optimistic**.
+`ntRunsFor_` now subtracts `NT_COHORT_PULL_MS` and the checkpoint reserve, leaving **~46s of paging
+per run**. 🔴 That constant is not a lever — lowering it does not create time, it only makes the
+estimate lie.
+
+| cohort | `Received Email` in its window | runs, as the code stands | runs if the cohort pull were cached |
+|---|---|---|---|
+| `_SHIP_2026-08-17` | ~135,000 at maturity (13,997 so far) | 22 | 5 |
+| `_SHIP_2026-08-10` | 135,665 | 22 | 5 |
+| `_SHIP_2026-08-03` | 159,225 | 26 | 6 |
+| `_SHIP_2026-07-27` | 160,555 | 26 | 6 |
+| `_SHIP_2026-07-20` | 176,562 | 29 | 7 |
+| `_SHIP_2026-07-13` | 218,613 | 36 | 8 |
+
+**Read the third column.** `NT_MAX_EVENTS = 250000` makes every cohort *finishable*, but at **~161
+runs to fill all six columns** — months on the daily trigger. Saying that plainly is the point of
+the table; 4.9× cheaper is not the same as cheap.
+
+**The fourth column is a proposal that is deliberately NOT taken here.** D30 listed caching the
+cohort pull and declined it because it would freeze `Order Placed` / `Order Shipped` mid-day — the
+staleness class D29c exists to stop. 🔴 **That objection does not apply to a FROZEN column:** a
+matured cohort's placed/shipped counts are final, so a backfill run has nothing to go stale. Caching
+the cohort pull **for frozen columns only** is the single highest-leverage change left here — 161
+runs → ~37 — and it is written down rather than done because D30 already ruled this class of
+decision Kurt's.
+
+#### 🔴 Klaviyo retention is NOT what blocks the backfill
+
+Checked 2026-08-19: `/events/` returns real data on page 1 for **every** target window back to
+`_SHIP_2026-07-13`, and a probe at `2026-05-12` still returns events. All five older columns are
+**queryable**; what stops them is the per-column run cost above, not missing data. Retention is a
+plan-level setting that can change — re-probe before promising a backfill of anything older.
+
+#### 🔴 Fail-closed on the one thing that would fail silently
+
+If Klaviyo ever stops populating `Recipient Email Address`, the email sweep would not error — it
+would just return a **smaller number**, and a quiet undercount on a published row is the worst
+outcome available. `ntAssertAddressCoverage_` throws `NT_ASSERT_ADDRESS_COVERAGE` when more than
+0.5% of *tracked-flow* events resolve no address, on the live response shape (the only shape that
+can regress — a fixture would pass forever). Measured today: **0 of 3,864.** Do not relax the
+tolerance; find out what Klaviyo stopped sending.
+
+#### Also changed
+
+- `NT_STATE_VER` 2 → 3: every stored checkpoint is discarded on sight. The state now carries
+  `fetched` / `trackedSeen` / `noEmail`, and the signature carries **every metric's window** rather
+  than one shared `lo`/`hi` — the email window moves independently now, and a single pair could not
+  detect that. A set accumulated over a different span is a wrong answer, not a partial one.
+- `ntCheckSweepState()` reports events (not pages), runs remaining, and the no-address counter.
