@@ -43,13 +43,38 @@ var PA_PP_MAX_CALLS = 200;     // hard backstop per RUN (shared across both coho
 // Kurt-owned. This is what makes stale wrongness recoverable: a box frozen as 3+ Day / Not Arrived
 // that later proves delivered gets corrected while the column is still in-window.
 var PA_MATURITY_DAYS = 10;
-// 🔴 THREE OBSERVATIONS under `3+ Day Shipments` (D16, Kurt-approved 2026-08-07). Order matters —
-// it is the on-sheet row order. All three are INSIDE 3+ Day, none is summed into any total, and
-// together they PARTITION Not Arrived. NOTE: the words "Lost in Transit" appear NOWHERE on TnT2
-// by request — that phrasing is what Dan reacts to. The Lost in Transit TAB keeps its own name.
-var PA_OBS = ['still moving (4+ days)',            // undelivered, a real scan <24h — moving
+// 🔴 FOUR OBSERVATIONS under `3+ Day Shipments` (D16 as amended by D27, Kurt 2026-08-19). Order
+// matters — it is the on-sheet row order. All four are INSIDE 3+ Day, none is summed into any
+// total, and together they PARTITION Not Arrived. NOTE: the words "Lost in Transit" appear NOWHERE
+// on TnT2 by request — that phrasing is what Dan reacts to. The Lost in Transit TAB keeps its name.
+//
+// 🔴 D27 — WHY THE OLD SINGLE ROW WAS WRONG. `still moving (4+ days)` carried a FIXED CALENDAR DAY
+// COUNT in its label, coined when the only cohort on screen was old. Kurt 2026-08-19, reading
+// `_SHIP_2026-08-17` on a WEDNESDAY: **"1396 4+ days still moving is misleading. especially with
+// some pickups on tuesday"** … **"also, its only wednesday"** … **"Still Moving =<TNT2 and Still
+// Moving >TNT2"**. A cohort-age day-count cannot describe a MULTI-LEG week: a Tuesday (Dallas) leg
+// box read as "4+ days" on a cohort that is two days old, and 1,396 boxes in ordinary transit
+// INSIDE their own promise read as catastrophe. The split is on each box's OWN 2-day promise from
+// its OWN pickup (D18 per-box clock) — never cohort age, never a calendar day count.
+//
+// 🔴 PRECEDENCE, so the four are mutually exclusive (top to bottom, first match wins):
+//   1. a real carrier scan in the last PA_ACTIVE_HRS (`r.active`) -> a Still Moving row, split by
+//      that box's own deadline: inside its promise (`r.pending`) = `=< TNT2`, past it (`r.late`)
+//      = `> TNT2`.
+//   2. otherwise the box is `lost` (no scan in 24h+) and lands on row 3 or 4 by whether it was
+//      ever picked up. A box silent >=24h NEVER appears on a Still Moving row, however new it is —
+//      "no scan in 24h+" and "never picked up" keep their D16 definitions unchanged and win.
+//
+// 🔴 Kurt's spelling `=<` is DELIBERATE and is his label text. Do not "correct" it to `<=`.
+var PA_OBS = ['Still Moving =< TNT2',              // undelivered, scan <24h, INSIDE its own 2d promise
+              'Still Moving > TNT2',               // undelivered, scan <24h, PAST its own 2d promise
               'no scan in 24h+ (investigating)',   // scanned, then silent >=24h
               'never picked up by carrier'];       // zero carrier scans ever
+/** The pre-D27 label this row is renamed FROM. Kept so the split is idempotent and so a sheet that
+ *  still carries the old wording is recognised rather than treated as a missing row. */
+var PA_OBS_LEGACY_MOVING = 'still moving (4+ days)';
+/** Shared stem of the two D27 rows — the nested-row predicate matches on it. */
+var PA_OBS_MOVING_STEM = 'Still Moving ';
 
 /**
  * 🔴 TNT1 (D22, Kurt 2026-08-17: "I want to get TNT0 and TNT1 shipments in there (just label the
@@ -75,6 +100,12 @@ var PA_NESTED = PA_OBS.concat([PA_TNT1_LABEL]);
  */
 function paIsNested_(lab) {
   if (PA_NESTED.indexOf(lab) >= 0) return true;
+  if (lab === PA_OBS_LEGACY_MOVING) return true;          // pre-D27 sheet, mid-migration
+  // 🔴 D27 — the two Still Moving rows are nested siblings. Kurt asked for ' Still Moving ' to be
+  // added to this predicate; labels reaching here are ALREADY TRIMMED, so a leading-space literal
+  // would never match. The PREFIX is the honest form of the same test, and it stays an ALLOWLIST
+  // (D19a): only rows whose label begins with the Still Moving stem, not "anything non-grain".
+  if (lab.indexOf(PA_OBS_MOVING_STEM) === 0) return true;
   var suf = ' · ' + PA_TNT1_LABEL;
   return lab.length > suf.length && lab.slice(-suf.length) === suf;
 }
@@ -516,9 +547,20 @@ function paValues_(recs, tab) {
       }
       m[paKey_('hub', hl + ' · ' + PA_TNT1_LABEL)] = v;
     });
-    m[paKey_('', PA_OBS[0])] = n(function (r) { return r.active; });
-    m[paKey_('', PA_OBS[1])] = n(function (r) { return r.lost && r.moved; });
-    m[paKey_('', PA_OBS[2])] = n(function (r) { return r.lost && !r.moved; });
+    // 🔴 D27 — the old single `still moving` row was `r.active`; it now splits on THAT BOX's own
+    // deadline. `r.pending` / `r.late` are already the per-box-clock verdicts (D18), so the split
+    // reuses the exact predicates the headline uses — it does not recompute a second clock.
+    m[paKey_('', PA_OBS[0])] = n(function (r) { return r.active && r.pending; });
+    m[paKey_('', PA_OBS[1])] = n(function (r) { return r.active && r.late; });
+    m[paKey_('', PA_OBS[2])] = n(function (r) { return r.lost && r.moved; });
+    m[paKey_('', PA_OBS[3])] = n(function (r) { return r.lost && !r.moved; });
+    // 🔴 D27 MIGRATION WINDOW. Between deploying this code and Kurt running `splitStillMovingRows`,
+    // the sheet still carries the ONE pre-D27 row. `paWriteOwned_` is label-driven, so without this
+    // key that row would simply stop being written and would sit at yesterday's number looking fine
+    // — the stale-number bug, which has no visual signature. So the legacy label keeps receiving the
+    // UNSPLIT total (exactly its old definition) for as long as the row exists. After the split the
+    // row is gone and this key is never matched by anything.
+    m[paKey_('', PA_OBS_LEGACY_MOVING)] = n(function (r) { return r.active; });
   }
   return m;
 }
@@ -719,7 +761,12 @@ function paWriteOwned_(sheet, col, valuesByLabel, dry) {
     wrote++;
   }
   Object.keys(valuesByLabel).forEach(function (k) {
-    if (!seen[k] && /·/.test(k)) missing.push(k.replace('||', ' → ') + '=' + valuesByLabel[k]);
+    // 🔴 D27 — observation keys carry no `·`, so the old filter hid them. A missing OBSERVATION row
+    // is exactly the case that must be loud: the number goes nowhere and the row that should hold it
+    // keeps whatever it held before. The legacy migration key is exempt — it is EXPECTED to be
+    // unmatched once the split has landed.
+    var isObs = PA_OBS.indexOf(k.replace('||', '')) >= 0;
+    if (!seen[k] && (/·/.test(k) || isObs)) missing.push(k.replace('||', ' → ') + '=' + valuesByLabel[k]);
   });
   if (missing.length) {
     paLog_('  ⚠️ ' + sheet.getName() + ': no row on the sheet for ' + missing.length +
@@ -830,22 +877,45 @@ function paRefreshOne_(shipWeek, dry, budget, allowAppend) {
   // a cohort — a box leaves only by DELIVERING, and delivered cannot un-deliver. `lost` may rise
   // only when still-in-transit falls by at least as much. Refuse rather than publish a rise.
   var obs = {}, newSum = 0;
-  obs[PA_OBS[0]] = active;
-  obs[PA_OBS[1]] = 0; obs[PA_OBS[2]] = 0;
+  PA_OBS.forEach(function (k) { obs[k] = 0; });
   recs.forEach(function (r) {
-    if (!r.lost) return;
-    obs[r.moved ? PA_OBS[1] : PA_OBS[2]] += 1;
+    // 🔴 D27 PRECEDENCE, in this order: `active` (a real scan <24h) is tested FIRST, so a box
+    // silent >=24h can never reach a Still Moving row no matter how new it is. Only then is a
+    // Still Moving box split by its OWN promise deadline (pending = inside, late = past).
+    if (r.active) obs[r.pending ? PA_OBS[0] : PA_OBS[1]] += 1;
+    else if (r.lost) obs[r.moved ? PA_OBS[2] : PA_OBS[3]] += 1;
   });
   PA_OBS.forEach(function (k) { newSum += obs[k]; });
   if (newSum !== total - arr) {
-    throw new Error('PA_ASSERT_OBSERVATION_PARTITION: three observations sum ' + newSum +
+    throw new Error('PA_ASSERT_OBSERVATION_PARTITION: four observations sum ' + newSum +
                     ' != Not Arrived ' + (total - arr));
   }
+  // 🔴 D27 RECONCILIATION — asserted, not assumed. Verified against measured wk0817/wk0810 before
+  // shipping. `Still Moving > TNT2` is undelivered AND past its own deadline, so it is a SUBSET of
+  // the late-undelivered population already counted in `3+ Day Shipments`; `Still Moving =< TNT2`
+  // is undelivered and inside its deadline, so it is a SUBSET of `pending`. Note what is NOT true:
+  // `no scan in 24h+` is NOT a subset of late — on _SHIP_2026-08-17 all 12 no-scan boxes were still
+  // inside their own promise (late-undelivered was 0). So the late-undelivered population equals
+  // `Still Moving > TNT2` plus the LATE part of the no-scan/never-picked rows, never the whole rows.
+  var lateUndel = 0;
+  recs.forEach(function (r) { if (r.late && !r.arrived) lateUndel++; });
+  if (obs[PA_OBS[1]] > lateUndel) {
+    throw new Error('PA_ASSERT_MOVING_OUT_SUBSET: "' + PA_OBS[1] + '" ' + obs[PA_OBS[1]] +
+                    ' is not inside the late-undelivered population ' + lateUndel +
+                    ' — a box past its own promise must already be counted in 3+ Day.');
+  }
+  if (obs[PA_OBS[0]] > pend) {
+    throw new Error('PA_ASSERT_MOVING_IN_SUBSET: "' + PA_OBS[0] + '" ' + obs[PA_OBS[0]] +
+                    ' is not inside pending ' + pend +
+                    ' — a box inside its own promise must be pending, never late.');
+  }
+  paLog_('  D27 reconcile: "' + PA_OBS[1] + '" ' + obs[PA_OBS[1]] + ' of late-undelivered ' +
+         lateUndel + '  ·  "' + PA_OBS[0] + '" ' + obs[PA_OBS[0]] + ' of pending ' + pend);
   var prev = paReadNested_(ss, shipWeek), prevKeys = Object.keys(prev), oldSum = 0;
   prevKeys.forEach(function (k) { oldSum += prev[k]; });
   if (prevKeys.length === PA_OBS.length) {
     if (newSum > oldSum) {
-      throw new Error('REFUSING to write: the three observations rose ' + oldSum + ' -> ' + newSum +
+      throw new Error('REFUSING to write: the four observations rose ' + oldSum + ' -> ' + newSum +
                       '. A box leaves only by DELIVERING and delivered cannot un-deliver.');
     }
     PA_OBS.forEach(function (k) {
@@ -1131,10 +1201,11 @@ function paHubSortsBefore_(a, b) {
  *
  *     3  2 Day Shipments          <- good
  *     4  3+ Day Shipments         <- bad
- *     5     still moving (4+ days)          } D16 observations: a nested PARTITION of Not Arrived,
- *     6     no scan in 24h+ (investigating) } NOT a rate pair. Nothing may be summed from them.
- *     7     never picked up by carrier      }
- *     8  (blank label)            <- rate row; its pair is 3+4, not 6+7
+ *     5     Still Moving =< TNT2            } D16 observations (four since D27): a nested PARTITION
+ *     6     Still Moving > TNT2             } of Not Arrived, NOT a rate pair. Nothing may be
+ *     7     no scan in 24h+ (investigating) } summed from them.
+ *     8     never picked up by carrier      }
+ *     9  (blank label)            <- rate row; its pair is 3+4, not 7+8
  *
  * That mis-assumption made `paAuditRateRows_` report 5 FALSE POSITIVES (TnT2!B8..F8, all correct)
  * and refuse the D19 hub-row insert with PA_INSERT_PRE_AUDIT_FAILED — blocking a real maintenance
@@ -1150,7 +1221,7 @@ function paHubSortsBefore_(a, b) {
  * `{good, bad}` indices, or null when it cannot resolve — and unresolvable stays a REPORTED
  * failure, never a silent pass.
  */
-var PA_PAIR_WALK_MAX = 6;      // observation rows are 3; a longer gap means the tab shape changed
+var PA_PAIR_WALK_MAX = 7;      // observation rows are 4 since D27; a longer gap means the tab shape changed
 
 function paRatePairFor_(labels, i, tabName) {
   var g = paGrains_(tabName);                       // ['2 Day','3+ Day'] | ['Arrived','Not Arrived']
@@ -1598,6 +1669,160 @@ function paAddHubTnt1_(dry) {
 function previewAddHubTnt1Rows() { return paAddHubTnt1_(true); }
 /** Then THIS: inserts them. Idempotent — a group that already has its TNT1 row is skipped. */
 function addHubTnt1Rows() { return paAddHubTnt1_(false); }
+
+// ------------------------------------- SPLIT the `still moving` row in two (D27, human-invoked)
+
+/**
+ * 🔴 D27 — ONE RELABEL + ONE INSERT on TnT2, turning the single `still moving (4+ days)`
+ * observation into the two rows Kurt asked for:
+ *
+ *     3+ Day Shipments
+ *        Still Moving =< TNT2            <- the relabelled row
+ *        Still Moving > TNT2             <- the inserted row
+ *        no scan in 24h+ (investigating) <- unchanged, and it WINS: silent >=24h is never "moving"
+ *        never picked up by carrier      <- unchanged
+ *
+ * WHY (Kurt 2026-08-19, reading wk0817 on a Wednesday): **"1396 4+ days still moving is misleading.
+ * especially with some pickups on tuesday"** · **"also, its only wednesday"** · **"Still Moving =<TNT2
+ * and Still Moving >TNT2"**. The old label hardcoded a CALENDAR DAY COUNT — a cohort-age measure —
+ * onto a multi-leg ship week. It cannot be right for a Tuesday-leg box, and two days into a cohort it
+ * renders 1,251 boxes in ordinary transit as a disaster. The split is on each box's OWN promise
+ * (D18 per-box pickup clock), so a Tuesday-leg box is measured from ITS Tuesday pickup.
+ *
+ * Same discipline as D19/D19a/D22b, and for the same reason — the unattended refresh writer NEVER
+ * inserts rows (D13):
+ *   1. **Pre-audit both tabs or refuse** (`PA_INSERT_PRE_AUDIT_FAILED`).
+ *   2. **Post-audit both tabs from FORMULA TEXT** — a re-pointed formula still LOOKS right. Rate-row
+ *      and formula-cell counts must be UNCHANGED: this adds a COUNT row, never a pair.
+ *   3. **Idempotent** — a sheet that already carries `Still Moving > TNT2` is a no-op.
+ *   4. **Bottom-up ordering** is trivially satisfied: the relabel is done FIRST (it shifts nothing),
+ *      then the single insert goes directly beneath it.
+ *
+ * 🔴 THE INSERTED ROW STAYS BLANK IN EVERY EXISTING COLUMN, NEVER 0. Frozen/matured columns predate
+ * the split — we never measured `> TNT2` for those weeks and a 0 would assert we did. Values arrive
+ * only from the ordinary refresh, into non-frozen cohort columns.
+ *
+ * 🔴 WHAT THIS DELIBERATELY DOES NOT DO: it does not touch the relabelled row's EXISTING history.
+ * Those frozen numbers are the UNSPLIT total (they were `still moving`, all of it) and are now sitting
+ * under the `=< TNT2` label. Blanking them would delete Kurt-owned frozen cells, so the preview PRINTS
+ * them and leaves the decision to Kurt.
+ */
+function paSplitStillMoving_(dry) {
+  var ss = SpreadsheetApp.openById(PIVOT_SHEET_ID);
+  var name = PA_TABS.tnt2, sh = ss.getSheetByName(name);
+  paLog_('=== split the still-moving row on ' + name + ' — ' + (dry ? 'DRY RUN (no writes)' : 'WRITING') + ' ===');
+  if (!sh) throw new Error('PA_INSERT_NO_TAB: ' + name + ' not found');
+  paAssertColumns_(sh);                                  // never edit a tab that is already damaged
+
+  var lastRow = Math.max(1, sh.getLastRow()), lastCol = Math.max(1, sh.getLastColumn());
+  var raw = sh.getRange(1, 1, lastRow, 1).getValues().map(function (r) { return String(r[0]); });
+  var labels = raw.map(function (s) { return s.trim(); });
+  if (labels.indexOf(PA_OBS[1]) >= 0) {
+    paLog_('  ' + name + ': "' + PA_OBS[1] + '" already present at row ' + (labels.indexOf(PA_OBS[1]) + 1) +
+           ' — nothing to do');
+    paLog_('=== done (idempotent no-op) ===');
+    return { relabelled: 0, inserted: 0 };
+  }
+  var old = labels.indexOf(PA_OBS[0]);                   // already relabelled by a half-finished run?
+  var wasLegacy = false;
+  if (old < 0) { old = labels.indexOf(PA_OBS_LEGACY_MOVING); wasLegacy = old >= 0; }
+  if (old < 0) {
+    throw new Error('PA_SPLIT_NO_ROW: ' + name + ' — found neither "' + PA_OBS[0] + '" nor "' +
+                    PA_OBS_LEGACY_MOVING + '" in column A; refusing to guess where the split belongs');
+  }
+  // Format/indent template = a SURVIVING D16 observation row (`no scan in 24h+`), which is the same
+  // nesting level and the same kind of row (a count refining Not Arrived). Cloning from a sibling,
+  // not from a guessed space count, is what keeps the two Still Moving rows visually identical.
+  var tmpl = labels.indexOf(PA_OBS[2]);
+  if (tmpl < 0) {
+    throw new Error('PA_INSERT_NO_TEMPLATE: ' + name + ' — sibling observation row "' + PA_OBS[2] +
+                    '" not found to clone formatting/indent from');
+  }
+  var indent = (raw[old].match(/^\s*/) || [''])[0] || (raw[tmpl].match(/^\s*/) || [''])[0];
+  var anchor = old + 2;                                  // 1-based sheet row to insert BEFORE
+
+  var audits = {};
+  [PA_TABS.tnt2, PA_TABS.lost].forEach(function (tab) {
+    var s2 = ss.getSheetByName(tab);
+    if (!s2) { paLog_('  ⚠️ missing tab ' + tab); return; }
+    var a = paAuditRateRows_(s2);
+    audits[tab] = a;
+    paLog_('  ' + tab + ' BEFORE: ' + a.rows + ' rate rows, ' + a.cells + ' formulas, ' + a.bad.length + ' wrong');
+    if (a.bad.length) {
+      throw new Error('PA_INSERT_PRE_AUDIT_FAILED: ' + tab + ' already has ' + a.bad.length +
+                      ' mis-pointed rate formula(s) — fix those before inserting rows: ' +
+                      a.bad.slice(0, 5).join(' | '));
+    }
+  });
+
+  if (dry) {
+    paLog_('  [dry] ' + name + '!A' + (old + 1) + ': "' + labels[old] + '" -> "' + PA_OBS[0] + '"' +
+           (wasLegacy ? '  (the pre-D27 label)' : '  (already relabelled — insert only)'));
+    paLog_('  [dry] insert 1 row before ' + name + '!A' + anchor + ' = "' + indent + PA_OBS[1] +
+           '"  (formats cloned from row ' + (tmpl + 1) + ': "' + labels[tmpl] + '")');
+    paLog_('  [dry] precedence unchanged: "' + PA_OBS[2] + '" and "' + PA_OBS[3] + '" keep their D16 ' +
+           'definitions and WIN — a box silent >=' + PA_ACTIVE_HRS + 'h never lands on a Still Moving row');
+    var rateRow = -1;
+    for (var q = old + 1; q < labels.length; q++) { if (labels[q] === '') { rateRow = q; break; } }
+    if (rateRow >= 0) {
+      paLog_('  [dry] the top-block rate row moves ' + (rateRow + 1) + ' -> ' + (rateRow + 2) +
+             '; Sheets re-points its own formula and the POST audit proves it, per cell, from the ' +
+             'formula text, on BOTH tabs');
+    }
+    paLog_('  [dry] the INSERTED row stays BLANK in every existing column (blank != zero — those ' +
+           'weeks predate the split); values arrive only from the ordinary refresh');
+    // Print the frozen history sitting under the relabelled row so Kurt can decide about it himself.
+    var hdr = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+    var vals = sh.getRange(old + 1, 1, 1, lastCol).getValues()[0];
+    var hist = [];
+    for (var c = 2; c <= lastCol; c++) {
+      if (typeof vals[c - 1] === 'number') hist.push(String(hdr[c - 1]).trim() + '=' + vals[c - 1]);
+    }
+    paLog_('  [dry] 🔴 existing history on the relabelled row is the UNSPLIT total and is NOT touched: ' +
+           (hist.join('  ') || '(none)') + ' — blanking a frozen cell is Kurt\'s call, not this script\'s');
+    paLog_('=== done (DRY RUN — nothing written) ===');
+    return { relabelled: 0, inserted: 0, oldRow: old + 1, anchor: anchor, dry: true };
+  }
+
+  var maxCols = Math.max(1, sh.getMaxColumns());
+  sh.getRange(old + 1, 1).setValue(indent + PA_OBS[0]);  // relabel FIRST — it shifts nothing
+  sh.insertRowsBefore(anchor, 1);
+  var t = (tmpl + 1) >= anchor ? tmpl + 2 : tmpl + 1;    // 1-based template row after the shift
+  sh.getRange(t, 1, 1, maxCols).copyTo(sh.getRange(anchor, 1, 1, maxCols), { formatOnly: true });
+  sh.getRange(anchor, 1).setValue(indent + PA_OBS[1]);
+  var cur = paRightmostCohortCol_(sh);
+  if (cur) sh.getRange(anchor, cur).setNumberFormat('0');   // a count, not a rate
+  SpreadsheetApp.flush();
+
+  var bad = 0;
+  [PA_TABS.tnt2, PA_TABS.lost].forEach(function (tab) {
+    var s2 = ss.getSheetByName(tab);
+    if (!s2 || !audits[tab]) return;
+    var post = paAuditRateRows_(s2), pre = audits[tab];
+    paLog_('  ' + tab + ' AFTER : ' + post.rows + ' rate rows, ' + post.cells + ' formulas, ' +
+           post.bad.length + ' wrong');
+    if (post.bad.length) {
+      bad += post.bad.length;
+      throw new Error('PA_INSERT_POST_AUDIT_FAILED: ' + tab + ' — the insert re-pointed ' +
+                      post.bad.length + ' rate formula(s): ' + post.bad.slice(0, 5).join(' | '));
+    }
+    if (post.rows !== pre.rows || post.cells !== pre.cells) {
+      throw new Error('PA_INSERT_ROW_COUNT: ' + tab + ' rate rows ' + pre.rows + ' -> ' + post.rows +
+                      ', formulas ' + pre.cells + ' -> ' + post.cells + ' (expected both unchanged — ' +
+                      'D27 adds a count row, not a pair)');
+    }
+  });
+  paAssertColumns_(sh);
+  paLog_('  ' + name + ' ✅ "' + PA_OBS[0] + '" at row ' + (old + 1) + ', "' + PA_OBS[1] +
+         '" inserted at row ' + anchor + ', rate integrity intact on both tabs');
+  paLog_('=== done (1 relabel + 1 insert) ===');
+  return { relabelled: 1, inserted: 1, oldRow: old + 1, anchor: anchor, badAfter: bad };
+}
+
+/** 🔴 Kurt runs THIS first: logs the relabel + exactly where the second row lands. Writes nothing. */
+function previewSplitStillMoving() { return paSplitStillMoving_(true); }
+/** Then THIS: relabels and inserts. Idempotent — a sheet that already has both rows is a no-op. */
+function splitStillMovingRows() { return paSplitStillMoving_(false); }
 
 /**
  * Fill MISSING rate formulas in the rightmost (live) cohort column across both tabs.

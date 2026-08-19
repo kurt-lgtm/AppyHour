@@ -497,6 +497,11 @@ rows/notes here are label-skipped by the owned-row writer regardless.
 
 ### D16 — THREE OBSERVATIONS under `3+ Day`, and the monotonicity invariant (Kurt 2026-08-07)
 
+> 🔴 **AMENDED BY [D27](#d27--still-moving-4-days-splits-on-each-boxs-own-promise-not-on-a-calendar-day-count-kurt-2026-08-19) (2026-08-19): FOUR observations, not three.** `still moving (4+ days)` is split
+> into `Still Moving =< TNT2` / `Still Moving > TNT2` on each box's OWN promise (D18 clock) — a fixed
+> calendar day-count label is wrong on a multi-leg week and read mid-week. The other two rows below
+> are UNCHANGED and take precedence. Read D27 before touching this block.
+
 **APPROVED MODEL** (Kurt's paste, verbatim):
 
 ```
@@ -1227,3 +1232,104 @@ unresolved count — an under-count with no signal anywhere.
    labels moved.
 8. **Dry run:** menu → *Preview Triage decisions (writes NOTHING)* shows what would be removed,
    the tally, and any unrecognized text, without touching the sheet. Run it before a refresh.
+
+### D27 — `still moving (4+ days)` SPLITS ON EACH BOX'S OWN PROMISE, NOT ON A CALENDAR DAY COUNT (Kurt 2026-08-19)
+
+**AMENDS D16.** The observation block under `3+ Day Shipments` goes from THREE rows to FOUR.
+
+Kurt, reading `_SHIP_2026-08-17` on a **Wednesday**, verbatim:
+
+> **"1396 4+ days still moving is misleading. especially with some pickups on tuesday"**
+> **"also, its only wednesday"**
+> **"Still Moving =<TNT2 and Still Moving >TNT2"**
+
+**The failure this fixes (negatives first).** `still moving (4+ days)` hardcoded a **fixed calendar
+day count** into a row label. That count was coined when the only cohort on screen was old, and it is
+wrong in two independent ways the moment it is read mid-week:
+
+- **A ship week is MULTI-LEG.** A Tuesday (Dallas) pickup is standard here. "4+ days" describes
+  cohort age, which for a Tuesday-leg box is not that box's transit at all — the same mistake D18
+  already fixed on the headline and which survived in this label.
+- **It is read before the cohort is old.** Two days into `_SHIP_2026-08-17` the row measured **1,251**
+  (Kurt saw 1,396 on an earlier read the same day) — boxes almost entirely in **ordinary transit,
+  inside their own 2-day promise**. Rendering that as a single alarming number is how a report trains
+  its reader to ignore it.
+
+**The model (four rows, on-sheet order):**
+
+```
+3+ Day Shipments
+   Still Moving =< TNT2              undelivered, movement scan <24h, INSIDE its own 2-day promise
+   Still Moving > TNT2               undelivered, movement scan <24h, PAST its own 2-day promise
+   no scan in 24h+ (investigating)   unchanged (D16)
+   never picked up by carrier        unchanged (D16)
+```
+
+- **The clock is the D18 per-box clock**, never cohort age and never a calendar day count: deadline =
+  **that box's own pickup + 2 days (ET)**, pickup from ParcelPanel `pickup_date` (canonical) with the
+  Shopify first-movement scan as the fallback ONLY when PP has none.
+- **Kurt's spelling `=<` is his label text and is deliberate. Do not "correct" it to `<=`.**
+
+**PRECEDENCE — first match wins, which is what makes the four mutually exclusive:**
+
+1. a real carrier scan within the last 24h (`active`) → a **Still Moving** row, split by that box's
+   own deadline: inside it (`pending`) = `=< TNT2`, past it (`late`) = `> TNT2`;
+2. otherwise → `no scan in 24h+` or `never picked up`, by whether the box was ever picked up.
+
+So **a box silent >=24h NEVER appears on a Still Moving row**, however new the cohort is. The two D16
+rows keep their definitions and **win**.
+
+**PARTITION + MONOTONICITY (D16, extended).** `PA_ASSERT_OBSERVATION_PARTITION` now requires the
+**four** rows to sum to `Not Arrived`, and the refuse-to-write-on-rise gate is unchanged: the SUM is
+monotone non-increasing within a cohort — a box leaves only by DELIVERING, and delivered cannot
+un-deliver. Migration *between* rows is expected and logged (a box crossing its own deadline moves
+`=< TNT2` → `> TNT2` with the sum unchanged). While a sheet still carries the old three-row shape the
+gate logs "partial prior row set — first write, gate skipped" rather than comparing against a baseline
+that means nothing.
+
+**RECONCILIATION AGAINST THE HEADLINE — asserted, not assumed** (`PA_ASSERT_MOVING_OUT_SUBSET`,
+`PA_ASSERT_MOVING_IN_SUBSET`), verified on measured wk0817 and wk0810 before shipping:
+
+- `Still Moving > TNT2` is undelivered and past its own deadline → a **subset of the late-undelivered
+  population already counted in `3+ Day Shipments`**.
+- `Still Moving =< TNT2` is undelivered and inside its deadline → a **subset of `pending`** (D18).
+- 🔴 **What is NOT true, and was checked rather than assumed:** `no scan in 24h+` is *not* a subset of
+  late. On `_SHIP_2026-08-17` all 12 no-scan boxes were still inside their own promise while
+  late-undelivered was 0. Late-undelivered therefore equals `Still Moving > TNT2` **plus the late
+  part** of the no-scan / never-picked rows — never those whole rows.
+
+**MECHANICS — one relabel + one insert, D19/D19a discipline** (`previewSplitStillMoving` writes
+nothing; `splitStillMovingRows` applies it; idempotent):
+
+- **Pre-audit both tabs or refuse** (`PA_INSERT_PRE_AUDIT_FAILED`); **post-audit both tabs from
+  FORMULA TEXT** — a re-pointed formula still LOOKS right. Rate-row and formula-cell counts must be
+  UNCHANGED: this adds a COUNT row, never a pair.
+- The **relabel happens first** (it shifts nothing), then the single insert lands directly beneath it —
+  the bottom-up rule is satisfied trivially. Formats and indent are cloned from the surviving sibling
+  observation row (`no scan in 24h+`), never from a guessed space count.
+- `paIsNested_` gained the `Still Moving ` stem so the label-based pair resolver still walks past both
+  rows. It stays an **allowlist** (D19a) — the stem, not "anything that isn't a grain row". Labels
+  reaching that predicate are already trimmed, so the stem is a PREFIX test. Verified offline against
+  the real resolver pulled out of the deployed file: 12 rate rows on each tab resolve their own pair,
+  before and after the split.
+- **The inserted row stays BLANK in every existing column, never 0** — those weeks predate the split
+  and a 0 would assert we measured `> TNT2` then. Values arrive only from the ordinary refresh into
+  non-frozen columns.
+- 🔴 **The relabelled row's existing history is NOT touched.** Those frozen numbers are the *unsplit*
+  total now sitting under the `=< TNT2` label. Blanking a frozen cell is Kurt-owned (D15), so the
+  preview PRINTS them and leaves the call to him.
+
+**Measured before the click** (read-only mirror `scratchpad/split_stillmoving.py`, 0 ParcelPanel calls
+— wk0817 is skipped by the age guard, wk0810 came from the existing local cache):
+
+| cohort | age | Not Arrived | `=< TNT2` | `> TNT2` | no scan 24h+ | never picked up |
+|---|---|---|---|---|---|---|
+| `_SHIP_2026-08-17` | 2d | 1,276 | **1,251** | **0** | 12 | 13 |
+| `_SHIP_2026-08-10` | 9d | 16 | **0** | **0** | 16 | 0 |
+
+That is the whole point of the split: the 1,251 that read as catastrophe are boxes inside their own
+promise, and **zero** boxes on either cohort are actually still moving past their promise.
+
+⏱️ `_SHIP_2026-08-10` freezes at age 10 on **2026-08-20** (D15). If the split is to appear in that
+column at all, the insert and a refresh must happen **before then**; after that the column is
+Kurt-owned forever and the new row stays blank there.
