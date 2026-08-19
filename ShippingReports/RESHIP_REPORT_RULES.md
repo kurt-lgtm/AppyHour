@@ -1364,3 +1364,98 @@ runtimes that cannot reach these Script Properties.
 
 ⏳ **Interim.** A ParcelPanel → DigitalOcean webhook replaces polling outright (slow daily
 reconciliation poll as the permanent backstop). Retire this metering with the polling, not before.
+
+### D29 — THE KLAVIYO SWEEP IS RESUMABLE; A PARTIAL SWEEP WRITES NOTHING (Kurt 2026-08-19: "can't we just slow it down?")
+
+🔴 **The failure this closes.** The 2026-08-19 13:40 live `ntRefreshCurrentColumn` on
+`_SHIP_2026-08-17` spent **242.7s of the 360s ceiling and wrote one cell** — the Shopify-sourced
+`Order Placed`. Both SMS metrics, **79 and 40 pages, well under the 120-page cap**, died on TIME,
+threw every page away and reported INCOMPLETE. The next run repeated the same 242.7s and threw it
+away again, forever. Nothing was wrong with the cap: **the run had no memory.**
+
+- 🔴 **ONE RUN CANNOT BE MADE TO FINISH — this is arithmetic, not tuning** (measured live
+  2026-08-19 against the cohort's real window, read-only):
+
+  | metric | events | pages @200 | s/page | total |
+  |---|---|---|---|---|
+  | `Clicked Text Message` | 7,974 | 40 | 2.75 | **110s** — fits in one run |
+  | `Received Text Message` | 15,720 | 79 | 4.59 | **363s** — exceeds the whole 360s ceiling alone |
+  | `Received Email` | 165,999 | 830 | — | declined, unchanged (D24) |
+
+  No budget, cap, or optimisation fits 363s into a 360s invocation. Resumption is the only way that
+  metric ever completes.
+- 🔴 **THE "129s ON VOLUME PROBES" FIGURE WAS AN INFERENCE AND IT WAS WRONG.** The three
+  `/metric-aggregates/` POSTs were assumed to be the waste because they are the only thing logged
+  between the window line and the sweep. Timed directly they are **0.5s + 0.5s + 0.6s = 1.6s**. They
+  are now cached anyway (once per cohort, and skipped entirely once a sweep is under way) because it
+  is free and makes the feasibility decision once — but **the cost is pages, not probes**, and
+  anyone optimising this file must attack paging. *A cost attributed by elimination is not a
+  measurement* — same class as the stage-timer burn.
+- 🔴 **A PARTIALLY SWEPT METRIC WRITES NOTHING.** Its rows stay BLANK and the log states progress
+  (`pages 62/79, 78% — resuming next run`). A half-swept count looks finished on the sheet and is
+  indistinguishable from a real one. **Blank ≠ zero** applies to partial exactly as it does to absent.
+- 🔴 **STATE LIVES IN THE HIDDEN `_nt_sweep` TAB, NOT A SCRIPT PROPERTY.** One cohort's accumulated
+  sets measured **178 KB / 3,409 profiles** in test and ~137 KB live. A Script Property value caps at
+  **9 KB** (store 500 KB, shared with three other files) so it cannot hold this at all; CacheService
+  caps at 100 KB/key and **expires** — a checkpoint that can silently vanish mid-sweep is the same
+  failure with extra steps. Rows are `key | kind | seq | payload`, chunked at 40,000 chars (cell limit
+  50,000), payload `'#'`-prefixed because `setValue` on a leading `=` makes a FORMULA. Entries are
+  `flowId <TAB> email <TAB> epochSeconds` — tab and newline are both illegal in an email address, so
+  the delimiter cannot collide with the data (a comma or semicolon eventually would).
+- 🔴 **A MISSING CHUNK IS DISCARDED, NOT PARSED.** Half a blob parses cleanly into a
+  smaller-but-plausible set, which would then be published as a finished count. The chunk count is
+  stored and verified on load; short means drop the record and re-sweep.
+- 🔴 **`sort=datetime` (ASCENDING) IS LOAD-BEARING** (verified live: 200, ascending; the default is
+  descending). Newest-first inserts an event created between run 1 and run 2 **ahead** of the stored
+  cursor, so a resumed sweep completes having silently missed it. Ascending appends behind the cursor.
+  Verified live: a stored `links.next` replayed **after a 90s gap** returned 200 and continued exactly
+  where the previous page ended. ⚠️ Only a 90s gap was tested — a cursor reused across a **day** is
+  unverified; the signature discards state on a new cohort anyway.
+- 🔴 **INVALIDATION IS BY SIGNATURE**: `{version, cohort tag, window lo/hi, sorted tracked flow ids,
+  metric names}`. Any change discards the state. The flow ids are in it because the sweep **drops
+  every untracked flow as it reads** — re-pointing a pin cannot be repaired by continuing a sweep
+  that already threw the new flow's events away. A **COMPLETE** result is reused for the rest of the
+  same **ET calendar day** and re-measured the next: this tab is a daily walk-forward artifact, so the
+  day is its natural grain, and a duration TTL would let a 23:50 sweep be reused at 01:10 and freeze a
+  day's movement.
+- **Cheapest metric first.** With a hard budget, sweeping the 830-page metric first starves two that
+  fit. Ordering by measured pages means run 1 finishes `Clicked Text Message` and both `SMS Engaged`
+  rows land immediately; `SMS Sent` and `Time of Sending` land when `Received Text Message` finishes.
+- **`NT_MAX_PAGES` (120) is now a TOTAL across runs, and is still the feasibility cap.** Resumption
+  exists to make a sweep already under the cap actually finish — it is not licence to raise it.
+  Raising it is a decision about how many runs a cohort costs, so it is Kurt's, not a tuning knob.
+- Diagnostics: `ntCheckSweepState()` (progress, no writes/fetches) and `ntResetSweepState(tag)`
+  (manual escape hatch when the stored pages are suspect but the signature did not move).
+
+⚠️ **UNVERIFIED.** The per-run fixed overhead — the Shopify cohort pull (2,324 orders at 25/page ≈ 93
+GraphQL calls) plus `/metrics/` and `/flows/` — was **not** measured; those credentials live in Script
+Properties and are unreachable from a local probe. It comes off the same 240s budget, so
+`Received Text Message` needs **3 runs at 60s of overhead and 5 at 120s**. The first live run settles
+it: read `total …s of the 360s ceiling` next to the `pages n/79` line. The file is also **unexecuted**
+— Apps Script cannot be run from here; the checkpoint path was verified by a Node self-test
+(`scratchpad/nt_state_selftest.js`, 27 assertions) that loads the real file and exercises
+serialize → chunk → sheet round-trip → resume, proving a resumed sweep equals one uninterrupted sweep.
+
+### D29b — `Notifications!Total Shipments` IS A HAND-TYPED MIRROR NOBODY OWNS (found 2026-08-19)
+
+The 08-19 run's `⚠️ Total Shipments is blank on this column — no percents written` is **not a bug in
+`Notifications.gs` and not a stale job**:
+
+- Read back with `valueRenderOption=FORMULA`, `Notifications!Total Shipments` and `Arrived` are
+  **literal numbers, not formulas** — nothing links them to anything.
+- **No code in the script project writes them.** `paValues_` (PivotAnalytics.gs) emits
+  `Total Shipments`, but only onto `TnT2` and `Lost in Transit` (`PA_TABS`); the string does not occur
+  in `Code.gs` or `Exceptions.gs` at all, and this file's header has always declared the row "NOT OURS".
+- So it is a **manual mirror that stopped after `_SHIP_2026-08-03`**. Measured 2026-08-19:
+
+  | tab | 07-13 | 07-20 | 07-27 | 08-03 | 08-10 | 08-17 |
+  |---|---|---|---|---|---|---|
+  | `Notifications` | 2025 | 2075 | 2227 | 2305 | *(blank)* | *(blank)* |
+  | `TnT2` (script-filled) | 2025 | 2075 | 2227 | 2305 | **2316** | **2324** |
+
+  Identical on all four overlapping columns; TnT2 has the two the Notifications tab is missing.
+- 🔴 **FIX IS THE SMALLER ONE: read, do not write.** When this tab's own cell is blank the denominator
+  is read from `TnT2` for the same cohort column and the source is logged and noted. The row is **not**
+  filled: D24 and the file header both declare it somebody else's, and quietly taking ownership of a
+  row a human maintains is how two writers end up disagreeing. **Who owns that row is a Kurt
+  decision** — filling it for real is a one-line change once he says whose it is.

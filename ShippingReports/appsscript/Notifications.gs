@@ -81,6 +81,42 @@
  * quotes." Every 400 from ntGet_ now prints the endpoint's declared paging mode, the size actually
  * sent, the revision, and the decoded query, so the next one of this class self-diagnoses.
  *
+ * 🔴 THE SWEEP IS RESUMABLE — A RUN THAT DOES NOT FINISH BANKS ITS PROGRESS (Kurt 2026-08-19:
+ * "can't we just slow it down?"). The 2026-08-19 13:40 live run is the motivating burn: 242.7s of
+ * the 360s ceiling spent, and the ONLY cell written was the Shopify-sourced `placed` one. Both SMS
+ * metrics — 79 and 40 pages, comfortably UNDER the 120-page cap — died on TIME, threw their pages
+ * away, and reported INCOMPLETE. Every subsequent run repeated the same 242.7s and threw it away
+ * again. Nothing was wrong with the cap; the run had no memory.
+ *   🔴 AND ONE RUN CANNOT BE MADE TO FINISH. Measured live 2026-08-19 on this cohort's real window:
+ *   `Received Text Message` is 79 pages at 4.59s/page = **363s**, which is more than the entire 360s
+ *   ceiling before a single other call. No budget, cap, or tuning makes that fit in one invocation —
+ *   resumption is not an optimisation here, it is the only way that metric ever completes.
+ *   - Progress is CHECKPOINTED to the hidden `_nt_sweep` tab after every run: per (cohort, metric)
+ *     the Klaviyo `links.next` cursor, the page count, and the accumulated per-flow distinct-profile
+ *     sets. The next run picks the cursor up and keeps going.
+ *   - 🔴 WHY A SHEET TAB AND NOT A SCRIPT PROPERTY. A Script Property value is capped at 9 KB and
+ *     the whole store at 500 KB; one cohort's set is ~900–2,300 email/timestamp pairs ≈ 40–100 KB,
+ *     so it does not fit in one property and sharding it across properties would burn the store the
+ *     other three files share. CacheService is 100 KB/key and EXPIRES (6h max, evictable) — a cache
+ *     that can silently vanish mid-sweep is the same failure with extra steps. A hidden tab is
+ *     durable, inspectable by hand, and already the house pattern (`_exc_state`, `_state`).
+ *   - 🔴 A PARTIALLY SWEPT METRIC WRITES NOTHING. Its rows stay BLANK and the log says how far it
+ *     got ("pages 62/79, 78% — resuming next run"). A half-swept number looks finished and is a lie;
+ *     blank is honest. Only `complete` sweeps produce cells.
+ *   - The run is bounded by TIME first (NT_TIME_BUDGET_MS minus NT_SAVE_RESERVE_MS, so there is
+ *     always room to checkpoint) and by pages second, so it exits cleanly instead of being killed
+ *     mid-page by the 360s ceiling.
+ *   - INVALIDATION: the state carries a signature of {version, cohort tag, window lo/hi, sorted
+ *     tracked flow ids, metric names}. Any change discards the state and restarts — a set
+ *     accumulated under different pins is not a partial answer to the new question, it is a wrong
+ *     one. A COMPLETE result is reused for the rest of the SAME America/New_York calendar day and
+ *     re-measured the next day: this tab is a daily walk-forward artifact, so "same day" is its
+ *     natural grain, and a duration TTL would let a 23:50 sweep be reused at 01:10 and silently
+ *     freeze a day's movement.
+ *   - Only the THREE tracked flows (the two pinned + the informational one) are retained in state.
+ *     Events belonging to any other flow are dropped as they are read — that is what keeps the state
+ *     bounded and it is why a change to the pins MUST invalidate it.
+ *
  * 🔴 THE EMAIL ROWS CANNOT BE FILLED FROM APPS SCRIPT — AND THAT IS A PROPERTY OF THE ACCOUNT, NOT
  * A BUG (measured 2026-08-18, /metric-aggregates). /events/ has NO flow filter, so counting one
  * flow's email sends means paging EVERY "Received Email" event: 206,381 events in a 28-day window,
@@ -162,8 +198,23 @@ var NT_PAGING = {
   '/events/':  { size: 200,  mode: 'page[size]<=200 + cursor' }
 };
 var NT_PAGE = 200;                       // events page[size] — mirrors NT_PAGING['/events/'].size
-var NT_MAX_PAGES = 120;                  // per metric, per cohort. Hitting it = INCOMPLETE = no write
+/**
+ * 🔴 NT_MAX_PAGES IS THE FEASIBILITY CAP, AND IT IS NOW A TOTAL ACROSS RUNS — not a per-run limit.
+ * Resumption exists to make a sweep that is ALREADY under this cap actually FINISH; it is not a
+ * licence to raise the cap. At ~2s/page a 120-page metric is ~2 runs, which is a number of clicks
+ * Kurt can live with. The 830-page email metric is still DECLINED up front by the volume precheck
+ * and still leaves its rows blank — see the email block in the header. Raising this number is a
+ * decision about how many runs a cohort costs, so it is Kurt's, not a tuning knob.
+ */
+var NT_MAX_PAGES = 120;                  // TOTAL pages per metric per cohort, across runs
+var NT_MAX_PAGES_PER_RUN = 90;           // second bound inside ONE run (time is the first)
 var NT_TIME_BUDGET_MS = 240000;          // 4 min of fetching, leaving 2 min of the 360s ceiling
+/**
+ * Held back from the fetch budget so a run ALWAYS has room to serialize + write its checkpoint.
+ * Without this the paging loop runs to the deadline and the checkpoint write is what gets killed by
+ * the 360s ceiling — losing exactly the progress the checkpoint exists to keep.
+ */
+var NT_SAVE_RESERVE_MS = 25000;
 var NT_WIN_LEAD_DAYS = 9;                // order-placed mail fires up to ~a week before ship Monday
 var NT_WIN_TAIL_DAYS = 12;               // delivered mail trails the ship week
 var NT_DENOM_TOLERANCE = 0.02;           // cohort size vs the sheet's Total Shipments
@@ -215,7 +266,182 @@ var NT_FLOW_CFG = {
                name: 'Shipping Notification - Delivered (Shopify)' }
 };
 
+// ------------------------------------------------------------------ resumable sweep state
+
+/**
+ * 🔴 THE CHECKPOINT STORE. Hidden tab, one row per record, `write-then-trim` like `_exc_state`
+ * (clearing first means any failure below destroys the state outright).
+ *
+ * Layout:  key | kind | seq | payload
+ *   key      the cohort tag, so two legs never collide and a stale cohort is trivially droppable
+ *   kind     'sig' | 'vol:<metricKey>' | 'meta:<metricKey>' | 'data:<metricKey>'
+ *   seq      chunk index for `data:` rows, 0 otherwise
+ *   payload  a '#'-prefixed string. 🔴 THE '#' IS LOAD-BEARING: setValue() on a string beginning
+ *            with '=' makes it a FORMULA, and a serialized blob is not something to hand the
+ *            formula parser. One char, stripped on read, and the class cannot recur.
+ *
+ * A cell holds 50,000 characters, so blobs are chunked at NT_CHUNK_CHARS with headroom and
+ * reassembled by seq. Entries are `flowId\temail\tepochSeconds` per line — tab and newline are both
+ * illegal in an email address and both survive a sheet round-trip, so the delimiter can never
+ * collide with the data (a comma or semicolon eventually would).
+ */
+var NT_STATE_TAB = '_nt_sweep';
+var NT_STATE_VER = 2;                    // bump = every stored state is discarded on sight
+var NT_STATE_COLS = ['key', 'kind', 'seq', 'payload'];
+var NT_CHUNK_CHARS = 40000;              // cell limit is 50,000 — headroom for the '#' and for slack
+
 function ntLog_(m) { Logger.log(m); }
+
+/** ET calendar date, the grain a COMPLETE result is reused for. */
+function ntToday_() { return Utilities.formatDate(new Date(), NT_TZ, 'yyyy-MM-dd'); }
+
+function ntJson_(s) { try { return JSON.parse(s); } catch (e) { return null; } }
+
+function ntStateSheet_() {
+  var ss = SpreadsheetApp.openById(EXC_HOST_SHEET_ID);
+  var sh = ss.getSheetByName(NT_STATE_TAB);
+  if (!sh) {
+    sh = ss.insertSheet(NT_STATE_TAB);
+    sh.getRange(1, 1, 1, NT_STATE_COLS.length).setValues([NT_STATE_COLS.slice()]);
+  }
+  try { sh.hideSheet(); } catch (e) { /* already hidden, or it is the only visible sheet */ }
+  return sh;
+}
+
+/** `flowId\temail\tepochSec` per line. Sorted only incidentally; order carries no meaning. */
+function ntSerializeSets_(sets) {
+  var lines = [];
+  Object.keys(sets).forEach(function (flow) {
+    var d = sets[flow] || {};
+    Object.keys(d).forEach(function (em) { lines.push(flow + '\t' + em + '\t' + d[em]); });
+  });
+  return lines.join('\n');
+}
+
+function ntParseSets_(blob) {
+  var out = {};
+  if (!blob) return out;
+  blob.split('\n').forEach(function (ln) {
+    if (!ln) return;
+    var p = ln.replace(/\r$/, '').split('\t');
+    if (p.length !== 3 || !p[0] || !p[1]) return;
+    if (!out[p[0]]) out[p[0]] = {};
+    out[p[0]][p[1]] = Number(p[2]) || 0;
+  });
+  return out;
+}
+
+function ntSetSize_(sets) {
+  var n = 0;
+  Object.keys(sets || {}).forEach(function (f) { n += Object.keys(sets[f] || {}).length; });
+  return n;
+}
+
+/**
+ * 🔴 THE INVALIDATION KEY. Everything the accumulated sets are an answer TO. If any of it moved,
+ * the stored pages answer a different question and are discarded rather than continued — a set
+ * gathered under the old flow pins is not a partial answer to the new pins, it is a wrong one.
+ * The tracked flow list is in here precisely because the sweep DROPS every untracked flow as it
+ * reads: re-pointing a pin cannot be repaired by continuing, only by restarting.
+ */
+function ntSig_(shipWeek, lo, hi, flowIds) {
+  return { ver: NT_STATE_VER, shipWeek: shipWeek, lo: lo, hi: hi,
+           flows: flowIds.slice().sort().join(','),
+           metrics: NT_METRIC.email + '|' + NT_METRIC.sms + '|' + NT_METRIC.smsEngaged };
+}
+
+function ntSigEq_(a, b) {
+  if (!a || !b) return false;
+  return a.ver === b.ver && a.shipWeek === b.shipWeek && a.lo === b.lo && a.hi === b.hi &&
+         a.flows === b.flows && a.metrics === b.metrics;
+}
+
+function ntSigWhy_(a, b) {
+  if (!a) return 'no stored state';
+  if (!b) return 'no signature computed';
+  var d = [];
+  ['ver', 'shipWeek', 'lo', 'hi', 'flows', 'metrics'].forEach(function (k) {
+    if (a[k] !== b[k]) d.push(k + ' ' + a[k] + ' -> ' + b[k]);
+  });
+  return d.length ? d.join('; ') : 'unchanged';
+}
+
+/** Everything stored for ONE cohort. Returns {sig, vol:{}, metrics:{k:{...,sets}}}. */
+function ntLoadState_(shipWeek) {
+  var st = { sig: null, vol: {}, metrics: {} };
+  var sh = ntStateSheet_();
+  var last = sh.getLastRow();
+  if (last < 2) return st;
+  var rows = sh.getRange(2, 1, last - 1, NT_STATE_COLS.length).getValues();
+  var blobs = {};
+  rows.forEach(function (r) {
+    if (String(r[0]) !== shipWeek) return;
+    var kind = String(r[1]), seq = Number(r[2]) || 0, pay = String(r[3] == null ? '' : r[3]);
+    if (pay.charAt(0) === '#') pay = pay.slice(1);
+    if (kind === 'sig') { st.sig = ntJson_(pay); return; }
+    if (kind.indexOf('vol:') === 0) { st.vol[kind.slice(4)] = ntJson_(pay); return; }
+    if (kind.indexOf('meta:') === 0) { st.metrics[kind.slice(5)] = ntJson_(pay); return; }
+    if (kind.indexOf('data:') === 0) {
+      var k = kind.slice(5);
+      if (!blobs[k]) blobs[k] = [];
+      blobs[k][seq] = pay;
+    }
+  });
+  Object.keys(st.metrics).forEach(function (k) {
+    var m = st.metrics[k];
+    if (!m) { delete st.metrics[k]; return; }
+    var parts = blobs[k] || [];
+    // 🔴 A MISSING CHUNK IS CORRUPTION, NOT AN EMPTY SET. Half a blob parses cleanly into a
+    // smaller-but-plausible set, which would then be written as a finished count. Drop the record.
+    var have = 0;
+    for (var i = 0; i < (m.chunks || 0); i++) { if (typeof parts[i] === 'string') have++; }
+    if (have !== (m.chunks || 0)) {
+      ntLog_('  ⚠️ sweep state for "' + k + '" is missing ' + ((m.chunks || 0) - have) + ' of ' +
+             m.chunks + ' chunk(s) — DISCARDED (a partial blob would parse as a smaller valid set)');
+      delete st.metrics[k];
+      return;
+    }
+    m.sets = ntParseSets_(parts.join(''));
+  });
+  return st;
+}
+
+/** Rewrites this cohort's rows; every OTHER cohort's rows are preserved untouched. */
+function ntSaveState_(shipWeek, st) {
+  var sh = ntStateSheet_();
+  var keep = [], last = sh.getLastRow();
+  if (last >= 2) {
+    sh.getRange(2, 1, last - 1, NT_STATE_COLS.length).getValues().forEach(function (r) {
+      if (String(r[0]) && String(r[0]) !== shipWeek) keep.push(r);
+    });
+  }
+  var rows = [NT_STATE_COLS.slice()].concat(keep);
+  rows.push([shipWeek, 'sig', 0, '#' + JSON.stringify(st.sig)]);
+  Object.keys(st.vol).forEach(function (k) {
+    rows.push([shipWeek, 'vol:' + k, 0, '#' + JSON.stringify(st.vol[k])]);
+  });
+  Object.keys(st.metrics).forEach(function (k) {
+    var m = st.metrics[k];
+    if (!m) return;
+    var blob = ntSerializeSets_(m.sets || {});
+    var chunks = [];
+    for (var i = 0; i < blob.length; i += NT_CHUNK_CHARS) chunks.push(blob.slice(i, i + NT_CHUNK_CHARS));
+    if (!chunks.length) chunks = [''];
+    rows.push([shipWeek, 'meta:' + k, 0, '#' + JSON.stringify({
+      next: m.next || '', pages: m.pages || 0, events: m.events || 0,
+      total: m.total || 0, complete: !!m.complete, declined: !!m.declined,
+      why: m.why || '', profiles: ntSetSize_(m.sets || {}), chunks: chunks.length,
+      day: m.day || ntToday_(), updatedAt: new Date().toISOString()
+    })]);
+    chunks.forEach(function (c, i) { rows.push([shipWeek, 'data:' + k, i, '#' + c]); });
+  });
+  sh.getRange(1, 1, rows.length, NT_STATE_COLS.length).setValues(rows);
+  if (sh.getLastRow() > rows.length) {
+    sh.getRange(rows.length + 1, 1, sh.getLastRow() - rows.length, NT_STATE_COLS.length).clearContent();
+  }
+  try { sh.hideSheet(); } catch (e) { /* fine */ }
+}
+
 function ntWriteArmed_() {
   return PropertiesService.getScriptProperties().getProperty('NOTIFICATIONS_WRITE') === '1';
 }
@@ -377,25 +603,57 @@ function ntResolveFlows_(flows) {
 }
 
 /**
- * Every event of one metric in [lo,hi). Returns {byFlow:{flowId:{email:{hourUtcIso:1}}}, complete}.
- * We keep, per flow, per profile-email, the FIRST send timestamp — that is the message whose
- * local hour the Time-of-Sending split is measured on.
+ * The FIRST page url of a metric's event sweep. Split out from the sweep because a resumed run
+ * uses the stored `links.next` instead and must never rebuild this by hand.
+ *
+ * 🔴 DATETIME LITERALS ARE UNQUOTED IN A KLAVIYO FILTER; a metric_id is a QUOTED string. Quoting
+ * the datetimes returns 400 "Invalid filter provided. Verify your datetimes are not in quotes."
+ * (verified live 2026-08-18, revision 2024-10-15 — this was the next 400 after the paging one).
+ *
+ * 🔴 `sort=datetime` (ASCENDING) IS WHAT MAKES RESUMPTION SAFE ACROSS RUNS. The default order is
+ * newest-first, so an event created between run 1 and run 2 is inserted AHEAD of the stored cursor
+ * and is never seen — the sweep completes and silently misses it. Ascending appends new events
+ * BEHIND the cursor, so a resumed sweep walks all the way to the true end of the window. The set is
+ * a union either way, so the sort never double-counts; it only decides what a resumed run can miss.
  */
-function ntEvents_(metricId, lo, hi, deadline) {
-  // 🔴 DATETIME LITERALS ARE UNQUOTED IN A KLAVIYO FILTER; a metric_id is a QUOTED string. Quoting
-  // the datetimes returns 400 "Invalid filter provided. Verify your datetimes are not in quotes."
-  // (verified live 2026-08-18, revision 2024-10-15 — this was the next 400 after the paging one).
+function ntEventsUrl_(metricId, lo, hi) {
   var q = ntPageParam_('/events/');
-  var url = NT_BASE + '/events/?filter=' + encodeURIComponent(
-              'and(equals(metric_id,"' + metricId + '"),greater-or-equal(datetime,' + lo +
-              '),less-than(datetime,' + hi + '))') +
-            '&include=profile&fields[profile]=email' +
-            '&fields[event]=datetime,event_properties' + (q ? '&' + q : '');
-  var out = { byFlow: {}, complete: true, n: 0 };
-  var next = url, pages = 0;
+  return NT_BASE + '/events/?filter=' + encodeURIComponent(
+           'and(equals(metric_id,"' + metricId + '"),greater-or-equal(datetime,' + lo +
+           '),less-than(datetime,' + hi + '))') +
+         '&include=profile&fields[profile]=email' +
+         '&fields[event]=datetime,event_properties&sort=datetime' + (q ? '&' + q : '');
+}
+
+/**
+ * RESUMABLE sweep of one metric over [lo,hi). Continues from `prev` (a checkpoint) or starts fresh,
+ * pages until it finishes / runs out of time / hits a page bound, and returns a checkpoint either
+ * way. Per flow, per profile-email it keeps the FIRST send — that is the message whose local hour
+ * the Time-of-Sending split is measured on.
+ *
+ * 🔴 ONLY `tracked` FLOWS ARE RETAINED. Everything else is dropped as it is read: that is what keeps
+ * the checkpoint bounded (an account-wide email metric is 206k events; the three tracked flows are
+ * ~1k profiles), and it is exactly why the tracked ids are part of the state signature — re-pointing
+ * a pin cannot be repaired by continuing a sweep that already threw the new flow's events away.
+ *
+ * 🔴 `complete:false` IS NOT A SMALLER ANSWER. The caller must write NOTHING from it. It carries the
+ * cursor so the next run continues; deriving a count from it would publish a number that is missing
+ * however many pages are left, indistinguishable on the sheet from a finished one.
+ */
+function ntSweepMetric_(metricId, lo, hi, tracked, prev, deadline) {
+  var st = {
+    sets: (prev && prev.sets) || {},
+    pages: (prev && prev.pages) || 0,
+    events: (prev && prev.events) || 0,
+    next: (prev && prev.next) || '',
+    complete: false, why: ''
+  };
+  var next = st.next || ntEventsUrl_(metricId, lo, hi);
+  var thisRun = 0;
   while (next) {
-    if (pages >= NT_MAX_PAGES) { out.complete = false; out.why = 'page cap'; break; }
-    if (new Date().getTime() > deadline) { out.complete = false; out.why = 'time budget'; break; }
+    if (st.pages >= NT_MAX_PAGES) { st.next = next; st.why = 'total page cap ' + NT_MAX_PAGES; return st; }
+    if (thisRun >= NT_MAX_PAGES_PER_RUN) { st.next = next; st.why = 'per-run page cap ' + NT_MAX_PAGES_PER_RUN; return st; }
+    if (new Date().getTime() > deadline) { st.next = next; st.why = 'time budget'; return st; }
     var j = ntGet_(next);
     var emailById = {};
     (j.included || []).forEach(function (p) {
@@ -404,22 +662,28 @@ function ntEvents_(metricId, lo, hi, deadline) {
     (j.data || []).forEach(function (e) {
       var props = e.attributes.event_properties || {};
       var flow = props['$flow'] || props['$flow_id'] || '';
-      if (!flow) return;                                  // campaign send, not a flow — out of scope
+      if (!flow || !tracked[flow]) return;      // campaign send, or a flow no row depends on
       var pid = e.relationships && e.relationships.profile && e.relationships.profile.data &&
                 e.relationships.profile.data.id;
       var em = emailById[pid] || '';
       if (!em) return;
-      if (!out.byFlow[flow]) out.byFlow[flow] = {};
-      var prev = out.byFlow[flow][em];
-      var ts = e.attributes.datetime;
-      if (!prev || ts < prev) out.byFlow[flow][em] = ts;  // first send wins
-      out.n++;
+      if (!st.sets[flow]) st.sets[flow] = {};
+      var sec = Math.floor(new Date(e.attributes.datetime).getTime() / 1000);
+      var prevSec = st.sets[flow][em];
+      if (!prevSec || sec < prevSec) st.sets[flow][em] = sec;   // first send wins
+      st.events++;
     });
     next = (j.links && j.links.next) || null;
-    pages++;
+    st.pages++;
+    thisRun++;
   }
-  return out;
+  st.next = '';
+  st.complete = true;
+  return st;
 }
+
+/** epoch seconds (how the checkpoint stores a send) -> the ISO string ntDayNight_ parses. */
+function ntIsoFromSec_(sec) { return new Date(Number(sec) * 1000).toISOString(); }
 
 /**
  * 🔴 HOW BIG IS THE SWEEP? Ask BEFORE paging, not after the budget is gone (live burn 2026-08-18).
@@ -456,6 +720,37 @@ function ntMetricVolume_(metricId, lo, hi) {
     (d.measurements.count || []).forEach(function (v) { tot += Number(v) || 0; });
   });
   return tot;
+}
+
+/**
+ * 🔴 THE VOLUME PROBES WERE **NOT** THE COST — THAT WAS AN INFERENCE, AND IT WAS WRONG (measured
+ * 2026-08-19, live). The three `/metric-aggregates/` POSTs were assumed to be ~129s of the 242.7s
+ * run because they are the only thing logged between the window line and the sweep. Timed directly
+ * they are **0.5s, 0.5s and 0.6s — 1.6s for all three**. The budget went where the pages are:
+ * `Received Text Message` is 79 pages at **4.59s/page = 363s**, which exceeds the entire 360s Apps
+ * Script ceiling on its own. Caching the probe is still worth doing — it is free and it makes the
+ * feasibility decision once per cohort instead of once per run — but it saves ~1.6s, not ~129s, and
+ * anyone optimising this file should attack pages, not probes. (Same class as the stage-timer burn:
+ * a cost attributed by elimination is not a measurement.) Now:
+ *   - ONE probe per (cohort, metric), CACHED in the sweep state. The cohort's window is fixed and
+ *     historical and the signature already discards the cache when the window, the pins, or the
+ *     metric names move, so the cached number is never answering a stale question. There is no
+ *     separate TTL because there is no separate way for it to go stale.
+ *   - SKIPPED ENTIRELY once that metric's sweep is under way or finished. The volume's only job is
+ *     the feasibility decision (pages needed vs NT_MAX_PAGES); once pages are banked the decision
+ *     has already been taken and re-taking it can only cost time or, worse, flip mid-sweep.
+ *   - A probe that FAILS caches nothing (null = unknown, not zero) and the sweep proceeds blind,
+ *     exactly as before — bounded now by the caps rather than by the unknown.
+ */
+function ntVolumeCached_(key, metricId, lo, hi, state) {
+  if (state.vol && state.vol[key] && typeof state.vol[key].events === 'number') {
+    ntLog_('  volume "' + NT_METRIC[key] + '": ' + state.vol[key].events +
+           ' events (CACHED for this cohort, probed ' + state.vol[key].at + ' — no POST this run)');
+    return state.vol[key].events;
+  }
+  var v = ntMetricVolume_(metricId, lo, hi);
+  if (v !== null) state.vol[key] = { events: v, at: new Date().toISOString() };
+  return v;
 }
 
 // ------------------------------------------------------------------ cohort (Shopify)
@@ -575,6 +870,44 @@ function ntDayNight_(iso, zone) {
 }
 
 // ------------------------------------------------------------------ sheet plumbing
+
+/**
+ * 🔴 WHY THE PERCENT ROWS WERE UNREACHABLE, AND WHO OWNS `Total Shipments` (found 2026-08-19).
+ * The 08-19 run logged "⚠️ Total Shipments is blank on this column — no percents written". The cause
+ * is NOT a bug in this file and NOT a stale job:
+ *   - `Notifications!Total Shipments` and `Notifications!Arrived` are HAND-TYPED CONSTANTS. Read
+ *     back with valueRenderOption=FORMULA they are literal numbers, not formulas — nothing links
+ *     them to anything.
+ *   - NOTHING IN THE SCRIPT PROJECT WRITES THEM. `paValues_` (PivotAnalytics.gs) emits
+ *     `Total Shipments`, but only onto `TnT2` and `Lost in Transit` (`PA_TABS`); the string
+ *     `Total Shipments` does not occur in Code.gs or Exceptions.gs at all, and the header of this
+ *     file has always declared the row "NOT OURS … read-only here".
+ *   - So the row is a MANUAL MIRROR that someone stopped updating. Measured 2026-08-19:
+ *       Notifications: 07-13 2025 | 07-20 2075 | 07-27 2227 | 08-03 2305 | 08-10 (blank) | 08-17 (blank)
+ *       TnT2:          07-13 2025 | 07-20 2075 | 07-27 2227 | 08-03 2305 | 08-10 2316   | 08-17 2324
+ *     Identical on all four overlapping columns, and TnT2 is script-filled for the two the
+ *     Notifications tab is missing. The mirror simply stopped after 08-03.
+ * FIX, deliberately the SMALLER one: when this tab's own cell is blank we READ the denominator from
+ * `TnT2` for the SAME cohort column and log where it came from. We do NOT write the row — D24 and
+ * this file's header both declare it somebody else's, and quietly taking ownership of a row a human
+ * maintains is how two writers end up disagreeing. Filling it for real is a one-line change plus
+ * Kurt's word on who owns it.
+ */
+var NT_DENOM_MIRROR_TAB = 'TnT2';
+
+function ntDenomFromMirror_(shipWeek) {
+  var sh = SpreadsheetApp.openById(EXC_HOST_SHEET_ID).getSheetByName(NT_DENOM_MIRROR_TAB);
+  if (!sh) return 0;
+  var lastCol = Math.max(1, sh.getLastColumn()), lastRow = Math.max(1, sh.getLastRow());
+  var headers = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(function (h) { return String(h).trim(); });
+  var col = headers.indexOf(shipWeek) + 1;
+  if (col < 1) return 0;
+  var labels = sh.getRange(1, 1, lastRow, 1).getValues()
+                 .map(function (r) { return String(r[0]).replace(/\s+/g, ' ').trim(); });
+  var row = labels.indexOf('Total Shipments') + 1;
+  if (row < 1) return 0;
+  return Number(String(sh.getRange(row, col).getValue()).replace(/[^0-9.]/g, '')) || 0;
+}
 
 function ntCohortAgeDays_(shipWeek) {
   var d = shipWeek.replace('_SHIP_', '');
@@ -742,8 +1075,22 @@ function ntMeasure_(shipWeek, sheetTotal, deadline) {
 
   // 🔴 denominator sanity: the sheet's Total Shipments is the published number. If our cohort
   // pull disagrees materially, REPORT — do not write a percent against a denominator we distrust.
-  var denomOk = true;
-  if (!sheetTotal) { denomOk = false; notes.push('Total Shipments is blank on this column — no percents written'); }
+  var denomOk = true, denomSrc = NT_TAB + '!Total Shipments';
+  if (!sheetTotal) {
+    // The row is a hand-maintained mirror that stopped after 08-03 — see ntDenomFromMirror_.
+    sheetTotal = ntDenomFromMirror_(shipWeek);
+    if (sheetTotal) {
+      denomSrc = NT_DENOM_MIRROR_TAB + '!Total Shipments (this tab\'s own cell is blank — the row ' +
+                 'is hand-maintained and was last filled for _SHIP_2026-08-03)';
+      ntLog_('  denominator ' + sheetTotal + ' read from ' + denomSrc);
+      notes.push('Total Shipments is BLANK on this column of ' + NT_TAB + ' — that row is a manual ' +
+                 'mirror nobody has updated since _SHIP_2026-08-03, and no script writes it. The ' +
+                 'percent denominator was read from ' + NT_DENOM_MIRROR_TAB + ' instead (' +
+                 sheetTotal + '), which is script-filled. The row itself is still empty and is not ' +
+                 'this file\'s to fill.');
+    }
+  }
+  if (!sheetTotal) { denomOk = false; notes.push('Total Shipments is blank on this column AND on ' + NT_DENOM_MIRROR_TAB + ' — no percents written'); }
   else {
     var drift = Math.abs(cohort.length - sheetTotal) / sheetTotal;
     if (drift > NT_DENOM_TOLERANCE) {
@@ -766,38 +1113,140 @@ function ntMeasure_(shipWeek, sheetTotal, deadline) {
              .toISOString().replace(/\.\d+Z$/, 'Z');
   ntLog_('  klaviyo window ' + lo + ' .. ' + hi);
 
-  // pull each metric ONCE for the whole window; split by flow afterwards.
-  var ev = {};
-  ['email', 'sms', 'smsEngaged'].forEach(function (k) {
-    var id = metrics[NT_METRIC[k]];
-    if (!id) { ev[k] = null; return; }
-    // volume precheck — decline an impossible sweep instead of spending the budget discovering it.
-    var vol = ntMetricVolume_(id, lo, hi);
-    if (vol !== null) {
-      var pagesNeeded = Math.ceil(vol / NT_PAGE);
-      ntLog_('  volume "' + NT_METRIC[k] + '" in window: ' + vol + ' events -> ~' + pagesNeeded +
-             ' pages (cap ' + NT_MAX_PAGES + ')');
-      if (pagesNeeded > NT_MAX_PAGES) {
-        notes.push('SWEEP DECLINED for "' + NT_METRIC[k] + '": ' + vol + ' events in the window ' +
-                   'need ~' + pagesNeeded + ' pages, over the ' + NT_MAX_PAGES + '-page cap. ' +
-                   'Klaviyo /events has NO flow filter, so there is no cheaper cut — every row fed ' +
-                   'by this metric is left BLANK (blank != zero). Raising NT_MAX_PAGES does not fix ' +
-                   'it; the 360s Apps Script ceiling does not fit the sweep.');
-        ev[k] = null;
-        return;
-      }
+  // ---- resumable sweep: load the checkpoint, validate it, continue or restart ----------------
+  // 🔴 The tracked flow set is the two PINNED flows plus the informational one. Nothing else is
+  // retained (see ntSweepMetric_), and the same list is what the state signature is taken over.
+  var tracked = {};
+  ['shipped', 'delivered'].forEach(function (s) { if (flows[s]) tracked[flows[s]] = s; });
+  tracked[NT_FLOW_INFO.id] = 'info';
+  var sig = ntSig_(shipWeek, lo, hi, Object.keys(tracked));
+
+  var state = ntLoadState_(shipWeek);
+  if (!ntSigEq_(state.sig, sig)) {
+    if (state.sig) {
+      ntLog_('  ⚠️ sweep state DISCARDED — ' + ntSigWhy_(state.sig, sig) + '. A set accumulated ' +
+             'under different pins/window is not a partial answer to this question, it is a wrong ' +
+             'one. Restarting from page 0.');
     }
-    var r = ntEvents_(id, lo, hi, deadline);
-    if (!r.complete) {
-      notes.push('INCOMPLETE fetch of "' + NT_METRIC[k] + '" (' + r.why + ') — nothing derived from it');
-      ev[k] = null;
-    } else {
-      ev[k] = r;
-      ntLog_('  ' + NT_METRIC[k] + ': ' + r.n + ' events, ' + Object.keys(r.byFlow).length + ' flows');
+    state = { sig: sig, vol: {}, metrics: {} };
+  } else {
+    state.sig = sig;
+  }
+
+  // 🔴 A COMPLETE result is reused only for the REST OF THE SAME ET CALENDAR DAY. This tab is a
+  // daily walk-forward artifact, so the day is its natural grain: a duration TTL would let a 23:50
+  // sweep be reused at 01:10 and freeze a day's movement into the next column refresh.
+  var today = ntToday_();
+  Object.keys(state.metrics).forEach(function (k) {
+    var m = state.metrics[k];
+    if (m && m.complete && m.day !== today) {
+      ntLog_('  sweep of "' + NT_METRIC[k] + '" completed on ' + m.day + ', not today (' + today +
+             ') — re-measuring from page 0 so the column moves forward');
+      delete state.metrics[k];
     }
   });
 
-  var sendTimes = [];       // {iso, email} for every SEND we counted (email + sms, all sections)
+  // 🔴 ORDER BY COST, CHEAPEST FIRST. With a hard budget, sweeping the 830-page metric first would
+  // starve two 40/79-page metrics that fit — the whole point of resuming is that the runs that can
+  // finish, do. Unknown volume sorts last: it might be the expensive one.
+  var order = ['email', 'sms', 'smsEngaged'].filter(function (k) { return !!metrics[NT_METRIC[k]]; });
+  var costOf = {};
+  order.forEach(function (k) {
+    var m = state.metrics[k];
+    // 🔴 the probe is SKIPPED once a sweep is under way or done — the decision it feeds is taken.
+    if (m && (m.pages > 0 || m.complete || m.declined)) {
+      costOf[k] = m.total || (m.pages || 0);
+      return;
+    }
+    var vol = ntVolumeCached_(k, metrics[NT_METRIC[k]], lo, hi, state);
+    costOf[k] = (vol === null) ? 1e9 : Math.ceil(vol / NT_PAGE);
+    if (vol !== null) {
+      ntLog_('  volume "' + NT_METRIC[k] + '" in window: ' + vol + ' events -> ~' + costOf[k] +
+             ' pages (cap ' + NT_MAX_PAGES + ' total, ' + NT_MAX_PAGES_PER_RUN + '/run)');
+    }
+  });
+  order.sort(function (a, b) { return costOf[a] - costOf[b]; });
+  ntLog_('  sweep order (cheapest first): ' + order.map(function (k) {
+    return NT_METRIC[k] + ' ~' + (costOf[k] >= 1e9 ? '?' : costOf[k]) + 'p';
+  }).join(' -> '));
+
+  // ---- work the metrics in order, banking progress; TIME is the first bound ------------------
+  var ev = {}, resumed = [];
+  var sweepDeadline = deadline - NT_SAVE_RESERVE_MS;
+  order.forEach(function (k) {
+    var id = metrics[NT_METRIC[k]];
+    var m = state.metrics[k] || null;
+
+    if (m && m.complete) {
+      ev[k] = { byFlow: m.sets, n: m.events };
+      ntLog_('  "' + NT_METRIC[k] + '": COMPLETE from state (' + m.pages + ' pages, ' +
+             ntSetSize_(m.sets) + ' profiles, swept ' + m.updatedAt + ') — no fetch this run');
+      return;
+    }
+
+    // feasibility decline — unchanged semantics, now recorded so it is decided once per cohort.
+    if (!m && costOf[k] < 1e9 && costOf[k] > NT_MAX_PAGES) {
+      state.metrics[k] = { declined: true, complete: false, total: costOf[k], pages: 0, events: 0,
+                           sets: {}, day: today, why: 'over the ' + NT_MAX_PAGES + '-page cap' };
+      notes.push('SWEEP DECLINED for "' + NT_METRIC[k] + '": ~' + costOf[k] + ' pages, over the ' +
+                 NT_MAX_PAGES + '-page total cap. Klaviyo /events has NO flow filter, so there is ' +
+                 'no cheaper cut — every row fed by this metric is left BLANK (blank != zero). ' +
+                 'Resuming does not fix this either: it would take ~' +
+                 Math.ceil(costOf[k] / NT_MAX_PAGES_PER_RUN) + ' runs. Raising NT_MAX_PAGES is a ' +
+                 'decision about how many runs a cohort costs — Kurt\'s, not a tuning knob.');
+      ev[k] = null;
+      return;
+    }
+    // 🔴 RE-STATE THE DECLINE EVERY RUN. Recording it in state so the probe can be skipped must not
+    // also silence it: a blank row whose reason was logged once, days ago, reads as an unexplained
+    // gap — which is how a deliberate decline gets mistaken for a broken job.
+    if (m && m.declined) {
+      notes.push('SWEEP DECLINED for "' + NT_METRIC[k] + '" (decided for this cohort on ' +
+                 m.day + '): ~' + m.total + ' pages, over the ' + NT_MAX_PAGES + '-page total cap. ' +
+                 'Rows fed by this metric stay BLANK (blank != zero).');
+      ev[k] = null;
+      return;
+    }
+
+    if (new Date().getTime() > sweepDeadline) {
+      notes.push('NOT STARTED this run: "' + NT_METRIC[k] + '" — the budget went to the metrics ' +
+                 'ahead of it. Its rows stay BLANK; run again to continue.');
+      ev[k] = null;
+      return;
+    }
+
+    var before = (m && m.pages) || 0;
+    var r = ntSweepMetric_(id, lo, hi, tracked, m, sweepDeadline);
+    r.total = (m && m.total) || costOf[k];
+    r.day = today;
+    state.metrics[k] = r;
+
+    var tot = (r.total >= 1e9) ? 0 : r.total;
+    var pctDone = tot ? Math.min(100, Math.round((r.pages / tot) * 100)) : 0;
+    if (r.complete) {
+      ev[k] = { byFlow: r.sets, n: r.events };
+      ntLog_('  "' + NT_METRIC[k] + '": COMPLETE — ' + r.pages + ' pages (' + (r.pages - before) +
+             ' this run), ' + r.events + ' tracked-flow events, ' + ntSetSize_(r.sets) + ' profiles');
+    } else {
+      ev[k] = null;
+      resumed.push(k);
+      notes.push('IN PROGRESS "' + NT_METRIC[k] + '": pages ' + r.pages + '/' +
+                 (tot ? tot : '?') + (tot ? ', ' + pctDone + '%' : '') + ' — stopped on ' + r.why +
+                 ', checkpointed, resuming next run. Its rows stay BLANK (blank != zero); a ' +
+                 'partial count would look finished.');
+      ntLog_('  "' + NT_METRIC[k] + '": pages ' + r.pages + '/' + (tot ? tot : '?') +
+             (tot ? ', ' + pctDone + '%' : '') + ' — resuming next run (' + r.why + ')');
+    }
+  });
+
+  // 🔴 CHECKPOINT BEFORE ANY SHEET WRITE and before any assert can throw. The whole point is that a
+  // run which dies later still banks its pages; saving at the end of ntMeasure_ would lose them to
+  // the very partition/overcount asserts that exist to stop a bad write.
+  ntSaveState_(shipWeek, state);
+  ntLog_('  checkpoint saved to ' + NT_STATE_TAB + ' (' + Object.keys(state.metrics).length +
+         ' metric record(s))');
+
+  var sendTimes = [];       // {sec, email} for every SEND we counted (email + sms, all sections)
 
   // ---- Order Placed: SHOPIFY, per ORDER (Kurt 2026-08-18). Not Klaviyo, not a flow. ----
   // 🔴 GRAIN WARNING, stated every run: this row counts ORDERS; the two Klaviyo rows below count
@@ -830,7 +1279,7 @@ function ntMeasure_(shipWeek, sheetTotal, deadline) {
       Object.keys(hits).forEach(function (em) {
         if (!emails[em]) return;                            // not in this cohort
         n++;
-        sendTimes.push({ iso: hits[em], email: em });
+        sendTimes.push({ sec: hits[em], email: em });       // epoch seconds — the checkpoint's grain
       });
       var label = (ch === 'email') ? 'Email Sent' : 'SMS Sent';
       out[sec + '||' + (ch === 'email' ? 'email' : 'sms') + '||' + label] = n;
@@ -860,7 +1309,7 @@ function ntMeasure_(shipWeek, sheetTotal, deadline) {
   if (sendTimes.length) {
     var day = 0, night = 0, miss = 0;
     sendTimes.forEach(function (s) {
-      var b = ntDayNight_(s.iso, zoneByEmail[s.email]);
+      var b = ntDayNight_(ntIsoFromSec_(s.sec), zoneByEmail[s.email]);
       if (b === 'day') day++; else if (b === 'night') night++; else miss++;
     });
     if (day + night + miss !== sendTimes.length) {
@@ -1020,6 +1469,61 @@ function ntCheckKlaviyo() {
   return { metrics: Object.keys(metrics).length, flows: flows.length };
 }
 
+/**
+ * How far each metric's sweep has got, and why it is where it is. NO writes, no fetches — reads the
+ * checkpoint tab only, so it is safe to run at any point including mid-sweep.
+ */
+function ntCheckSweepState(shipWeek) {
+  if (typeof shipWeek !== 'string' || !/^_SHIP_\d{4}-\d{2}-\d{2}$/.test(shipWeek)) shipWeek = '';
+  var cur = shipWeek || ntCurrentShipWeek_();
+  var st = ntLoadState_(cur);
+  ntLog_('=== sweep state for ' + cur + ' (tab ' + NT_STATE_TAB + ') ===');
+  if (!st.sig) { ntLog_('  no stored state — the next run starts from page 0'); return st; }
+  ntLog_('  signature: ver ' + st.sig.ver + ' | window ' + st.sig.lo + ' .. ' + st.sig.hi +
+         ' | flows ' + st.sig.flows);
+  Object.keys(st.vol).forEach(function (k) {
+    ntLog_('  volume cache "' + NT_METRIC[k] + '": ' + st.vol[k].events + ' events (probed ' +
+           st.vol[k].at + ')');
+  });
+  ['email', 'sms', 'smsEngaged'].forEach(function (k) {
+    var m = st.metrics[k];
+    if (!m) { ntLog_('  "' + NT_METRIC[k] + '": nothing stored'); return; }
+    var tot = m.total || 0;
+    ntLog_('  "' + NT_METRIC[k] + '": ' + (m.complete ? 'COMPLETE' : m.declined ? 'DECLINED' : 'IN PROGRESS') +
+           '  pages ' + m.pages + '/' + (tot || '?') +
+           (tot ? ' (' + Math.min(100, Math.round((m.pages / tot) * 100)) + '%)' : '') +
+           '  profiles ' + ntSetSize_(m.sets || {}) + '  chunks ' + m.chunks +
+           '  day ' + m.day + '  ' + (m.why || '') + (m.next ? '  [cursor stored]' : ''));
+  });
+  return st;
+}
+
+/**
+ * Throw the checkpoint away for one cohort so the next run re-sweeps from page 0. The ordinary way
+ * to invalidate is to change something the SIGNATURE covers — this is the manual escape hatch for
+ * the case where the stored pages are suspect but nothing in the signature moved. Writes only to
+ * the hidden state tab; the Notifications tab is never touched.
+ */
+function ntResetSweepState(shipWeek) {
+  if (typeof shipWeek !== 'string' || !/^_SHIP_\d{4}-\d{2}-\d{2}$/.test(shipWeek)) {
+    throw new Error('NT_ASSERT_RESET_ARG: pass an explicit _SHIP_YYYY-MM-DD — this discards ' +
+                    'measured pages and must never be aimed by accident');
+  }
+  var sh = ntStateSheet_();
+  var last = sh.getLastRow();
+  if (last < 2) { ntLog_('  nothing stored'); return 0; }
+  var rows = sh.getRange(2, 1, last - 1, NT_STATE_COLS.length).getValues();
+  var keep = rows.filter(function (r) { return String(r[0]) && String(r[0]) !== shipWeek; });
+  var dropped = rows.filter(function (r) { return String(r[0]) === shipWeek; }).length;
+  var outRows = [NT_STATE_COLS.slice()].concat(keep);
+  sh.getRange(1, 1, outRows.length, NT_STATE_COLS.length).setValues(outRows);
+  if (sh.getLastRow() > outRows.length) {
+    sh.getRange(outRows.length + 1, 1, sh.getLastRow() - outRows.length, NT_STATE_COLS.length).clearContent();
+  }
+  ntLog_('  dropped ' + dropped + ' state row(s) for ' + shipWeek + ' — the next run restarts it');
+  return dropped;
+}
+
 /** Prints the row map so the label→row binding can be eyeballed before any write. No writes. */
 function ntCheckRows() {
   var sheet = SpreadsheetApp.openById(EXC_HOST_SHEET_ID).getSheetByName(NT_TAB);
@@ -1039,6 +1543,24 @@ function ntCheckRows() {
  * event sweep is thousands of paged reads — the existing run is ~60s of the 360s ceiling and this
  * job's own budget is 240s. Sharing the invocation would put both over one ceiling and the
  * routing/TnT2 refresh is the one that must never be the casualty.
+ *
+ * 🔴 ONE RUN NO LONGER FINISHES A COHORT, AND IT IS NOT SUPPOSED TO (measured 2026-08-19, live,
+ * read-only, against `_SHIP_2026-08-17`'s real window):
+ *     Clicked Text Message    40 pages @ 2.75s/page = 110s   -> fits in ONE run
+ *     Received Text Message   79 pages @ 4.59s/page = 363s   -> EXCEEDS the whole 360s ceiling alone
+ *     Received Email         830 pages                       -> declined, unchanged
+ * That is why the 08-19 run wrote nothing: the cheaper SMS metric was never the problem, the
+ * expensive one cannot be done in one invocation at any budget. With the sweep ordered cheapest-first
+ * and checkpointed, run 1 finishes `Clicked Text Message` and both `SMS Engaged` rows land; the
+ * `SMS Sent` rows and `Time of Sending` land when `Received Text Message` finishes a few runs later.
+ * The daily trigger gets there on its own; Kurt can also just press ntRefreshCurrentColumn again and
+ * each press picks up exactly where the last stopped. `ntCheckSweepState()` says how far it has got.
+ *
+ * ⚠️ UNVERIFIED: the per-run fixed overhead (the Shopify cohort pull — 2,324 orders at 25/page ≈ 93
+ * GraphQL calls — plus /metrics/ and /flows/) has NOT been measured; the Shopify credentials live in
+ * Script Properties and are not reachable from a local probe. It comes off the same 240s budget, so
+ * the number of runs `Received Text Message` needs is 3 at 60s of overhead and 5 at 120s. The first
+ * live run settles it — read `total …s of the 360s ceiling` and the `pages n/79` line together.
  */
 function ntListTriggers() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
