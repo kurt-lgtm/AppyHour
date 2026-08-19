@@ -154,7 +154,16 @@ var EXC_PP_BACKOFF_MS = 5000;             // one retry for a batch that came bac
 // loop that looks like activity. Stop fetching at the budget, then always save.
 var EXC_MAX_POLL_PER_RUN = 1200;          // hard ceiling; the time budget normally binds first
 var EXC_TIME_BUDGET_MS = 240000;          // 4 min of fetching, leaving 2 min to write state
-var EXC_PP_FAIL_RATIO = 0.2;              // share of NON-throttle failures that means CRITICAL
+var EXC_PP_FAIL_RATIO = 0.2;              // share of TRANSPORT failures that means CRITICAL
+// 🔴 QUARANTINE AFTER N CONSECUTIVE DEAD ANSWERS (directive P9). N = 3, and the unit is RUNS THAT
+// REACHED IT, which under the once-per-day tier is three separate DAYS of ParcelPanel insisting it
+// has no such order. Three, not one: a single 404 could be a sync lag on a freshly-created order,
+// and closing a real box on one bad answer is the wk0803 failure (an undelivered box we stopped
+// checking). Three, not ten: at ~1 call/day/box, ten is a fortnight of a dead record sitting in the
+// queue. Any real answer resets the counter to 0, so only a PERMANENT condition ever reaches 3.
+var EXC_PP_DEAD_QUARANTINE = 3;
+// A dead record is stamped `last_seen` like any other answer, so it leaves the head of the
+// longest-unpolled queue immediately and costs at most one call per day while it counts down.
 // 🔴 NEVER_PICKED_UP FLOOR (Kurt 2026-08-10). Was 1 day, which fired at ~32h while carrier scans
 // were still landing: of 598 not-picked-up rows on the tab, 299 had a movement scan arrive AFTER
 // the row was written (one at +1.5h, one at +16h) — pure feed lag, invisible to any feed at sweep
@@ -446,13 +455,13 @@ function excResolveDelivered_(orders, st) {
   EXC_SHOPIFY_MOVED_ = {};
   EXC_SHOPIFY_DELAYED_ = {};
   EXC_SHOPIFY_ATTEMPTED_ = {};
-  var alive = [], closed = 0;
+  var alive = [], closed = 0, cancelled = 0, cancelledNums = [];
   for (var i = 0; i < orders.length; i += 100) {
     var batch = orders.slice(i, i + 100);
-    // 🔴 ONE Shopify call serves BOTH jobs: closing delivered orders AND supplying the union's
-    // movement signal. The union therefore costs ZERO extra ParcelPanel budget — it rides on a
-    // request that was already being made.
-    var q = 'query($q:String!){orders(first:100, query:$q){edges{node{ name ' +
+    // 🔴 ONE Shopify call serves THREE jobs: closing delivered orders, closing CANCELLED orders
+    // (directive P9), and supplying the union's movement signal. All three therefore cost ZERO
+    // extra ParcelPanel budget — they ride on a request that was already being made.
+    var q = 'query($q:String!){orders(first:100, query:$q){edges{node{ name cancelledAt ' +
             'fulfillments(first:10){ displayStatus events(first:50){edges{node{status}}} } }}}}';
     var qs = batch.map(function (n) { return 'name:' + n; }).join(' OR ');
     var d;
@@ -463,9 +472,18 @@ function excResolveDelivered_(orders, st) {
       alive = alive.concat(batch);
       continue;
     }
-    var delivered = {};
+    var delivered = {}, isCancelled = {};
     d.orders.edges.forEach(function (e) {
       var num = String(e.node.name).replace(/^#/, '');
+      // 🔴 A CANCELLED ORDER IS NOT A BOX (directive P9). `excSeedCohort_` filters
+      // `-status:cancelled` at SEED time only, so an order cancelled AFTER it was seeded stayed
+      // `open` forever with nothing to re-check it. ParcelPanel never created a shipment for it and
+      // answers 404 "Order (order_number = X) not found" every single time — a permanent failure
+      // that, because a failed order is never stamped `last_seen`, sat at the head of the
+      // longest-unpolled queue and was re-selected every run. On 2026-08-19 exactly nine such
+      // records (171813, 173555, 173559, 173560, 173562, 173596, 173632, 174409, 174413) produced
+      // the "9/19 hard failures" that suppressed the whole sweep hourly. Close them here, for free.
+      if (e.node.cancelledAt) { isCancelled[num] = 1; }
       (e.node.fulfillments || []).forEach(function (f) {
         if (f.displayStatus === 'DELIVERED') { delivered[num] = 1; }
         if (f.displayStatus === 'DELAYED') { EXC_SHOPIFY_DELAYED_[num] = 1; }
@@ -478,12 +496,20 @@ function excResolveDelivered_(orders, st) {
       });
     });
     batch.forEach(function (n) {
+      if (isCancelled[n]) {
+        if (st[n]) st[n].open = false;
+        cancelled += 1;
+        if (cancelledNums.length < 40) cancelledNums.push(n);
+        return;                       // never poll it, never count it as an exception
+      }
       if (delivered[n]) { if (st[n]) st[n].open = false; closed += 1; }
       else alive.push(n);
     });
   }
   Logger.log('  pre-PP filter: ' + orders.length + ' open -> ' + alive.length +
-             ' pollable (' + closed + ' already DELIVERED per Shopify, closed for good)');
+             ' pollable (' + closed + ' already DELIVERED per Shopify, closed for good; ' +
+             cancelled + ' CANCELLED in Shopify, closed for good' +
+             (cancelled ? ': ' + cancelledNums.join(', ') : '') + ')');
   return alive;
 }
 
@@ -718,20 +744,32 @@ function excDaysSince_(iso) {
 // ---------------------------------------------------------------- ParcelPanel
 
 /**
- * Fetch raw PP shipments. Returns {ships, failed, throttled, attempted, seen}.
+ * Fetch raw PP shipments. Returns {ships, failed, throttled, attempted, seen, dead}.
  *
  * `seen` is the set of order numbers PP actually answered for — callers must only stamp
  * last_seen on those. Stamping an order we never reached pushes it to the BACK of the
  * oldest-first queue, so the same orders starve run after run while the log looks healthy.
  * Throttled (429) is counted apart from failed: throttling is expected backpressure and is
  * retried next run, whereas a real failure rate means something is broken and must be loud.
+ *
+ * 🔴 THREE OUTCOMES, NOT TWO (directive P9). `failed` used to mean "any non-200", which fused two
+ * opposite conditions under one number:
+ *   TRANSPORT  — 5xx, a network-class throw, a 200 whose body will not parse. The REQUEST broke.
+ *                Retrying is the right move and a high rate means PP is down: suppress the run.
+ *   DEAD RECORD — 404/410 with a body like `{"errors":"Order (order_number = X) not found"}`.
+ *                Nothing broke. PP answered, definitively, that it has no such order. Retrying is
+ *                guaranteed to produce the identical answer until the end of time.
+ * Fusing them let nine dead records (all cancelled orders) trip a 20% TRANSPORT alarm and suppress
+ * ten perfectly good answers, every hour, forever. `dead` is per-order because the caller has to
+ * count consecutive failures against the order to quarantine it — a bare tally cannot.
  */
 function excPpFetch_(orderNums, deadline) {
   // 🔴 `charged` is the ONLY honest unit of spend (directive P1): a request ParcelPanel actually
   // served, whatever it answered. A 429/503 is refused backpressure, and a request never dispatched
   // (time budget, 6-minute kill) never existed — neither may be billed to the weekly ledger, which
   // is precisely how week 34 charged 2,000 for 88 observed polls.
-  var out = { ships: {}, failed: 0, throttled: 0, attempted: 0, charged: 0, seen: {}, budgetHit: false };
+  var out = { ships: {}, failed: 0, throttled: 0, attempted: 0, charged: 0, seen: {},
+              dead: {}, budgetHit: false };
   var key = PropertiesService.getScriptProperties().getProperty('PARCELPANEL_API_KEY');
   if (!key || !orderNums.length) return out;
   var uniq = orderNums.filter(function (n, i) { return n && orderNums.indexOf(n) === i; });
@@ -751,6 +789,9 @@ function excPpFetch_(orderNums, deadline) {
       var on = slice[k], code = rp.getResponseCode();
       if (code === 429 || code === 503) { retry.push(on); return; }   // refused — not billable
       out.charged++;                                                  // served, whatever it said
+      // 404/410 = PP answered "I have no such order". A verdict about the RECORD, not a transport
+      // fault (directive P9). Kept per-order so the caller can quarantine on repeats.
+      if (code === 404 || code === 410) { out.dead[on] = code; return; }
       if (code !== 200) { out.failed++; return; }
       try {
         var o = JSON.parse(rp.getContentText());
@@ -846,6 +887,10 @@ function excLoadState_() {
       alerted: String(r[6] || '').split(',').filter(String),
       last_seen: r[7],
       logged: String(r[8] || '').split(',').filter(String),
+      // 🔴 CONSECUTIVE ParcelPanel dead-record answers (directive P9). Reset to 0 by any real
+      // answer. It has to PERSIST — a counter held only in memory can never reach the quarantine
+      // threshold, because the run that would have incremented it is the run that throws.
+      pp_dead: Number(r[9] || 0) || 0,
     };
   });
   return st;
@@ -856,7 +901,7 @@ function excLoadState_() {
 // save — and because clear() runs first, each throw left _exc_state EMPTY. Derive the width from
 // the header row so adding a column can never desync it again.
 var EXC_STATE_COLS = ['order', 'cohort', 'customer', 'state', 'carrier', 'open',
-                      'alerted_classes', 'last_seen', 'logged_classes'];
+                      'alerted_classes', 'last_seen', 'logged_classes', 'pp_dead_runs'];
 
 function excSaveState_(st) {
   var ss = excSS_();
@@ -865,7 +910,8 @@ function excSaveState_(st) {
   Object.keys(st).forEach(function (k) {
     var r = st[k];
     rows.push([r.order, r.cohort, r.customer, r.state, r.carrier, r.open ? '1' : '0',
-               r.alerted.join(','), r.last_seen || '', (r.logged || []).join(',')]);
+               r.alerted.join(','), r.last_seen || '', (r.logged || []).join(','),
+               Number(r.pp_dead || 0) || 0]);
   });
   // write FIRST, then trim: clearing up front means any failure here destroys the state outright.
   sh.getRange(1, 1, rows.length, EXC_STATE_COLS.length).setValues(rows);
@@ -980,6 +1026,9 @@ var EXC_DISPLAY_ = {
   // look new and re-spam the channel.
   ATTEMPT_FAILED: 'delivery attempt failed',
   DELAYED: 'delayed / stuck in transit',
+  // 🔴 Directive P9. Deliberately NOT phrased as a carrier condition — it is a statement about our
+  // own monitoring: we gave up. It reads as an action item because it is one.
+  PP_NO_RECORD: 'NOT BEING CHECKED — ParcelPanel has no record of this order',
 };
 
 /**
@@ -1217,16 +1266,82 @@ function hourlyExceptionSweep() {
     var refunded = excBudgetSettle_(allowed, pp.charged, 'exc');
     if (!excPingDayET_()) excThinDayAdd_(pp.charged);
 
+    var stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
+
+    // 🔴 DEAD-RECORD BOOKKEEPING, BEFORE THE GUARD (directive P9). This has to run first for two
+    // reasons: the guard's denominator depends on it, and the counters it writes are the only thing
+    // that can ever end a permanent failure — a run that throws before incrementing them can never
+    // reach the quarantine threshold, which is exactly how nine records survived every sweep.
+    var deadNow = Object.keys(pp.dead);
+    var deadRegression = [], deadUnknown = [], quarantined = [];
+    deadNow.forEach(function (on) {
+      var rec = st[on];
+      if (!rec) return;
+      // 🔴 SPLIT ON PRIOR EVIDENCE, NOT ON CONVENIENCE. An order ParcelPanel ANSWERED before and
+      // now denies is a REGRESSION — something broke, and it belongs in the transport ratio. An
+      // order PP has never once acknowledged is an unknown record and is excluded. The exclusion is
+      // therefore defined by an independent fact (did we ever get an answer?), never by "it failed
+      // and excluding it makes the number look better".
+      if (String(rec.last_seen || '').trim()) deadRegression.push(on);
+      else deadUnknown.push(on);
+      rec.pp_dead = (Number(rec.pp_dead) || 0) + 1;
+      // Stamp it. PP gave a definitive answer; it just answered "no such order". Leaving it
+      // unstamped is what pinned it to the head of the longest-unpolled queue forever.
+      rec.last_seen = stamp;
+      if (rec.pp_dead >= EXC_PP_DEAD_QUARANTINE) {
+        rec.open = false;                              // stop polling it
+        quarantined.push(on);
+        if (!rec.logged) rec.logged = [];
+        if (rec.logged.indexOf('PP_NO_RECORD') < 0) {  // surface ONCE, on the tab a human reads
+          excLog_(stamp, rec, 'PP_NO_RECORD',
+                  'ParcelPanel answered HTTP ' + pp.dead[on] + ' "order not found" on ' +
+                  rec.pp_dead + ' consecutive polls. Quarantined — this box is NO LONGER BEING ' +
+                  'CHECKED. Confirm it is cancelled/never shipped, or investigate.', '');
+          rec.logged.push('PP_NO_RECORD');
+        }
+      }
+    });
+    // Any real answer clears the counter — only a PERMANENT condition ever reaches the threshold.
+    Object.keys(pp.seen).forEach(function (on) { if (st[on]) st[on].pp_dead = 0; });
+
+    if (deadNow.length) {
+      Logger.log('  PP dead records: ' + deadNow.length + ' (' + deadRegression.length +
+                 ' REGRESSION — answered before, now 404: ' + deadRegression.join(', ') + '; ' +
+                 deadUnknown.length + ' never acknowledged: ' + deadUnknown.join(', ') + ')');
+    }
+    if (quarantined.length) {
+      // 🔴 QUARANTINE IS AN UNDELIVERED BOX WE STOPPED CHECKING — the wk0803 class. It gets a row
+      // on the Exceptions tab (above) AND one ops message, ONCE, at the moment it happens. Never
+      // hourly: an alarm that repeats is an alarm that gets muted, and a muted alarm is silence.
+      try {
+        excSlackOps_(':no_entry: exceptions sweep QUARANTINED ' + quarantined.length +
+          ' box(es) after ' + EXC_PP_DEAD_QUARANTINE + ' consecutive ParcelPanel "order not found" ' +
+          'answers: ' + quarantined.map(function (o) { return '#' + o; }).join(', ') +
+          '. They are no longer being polled and a row for each is on the ' + EXC_LOG_TAB +
+          ' tab. If any of these is a real box, it is now unmonitored — check it.');
+      } catch (eQ) { Logger.log('quarantine alert failed to post: ' + eQ); }
+    }
+
     // 🔴 A PP outage must not read as "no exceptions" — silence has to fail loudly. But THROTTLING
     // is not an outage: those orders keep their old last_seen, stay at the front of the queue and
     // are picked up next run. Only genuine failures count against the ratio.
-    if (pp.attempted && pp.failed / pp.attempted > EXC_PP_FAIL_RATIO) {
-      throw new Error('ParcelPanel fetch failing: ' + pp.failed + '/' + pp.attempted +
-                      ' hard failures (throttled: ' + pp.throttled + ')' +
+    // 🔴 NOR IS A DEAD RECORD AN OUTAGE (directive P9). Unknown-record 404s leave BOTH sides of the
+    // ratio: they are not failures, and they must not dilute the denominator either. What remains
+    // is transport-only — the condition the 20% threshold was actually chosen for. Nine cancelled
+    // orders can no longer suppress ten healthy answers.
+    var transportFails = pp.failed + deadRegression.length;
+    var transportDenom = pp.attempted - deadUnknown.length;
+    if (transportDenom > 0 && transportFails / transportDenom > EXC_PP_FAIL_RATIO) {
+      // 🔴 SAVE FIRST, THEN THROW. The pp_dead counters and last_seen stamps written above are the
+      // mechanism that retires a permanent failure; discarding them on the way out is what made the
+      // failure permanent in the first place. A suppressed run still has to record what it learned.
+      try { excSaveState_(st); } catch (eS) { Logger.log('state save before suppression failed: ' + eS); }
+      throw new Error('ParcelPanel fetch failing: ' + transportFails + '/' + transportDenom +
+                      ' hard failures (throttled: ' + pp.throttled + ', dead records excluded: ' +
+                      deadUnknown.length + ')' +
                       ' — results suppressed rather than reported as all-clear');
     }
 
-    var stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
     var posted = 0, recorded = 0, wouldPost = [];
     batch.forEach(function (on) {
       var rec = st[on], ship = pp.ships[on];

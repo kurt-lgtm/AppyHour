@@ -239,7 +239,7 @@ ping day. Stale heartbeat ⇒ the trigger is gone (`installExceptionsTrigger()`)
 the fault is downstream. The Apps Script REST API cannot list triggers, so without this stamp the
 question has no answer short of opening the editor.
 
-## 🔴 PARCELPANEL BUDGET DIRECTIVE P1–P7 (Kurt GO, 2026-08-19) — SSOT for every PP call
+## 🔴 PARCELPANEL BUDGET DIRECTIVE P1–P9 (Kurt GO, 2026-08-19) — SSOT for every PP call
 
 **Pacing (`edadb7b`, above) was never the whole fault and was never given a week to work** — it
 deployed 2026-08-19 10:19 ET, by which time week 34's counter already read 2,000/2,000. What the
@@ -461,6 +461,123 @@ legacy `excSlackHealth_` shim→DM; override wins; unset→literal; empty→lite
   1,912 is UNVERIFIED** — P1 fixes both, which is why the deploy did not wait on it.
 - **C.** 2,000/wk still cannot poll a ~1,500-box open set hourly. Pacing feeds the ping window; it
   does not make the set fresh. 🔴 **Do not silently raise `EXC_PP_WEEKLY_BUDGET` past the plan.**
+
+### P9 — A DEAD RECORD IS NOT AN OUTAGE, AND A CANCELLED ORDER IS NOT A BOX (2026-08-19)
+
+> The evidence: `:rotating_light: exceptions sweep FAILED: ParcelPanel fetch failing: 9/19 hard
+> failures (throttled: 0)` — **the identical ratio, two hours running**. Reproduced from python at
+> 15:5x the same day: the same 19, the same 9 failures, byte-for-byte.
+
+🔴 **This was never a ParcelPanel outage.** P8 was written on that assumption and says so; the
+assumption was wrong. All nine failures are HTTP **404** with body
+`{"errors":"Order (order_number = X) not found"}`, and all nine orders are **cancelled in Shopify**:
+
+| order | cohort | cancelled | Shopify fulfillments |
+|-------|--------|-----------|----------------------|
+| 173555 | `_SHIP_2026-08-17` | 2026-08-18 06:42 | 0 (UNFULFILLED) |
+| 173559 | `_SHIP_2026-08-17` | 2026-08-18 06:43 | 0 (UNFULFILLED) |
+| 173560 | `_SHIP_2026-08-17` | 2026-08-18 15:08 | 0 (UNFULFILLED) |
+| 173562 | `_SHIP_2026-08-17` | 2026-08-18 06:45 | 0 (UNFULFILLED) |
+| 173596 | `_SHIP_2026-08-17` | 2026-08-18 18:12 | 0 (UNFULFILLED) |
+| 173632 | `_SHIP_2026-08-17` | 2026-08-17 16:30 | 0 (UNFULFILLED) |
+| 174409 | `_SHIP_2026-08-17` | 2026-08-17 15:05 | 0 (UNFULFILLED) |
+| 174413 | `_SHIP_2026-08-17` | 2026-08-18 16:06 | 0 (UNFULFILLED) |
+| 171813 | `_SHIP_2026-08-10` | 2026-08-10 17:28 | 0 (UNFULFILLED) |
+
+**The exclusion is proven, not assumed.** A cross-check of every one of the 1,201 open `_exc_state`
+rows against Shopify `cancelledAt` returns **exactly 9 cancelled orders — the same nine**. The set
+that fails and the set that is cancelled are identical, so no real failure is hiding behind the
+exclusion. The discriminator is an independent fact (Shopify's cancellation), never "it failed and
+excluding it makes the number look better." (`~/.claude/.../exclusion-that-flatters-needs-proof`.)
+
+#### The starvation loop, confirmed against the deployed code
+
+1. `excSeedCohort_` filters `-status:cancelled` **at seed time only**. An order cancelled *after*
+   seeding keeps `open = 1` forever; nothing re-checks it.
+2. `excResolveDelivered_` closed only **DELIVERED**. Cancelled orders sailed through it.
+3. They have no movement scan, so `excShopifyFlagged_` is true → permanently eligible regardless of
+   the cohort age gate.
+4. PP 404s → old `consume()` did `out.failed++` and **never added the order to `out.seen`**.
+5. Unseen ⇒ `last_seen` never stamped ⇒ `excPollSet_`'s "never-polled sorts first" pins them to the
+   **head of the queue**, re-selected every single run.
+6. 🔴 **And the throw was ABOVE `excSaveState_`.** A tripped guard discarded the *entire* run's
+   state — including the `last_seen` of the ten boxes that answered perfectly. Nothing could ever
+   change, so the next run was bit-identical. **The sweep was not degraded, it was 100% dead**, and
+   every hour it also burned 19 real ParcelPanel calls to stay that way.
+
+🔴 **Pacing is what made it fatal.** Nine dead records out of a 120-call run is 7.5% and trips
+nothing; out of the paced 19-call run it is 47%. P5's pacing was correct — it just moved a
+pre-existing poison from below the threshold to above it. **A ratio guard whose numerator can be a
+fixed set of permanently-bad rows becomes more likely to fire as the batch gets smaller.**
+
+#### The rules
+
+1. **A CANCELLED ORDER IS CLOSED, FOR FREE, IN THE SHOPIFY TRIAGE.** `excResolveDelivered_` now
+   selects `cancelledAt` and closes on it exactly as it closes on DELIVERED. Zero extra ParcelPanel
+   cost — it rides a request already being made. A cancelled order is not a box: it is never an
+   exception, never polled, and never alerted on.
+2. **THREE OUTCOMES, NOT TWO.** `excPpFetch_` returns `dead` alongside `failed`:
+   - **TRANSPORT** (`failed`) — 5xx, a `fetchAll` throw, a 200 whose body will not parse. The
+     request broke. Retry is right; a high rate means PP is down → **suppress the run**.
+   - **DEAD RECORD** (`dead`, per-order) — **404/410**. PP answered definitively that it has no such
+     order. Retrying returns the identical answer forever.
+   - **THROTTLED** — 429/503, unchanged: refused backpressure, not billable, retried next run.
+3. **A DEAD RECORD IS STAMPED `last_seen`.** 404 *is* an answer. Stamping it is what lets the box
+   leave the head of the longest-unpolled queue; leaving it unstamped is the whole bug. It then
+   costs at most one call per day under the once-per-day tier instead of one per run.
+4. **QUARANTINE AFTER `EXC_PP_DEAD_QUARANTINE = 3` CONSECUTIVE DEAD ANSWERS.** The counter
+   (`_exc_state.pp_dead_runs`, the tab's 10th column) **persists**, and **any real answer resets it
+   to 0** — so only a permanent condition ever reaches it. Three, not one: a single 404 could be
+   sync lag on a fresh order, and closing a real box on one bad answer is the wk0803 failure. Three,
+   not ten: at ~1 call/day/box, ten is a fortnight of a dead record in the queue.
+5. **THE RATIO IS TRANSPORT-ONLY, AND THE SPLIT IS EVIDENCE-BASED.**
+   `transportFails / transportDenom > EXC_PP_FAIL_RATIO`, where
+   `transportFails = failed + deadRegression` and `transportDenom = attempted − deadUnknown`.
+   - **deadRegression** — the order has a prior `last_seen`. PP *answered it before* and now denies
+     it. Something broke → it counts as a transport failure, both sides of the ratio.
+   - **deadUnknown** — PP has never once acknowledged it. Excluded from **both** sides, so it
+     neither inflates the numerator nor dilutes the denominator.
+   🔴 An unknown-record 404 leaving the denominator is deliberate: a run of 19 that is 18 dead
+   records and 1 transport failure is 1/1 = 100% and **still suppresses**. The exclusion cannot be
+   used to hide a real outage behind a pile of dead rows.
+6. 🔴 **A SUPPRESSED RUN STILL SAVES WHAT IT LEARNED.** `excSaveState_` runs **before** the guard
+   throws. The `pp_dead` counters and stamps are the only mechanism that can retire a permanent
+   failure; discarding them on the way out is precisely what made the failure permanent.
+
+#### Where a quarantined box is visible — this is the wk0803 class
+
+A quarantined box is **an undelivered box we have stopped checking**. It is surfaced twice, and
+**once each — never hourly**, because an alarm that repeats is an alarm that gets muted:
+
+- a row on the **`Exceptions` tab**, class `PP_NO_RECORD`, labelled
+  *"NOT BEING CHECKED — ParcelPanel has no record of this order"*, deduped through `logged_classes`;
+- one **ops message** (`excSlackOps_`, per P8 → appyhour-ops-reader DM) naming every order
+  quarantined that run and saying plainly that if any is a real box it is now unmonitored.
+
+The cancelled-order close in rule 1 is **not** a quarantine and gets neither — a cancelled order was
+never a box, so announcing it would be noise. Only the count is logged.
+
+#### Verification (2026-08-19)
+
+- `scratchpad/p9_dead_test.js` — **24/24 PASS**. Drives the real `excPpFetch_` from `Exceptions.gs`
+  against the **real captured ParcelPanel bodies** for all 19 orders (full bytes, not truncated —
+  the first fixture truncated the 200s at 400 chars and `JSON.parse` threw, which the harness
+  correctly reported as 10 transport failures; a synthetic `{code:404}` fixture would have passed
+  while proving nothing). Asserts: the 9 dead are identified; `failed = 0`; 10 answered; the guard
+  **does not** trip (1/11 = 0.09); a genuine 19/19 5xx outage **does** trip; quarantine fires on run
+  3 and logs once; a real answer resets the counter; the schema round-trips 10 columns.
+- `scratchpad/gas_lint.js` — SYNTAX OK on all four files, COLLISIONS: NONE.
+- ParcelPanel calls spent proving this: **29 metered** (19 poll-set probe + 10 full-body re-fetch),
+  plus 19 earlier that Cloudflare rejected 403 before reaching the API. **Local python probes do not
+  report into `PP_WEEK_USED`** (P3) — this spend is invisible to the ledger and is recorded here
+  instead.
+
+#### Still open
+
+- **D.** Order `164878A` sits in `_exc_state` — the only non-numeric order value among 9,333 rows.
+  Not investigated; it is not in the failing set. If PP 404s it, P9 quarantines it in 3 days.
+- **E.** The cancelled-order close is a **poll-time** repair, not a backfill. The 9 close on the
+  next sweep; older cancelled rows already `open=0` are untouched.
 
 ## Alert classes (Kurt 2026-07-30)
 
