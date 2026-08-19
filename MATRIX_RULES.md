@@ -242,8 +242,19 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
         prints it. No silent-append of unknown orders.
     (d) **Items map only by registered MFG name** — header-based with rule-15b normalization, never
         positional. A known gift-only MFG column may be appended once. Unknown names (including
-        literal `remove`) are silently omitted. Duplicate normalized headers on either input never
-        create duplicate output columns; duplicate gift quantities are summed deterministically.
+        literal `remove`) are omitted at merge — the merge never guesses — but the omission is
+        **REPORTED AT UPLOAD, never silent** (Kurt's ruling 2026-08-18, verbatim: *"when I upload,
+        it should tell me for discrepancies"*). The old wording here sanctioned SILENT omission: a
+        gift quantity under a typo'd header vanished with only a count in a response field nobody
+        reads. The contract is now **dropped-and-REPORTED-AT-UPLOAD, never dropped-and-silent**:
+        the vFGR upload endpoint (ShipRouting `server/run_vf.survey_discrepancies`, ROUTING_RULES
+        §13.7 rule 6) returns one `discrepancies` entry per dropped column naming the header, the
+        affected orders, the units that will NOT merge, and what to do ("fix the header in the
+        vFGR and re-upload — the merge will NOT guess"), and BOTH consoles render a non-empty list
+        as a banner the operator cannot miss. The upload is never blocked (the drop may be
+        intended) and **merge behaviour itself is unchanged** — no guessing, no hard fail.
+        Duplicate normalized headers on either input never create duplicate output columns;
+        duplicate gift quantities are summed deterministically.
     Chokepoint: `merge_gift_xlsx` — cmd_generate, cmd_finalize, and weekly_flow stage 1 all route
     through it; never fork a second gift-merge path. Post-apply, `check_routing_and_ice` /
     gen_rmfg self-QC still gate that every gift row got a routing tag.
