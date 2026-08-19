@@ -447,10 +447,43 @@ destination through `excChannelOps_()` behind a `typeof` guard, so one property 
 a project that has lost `Exceptions.gs` (which happened 2026-08-14) still alerts. 🔴 **`Code.gs` has
 no ping-class helper and must never get one** — it must have no way to reach #exceptions.
 
-Verification, given Apps Script cannot be executed from here: `scratchpad/p8_route_test.js` loads
-`Exceptions.gs` into a stubbed context and asserts destination + gates per class — **9/9 PASS**
+Static verification, given Apps Script cannot be executed from here: `scratchpad/p8_route_test.js`
+loads `Exceptions.gs` into a stubbed context and asserts destination + gates per class — **9/9 PASS**
 (ping Thu→#exceptions; ping Mon→suppressed; ping dry→suppressed; ops Mon→DM; ops dry→**still posts**;
 legacy `excSlackHealth_` shim→DM; override wins; unset→literal; empty→literal).
+
+🔴 **LIVE PROOF — recorded here because the signal that produced it no longer exists.** The hourly
+sweep ran an unintended A/B across the deploy, and it is the only one that will ever occur:
+
+| run | destination | message |
+|-----|-------------|---------|
+| 01:46 | **#exceptions** | `exceptions sweep FAILED: ParcelPanel fetch failing: 9/19 hard failures (throttled: 0)` |
+| 02:46 | **#exceptions** | same, verbatim |
+| *(P8 deployed — `Exceptions 0807a062da27 → 3d5a2a20e9a9`)* | | |
+| 03:46 | **ops DM `D0BG1541F0A`** | same, verbatim — first exceptions-sweep message ever in that DM |
+
+Three consecutive runs of one job on a known hourly cadence, byte-identical text, destination
+flipping exactly at the push, with n=2 before the flip. Nothing else on that path changed.
+
+Two independent discriminators prove it came from `excSlackOps_` and not a fallback:
+- **Emoji fingerprint.** `Code.gs`'s `slack_` PREFIXES its own emoji, so anything routed through it
+  shows a **doubled** `:rotating_light:` — all three Reship-report failures in that DM do, and the
+  missing-tab warning reads `:rotating_light: :warning:`. The 03:46 sweep failure carries a **single**
+  one. Only `excSlackOps_` passes the string through untouched, and only `Exceptions.gs`'s catch
+  block produces that text.
+- **It tripped the OLD fail-ratio guard.** P9 exists to stop that exact message, so a run still
+  emitting it was running post-P8, pre-P9 — the one window where both facts hold.
+
+🔴 **Do not re-derive this from timestamps.** The Slack MCP renders those stamps as `2026-08-20 CST`
+against a session date of 08-19 — the absolute times are unusable and read as *preceding* the push.
+**The ORDERING across two channels carries the claim, not the clock.**
+
+🔴 **What this does NOT prove, and what killed the signal.** P9 (next section) makes the 9/19 stop
+firing, so **there is no next FAILED message** — a quiet DM is now evidence for P9, not for P8.
+This paragraph is the whole live record. Still unproven: (a) the **PING** side resolving —
+`excStatus_` prints both destinations and flags override-vs-literal, read-only, no trigger needed,
+and is the fastest way to check it; (b) P9's own quarantine `excSlackOps_` caller, which stays cold
+until a future dead record trips the 3-run counter. **Three claims, one evidenced.**
 
 ### Still open (Kurt decisions, not fixed here)
 
