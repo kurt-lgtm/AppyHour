@@ -25,6 +25,11 @@
  *   computed value disagrees it is REPORTED and the typed value kept, because the disagreement is
  *   the evidence that the mirror drifted.
  *
+ *   🔴 GRAIN IS MIXED WITHIN THE `Order Shipped` SECTION, ON PURPOSE. Its `Email Sent` is Shopify at
+ *   ORDER grain; its `SMS Sent` / `SMS Engaged` are Klaviyo at DISTINCT-PROFILE grain. They are not
+ *   comparable line-for-line and the gap is the repeat-customer count. Both grains are named in the
+ *   log every run so the difference is never mistaken for a discrepancy.
+ *
  *   🔴 ORDER PLACED IS NOT KLAVIYO (Kurt's ruling 2026-08-18). The order-confirmation mail is sent
  *   by SHOPIFY, not by a Klaviyo flow — and the live flow list confirms it: 26 flows, 21 live /
  *   5 draft, 0 archived, and NONE of them is an order-placed/confirmation flow. Sourcing that row
@@ -131,14 +136,36 @@
  *     Events belonging to any other flow are dropped as they are read — that is what keeps the state
  *     bounded and it is why a change to the pins MUST invalidate it.
  *
- * 🔴 THE EMAIL ROWS CANNOT BE FILLED FROM APPS SCRIPT — AND THAT IS A PROPERTY OF THE ACCOUNT, NOT
- * A BUG (measured 2026-08-18, /metric-aggregates). /events/ has NO flow filter, so counting one
- * flow's email sends means paging EVERY "Received Email" event: 206,381 events in a 28-day window,
- * ~1,032 pages, measured at ~3.0s/page against this account = ~52 MINUTES. The Apps Script ceiling
- * is 360s. The SMS metrics are 90 and 48 pages (~4.7 and ~2.1 min) and DO fit. So:
- *     Order Shipped / Delivered  SMS Sent + SMS Engaged  -> measured, written
- *     Order Shipped / Delivered  Email Sent + its %      -> DECLINED, left BLANK, note logged
- *     Order Placed               Email Sent + its %      -> Shopify, cheap, written
+ * 🔴 `Order Shipped -> Email Sent` IS SHOPIFY NOW, AND IT IS A DIFFERENT MESSAGE FROM THE KLAVIYO
+ * IN-TRANSIT MAIL (Kurt 2026-08-19). Shopify logs the shipping confirmation as an order event, just
+ * like the placed one, so the row no longer needs the Klaviyo sweep at all. But the two are NOT the
+ * same notification and the row's meaning has changed — stated here so nobody reads it as the old
+ * definition:
+ *     THIS ROW  = Shopify's shipping-confirmation email, sent by the fulfiller AT FULFILLMENT
+ *                 ("… sent a shipping confirmation email to <name>", stamped the same minute as
+ *                 "… marked N items as fulfilled"). Measured 2323 of 2324 orders on wk0817 and
+ *                 2316 of 2316 on wk0810 — i.e. ~every order, at fulfillment time.
+ *     NOT THIS  = Klaviyo flow XYFE5N "Shipping Notification - In Transit (PARCEL PANEL)", which
+ *                 fires off a ParcelPanel tracking webhook when the CARRIER scans the parcel into
+ *                 transit — a later, carrier-driven event. Its own weekly flow-series figure is in
+ *                 the hundreds, not ~2,300, which is the scale difference you would expect between
+ *                 "we fulfilled it" and "the carrier picked it up".
+ * If Kurt ever wants the Klaviyo In-Transit email counted as well, that is a SEPARATE row, not a
+ * re-point of this one.
+ *
+ * 🔴 SHOPIFY EMITS NO DELIVERY EVENT — VERIFIED, NOT ASSUMED (2026-08-19). Every order event on both
+ * cohorts was scanned for the substring "deliver": ZERO matches on 2,324 and 2,316 orders. So the
+ * same trick does NOT work for `Order Delivered -> Email Sent`; that row remains Klaviyo's and stays
+ * BLANK until a job without the 360s ceiling can sweep it.
+ *
+ * 🔴 THE REMAINING EMAIL ROW CANNOT BE FILLED FROM APPS SCRIPT — A PROPERTY OF THE ACCOUNT, NOT A
+ * BUG (measured 2026-08-18, /metric-aggregates). /events/ has NO flow filter, so counting one
+ * flow's email sends means paging EVERY "Received Email" event: 165,999 events in this cohort's
+ * window, ~830 pages. The Apps Script ceiling is 360s. So:
+ *     Order Placed               Email Sent + its %      -> Shopify order events, cheap, written
+ *     Order Shipped              Email Sent + its %      -> Shopify order events, cheap, written
+ *     Order Delivered            Email Sent + its %      -> Klaviyo, DECLINED, BLANK, note logged
+ *     Order Shipped / Delivered  SMS Sent + SMS Engaged  -> Klaviyo, resumable sweep (see below)
  * ntMetricVolume_ makes the decline explicit and instant instead of burning 4 minutes to fail.
  * Do NOT "fix" this by raising NT_MAX_PAGES. If Kurt wants the two email rows, the honest options
  * are (a) a local/cloud job with no 360s ceiling that writes the cells, or (b) Klaviyo's
@@ -779,6 +806,51 @@ function ntVolumeCached_(key, metricId, lo, hi, state) {
 var NT_PLACED_RE = /^order confirmation email was sent/i;
 
 /**
+ * 🔴 `Order Shipped -> Email Sent` IS SHOPIFY, NOT KLAVIYO (Kurt 2026-08-19, from a live order).
+ * Shopify logs the shipping confirmation as an order event exactly like the placed one:
+ *     "RMFG Shopify Translator sent a shipping confirmation email to Lindsay Marshall (…)."  5:00 PM
+ *     "RMFG Shopify Translator marked 12 items as fulfilled from RMFG."                      5:00 PM
+ *
+ * MATCHED ON THE PHRASE, NOT THE LINE START, because this message carries an ACTOR PREFIX where the
+ * placed one does not. Matching the phrase is also what makes it fulfiller-agnostic: this cohort is
+ * 100% "RMFG Shopify Translator", but the account also fulfils "from COG", and a COG/Woburn/Dallas
+ * actor must still match. Anchoring to `^RMFG` would silently zero those legs.
+ *
+ * 🔴 THE TWO MATCHERS ARE DISJOINT, VERIFIED AGAINST EVERY MESSAGE SHAPE THE ACCOUNT EMITS. The
+ * complete email-mentioning vocabulary over a 400-order sample of _SHIP_2026-08-17 is 6 shapes, and
+ * only these two may ever match:
+ *     401  "<actor> sent a shipping confirmation email to <name> (<email>)."   -> SHIPPED
+ *     399  "Order confirmation email was sent to <name> (<email>)."            -> PLACED
+ *      40  "Order edited email was sent to <name> (<email>)."                  -> neither
+ *       8  "<human> sent an order confirmation email to <name> (<email>)."     -> neither
+ *       4  "<human> sent an order edited email to <name> (<email>)."           -> neither
+ *       2  "<human> updated the email for this order from <a> to <b>."         -> neither
+ * Note the 4th: a MANUAL RESEND of the order confirmation does NOT match NT_PLACED_RE, because that
+ * one is anchored to the line start and this variant leads with the human's name. That is a known
+ * (small) undercount on the placed row, left as-is rather than widened silently — see D30.
+ * 🔴 There is NO passive "Shipping confirmation email was sent to …" variant in this account; the
+ * regex was written against the enumerated vocabulary, not against a guess at the phrasing.
+ */
+var NT_SHIPPED_RE = /sent a shipping confirmation email to/i;
+
+/**
+ * 🔴 `query:"confirmation"` HIDES THE SHIPPING EVENT — MEASURED, AND IT WOULD HAVE SHIPPED A LIE.
+ * The previous selector was `events(first:10, …, query:"confirmation")`. Counting the shipping
+ * confirmation through it returns **21 of 2,324 orders (0.90%)**; the same cohort through an
+ * unfiltered selector returns **2,323 (99.96%)**. The Shopify events search does not surface these
+ * on that term, so wiring the new regex into the old selector would have written **21** into a row
+ * whose true value is 2,323 — a number small enough to look like a real deliverability problem and
+ * large enough not to look broken. The filter is therefore GONE.
+ * Placed is measured through the same selector and rises 2291 -> 2301 as a result (the filter was
+ * costing it 10 orders too); that change is declared in D30 rather than left to be discovered.
+ * 🔴 ASCENDING IS STILL LOAD-BEARING (the 2026-08-18 burn): newest-first fills the window with
+ * fulfillment chatter and drops the confirmation off the end (271/400 vs 397/400). Keep
+ * sortKey CREATED_AT / reverse:false. The window is 40 because the shipping confirmation lands
+ * AFTER address updates and fulfillment-location changes, not among the first few events.
+ */
+var NT_ORDER_EVENTS = 'events(first:40, sortKey:CREATED_AT, reverse:false)';
+
+/**
  * The cohort population: order name, customer email, destination zip, AND whether Shopify sent the
  * order-confirmation email. Deliberately a LIGHT query — PivotAnalytics' paFetchCohort_ pulls
  * fulfillment event trees we do not need here.
@@ -797,7 +869,7 @@ function ntFetchCohort_(shipWeek) {
   var q = 'query($q:String!,$cursor:String){ orders(first:25, query:$q, after:$cursor){' +
           ' pageInfo{hasNextPage endCursor} edges{node{ name email' +
           ' shippingAddress{ zip provinceCode }' +
-          ' events(first:10, sortKey:CREATED_AT, reverse:false, query:"confirmation")' +
+          ' ' + NT_ORDER_EVENTS +
           '   { edges{ node{ createdAt message } } } } } } }';
   var qs = "tag:'" + shipWeek + "' -status:cancelled -tag:'Reship'";
   var out = [], cursor = null;
@@ -805,16 +877,21 @@ function ntFetchCohort_(shipWeek) {
     var conn = shopifyGql_(q, { q: qs, cursor: cursor }).orders;
     conn.edges.forEach(function (e) {
       var n = e.node;
-      var confirmAt = '';
+      var confirmAt = '', shipAt = '';
       ((n.events && n.events.edges) || []).forEach(function (ee) {
         var msg = String((ee.node && ee.node.message) || '').trim();
         if (!confirmAt && NT_PLACED_RE.test(msg)) confirmAt = ee.node.createdAt;
+        // FIRST match wins per order -> the row counts ORDERS, never events. Measured on both
+        // cohorts the two are equal (2323 events / 2323 orders; 2316 / 2316), but an order with
+        // several fulfillments may emit several, and this row must not drift above the cohort.
+        if (!shipAt && NT_SHIPPED_RE.test(msg)) shipAt = ee.node.createdAt;
       });
       out.push({
         order: n.name,
         email: String(n.email || '').toLowerCase(),
         zip: String((n.shippingAddress && n.shippingAddress.zip) || '').replace(/[^0-9]/g, ''),
-        confirmAt: confirmAt                      // '' = Shopify has no such event on this order
+        confirmAt: confirmAt,                     // '' = Shopify has no such event on this order
+        shipAt: shipAt                            // '' = no Shopify shipping-confirmation event
       });
     });
     if (!conn.pageInfo.hasNextPage) break;
@@ -1148,9 +1225,10 @@ function ntPct_(n, d) { return (d > 0) ? ((n / d) * 100).toFixed(2) + '%' : ''; 
 function ntMeasure_(shipWeek, sheetTotal, deadline) {
   var out = {}, notes = [];
   var cohort = ntFetchCohort_(shipWeek);
-  var emails = {}, dupes = 0, zoneByEmail = {}, placedN = 0;
+  var emails = {}, dupes = 0, zoneByEmail = {}, placedN = 0, shippedN = 0;
   cohort.forEach(function (o) {
     if (o.confirmAt) placedN++;
+    if (o.shipAt) shippedN++;                      // DISTINCT ORDERS: shipAt holds the first match
     if (!o.email) return;
     if (emails[o.email]) dupes++;
     emails[o.email] = 1;
@@ -1377,10 +1455,37 @@ function ntMeasure_(shipWeek, sheetTotal, deadline) {
                'too small or the message wording changed — check before trusting this row.');
   }
 
+  // ---- Order Shipped -> Email Sent: SHOPIFY, per ORDER (Kurt 2026-08-19). Not Klaviyo. --------
+  // 🔴 THIS IS NOT THE SAME MESSAGE AS THE KLAVIYO IN-TRANSIT MAIL — see the header. It is
+  // Shopify's own shipping-confirmation email, sent at FULFILLMENT. The row is labelled and
+  // documented as that, rather than quietly inheriting the old row's meaning.
+  out['shipped||email||Email Sent'] = shippedN;
+  if (denomOk) out['shipped||email||Percent of Total'] = ntPct_(shippedN, sheetTotal);
+  ntLog_('  shipped Email Sent = ' + shippedN + ' of ' + cohort.length + ' orders (SHOPIFY order ' +
+         'events, ORDER grain, Shopify shipping-confirmation mail — NOT the Klaviyo In-Transit ' +
+         'flow)' + (denomOk ? ' (' + ntPct_(shippedN, sheetTotal) + ')' : ' (no %)'));
+  // 🔴 ORDER GRAIN CANNOT EXCEED THE COHORT. Same guard as the placed row: if it ever does, the
+  // per-order match has started counting events instead of orders.
+  if (shippedN > cohort.length) {
+    throw new Error('NT_ASSERT_SHIPPED_OVERCOUNT: ' + shippedN + ' shipping-confirmation matches on ' +
+                    cohort.length + ' orders — the per-order match is double-counting.');
+  }
+  if (cohort.length && (cohort.length - shippedN) / cohort.length > 0.05) {
+    notes.push('ORDER SHIPPED GAP: ' + (cohort.length - shippedN) + ' of ' + cohort.length +
+               ' cohort orders carry NO Shopify shipping-confirmation event. Measured 2026-08-19 ' +
+               'this is 1 of 2324 (wk0817) and 0 of 2316 (wk0810), so a large gap means either the ' +
+               'cohort is not fulfilled yet or the NT_ORDER_EVENTS window is too small to reach the ' +
+               'event — check before trusting this row.');
+  }
+
   ['shipped', 'delivered'].forEach(function (sec) {
     var flowId = flows[sec];
     if (!flowId) return;                                    // unresolved -> blank, already logged
-    var chans = ['email', 'sms'];
+    // 🔴 `shipped` NO LONGER TAKES THE EMAIL CHANNEL FROM KLAVIYO (Kurt 2026-08-19): that row is
+    // written above from Shopify order events. `delivered` still has no Shopify source — Shopify
+    // emits NO delivery event at all (verified: zero messages containing "deliver" on either
+    // cohort) — so its email row stays Klaviyo's, and stays BLANK while that sweep is declined.
+    var chans = (sec === 'shipped') ? ['sms'] : ['email', 'sms'];
     chans.forEach(function (ch) {
       var src = ev[ch];
       if (!src) return;

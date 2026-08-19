@@ -1067,6 +1067,10 @@ implementation and carries the same rules in its header.
   1,479 events vs 17,922, so it is not even the superset it sounds like. `SMS Engaged` =
   **`Clicked Text Message`**, **clicks only**: Klaviyo publishes no reply/inbound metric, so this row
   UNDERSTATES engagement and must never be read as "responded".
+- 🔴 **SUPERSEDED FOR THE SHIPPED ROW BY [D30](#d30--source-of-truth-for-each-email-sent-row-and-the-filter-that-hid-the-shipping-event-kurt-2026-08-19):**
+  `Order Shipped → Email Sent` is now sourced from a **Shopify order event** and is written
+  (2,323 of 2,324 on wk0817). Only `Order Delivered → Email Sent` still waits on Klaviyo. The
+  bullet below remains true of the DELIVERED row only.
 - 🔴 **The two `Email Sent` rows for Shipped/Delivered cannot be filled from Apps Script.**
   `/events/` has no flow filter, so one flow's email count means paging every `Received Email` event:
   **206,381 events / 28d ≈ 1,032 pages at ~3.0s/page ≈ 52 minutes** against a 360s ceiling. The SMS
@@ -1552,3 +1556,105 @@ A "disagreement" is therefore only ever raised where it means something — agai
 stopped moving and may be a human's. Raising it on the current column would just narrate normal daily
 movement as if it were drift, and noise of that kind trains the reader to ignore the real ones.
 
+
+### D30 — SOURCE OF TRUTH FOR EACH `Email Sent` ROW, AND THE FILTER THAT HID THE SHIPPING EVENT (Kurt 2026-08-19)
+
+Kurt, from a live order: the shipping confirmation is a **Shopify order event**, exactly like the
+placed one — so `Order Shipped → Email Sent` never needed the Klaviyo sweep.
+
+```
+RMFG Shopify Translator sent a shipping confirmation email to Lindsay Marshall (…).   5:00 PM
+RMFG Shopify Translator marked 12 items as fulfilled from RMFG.                       5:00 PM
+```
+
+**The four `Email Sent` rows, and where each number comes from:**
+
+| row | source | grain | wk0817 | wk0810 |
+|---|---|---|---|---|
+| `Order Placed → Email Sent` | Shopify order event, `^order confirmation email was sent` | ORDER | **2301** (98.99%) | **2289** (98.83%) |
+| `Order Shipped → Email Sent` | Shopify order event, `sent a shipping confirmation email to` | ORDER | **2323** (99.96%) | **2316** (100.00%) |
+| `Order Delivered → Email Sent` | Klaviyo `Received Email` — **no Shopify equivalent exists** | profile | BLANK | BLANK |
+| `Order Shipped/Delivered → SMS *` | Klaviyo, resumable sweep (D29) | profile | see D29 | see D29 |
+
+- 🔴 **`query:"confirmation"` HID THE SHIPPING EVENT, AND WOULD HAVE SHIPPED A PLAUSIBLE LIE.** The
+  existing selector was `events(first:10, sortKey:CREATED_AT, reverse:false, query:"confirmation")`.
+  Counting the shipping confirmation through it returns **21 of 2,324 orders (0.90%)**; through an
+  unfiltered selector the same cohort returns **2,323 (99.96%)**. Wiring the new regex into the old
+  selector would have written **21** — small enough to read as a real deliverability problem, large
+  enough not to look broken. *Measuring with an idealised query and shipping a narrower one is the
+  same class as auditing the fix you queued instead of the artifact that left.*
+- 🔴 **THE WINDOW MUST BE 40, NOT 10 OR 15.** The shipping confirmation lands **after** address
+  updates and fulfillment-location changes, not among the first few events. Measured on wk0817:
+  `first:15` no-query finds **829 (35.67%)**; `first:40` no-query finds **2,323 (99.96%)**. A page
+  size chosen by intuition would have undercounted by two thirds and looked fine.
+  Ascending (`sortKey: CREATED_AT, reverse:false`) is still load-bearing for the placed row — the
+  2026-08-18 burn (271/400 newest-first vs 397/400 ascending) is unchanged.
+- 🔴 **DECLARED SIDE-EFFECT: `Order Placed` RISES 2291 → 2301** on wk0817, because the same filter
+  was costing it 10 orders. Stated here rather than left to be discovered as unexplained drift.
+- 🔴 **MATCH THE PHRASE, NOT THE LINE START, AND NEVER THE ACTOR.** The shipping message carries an
+  actor prefix where the placed one does not, so it cannot be anchored to `^`. It must also not be
+  anchored to `RMFG`: this cohort is 100% `RMFG Shopify Translator`, but the account also fulfils
+  **from COG**, and a COG / Woburn / Dallas-leg actor has to match too. The two matchers were checked
+  against the **complete** email-mentioning vocabulary of the account (6 shapes over a 400-order
+  sample) and are disjoint — including the near-misses `Order edited email was sent to …` and
+  `<human> sent an order confirmation email to …`. There is **no** passive
+  `Shipping confirmation email was sent to …` variant; the regex was written against the enumerated
+  vocabulary, not a guess.
+- **Known, unchanged undercount:** `<human> sent an order confirmation email to <name>` (a manual
+  resend, 8 per 400 sampled) does **not** match the anchored placed regex. Left as-is rather than
+  widened silently — widening it is a Kurt call because it changes a shipped number.
+- 🔴 **ORDER GRAIN, DISTINCT ORDERS.** Only the FIRST match per order is kept, so several
+  fulfillments cannot inflate the row. Measured, events == orders on both cohorts (2323/2323 and
+  2316/2316), and `NT_ASSERT_SHIPPED_OVERCOUNT` refuses to write if it ever exceeds the cohort.
+- 🔴 **COVERAGE IS NOT RMFG-ONLY.** Both cohorts are 100% `FULFILLED` with ≥1 fulfillment object, and
+  the event is present on 2323/2324 and 2316/2316. The single wk0817 miss is `#173444` (fulfilled,
+  no shipping-confirmation event).
+
+#### 🔴 THE TWO MESSAGES ARE NOT THE SAME, AND THE ROW NOW MEANS THE SHOPIFY ONE
+
+Answering the question directly rather than swapping definitions quietly:
+
+- **This row = Shopify's shipping-confirmation email**, sent by the fulfiller **at fulfillment** —
+  the event is stamped the same minute as `marked N items as fulfilled`. ~Every order gets one
+  (2,323 of 2,324).
+- **Not the same as** Klaviyo flow `XYFE5N` *Shipping Notification - In Transit (**Parcel Panel**)*,
+  which fires off a ParcelPanel tracking webhook when the **carrier scans the parcel into transit** —
+  a later, carrier-driven event. Its weekly flow-series figure is in the hundreds, not ~2,300, which
+  is the scale difference you would expect between "we fulfilled it" and "the carrier picked it up".
+- Counting the Klaviyo In-Transit email as well would be a **separate row**, never a re-point of this
+  one. The file header states this at the row definition.
+
+#### `Order Delivered` — checked, and the trick does NOT work
+
+Kurt's earlier statement was "in transit and delivery both come through klaviyo". Verified rather
+than assumed: **every** order event on both cohorts was scanned for the substring `deliver` —
+**zero matches** across 2,324 and 2,316 orders. Shopify emits no delivery notification event, so
+`Order Delivered → Email Sent` stays Klaviyo-only and stays BLANK until a job without the 360s
+ceiling can sweep it.
+
+#### Cost — this is not free, and it comes off the Klaviyo budget
+
+The cohort pull runs every invocation and is charged to the **same 240s budget** as the resumable
+sweep (D29). Measured on wk0817, 93 pages each:
+
+| selector | placed | shipped | wall | verdict |
+|---|---|---|---|---|
+| `first:10` + `query:"confirmation"` (old) | 2291 | **21 (0.90%)** | 117.6s | wrong |
+| `first:15` no filter | 2300 | **829 (35.67%)** | 153.2s | wrong |
+| `first:40` no filter (**shipped**) | **2301** | **2323 (99.96%)** | **169.4s** | correct |
+
+🔴 **THIS TAKES ~52s/RUN AWAY FROM THE KLAVIYO SWEEP, AND THAT CHANGES D29's RUN COUNTS.** With the
+fetch budget at 240s and a 25s checkpoint reserve, the sweep now gets roughly **240 − 169 − 25 ≈ 46s**
+of paging per run. At the measured 4.59s/page, `Received Text Message` (79 pages) goes from ~3–5 runs
+to roughly **8**, and `Clicked Text Message` (40 pages @ 2.75s) to about **3**. Correctness was worth
+buying, but the bill lands on the sweep.
+
+Two ways to buy it back, **both deliberately NOT taken here** — they are tuning decisions about how
+close to a hard 360s kill we run, and D29 already says that class of call is Kurt's:
+1. **Raise `NT_TIME_BUDGET_MS`.** The 08-19 run used 242.7s of 360s, so ~117s is going unused. 300s
+   would restore ~4 runs, at the cost of a thinner margin before the kill.
+2. **Cache the cohort pull for the ET day** in the existing `_nt_sweep` store. Removes 169s from
+   every resumed run — but it FREEZES `Order Placed` and `Order Shipped` mid-day, which is the
+   staleness class D29c exists to stop. Would need the same matured-vs-current scoping.
+
+The first live run settles the arithmetic — read `total …s of the 360s ceiling` next to `pages n/79`.
