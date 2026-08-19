@@ -1080,12 +1080,20 @@ function ntAssertShape_(map) {
 }
 
 /**
- * 🔴 FILL-BLANKS-ONLY ROWS (Kurt 2026-08-19, with the ownership handover). `Total Shipments` and
- * `Arrived` are now script-OWNED, but a value already in the cell was typed by a human and is NEVER
- * overwritten — on ANY column, current or frozen, not only in backfill mode. When what we compute
- * DISAGREES with what is there, it is REPORTED and left alone: the disagreement is information, and
- * silently correcting it destroys the evidence that a hand mirror drifted. Every other owned row
- * keeps its existing refresh-in-place behaviour.
+ * 🔴 THE ROWS WHOSE DISAGREEMENT WITH A PRE-EXISTING CELL IS WORTH REPORTING (Kurt 2026-08-19).
+ * Both were hand-typed mirrors before the ownership handover, so an existing value in a MATURED
+ * column may be a human's — it is left alone, and if what we compute differs, that is REPORTED
+ * rather than corrected. The disagreement is the evidence that the mirror drifted; overwriting it
+ * hides how far.
+ *
+ * 🔴 THIS APPLIES IN BACKFILL MODE ONLY, AND THAT IS DELIBERATE. Holding these cells on the CURRENT
+ * column would freeze a still-moving number the first time it is written — `Arrived` on a 2-day-old
+ * cohort is mid-flight (1063 of 2324 on 08-17), so a write-once-then-never-touch rule would stamp a
+ * mid-flight value and leave it there forever. That is EXACTLY the bug this whole change exists to
+ * fix: the typed 2075 on 08-03 was mid-flight when it was copied and never refreshed, and the
+ * authority now says 2268. So the current, un-matured column REFRESHES in place like every other row
+ * here (walk-forward, the tab's existing doctrine), and only a matured column — reachable solely
+ * through `ntBackfillFrozen`, which is double-gated and empty-only — holds what it already has.
  */
 var NT_BLANK_ONLY_KEYS = { 'own||Total Shipments': 1, 'own||Arrived': 1 };
 
@@ -1098,20 +1106,24 @@ function ntWriteOwned_(sheet, col, map, values, dry, emptyOnly) {
     var cell = sheet.getRange(row, col);
     var existing = String(cell.getValue()).trim();
 
-    if (NT_BLANK_ONLY_KEYS[k] && existing !== '') {
-      held++;
-      var have = Number(existing.replace(/[^0-9.]/g, ''));
-      if (typeof v === 'number' && isFinite(have) && have !== v) {
-        notes.push('DISAGREEMENT on "' + k.replace('own||', '') + '" (column ' + col + '): the sheet ' +
-                   'holds ' + have + ', this run computes ' + v + ' (' + (v - have > 0 ? '+' : '') +
-                   (v - have) + '). The typed value is KEPT — a human entered it and this row only ' +
-                   'fills blanks. Reported, not corrected: a hand mirror that drifted is evidence, ' +
-                   'and overwriting it hides how far it drifted. Clear the cell to hand the row to ' +
-                   'the script.');
+    if (emptyOnly && existing !== '') {
+      // A matured column keeps what it has. For the two formerly hand-mirrored rows, say so loudly
+      // when our value differs — that gap is the only signal that the old manual mirror drifted.
+      if (NT_BLANK_ONLY_KEYS[k]) {
+        var have = Number(existing.replace(/[^0-9.]/g, ''));
+        if (typeof v === 'number' && isFinite(have) && have !== v) {
+          held++;
+          notes.push('DISAGREEMENT on "' + k.replace('own||', '') + '" (column ' + col + '): the ' +
+                     'sheet holds ' + have + ', this run computes ' + v + ' (' +
+                     (v - have > 0 ? '+' : '') + (v - have) + '). The existing value is KEPT — this ' +
+                     'is a matured column and a human may have typed it. Reported, not corrected: a ' +
+                     'hand mirror that drifted is evidence, and overwriting it hides how far. Clear ' +
+                     'the cell to hand it to the script.');
+        }
       }
+      skipped++;
       return;
     }
-    if (emptyOnly && existing !== '') { skipped++; return; }
 
     if (dry) { ntLog_('  [dry] ' + NT_TAB + '!' + cell.getA1Notation() + '  ' + k + ' = ' + v); }
     else {

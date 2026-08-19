@@ -1528,5 +1528,27 @@ elsewhere / read-only here" framing in D24 and in the `Notifications.gs` header;
   defaults to dry, and writes empty cells only. **The daily-refresh path still asserts exactly as
   before** — the guard's real job was stopping the refresh landing on an old column, and that is
   untouched.
+- 🔴 **THE HOLD IS SCOPED TO MATURED COLUMNS** — see the addendum below; a blanket fill-blanks-only
+  rule would freeze a mid-flight `Arrived` and recreate this very bug.
 - **The percent path needs no change.** `ntPct_` was always gated on `denomOk`; it was starved of a
   denominator, not broken. Once `Total Shipments` exists the percents populate on their own.
+
+#### D29c addendum — HOLD APPLIES TO MATURED COLUMNS ONLY, AND THAT DISTINCTION IS THE WHOLE POINT
+
+Caught while wiring D29c, before it shipped: a blanket *fill-blanks-only* rule on these two rows
+**recreates the exact bug D29c exists to fix.** `Arrived` on a live cohort is **mid-flight** — 1063 of
+2324 on `_SHIP_2026-08-17` two days in — so "write once, then never touch" would stamp a mid-flight
+number and freeze it there forever. That is precisely how the typed **2075** landed on 08-03 while the
+authority moved on to **2268**.
+
+So the hold is scoped by column maturity, which is the tab's existing walk-forward doctrine:
+
+| column | path | behaviour |
+|---|---|---|
+| current, age < `NT_MATURITY_DAYS` | `ntRefreshCurrentColumn` (`emptyOnly=false`) | **refreshes in place**, like every other owned row — the number is still moving |
+| matured / frozen | `ntBackfillFrozen` only (`emptyOnly=true`, double-gated, dry by default) | **holds** what is there; reports the gap if ours differs |
+
+A "disagreement" is therefore only ever raised where it means something — against a value that has
+stopped moving and may be a human's. Raising it on the current column would just narrate normal daily
+movement as if it were drift, and noise of that kind trains the reader to ignore the real ones.
+
