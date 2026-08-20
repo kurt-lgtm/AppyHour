@@ -475,6 +475,14 @@ with orders, which also makes the Monday skip safe: first touch of a new cohort 
 **`PA_MATURITY_DAYS = 10`.** A cohort column is **script-owned** and self-heals on every daily run
 from age 1 until age 10; at 10 days it **FREEZES** and the script refuses it forever after.
 
+> 🔴 **SCOPE NARROWED BY [D32](#d32--maturity-is-kurts-delivery-sla-ship--4--friday-and-the-measurement-window-closes-there-kurt-2026-08-20) (2026-08-20): this 10 is PivotAnalytics' number, and the
+> `Notifications` tab NO LONGER SHARES IT.** `NT_MATURITY_DAYS = 4` — Kurt's delivery SLA (ship
+> Monday → due delivered Friday), not a reconciliation window. Copying the 10 across was the mistake
+> D32 corrects. The 10 still governs TnT2 / Lost in Transit / `arrived` here, and D32 explains why
+> the two tabs legitimately differ: a late DELIVERY self-heals into a column, a late NOTIFICATION is
+> a failure. `Notifications!Arrived` is mirrored from `Lost in Transit`, so it keeps following THIS
+> 10-day clock (`NT_MIRROR_MATURITY_DAYS`) even though the rest of its column freezes at 4.
+
 **Why it exists — stale wrongness.** A box frozen as `3+ Day` / `Not Arrived` can later prove
 delivered. On 2026-08-07 alone `arrived` moved 2,253 → 2,256 → 2,260 → 2,262 across a single day.
 Without reconciliation the column freezes at a number we already know is wrong.
@@ -1044,6 +1052,11 @@ builder's numbers on a matured cohort** before trusting the headless path (ident
 Negatives first. Everything below was live-verified 2026-08-18; `appsscript/Notifications.gs` is the
 implementation and carries the same rules in its header.
 
+> 🔴 **AMENDED BY [D32](#d32--maturity-is-kurts-delivery-sla-ship--4--friday-and-the-measurement-window-closes-there-kurt-2026-08-20) (2026-08-20): every row below is now measured to a
+> DEADLINE.** The Klaviyo windows close at ship + 4 days (the Friday), not ship + 12. Where this
+> section describes a row's source that is unchanged; where it implies a row counts every send that
+> ever arrived, it does not — a send after the Friday is a LATE BOX and is excluded and logged.
+>
 > 🔴 **AMENDED BY [D29c](#d29c--total-shipments-and-arrived-are-script-owned-kurt-2026-08-19) (2026-08-19):
 > `Total Shipments` and `Arrived` are SCRIPT-OWNED.** Where this section and the file header called
 > them "NOT OURS / owned elsewhere / read-only here", that is **superseded** — Kurt handed both rows to
@@ -1777,3 +1790,200 @@ tolerance; find out what Klaviyo stopped sending.
   than one shared `lo`/`hi` — the email window moves independently now, and a single pair could not
   detect that. A set accumulated over a different span is a wrong answer, not a partial one.
 - `ntCheckSweepState()` reports events (not pages), runs remaining, and the no-address counter.
+
+### D32 — MATURITY IS KURT'S DELIVERY SLA (ship + 4 = FRIDAY), AND THE MEASUREMENT WINDOW CLOSES THERE (Kurt 2026-08-20)
+
+Negatives first.
+
+> 🔴 **`NT_MATURITY_DAYS = 10` WAS NEVER A BUSINESS RULE.** It was `PA_MATURITY_DAYS` (D15), copied
+> into `Notifications.gs` because it was there — a PivotAnalytics *reconciliation* window borrowed as
+> a *completeness* rule. Kurt, verbatim: **"Orders have to be delivered by 8/14 at the latest. any
+> email after that is an issue"** · **"it should be mature on the friday"** · **"FRIDAY 8/14 NOT
+> thursday"**. A cohort tagged `_SHIP_2026-08-10` ships that Monday and every box is DUE DELIVERED by
+> Friday 2026-08-14 = **ship + 4 days**.
+
+#### The rule
+
+- **`NT_MATURITY_DAYS = 4`.** Derived from the cohort's OWN ship date (`ntCohortAgeDays_` subtracts
+  the date in the `_SHIP_` tag), never from a weekday name — a shifted ship week still lands on
+  ship+4 without anything knowing what day it is.
+- 🔴 **If a ship week ever starts on a day other than Monday it matures four days after ITSELF** — a
+  Tuesday cohort matures Saturday, not Friday. That is the correct reading of "delivered within four
+  days of shipping". If Kurt ever means *always Friday, whatever day we shipped*, that is a DIFFERENT
+  rule (weekday-anchored, so a Thursday cohort would mature the next day) and it needs his word — do
+  not infer it from this one. The **Tuesday Dallas sub-cohort is not such a case**: it carries the
+  same Monday `_SHIP_` tag and is already measured against that Monday's Friday.
+- **Every Klaviyo window closes at `ntMaturityEndIso_(shipWeek)`** = midnight **ET** at the END of the
+  maturity day (`2026-08-15T04:00:00Z` for `_SHIP_2026-08-10`). Exact windows, all half-open `[lo,hi)`:
+
+  | metric | feeds | window |
+  |---|---|---|
+  | `Received Email` | `Order Delivered → Email Sent` only | `[ship − 1d 00:00Z, maturityEnd)` |
+  | `Received Text Message` | Shipped + Delivered `SMS Sent` | `[ship − 9d 00:00Z, maturityEnd)` |
+  | `Clicked Text Message` | both `SMS Engaged` rows | `[ship − 9d 00:00Z, maturityEnd)` |
+
+  **The LEADS did not change** and must not: email keeps its 1-day lead (a Delivered mail cannot
+  precede the shipment, D31); SMS keeps 9 days because it also feeds the SHIPPED rows, which fire
+  early. **Only the tail moved**, from a flat `+12d` to the deadline.
+- 🔴 **The boundary is ET, not UTC, and that is worth four hours of Friday.** Closing at
+  `2026-08-15T00:00:00Z` would end the window at 8pm ET / 5pm PDT and call a Friday-evening delivery
+  notification LATE. The freeze clock is already ET (`NT_TZ`) and the deadline is a business day. The
+  ET edge is a strict superset of the UTC one, so nothing on time is lost to a timezone artifact.
+  Measured cost of the choice: 3 delivered-email customers on 08-10, 2 on 07-27, 1 on 07-20, 3 on
+  07-13 sit in that band.
+
+#### What it changed on the published rows (measured, not assumed)
+
+Re-slicing the SAME swept events over the new tail (`nt_mature.py`, 2026-08-20 — no re-fetch, so the
+two are directly comparable). Rows move **DOWN**, because `+12d` was sweeping up late boxes:
+
+| cohort | `Delivered → Email Sent` +12d | at maturity | late-only customers |
+|---|---|---|---|
+| `_SHIP_2026-08-10` | 2,181 | **2,153** | 28 |
+| `_SHIP_2026-08-03` | 2,142 | **2,132** | 10 |
+| `_SHIP_2026-07-27` | 2,020 | **1,678** | **342 (15.8%)** |
+| `_SHIP_2026-07-20` | 1,529 | **1,517** | 12 |
+| `_SHIP_2026-07-13` | 1,149 | **1,127** | 22 |
+
+`_SHIP_2026-07-27` read a healthy 93% under the old window. Measured to its own Friday it is 1,678
+of 2,169. **These rows are now a delivery-PERFORMANCE number, not an eventually-delivered one.**
+Delivered-SMS late-only over the same cohorts: 15 / 6 / 135 / 3 / 9.
+
+#### 🔴 The late count is EXCLUDED, not lost — and there is no cheap way to publish it
+
+Sends after the deadline are the signal Kurt asked for. They are **logged** (`ntLateSignalNote_`),
+not written, because getting them into a cell costs a second sweep.
+
+- 🔴 **DO NOT reach for `/metric-aggregates/`.** It is ACCOUNT-WIDE, and the days after one cohort's
+  deadline are exactly the days the NEXT cohort is delivered on time. Its Delivered-flow count in the
+  late span is **2,092 for `_SHIP_2026-08-10` against a true in-cohort 28**, and 3,107 vs 342 on
+  07-27. It is not a proxy, it is a different quantity. Tried, measured, rejected.
+- The two honest routes, priced: **(a)** sweep `[maturityEnd, ship + NT_LATE_HORIZON_DAYS)` and filter
+  to the cohort — a second sweep the size of the tail just removed, which gives back the whole saving;
+  **(b)** mirror it in from the local/cloud pipeline that has no 360s ceiling, the same shape `Arrived`
+  already uses. **Whether the late count gets its own ROW is Kurt's call** — it is a new published
+  number, not a tuning knob.
+- Definition, when it is built: a customer is LATE if their FIRST Delivered-flow send lands after the
+  deadline **and** they have none before it — so an on-time customer with a later duplicate is not
+  double-counted.
+
+#### 🔴 The two MIRROR rows do NOT freeze at maturity (`NT_MIRROR_MATURITY_DAYS = 10`)
+
+`Arrived` is mirrored from `Lost in Transit`, which self-heals on the PivotAnalytics walk-forward
+until `PA_MATURITY_DAYS = 10` (D15: `arrived` moved 2,253 → 2,256 → 2,260 → 2,262 inside one day).
+Dropping notification maturity to 4 without this would **freeze the mirror six days before its
+authority does**, stamping a mid-flight delivery count into a cell nothing revisits — the exact
+failure D29c exists to stop. So ages **6–9 run MIRROR-ONLY** (`ntRefreshMirrors_`): `Arrived`
+re-reads its authority, nothing else is touched, no cohort pull, no Klaviyo page.
+
+#### 🔴 The FINAL full run is the day AFTER maturity, not the maturity day
+
+`NT_FINAL_RUN_AGE = NT_MATURITY_DAYS + 1`. The window closes at midnight ET at the end of the
+Friday, so a trigger firing ON the Friday sees only part of it. Freezing there would publish a
+Thursday-night view of a Friday deadline. Because `ntCohortAgeDays_` counts ET days against an ET
+midnight boundary, `age >= NT_MATURITY_DAYS + 1` is EXACTLY the predicate "now is past
+`ntMaturityEndIso_`" — the same condition written two ways, not a fudge. Leg by age:
+**0 skip · 1–5 FULL · 6–9 mirror-only · 10+ frozen.**
+
+Consequence, handled: a completed sweep used to be discarded on every new ET day so the column walks
+forward. That now applies **only while the window is open**. A sweep completed **on or after** the day
+the window closed is KEPT — its event set cannot change, and with only one closed-window day to work
+in, discarding it would mean the column can never be finished. 🔴 The test is *"was the sweep taken
+after the window closed"*, not *"is the window closed now"*: `complete` means "reached
+`links.next = null`", never "the window is over", so a day-2 complete sweep is still discarded.
+
+#### Run cost: measure it, and it barely moves the decision
+
+Live `/metric-aggregates/` per cohort per metric, old window vs new (2026-08-20), against
+`NT_MAX_EVENTS = 24000`:
+
+| cohort | metric | OLD ev / runs | NEW ev / runs | verdict |
+|---|---|---|---|---|
+| 08-10 | Received Email | 144,886 / 24 | 119,663 / 20 | declined → declined |
+| 08-10 | Received Text Message | 22,908 / 4 | 14,305 / 3 | under → under |
+| 08-10 | Clicked Text Message | 11,793 / 2 | 7,461 / 2 | under → under |
+| 08-03 | Received Email | 161,678 / 27 | 44,762 / 8 | declined → declined |
+| 08-03 | Received Text Message | 34,640 / 6 | 26,943 / 5 | declined → declined |
+| 08-03 | Clicked Text Message | 17,275 / 3 | 13,326 / 3 | under → under |
+| 07-27 | Received Email | 162,467 / 27 | 116,569 / 19 | declined → declined |
+| 07-27 | Received Text Message | 31,813 / 6 | 25,378 / 5 | declined → declined |
+| 07-27 | Clicked Text Message | 15,982 / 3 | 12,592 / 3 | under → under |
+| 07-20 | Received Email | 178,106 / 29 | 60,182 / 10 | declined → declined |
+| 07-20 | **Received Text Message** | 28,255 / 5 | **7,928 / 2** | 🟢 **NEWLY REACHABLE** |
+| 07-20 | Clicked Text Message | 14,522 / 3 | 4,711 / 1 | under → under |
+| 07-13 | Received Email | 219,920 / 36 | 158,956 / 26 | declined → declined |
+| 07-13 | Received Text Message | 11,157 / 2 | 6,249 / 2 | under → under |
+| 07-13 | Clicked Text Message | 6,778 / 2 | 4,095 / 1 | under → under |
+
+Per-cohort runs to fill a column: **30→25, 36→16, 36→27, 37→13, 40→29** (179 → 110).
+
+🔴 **Exactly ONE row-pair is bought by this change** — `_SHIP_2026-07-20`'s `SMS Sent` rows. Every
+`Received Email` sweep is still 1.9×–6.6× over the cap, so every `Order Delivered → Email Sent` cell
+stays DECLINED and BLANK in Apps Script. Do not read the 72% cut on 08-03's email metric as progress
+toward a filled cell: 44,762 is still nearly twice 24,000. It *is* now the cheapest email column by a
+wide margin — **if** Kurt raises the cap, ~45,000 buys that one column for 8 runs.
+
+🔴 **And the old `135,665` figure for 08-10 was itself measuring a moving target** — re-probed a day
+later over the identical `+12d` window it is **144,886**, because that window ran to 2026-08-22, into
+the future. A cost quoted from a window that has not closed is a lower bound, not a measurement. The
+maturity windows have all closed, so the new figures cannot drift.
+
+#### Verification
+
+- `nt_maturity_selftest.js` **lifts `ntMaturityEndIso_` / `ntWindowFor_` out of the deployed `.gs`**
+  (not a re-typed copy — extraction fails loudly if they move) and asserts: every cohort matures on
+  its Friday; the window closes at the END of it (04:00Z EDT, **05:00Z EST** — a January cohort is
+  tested, so nothing is hard-coded to summer); a Tuesday cohort matures Saturday; the leads are
+  unchanged; the age→leg table; the checkpoint-reuse predicate. **0 failures.**
+- **Cross-language reproduce gate:** the `.gs` and the python pipeline independently produce
+  `2026-08-15T04:00:00Z` for `_SHIP_2026-08-10`.
+- **Fidelity gate re-run on the new boundary** (`nt_cost.py`): our re-slice vs Klaviyo's own
+  server-side `by:["$flow"]` aggregate — **45 of 45 comparisons EXACT**. Under the old `+12d` window
+  the same gate was 42 of 45, and **all 3 misses were `_SHIP_2026-08-10`, in both directions** — the
+  count moving under the measurement. Closing the window at maturity is what removed them.
+
+#### `_SHIP_2026-08-10` was written under this rule (2026-08-20)
+
+16 cells, `Notifications!F2:F21`, targeted `values.update` per cell, column resolved by row-1 header
+text and row by column-A label, `USER_ENTERED` for percents (RAW would land a TEXT string and break
+arithmetic), fill-blanks-only, every cell read back. **16 verified, 0 failed.** Gates passed first:
+computed Total Shipments 2,316 == the population `TnT2` publishes (this tab's own cell was blank);
+every Sent ≤ Total; time split 3,744 + 154 + 123 MISSING = 4,021 sends.
+
+Total 2316 · Arrived 2300 · Placed 2289 / 98.83% · Shipped email 2316 / 100.00% · Shipped SMS 928 /
+40.07%, engaged 348 · Delivered email 2153 / 92.96% · Delivered SMS 940 / 40.59%, engaged 283 ·
+Time 3744 day / 154 night.
+
+🔴 **`_SHIP_2026-08-03` (column E) still holds OLD-WINDOW numbers** — written 2026-08-19 before this
+rule. Fill-blanks-only did not correct them; each is REPORTED as a disagreement instead
+(`delivered email 2142` vs 2132, `delivered SMS 854` vs 848, `engaged 259` vs 255, `shipped SMS 704`
+vs 698, `engaged 272` vs 265, time `3456/180` vs `3440/174`, and the pre-existing hand-typed
+`Arrived 2075` vs 2268). **Re-stating a column Kurt has already seen is his call, not a silent
+rewrite.** `_SHIP_2026-07-13/-20/-27` remain refused on the denominator gate (cohort 1,944/2,038/2,169
+vs published 2,025/2,075/2,227) — unchanged by this rule.
+
+#### 🔴 TnT2 / Lost in Transit / Routing Match are NOT changed here — reported for Kurt
+
+By the Friday rule, `PA_MATURITY_DAYS = 10` (D15) and D23's freeze-at-first-write are six days late
+too. **They are deliberately left alone**, because the tradeoff is not the same one:
+
+- **What changing TnT2 to 4 days WOULD fix:** the column would stop describing "eventually arrived"
+  and start describing "arrived by the deadline", matching `Notifications` and matching how Kurt
+  actually judges a week.
+- **What it would BREAK, and why the longer window is not the same mistake:** TnT2's walk-forward
+  exists so a **late delivery self-heals into the column** — a box frozen `3+ Day` / `Not Arrived`
+  that later proves delivered (D15: `arrived` moved four times in one day). That is a *correctness*
+  mechanism for a fact that arrives late, not a generosity in a deadline. A notification count has no
+  equivalent: the event either happened by Friday or it did not, and nothing about it is pending. So
+  the same number means different things on the two tabs, and cutting TnT2 to 4 days would freeze
+  `Not Arrived` boxes that are simply not scanned yet.
+- **What it would NOT fix either way:** the all-in late rate. Attribution never shrinks it
+  ([[any-tag-convention-is-rmfgs]]).
+- **The shape that gets both:** keep TnT2's 10-day self-heal for *arrival truth*, and add a
+  **`by Friday`** observation alongside it — the same box, judged at the deadline — rather than moving
+  the freeze. That is a new published number and therefore Kurt's call.
+- **`Routing Match` (D23, write-once at first write) is a third case** and is untouched: it records
+  what the engine chose, which cannot change after the fact.
+
+**Deployed:** `Notifications.gs` `803c3ea257af` → `68e3b2245faf` via the gated pusher (other four
+files verified byte-identical to live before and after the PUT; never `clasp push`).

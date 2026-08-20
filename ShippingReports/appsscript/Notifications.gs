@@ -8,6 +8,19 @@
  * 🔴 NEVER LOG THE KEY. `ntKey_()` returns the secret; no code path prints it, and the diagnostics
  * print property NAMES only.
  *
+ * 🔴 EVERY NUMBER ON THIS TAB IS MEASURED TO A DEADLINE, AND THE DEADLINE IS KURT'S (2026-08-20).
+ * "Orders have to be delivered by 8/14 at the latest. any email after that is an issue" / "it
+ * should be mature on the friday" / "FRIDAY 8/14 NOT thursday". A cohort ships Monday and is DUE
+ * DELIVERED by the Friday, so the column matures at ship + 4 days and every Klaviyo window CLOSES
+ * THERE — see NT_MATURITY_DAYS and ntMaturityEndIso_.
+ * What that changes, and why it is not cosmetic: the tab used to sweep ship+12d, which counted a
+ * delivery notified the following Wednesday as if it had arrived on time. `_SHIP_2026-07-27` read
+ * 2,020 delivered-email of 2,169; measured to its own Friday it is 1,678, and the other 342 are
+ * LATE BOXES. The rows here are now a delivery-PERFORMANCE number, not an eventually-delivered one.
+ * 🔴 THE LATE COUNT IS DELIBERATELY EXCLUDED, NOT LOST — it is the signal, and it is logged rather
+ * than published because it costs a second sweep. See ntLateSignalNote_ for the measured figures
+ * per cohort and the two priced ways to give it a row. Whether it gets one is Kurt's call.
+ *
  * WHAT EACH ROW MEANS (interpretation — confirmed with Kurt where noted):
  *   Total Shipments / Arrived   — 🔴 SCRIPT-OWNED as of Kurt's ruling 2026-08-19. This REPLACES the
  *   "NOT OURS / owned elsewhere / read-only here" note that stood here before, and supersedes the
@@ -21,9 +34,14 @@
  *                       delivery fact derived from fulfillment trees + ParcelPanel, and this file's
  *                       cohort query is deliberately light — recomputing it would duplicate that
  *                       pipeline and spend the shared PP quota twice.
- *   🔴 BOTH ROWS FILL BLANKS ONLY. A value a human typed is never overwritten on any column; if the
+ *   🔴 BOTH ROWS FILL BLANKS ONLY **IN BACKFILL MODE** — and that qualifier matters, because this
+ *   line used to omit it and read as an absolute. On a FROZEN column (reachable only through
+ *   `ntBackfillFrozen`, `emptyOnly = true`) a value a human typed is never overwritten; if the
  *   computed value disagrees it is REPORTED and the typed value kept, because the disagreement is
- *   the evidence that the mirror drifted.
+ *   the evidence that the mirror drifted. On the CURRENT column both rows walk forward and DO
+ *   overwrite — see NT_BLANK_ONLY_KEYS, which explains why write-once here would freeze a
+ *   mid-flight `Arrived` forever. The mirror-only leg (days 4-9, ntRefreshMirrors_) is that same
+ *   walk-forward, narrowed to `Arrived`.
  *
  *   🔴 GRAIN IS MIXED WITHIN THE `Order Shipped` SECTION, ON PURPOSE. Its `Email Sent` is Shopify at
  *   ORDER grain; its `SMS Sent` / `SMS Engaged` are Klaviyo at DISTINCT-PROFILE grain. They are not
@@ -235,7 +253,8 @@
  *   - section-scoped keys: "Percent of Total" appears 5×, so a key carries its section AND its
  *     channel (the nearest preceding "Email Sent" / "SMS Sent" row).
  *   - format-from-previous → header → values → assert, in that order, on a new column.
- *   - walk-forward freeze at NT_MATURITY_DAYS; matured columns are Kurt-owned.
+ *   - walk-forward freeze at NT_MATURITY_DAYS (= 4, Kurt's delivery SLA — see the constant); days
+ *     4-9 run MIRROR-ONLY because `Lost in Transit` self-heals to day 10; Kurt-owned from day 10.
  *   - every assert is NAMED (NT_ASSERT_*) and throws BEFORE anything is written.
  *   - dry-run preview writes nothing: `ntPreviewCurrentColumn()`.
  *
@@ -257,7 +276,55 @@
 
 var NT_TAB = 'Notifications';
 var NT_TZ = 'America/New_York';
-var NT_MATURITY_DAYS = 10;               // same walk-forward window as PivotAnalytics (D15)
+/**
+ * 🔴 MATURITY IS KURT'S DELIVERY SLA, NOT A COPIED WALK-FORWARD WINDOW (Kurt 2026-08-20).
+ * It was 10, borrowed from PA_MATURITY_DAYS (D15). Ten was never a business rule — it was the
+ * PivotAnalytics reconciliation window, taken over because it was there. Kurt, verbatim:
+ *     "Orders have to be delivered by 8/14 at the latest. any email after that is an issue"
+ *     "it should be mature on the friday"           "FRIDAY 8/14 NOT thursday"
+ * A cohort tagged `_SHIP_2026-08-10` ships that Monday and every box is supposed to be DELIVERED by
+ * Friday 2026-08-14. Friday is ship + 4 days, so the column is complete on day 4 and a delivered
+ * notification after it is not a number still settling — it is a LATE BOX.
+ *
+ * 🔴 IT IS DERIVED FROM THE COHORT'S OWN SHIP DATE, NEVER FROM A WEEKDAY NAME. `ntCohortAgeDays_`
+ * subtracts the date in the `_SHIP_` tag, so a shifted ship week still lands on ship+4 without
+ * anything here knowing what day of the week it is.
+ * 🔴 WHAT HAPPENS IF A SHIP WEEK EVER STARTS ON A DAY OTHER THAN MONDAY: it matures four days after
+ * ITS OWN ship date — a Tuesday cohort matures Saturday, not Friday. That is the correct reading of
+ * "delivered within four days of shipping" and it is what this constant encodes. If Kurt ever means
+ * "always Friday, whatever day we shipped", that is a DIFFERENT rule (anchored to a weekday, so a
+ * Thursday cohort would mature the next day) and it needs his word — do not infer it from this one.
+ * The Tuesday Dallas sub-cohort is NOT such a case: it carries the same Monday `_SHIP_` tag and is
+ * therefore already measured against the Monday's Friday.
+ */
+var NT_MATURITY_DAYS = 4;                // ship Monday + 4 = Friday. Kurt 2026-08-20.
+/**
+ * 🔴 THE TWO MIRROR ROWS DO NOT FREEZE AT MATURITY, AND THAT IS THE WHOLE POINT OF THIS CONSTANT.
+ * `Total Shipments` and `Arrived` are not measured here — `Arrived` is MIRRORED from `Lost in
+ * Transit`, which is refreshed on the PivotAnalytics walk-forward and keeps self-healing until
+ * PA_MATURITY_DAYS = 10 (D15: `arrived` moved 2,253 -> 2,256 -> 2,260 -> 2,262 inside a single day).
+ * Dropping the notification maturity to 4 without this would freeze the mirror SIX DAYS BEFORE ITS
+ * AUTHORITY DOES, stamping a mid-flight delivery count into a cell nothing ever revisits — which is
+ * exactly the failure D29c was written to stop (the hand-typed 2075 on 08-03, copied mid-flight,
+ * 193 low, never refreshed).
+ * So ages [NT_MATURITY_DAYS, NT_MIRROR_MATURITY_DAYS) run in MIRROR-ONLY mode: the two mirror rows
+ * re-read their authority, and nothing else is touched. That leg costs no Klaviyo pages and no
+ * cohort pull — it is two sheet reads.
+ */
+var NT_MIRROR_MATURITY_DAYS = 10;        // == PA_MATURITY_DAYS, the authority tab's own freeze
+/**
+ * 🔴 THE FINAL FULL RUN IS THE DAY **AFTER** MATURITY, AND GETTING THIS WRONG WOULD PUBLISH A
+ * NUMBER MEASURED BEFORE ITS OWN DEADLINE. The window closes at MIDNIGHT ET at the end of the
+ * maturity Friday. A daily trigger firing ON the Friday therefore runs while the window is still
+ * open and can only see part of it — freezing there would stamp a Thursday-night view of a Friday
+ * deadline into the column forever. The first ET day on which the window is provably closed is
+ * maturity + 1 (the Saturday), so that is the last day a FULL refresh runs.
+ * 🔴 IT IS NOT A "+1 FUDGE". `ntCohortAgeDays_` counts ET days and the boundary is ET midnight, so
+ * `age >= NT_MATURITY_DAYS + 1` is EXACTLY the predicate "now is past ntMaturityEndIso_". The two
+ * are the same condition written two ways; this one is the one the trigger can evaluate without a
+ * clock comparison.
+ */
+var NT_FINAL_RUN_AGE = NT_MATURITY_DAYS + 1;
 var NT_REV = '2024-10-15';               // Klaviyo API revision header — REQUIRED on every call
 var NT_BASE = 'https://a.klaviyo.com/api';
 /**
@@ -314,6 +381,39 @@ var NT_PAGE = 1000;                      // events page[size] — mirrors NT_PAG
  *     _SHIP_2026-07-27      160,555               26                     6
  *     _SHIP_2026-07-20      176,562               29                     7
  *     _SHIP_2026-07-13      218,613               36                     8
+ *
+ * 🔴 RE-MEASURED 2026-08-20 AFTER THE WINDOW WAS CLOSED AT MATURITY — AND THE HEADLINE IS THAT IT
+ * BARELY MOVES THE DECISION. Shortening the tail from +12d to the maturity Friday cuts the events
+ * paged by 17-72%, and it unblocks EXACTLY ONE metric on ONE cohort. Live /metric-aggregates/ per
+ * cohort per metric, old window vs new, with the run count each implies:
+ *     cohort            metric                    OLD ev  runs      NEW ev  runs   verdict at 24,000
+ *     _SHIP_2026-08-10  Received Email           144,886    24     119,663    20   declined -> declined
+ *     _SHIP_2026-08-10  Received Text Message     22,908     4      14,305     3   under -> under
+ *     _SHIP_2026-08-10  Clicked Text Message      11,793     2       7,461     2   under -> under
+ *     _SHIP_2026-08-03  Received Email           161,678    27      44,762     8   declined -> declined
+ *     _SHIP_2026-08-03  Received Text Message     34,640     6      26,943     5   declined -> declined
+ *     _SHIP_2026-08-03  Clicked Text Message      17,275     3      13,326     3   under -> under
+ *     _SHIP_2026-07-27  Received Email           162,467    27     116,569    19   declined -> declined
+ *     _SHIP_2026-07-27  Received Text Message     31,813     6      25,378     5   declined -> declined
+ *     _SHIP_2026-07-27  Clicked Text Message      15,982     3      12,592     3   under -> under
+ *     _SHIP_2026-07-20  Received Email           178,106    29      60,182    10   declined -> declined
+ *     _SHIP_2026-07-20  Received Text Message     28,255     5       7,928     2   🟢 NEWLY REACHABLE
+ *     _SHIP_2026-07-20  Clicked Text Message      14,522     3       4,711     1   under -> under
+ *     _SHIP_2026-07-13  Received Email           219,920    36     158,956    26   declined -> declined
+ *     _SHIP_2026-07-13  Received Text Message     11,157     2       6,249     2   under -> under
+ *     _SHIP_2026-07-13  Clicked Text Message       6,778     2       4,095     1   under -> under
+ * Per-cohort total runs to fill a column: 30->25, 36->16, 36->27, 37->13, 40->29 (179 -> 110).
+ * 🔴 SO: ONE ROW-PAIR IS BOUGHT BY THIS CHANGE — `_SHIP_2026-07-20`'s SMS Sent rows, whose metric
+ * drops 28,255 -> 7,928. Every `Received Email` sweep is still 1.9x to 6.6x over the cap, so every
+ * `Order Delivered -> Email Sent` cell stays DECLINED and BLANK in Apps Script. Do not read the
+ * 72% cut on _SHIP_2026-08-03's email metric as progress toward a filled cell: 44,762 is still
+ * nearly twice 24,000. It IS, however, now the cheapest email column by a wide margin — if Kurt
+ * ever raises the cap, 45,000 buys that one column for 8 runs, and that is the only email row this
+ * change brings within reach of a plausible number.
+ * 🔴 AND THE OLD `135,665` FIGURE FOR _SHIP_2026-08-10 WAS ITSELF MEASURING A MOVING TARGET. Probed
+ * again a day later over the identical +12d window it is 144,886, because that window ran to
+ * 2026-08-22 — into the future. A cost quoted from a window that has not closed is a lower bound,
+ * not a measurement. The maturity windows have all closed, so the NEW column above cannot drift.
  * 🔴 READ THE FIRST COLUMN, NOT THE SECOND. As the code stands today NT_MAX_EVENTS = 250000 makes
  * every cohort *finishable*, but at 22-36 runs each — ~161 runs to fill all six columns, i.e. months
  * on the daily trigger. That is almost certainly not a price worth paying, and saying so is the
@@ -371,7 +471,30 @@ var NT_TIME_BUDGET_MS = 240000;          // 4 min of fetching, leaving 2 min of 
  */
 var NT_SAVE_RESERVE_MS = 25000;
 var NT_WIN_LEAD_DAYS = 9;                // order-placed mail fires up to ~a week before ship Monday
-var NT_WIN_TAIL_DAYS = 12;               // delivered mail trails the ship week
+/**
+ * 🔴 THE TAIL IS NO LONGER A FLAT +12 DAYS — IT CLOSES AT MATURITY (Kurt 2026-08-20).
+ * `NT_WIN_TAIL_DAYS = 12` was a guess about how long delivered mail trails a ship week. Kurt's rule
+ * makes it a measurement of the wrong thing: every box is supposed to be delivered by the Friday, so
+ * a window that runs to the following Saturday counts a LATE delivery as if it were on time. The
+ * window now ends at the END of the maturity day (see ntWindowFor_), and that is what makes the
+ * `Order Delivered` rows a delivery-PERFORMANCE number rather than an eventual-delivery number.
+ *
+ * WHAT IT COST US TO LEARN, MEASURED (local re-slice of the same swept events, 2026-08-20 — the
+ * rows moved DOWN because the +12d tail was sweeping up late boxes):
+ *     cohort              Delivered->Email Sent   +12d      at maturity     late-only customers
+ *     _SHIP_2026-08-10                            2,181         2,153                      28
+ *     _SHIP_2026-08-03                            2,142         2,132                      10
+ *     _SHIP_2026-07-27                            2,020         1,678                     342   <--
+ *     _SHIP_2026-07-20                            1,529         1,517                      12
+ *     _SHIP_2026-07-13                            1,149         1,127                      22
+ * 342 of _SHIP_2026-07-27's boxes were notified as delivered AFTER their Friday. Under the old
+ * window that column read 2,020/2,169 = a healthy 93%; the honest number is 1,678 on time.
+ *
+ * 🔴 THIS CONSTANT IS NOW THE **LATE-OBSERVATION HORIZON**, AND IT IS NOT USED BY THE SWEEP.
+ * It records how far past the ship date a late notification was still looked for when those figures
+ * were measured. Nothing in this file pages that span any more.
+ */
+var NT_LATE_HORIZON_DAYS = 12;
 /**
  * 🔴 THE EMAIL METRIC GETS ITS OWN, SHORTER LEAD — because it now feeds exactly ONE row.
  * The 9-day lead exists for the ORDER-PLACED mail, which fires up to a week before the ship Monday.
@@ -847,8 +970,38 @@ function ntWindowFor_(shipWeek, metricKey) {
   var lead = (metricKey === 'email') ? NT_EMAIL_WIN_LEAD_DAYS : NT_WIN_LEAD_DAYS;
   return {
     lo: new Date(ship - lead * 86400000).toISOString().replace(/\.\d+Z$/, 'Z'),
-    hi: new Date(ship + NT_WIN_TAIL_DAYS * 86400000).toISOString().replace(/\.\d+Z$/, 'Z')
+    hi: ntMaturityEndIso_(shipWeek)
   };
+}
+
+/**
+ * The instant the measurement window closes: the END of the maturity day, in ET.
+ *
+ * 🔴 IT IS ET, NOT UTC, AND THE DIFFERENCE IS FOUR HOURS OF FRIDAY. `_SHIP_2026-08-10` matures
+ * Friday 2026-08-14; closing at `2026-08-15T00:00:00Z` would end the window at 8pm ET / 5pm PDT and
+ * count a Friday-evening delivery notification as LATE. The freeze clock (ntCohortAgeDays_) is
+ * already ET (NT_TZ) and Kurt's deadline is a business day, so ET is the consistent frame — and it
+ * is a strict SUPERSET of the UTC boundary, so nothing on time can be lost to a timezone artifact.
+ * Measured cost of the choice (2026-08-20): 3 delivered-email customers on _SHIP_2026-08-10, 2 on
+ * 07-27, 1 on 07-20, 3 on 07-13 sit inside that 4-hour band. Small, and on the right side.
+ *
+ * 🔴 DERIVED FROM THE `_SHIP_` DATE, NOT FROM A WEEKDAY. Utilities.formatDate on the ET boundary
+ * handles EDT/EST for us, so this does not need a DST branch and must not grow one.
+ */
+function ntMaturityEndIso_(shipWeek) {
+  var ship = new Date(shipWeek.replace('_SHIP_', '') + 'T00:00:00Z').getTime();
+  // 🔴 FORMATTED IN **UTC**, NOT NT_TZ. `ship` is UTC midnight; rendering that instant in ET gives
+  // 8pm the PREVIOUS day, which would silently shift the whole boundary back 24 hours. The calendar
+  // arithmetic is done in the frame the tag is written in (UTC dates), and only the FINAL midnight
+  // is converted to ET below.
+  var dayAfter = new Date(ship + (NT_MATURITY_DAYS + 1) * 86400000);
+  var ymd = Utilities.formatDate(dayAfter, 'UTC', 'yyyy-MM-dd');
+  // midnight ET on the day AFTER maturity, expressed as the UTC instant the API filter wants
+  var offset = Utilities.formatDate(new Date(ymd + 'T12:00:00Z'), NT_TZ, 'Z');   // e.g. "-0400"
+  var hh = Number(offset.slice(1, 3)), mm = Number(offset.slice(3, 5));
+  var sign = offset.charAt(0) === '-' ? 1 : -1;                                  // ET->UTC
+  var utc = new Date(ymd + 'T00:00:00Z').getTime() + sign * (hh * 3600000 + mm * 60000);
+  return new Date(utc).toISOString().replace(/\.\d+Z$/, 'Z');
 }
 
 /**
@@ -1459,6 +1612,46 @@ function ntPct_(n, d) { return (d > 0) ? ((n / d) * 100).toFixed(2) + '%' : ''; 
  * Everything for ONE cohort. Returns {values, notes}. Throws only on a broken invariant; a data
  * gap comes back as an ABSENT key (blank on the sheet) plus a loud note.
  */
+/**
+ * THE LATE-DELIVERY SIGNAL — what it is, why it is a LOG LINE and not a row, and what it would cost.
+ *
+ * Closing the window at maturity answers "how many boxes were notified delivered ON TIME". The
+ * complement — how many were notified LATE — is a real signal Kurt asked for ("any email after that
+ * is an issue"), and it is NOT free, so this file states the number it knows and refuses to invent
+ * the one it does not.
+ *
+ * MEASURED LOCALLY 2026-08-20 (nt_mature.py, re-slicing the same swept events; a customer counts as
+ * LATE only if their FIRST Delivered-flow send lands after the deadline AND they have none before
+ * it, so an on-time customer with a later duplicate is not double-counted):
+ *     cohort              delivered EMAIL: on time / LATE     delivered SMS: on time / LATE
+ *     _SHIP_2026-08-10          2,153 /  28                        940 /  15
+ *     _SHIP_2026-08-03          2,132 /  10                        848 /   6
+ *     _SHIP_2026-07-27          1,678 / 342   <-- 15.8% late       691 / 135
+ *     _SHIP_2026-07-20          1,517 /  12                        572 /   3
+ *     _SHIP_2026-07-13          1,127 /  22                        387 /   9
+ *
+ * 🔴 DO NOT REACH FOR /metric-aggregates/ TO GET THIS CHEAPLY — IT WAS TRIED AND IT DOES NOT WORK.
+ * The aggregate is ACCOUNT-WIDE (the header already says so for the volume probe), and the days
+ * after one cohort's deadline are exactly the days the NEXT cohort is being delivered on time. Its
+ * Delivered-flow count in the late span is 2,092 for _SHIP_2026-08-10 against a true in-cohort 28,
+ * and 3,107 for _SHIP_2026-07-27 against 342. It is not a proxy, it is a different quantity.
+ *
+ * THE TWO HONEST WAYS TO PUT IT IN A CELL, PRICED:
+ *   a. Extend the sweep to [maturityEnd, ship + NT_LATE_HORIZON_DAYS) and filter to the cohort. That
+ *      is a SECOND sweep of the same size as the tail we just removed, so it gives back the entire
+ *      saving below and puts the email metric back over the cap. Real, expensive, correct.
+ *   b. Take it from the LOCAL pipeline (or a cloud job) that has no 360s ceiling, and mirror it in —
+ *      the same shape as `Arrived`, which is already mirrored rather than computed here.
+ * Which one, and whether the late count gets its own ROW at all, is Kurt's call — it is a new
+ * published number, not a tuning knob. Until he says, this is a log line.
+ */
+function ntLateSignalNote_(shipWeek, wins) {
+  ntLog_('  LATE SIGNAL: sends in [' + wins.email.hi + ', ship+' + NT_LATE_HORIZON_DAYS + 'd) are ' +
+         'excluded from every row above and are NOT counted here — see ntLateSignalNote_ for the ' +
+         'locally-measured per-cohort figures and the two priced ways to publish them. The ' +
+         'account-wide /metric-aggregates/ shortcut is NOT one of them (2,092 vs a true 28).');
+}
+
 function ntMeasure_(shipWeek, sheetTotal, deadline) {
   var out = {}, notes = [];
   var cohort = ntFetchCohort_(shipWeek);
@@ -1538,6 +1731,12 @@ function ntMeasure_(shipWeek, sheetTotal, deadline) {
   ntLog_('  klaviyo windows: email ' + wins.email.lo + ' .. ' + wins.email.hi +
          ' (lead ' + NT_EMAIL_WIN_LEAD_DAYS + 'd — a Delivered mail cannot precede the shipment) | ' +
          'sms ' + wins.sms.lo + ' .. ' + wins.sms.hi + ' (lead ' + NT_WIN_LEAD_DAYS + 'd)');
+  ntLog_('  🔴 ALL THREE WINDOWS CLOSE AT ' + wins.email.hi + ' = end of the maturity day (' +
+         'ship + ' + NT_MATURITY_DAYS + 'd, ET). Kurt 2026-08-20: "any email after that is an ' +
+         'issue". Sends after this instant are DELIBERATELY EXCLUDED from every row here — they ' +
+         'are LATE BOXES, not missing data, and counting them would make a late delivery read as ' +
+         'an on-time one. THAT COUNT IS NOT MEASURED IN THIS FILE — see ntLateSignalNote_.');
+  ntLateSignalNote_(shipWeek, wins);
 
   // ---- resumable sweep: load the checkpoint, validate it, continue or restart ----------------
   // 🔴 The tracked flow set is the two PINNED flows plus the informational one. Nothing else is
@@ -1562,14 +1761,35 @@ function ntMeasure_(shipWeek, sheetTotal, deadline) {
   // 🔴 A COMPLETE result is reused only for the REST OF THE SAME ET CALENDAR DAY. This tab is a
   // daily walk-forward artifact, so the day is its natural grain: a duration TTL would let a 23:50
   // sweep be reused at 01:10 and freeze a day's movement into the next column refresh.
+  // 🔴 …AND ONLY WHILE THE WINDOW IS STILL OPEN (added 2026-08-20 with the maturity change).
+  // Re-measuring daily is what keeps a LIVE column moving forward. Once the window has CLOSED at
+  // maturity, the same reasoning inverts: the events in [lo,hi) are a fixed historical set, a
+  // completed sweep of them cannot go stale, and discarding it would throw away the only run that
+  // ever sees the finished cohort. That matters much more at NT_MATURITY_DAYS = 4 than it did at
+  // 10 — the SMS metrics need 2-5 runs each and there is now ONE day (NT_FINAL_RUN_AGE) on which a
+  // closed-window sweep can be taken, so a banked partial has to survive to the next run or the
+  // column can never be finished.
+  // 🔴 THE TEST IS "WAS THE SWEEP TAKEN AFTER THE WINDOW CLOSED", NOT "IS THE WINDOW CLOSED NOW".
+  // A sweep that finished on day 2 paged every event that EXISTED on day 2 and set `complete` —
+  // that flag means "reached links.next = null", never "the window is over". Keeping such a sweep
+  // once the window later closes would publish a Tuesday view of a Friday deadline. `m.day` is the
+  // ET day the sweep completed on, and ntMaturityEndIso_ starts with the first ET day on which the
+  // window is provably closed, so a plain ISO-date string compare is the exact predicate.
   var today = ntToday_();
+  var closedFromDay = ntMaturityEndIso_(shipWeek).slice(0, 10);
   Object.keys(state.metrics).forEach(function (k) {
     var m = state.metrics[k];
-    if (m && m.complete && m.day !== today) {
-      ntLog_('  sweep of "' + NT_METRIC[k] + '" completed on ' + m.day + ', not today (' + today +
-             ') — re-measuring from page 0 so the column moves forward');
-      delete state.metrics[k];
+    if (!m || !m.complete || m.day === today) return;
+    if (m.day >= closedFromDay) {
+      ntLog_('  sweep of "' + NT_METRIC[k] + '" completed on ' + m.day + ', on or after the day the ' +
+             'window closed (' + closedFromDay + ') — KEPT, not re-measured: the event set behind ' +
+             'it can no longer change.');
+      return;
     }
+    ntLog_('  sweep of "' + NT_METRIC[k] + '" completed on ' + m.day + ', not today (' + today +
+           ') and before the window closed (' + closedFromDay + ') — re-measuring from page 0 so ' +
+           'the column moves forward');
+    delete state.metrics[k];
   });
 
   // 🔴 ORDER BY COST, CHEAPEST FIRST. With a hard budget, sweeping the biggest metric first would
@@ -1830,6 +2050,43 @@ function ntRefreshOne_(shipWeek, dry, allowAppend, emptyOnly, allowOlder) {
 }
 
 /**
+ * MIRROR-ONLY leg, for a column that has matured (>= NT_MATURITY_DAYS) but whose AUTHORITY TAB has
+ * not (< NT_MIRROR_MATURITY_DAYS). See NT_MIRROR_MATURITY_DAYS for why this exists at all.
+ *
+ * 🔴 IT REFRESHES `Arrived` AND NOTHING ELSE, and it does NOT pull the cohort. `Arrived` is the only
+ * owned row on this tab whose source keeps moving after maturity — `Lost in Transit` self-heals to
+ * PA_MATURITY_DAYS = 10. `Total Shipments` is a closed cohort count by then and re-deriving it would
+ * cost the 169s Shopify pull (NT_COHORT_PULL_MS) to confirm a number that cannot have changed, and
+ * the Klaviyo rows are measured over a window that has already closed, so re-sweeping them can only
+ * return what is already in the cells. This leg is therefore two sheet reads and at most one write.
+ *
+ * 🔴 IT IS NOT `ntBackfillFrozen`. That one is empty-cells-only and double-gated because it targets
+ * a Kurt-owned column. This is walk-forward on a still-live row and DOES overwrite — which is the
+ * whole point: the failure it prevents is a mid-flight `Arrived` frozen six days early.
+ */
+function ntRefreshMirrors_(shipWeek, dry) {
+  var sheet = SpreadsheetApp.openById(EXC_HOST_SHEET_ID).getSheetByName(NT_TAB);
+  if (!sheet) throw new Error('NT_ASSERT_NO_TAB: no tab named ' + NT_TAB);
+  ntAssertColumns_(sheet);
+  var map = ntRowMap_(sheet);
+  ntAssertShape_(map);                                 // throws BEFORE anything is written
+  var col = ntCurrentCol_(sheet, shipWeek, false, false);   // never appends, never an older column
+  if (!col) { ntLog_('  ' + shipWeek + ': no column on the tab — mirror leg skipped'); return null; }
+  var arrived = ntMirrorCell_(NT_MIRROR.arrived.tab, NT_MIRROR.arrived.label, shipWeek);
+  if (arrived === null) {
+    ntLog_('  ⚠️ Arrived NOT refreshed: ' + NT_MIRROR.arrived.tab + ' has no value for ' + shipWeek +
+           '. Blank != zero — the existing cell is left alone.');
+    return { shipWeek: shipWeek, col: col, wrote: 0, mirrorOnly: true };
+  }
+  var w = ntWriteOwned_(sheet, col, map, { 'own||Arrived': arrived }, dry, false);
+  w.notes.forEach(function (n) { ntLog_('  ⚠️ ' + n); });
+  ntAssertColumns_(sheet);
+  ntLog_('  ' + shipWeek + ' col ' + col + ': MIRROR-ONLY — Arrived ' + arrived + ' from ' +
+         NT_MIRROR.arrived.tab + ', ' + w.wrote + ' cell(s) ' + (dry ? 'previewed' : 'written'));
+  return { shipWeek: shipWeek, col: col, wrote: w.wrote, mirrorOnly: true, arrived: arrived };
+}
+
+/**
  * Daily entry point (its OWN time trigger — see the install note at the bottom of this file).
  * 🔴 A TIME-DRIVEN TRIGGER PASSES AN EVENT OBJECT as the first argument; only a real
  * `_SHIP_YYYY-MM-DD` string is accepted (the bug that killed paRefreshCurrentColumn_ in prod).
@@ -1841,9 +2098,18 @@ function ntRefreshCurrentColumn(shipWeek) {
   var age = ntCohortAgeDays_(cur);
   ntLog_('=== ntRefreshCurrentColumn ' + cur + ' (age ' + age + 'd) — ' +
          (dry ? 'DRY RUN (no writes)' : 'WRITING') + ' ===');
-  if (age >= NT_MATURITY_DAYS) {
-    ntLog_('FROZEN (age ' + age + 'd >= ' + NT_MATURITY_DAYS + 'd) — Kurt-owned, not touched. ' +
-           'Use ntBackfillFrozen() to fill EMPTY cells only.');
+  if (age > NT_FINAL_RUN_AGE && age < NT_MIRROR_MATURITY_DAYS) {
+    ntLog_('MATURED (age ' + age + 'd; window closed ' + ntMaturityEndIso_(cur) + ' and the final ' +
+           'full run was day ' + NT_FINAL_RUN_AGE + '). The measured rows are FINAL — a re-sweep of ' +
+           'a closed window can only return what is already in the cells. Running the MIRROR-ONLY ' +
+           'leg because ' + NT_MIRROR.arrived.tab + ' keeps self-healing until day ' +
+           NT_MIRROR_MATURITY_DAYS + '.');
+    return ntRefreshMirrors_(cur, dry);
+  }
+  if (age >= NT_MIRROR_MATURITY_DAYS) {
+    ntLog_('FROZEN (age ' + age + 'd >= ' + NT_MIRROR_MATURITY_DAYS + 'd — matured at day ' +
+           NT_MATURITY_DAYS + ', and ' + NT_MIRROR.arrived.tab + ' has frozen too) — Kurt-owned, ' +
+           'not touched. Use ntBackfillFrozen() to fill EMPTY cells only.');
     return { frozen: true };
   }
   if (age <= 0) { ntLog_('SKIP — cohort ships today; nothing sent yet.'); return { skipped: 'ship-day' }; }
