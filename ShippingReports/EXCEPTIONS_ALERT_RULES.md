@@ -1288,6 +1288,65 @@ against the ceiling.
   and should be deleted by hand.
 - 🔴 **NOT VERIFIED — the Python side.** Unchanged in this pass; proposed separately.
 
+#### 🔴 DEPLOYED (2026-08-20) — and what still needs Kurt's click
+
+| file | was | now |
+|---|---|---|
+| `Exceptions.gs` | `7d0dd0edfba0` | **`df1ff7e8088b`** |
+| `PivotAnalytics.gs` | `b6059ab1c568` | **`50ddf34eb17b`** |
+| `Code.gs` | `810e02c41d4f` | **`b38c8b5efbd1`** |
+| `Notifications.gs` | `68e3b2245faf` | *untouched, verified byte-identical after all three pushes* |
+
+Pushed one file per PUT via the gated `gas_swap.py`, **never `clasp push`** (`.claspignore` is a
+two-file allow-list and it deleted three deployed files on 2026-08-14). `Code.gs` went **last**
+because it owns the reserved `onOpen`. Each push re-GET the live project immediately beforehand and
+verified every untouched file byte-identical afterwards.
+
+🔴 **Rollback** — the pre-push bytes are snapshotted at
+`scratchpad/rollback_p12/` (verified to match the live shas above before anything moved):
+
+```
+cd "C:\Users\Work\AppData\Local\Temp\claude\C--Users-Work-Claude-Projects\b974d338-3e7f-4d7b-a87c-88d29670351d\scratchpad" && python gas_swap.py push Exceptions=rollback_p12\Exceptions.gs PivotAnalytics=rollback_p12\PivotAnalytics.gs Code=rollback_p12\Code.gs
+```
+
+##### Kurt's clicks (the Apps Script REST API can do none of these)
+
+**1. Cadence — recommended: go back to hourly.** F3 set it to 2×/day purely to yield budget. With
+no budget, cadence is a **detection-latency** choice, and the capacity table above shows 2×/day
+cannot cover a fresh 1,344-box cohort in a day while hourly clears every case with ≥7× headroom.
+487 open boxes polled once each per day is ~0.3 calls/minute — the load is irrelevant either way.
+
+🔴 **`installExceptionsTrigger()` is CORRECT AGAIN** — it always created `everyHours(1)`, which was
+wrong under F3 and is right under P12. So hourly is **one menu click**:
+
+> **Shipping Exceptions → Install/repair hourly trigger**
+
+It is idempotent: it deletes every existing `hourlyExceptionSweep` trigger first, so it also removes
+the two Day-timer rows. Nothing else's trigger is touched.
+
+**If Kurt prefers to keep 2×/day instead:** do nothing. The code no longer cares — the off-schedule
+guard that used to zero out unscheduled runs is deleted, so both cadences simply work. 🔴 **In that
+case accept the stated tradeoff:** a fresh cohort takes two days to cover once, and the second day's
+boxes are 24h staler.
+
+**To set the triggers by hand instead of using the menu** (clock icon in the Apps Script editor for
+*Running Reship*): delete the two Day-timer rows for `hourlyExceptionSweep`, then **Add trigger** →
+`hourlyExceptionSweep`, *Head*, *Time-driven*, **Hour timer**, **Every hour**.
+
+🔴 **TIMES IN THE TRIGGER UI ARE CENTRAL.** `appsscript.json` pins the project to
+`America/Chicago` while `EXC_TZ` is `America/New_York`. That mismatch is what produced P2, and it
+still applies to anything hour-specific — the existing Day timers at **8–9am / 3–4pm CT** are the
+ET 9 / ET 16 slots. Hourly makes the whole question moot, which is one more small argument for it.
+
+**2. Delete the dead property.** *Project Settings → Script Properties* → delete **`PP_WEEK_USED`**.
+It is no longer read or written by anything; leaving it invites someone to read it as live. Its
+final value is recorded above. (Properties are not writable over the REST API.)
+
+**3. Confirm it works.** **Shipping Exceptions → Check properties** prints the new
+`PP_CALLS_TODAY` line, the per-run ceiling and the cadence note, read-only, no trigger needed. Then
+**Run sweep now** and read the `PP fetch:` log line — `N asked, N served, 0 still throttled` is the
+success shape, and `min x-ratelimit-remaining` should sit near 20 of 120.
+
 ### P13 — NO CONSUMER MAY DROP A 429 (Kurt GO, 2026-08-20)
 
 A 429 is **backpressure, not an answer.** An order refused by one is in exactly the state it was in
