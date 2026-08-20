@@ -1305,9 +1305,16 @@ verified every untouched file byte-identical afterwards.
 🔴 **Rollback** — the pre-push bytes are snapshotted at
 `scratchpad/rollback_p12/` (verified to match the live shas above before anything moved):
 
+🔴 One line, PowerShell, absolute paths — no `cd` and no `&&` (PowerShell 5.1 has no `&&`):
+
 ```
-cd "C:\Users\Work\AppData\Local\Temp\claude\C--Users-Work-Claude-Projects\b974d338-3e7f-4d7b-a87c-88d29670351d\scratchpad" && python gas_swap.py push Exceptions=rollback_p12\Exceptions.gs PivotAnalytics=rollback_p12\PivotAnalytics.gs Code=rollback_p12\Code.gs
+python "C:\Users\Work\AppData\Local\Temp\claude\C--Users-Work-Claude-Projects\b974d338-3e7f-4d7b-a87c-88d29670351d\scratchpad\gas_swap.py" push "Exceptions=C:\Users\Work\AppData\Local\Temp\claude\C--Users-Work-Claude-Projects\b974d338-3e7f-4d7b-a87c-88d29670351d\scratchpad\rollback_p12\Exceptions.gs" "PivotAnalytics=C:\Users\Work\AppData\Local\Temp\claude\C--Users-Work-Claude-Projects\b974d338-3e7f-4d7b-a87c-88d29670351d\scratchpad\rollback_p12\PivotAnalytics.gs" "Code=C:\Users\Work\AppData\Local\Temp\claude\C--Users-Work-Claude-Projects\b974d338-3e7f-4d7b-a87c-88d29670351d\scratchpad\rollback_p12\Code.gs"
 ```
+
+It restores all three in ONE PUT (so the project is never half-rolled-back), needs no
+`--allow-create` because all three files exist live, and prints the same
+`VERIFY: ALL BYTE-IDENTICAL` proof. ⚠️ That scratchpad is session-scoped — if it has been cleaned,
+roll back from git instead: the pre-P12 bytes are `7ff83dd`.
 
 ##### Kurt's clicks (the Apps Script REST API can do none of these)
 
