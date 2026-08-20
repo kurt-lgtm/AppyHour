@@ -875,20 +875,129 @@ function ppDayDiff_(a, b) {
 // missing carrier/transit silently corrupts it; the exceptions sweep can retry an hour later and
 // this cannot. So this one reports and is allowed to overdraw, and the sweep is what yields.
 // Reconsider the moment the ParcelPanel -> DigitalOcean webhook replaces polling.
-function ppLookup_(orderNums) {
+// ---------------------------------------------------------------- PP answer cache (F1, P11)
+// 🔴 THIS EXISTS BECAUSE THE REPORT WAS RE-BUYING FACTS THAT CANNOT CHANGE, AND IT STARVED THE
+// EXCEPTIONS SWEEP TO ZERO. Measured 2026-08-20: ppLookup_ was called 3x per hourly build_ over
+// sets it re-asked from scratch every run — 11 + 388 + ~75 = ~474 calls/run = ~79,600/week
+// against a 2,500/week ACCOUNT-WIDE ParcelPanel plan (31.9x). It drained a zeroed ledger in 5.3
+// hours, so `excBudgetTake_`'s account leg (`EXC_PP_ACCOUNT_QUOTA - total`) sat at 0 for ~163 of
+// every 168 hours and the sweep's whole allowance got spent on MONDAY — the one day the day gate
+// forbids it to post on. Full derivation: EXCEPTIONS_ALERT_RULES.md directive P11.
+//
+// 🔴 THE CORRECTNESS BAR: Dan's columns must show the SAME values. Two rules make that true and
+// one makes it *nearly* true — the exception is stated, not hidden:
+//   1. TERMINAL FACT — `transit_days` is set ONLY when a box is DELIVERED with both dates known
+//      (see the caller below), and a delivered box's pickup->delivery span and carrier are
+//      IMMUTABLE. Re-asking can only return the identical answer, so we never ask again. Exact.
+//   2. GIVE UP ON A DEAD RECORD — an order whose incoming cohort is older than
+//      PP_CACHE_GIVEUP_DAYS and that STILL has no transit is never going to get one. Measured:
+//      169 of the 198 recurring orders are from _SHIP_2026-06-29 / _SHIP_2026-07-06, 45-52 days
+//      old, re-bought 24x/day forever. Same class as the P9 quarantine, on the report side.
+//      🔴 It only applies to an order we have ALREADY fetched at least once, so the carrier we
+//      show today is captured into the cache before the order retires — nothing blanks.
+//   3. ONCE PER CALENDAR DAY — everything else. 🔴 THIS ONE CAN DIFFER: a box that transitions to
+//      DELIVERED between today's first ask and midnight now shows its `transit_days` (and the
+//      >2d "Delayed supersedes Warm" reclassification derived from it) up to ~23h later than
+//      before. It converges to the IDENTICAL final value within a day and nothing is lost — the
+//      same "a floor delays, it cannot lose" argument the exceptions rules make for their floors.
+//      To halve that window, make PP_CACHE_DAY_KEY_ resolve to date+AM/PM (cost ~2x, still tiny).
+//
+// The cache lives on a hidden tab, matching this project's doctrine (`_state`, `_exc_state`,
+// `_triage_decisions`) rather than Script Properties, which cap at 9KB per value.
+var PP_CACHE_TAB = '_pp_cache';
+var PP_CACHE_COLS = ['order', 'carrier', 'transit', 'asked', 'terminal'];
+var PP_CACHE_GIVEUP_DAYS = 21;   // == the report's own window (WEEKS_BACK 2 -> 3 cohorts)
+
+function ppCacheDayKey_() {
+  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+}
+
+function ppCacheLoad_() {
+  var sh = SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName(PP_CACHE_TAB);
+  var c = {};
+  if (!sh || sh.getLastRow() < 2) return c;
+  sh.getRange(2, 1, sh.getLastRow() - 1, PP_CACHE_COLS.length).getValues().forEach(function (r) {
+    if (!r[0]) return;
+    c[String(r[0])] = { carrier: String(r[1] || ''),
+                        transit: (r[2] === '' || r[2] == null) ? null : Number(r[2]),
+                        asked: String(r[3] || ''),
+                        terminal: String(r[4]) === '1' };
+  });
+  return c;
+}
+
+function ppCacheSave_(c) {
+  var ss = SpreadsheetApp.openById(PIVOT_SHEET_ID);
+  var sh = ss.getSheetByName(PP_CACHE_TAB) || ss.insertSheet(PP_CACHE_TAB);
+  sh.hideSheet();
+  var rows = [PP_CACHE_COLS];
+  Object.keys(c).sort().forEach(function (k) {
+    var r = c[k];
+    rows.push([k, r.carrier || '', r.transit == null ? '' : r.transit,
+               r.asked || '', r.terminal ? '1' : '']);
+  });
+  sh.clear();
+  sh.getRange(1, 1, rows.length, PP_CACHE_COLS.length).setValues(rows);
+}
+
+/** Days between an `_SHIP_yyyy-MM-dd` (or bare yyyy-MM-dd) cohort tag and today. null = unknown. */
+function ppCohortAgeDays_(tag) {
+  var m = String(tag || '').match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return null;
+  var then = new Date(m[0] + 'T12:00:00Z').getTime();
+  if (!isFinite(then)) return null;
+  return Math.floor((new Date().getTime() - then) / 86400000);
+}
+
+/**
+ * `orderNums` — order numbers to resolve. `cohortOf` — OPTIONAL {order: shipWeekTag}; without it
+ * rule 2 (give-up) cannot apply and the helper behaves as terminal-memo + once-per-day only.
+ */
+function ppLookup_(orderNums, cohortOf) {
   var out = {}, key = PropertiesService.getScriptProperties().getProperty('PARCELPANEL_API_KEY');
-  if (!key || !orderNums || !orderNums.length) return out;
+  if (!orderNums || !orderNums.length) return out;
   var uniq = orderNums.filter(function (n, i) { return n && orderNums.indexOf(n) === i; });
+
+  // 🔴 SERVE EVERY REQUESTED ORDER FROM THE CACHE FIRST, not just the ones fetched this run.
+  // Building `out` only from fresh responses would blank the carrier/transit of every cached
+  // order — the exact regression this change must not cause.
+  var cache = ppCacheLoad_(), today = ppCacheDayKey_(), dirty = false;
+  uniq.forEach(function (n) {
+    var c = cache[n];
+    if (c && (c.carrier || c.transit != null)) out[n] = { carrier: c.carrier, transit: c.transit };
+  });
+  if (!key) return out;
+
+  var ask = uniq.filter(function (n) {
+    var c = cache[n];
+    if (!c) return true;                       // never asked — always ask, whatever its age
+    if (c.terminal) return false;              // rule 1/2: settled, and settled facts do not move
+    return c.asked !== today;                  // rule 3: at most once per calendar day
+  });
+  var skipped = uniq.length - ask.length;
+  if (!ask.length) {
+    Logger.log('ppLookup_: ' + uniq.length + ' asked, 0 fetched (all cached: ' + skipped +
+               ') — 0 billed to the shared ParcelPanel ledger [rpt]');
+    return out;
+  }
   var charged = 0;
-  var reqs = uniq.map(function (n) {
+  var reqs = ask.map(function (n) {
     return { url: 'https://open.parcelwill.com/api/v2/tracking/order?order_number=' + encodeURIComponent(n),
              headers: { 'x-parcelpanel-api-key': key }, muteHttpExceptions: true };
   });
   for (var i = 0; i < reqs.length; i += 50) {
     var resp = UrlFetchApp.fetchAll(reqs.slice(i, i + 50));
     resp.forEach(function (r, k) {
+      var onum = ask[i + k];
       var code = r.getResponseCode();
-      if (code !== 429 && code !== 503) charged++;   // served, whatever it answered
+      if (code === 429 || code === 503) return;      // not served — do not bill, do not stamp
+      charged++;                                     // served, whatever it answered
+      // 🔴 STAMP THE ASK EVEN ON A NON-200. A 404 is a served call and an answer ("no such
+      // order"); not stamping it would re-ask the same dead record every run and rebuild the
+      // exact drain this cache exists to remove.
+      var cur = cache[onum] || { carrier: '', transit: null, asked: '', terminal: false };
+      cur.asked = today; dirty = true;
+      cache[onum] = cur;
       if (code !== 200) return;
       try {
         var o = JSON.parse(r.getContentText());
@@ -901,10 +1010,23 @@ function ppLookup_(orderNums) {
         if (pk && dl && status.indexOf('DELIVER') >= 0) {
           var td = ppDayDiff_(pk, dl); if (td >= 0) rec.transit = td;
         }
-        out[uniq[i + k]] = rec;
+        out[onum] = rec;
+        cur.carrier = rec.carrier || cur.carrier;
+        if (rec.transit != null) cur.transit = rec.transit;
       } catch (e) {}
     });
   }
+  // Settle terminality AFTER the fetch, so an order always contributes at least one real answer
+  // (and therefore its carrier) to the cache before it can be retired.
+  var wentTerminal = 0;
+  ask.forEach(function (n) {
+    var cur = cache[n];
+    if (!cur || cur.terminal) return;
+    if (cur.carrier && cur.transit != null) { cur.terminal = true; wentTerminal++; return; }  // rule 1
+    var age = ppCohortAgeDays_(cohortOf && cohortOf[n]);                                      // rule 2
+    if (age != null && age > PP_CACHE_GIVEUP_DAYS) { cur.terminal = true; wentTerminal++; }
+  });
+  if (dirty) { try { ppCacheSave_(cache); } catch (eC) { Logger.log('⚠️ PP cache save failed: ' + eC); } }
   // Guarded: the accountant lives in Exceptions.gs. If it is ever absent the call must still
   // return — but the under-count has to be SAID, never left as a number that looks complete.
   try {
@@ -912,8 +1034,9 @@ function ppLookup_(orderNums) {
     else Logger.log('⚠️ PP spend NOT recorded — excBudgetCharge_ missing (Exceptions.gs); the ' +
                     'shared PP_WEEK_USED ledger is under-counting by ' + charged + ' call(s).');
   } catch (eB) { Logger.log('⚠️ PP ledger charge failed: ' + eB); }
-  Logger.log('ppLookup_: ' + uniq.length + ' asked, ' + charged +
-             ' served and billed to the shared ParcelPanel ledger [rpt]');
+  Logger.log('ppLookup_: ' + uniq.length + ' asked, ' + ask.length + ' fetched (' + skipped +
+             ' cached), ' + charged + ' served and billed to the shared ParcelPanel ledger [rpt]; ' +
+             wentTerminal + ' went terminal');
   return out;
 }
 // "late supersedes warm": a box >2 transit days arrived warm BECAUSE it was delayed —
@@ -921,14 +1044,15 @@ function ppLookup_(orderNums) {
 function isWarmShort_(iss) { return /arrived\s+warm/i.test(String(iss)); }        // Raw Data label
 function isWarmCanon_(iss) { return String(iss).indexOf('Arrived Warm') >= 0; }    // Triage canonical
 function enrichTransitOverride_(state, mondays) {
-  var tags = cohortTags_(mondays), need = [];
+  var tags = cohortTags_(mondays), need = [], cohortOf = {};
   Object.keys(state).forEach(function (k) {
     var r = state[k];
     if (r.original && tags[r.original_cohort] && r.transit_days == null) {
-      var nm = String(r.original).replace(/^#/, ''); if (nm && need.indexOf(nm) < 0) need.push(nm);
+      var nm = String(r.original).replace(/^#/, '');
+      if (nm && need.indexOf(nm) < 0) { need.push(nm); cohortOf[nm] = r.original_cohort; }
     }
   });
-  var pp = ppLookup_(need);
+  var pp = ppLookup_(need, cohortOf);
   Object.keys(state).forEach(function (k) {
     var r = state[k], nm = String(r.original || '').replace(/^#/, '');
     if (nm && pp[nm] && pp[nm].transit != null) r.transit_days = pp[nm].transit;
@@ -1107,12 +1231,12 @@ function productMixBreakdown_(cohortCols, sizeByCohort) {
   var rd = SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName('Raw Data');
   if (!rd || rd.getLastRow() < 2) return [];
   var vals = rd.getRange('A2:I' + rd.getLastRow()).getValues();  // A Order..I Box; D Issue, E Incoming, H Original
-  var recs = [], need = {};
+  var recs = [], need = {}, cohortOf = {};
   vals.forEach(function (v) {
     if (!v[4]) return;                                    // no incoming week
     var ord = String(v[7] || v[0] || '').replace(/^#/, '');   // Original, else Order
     recs.push({ order: ord, issue: String(v[3] || 'Unknown'), cohort: String(v[4]) });
-    if (ord) need[ord] = true;
+    if (ord) { need[ord] = true; cohortOf[ord] = String(v[4]); }
   });
   var orders = Object.keys(need), stateOf = {}, carrierOf = {}, shopCarrierOf = {};
   // state (province) + fallback carrier (Shopify fulfillment tracking_company) in one query
@@ -1132,7 +1256,7 @@ function productMixBreakdown_(cohortCols, sizeByCohort) {
   }
   // carrier from Parcel Panel (Kurt 2026-07-22) — centralized in ppLookup_ (also
   // returns transit; the transit->Delayed override already ran into Raw Data col D).
-  var pp = ppLookup_(orders);
+  var pp = ppLookup_(orders, cohortOf);
   Object.keys(pp).forEach(function (o) { if (pp[o].carrier) carrierOf[o] = pp[o].carrier; });
   var byIssue = {}, byCarrier = {}, warm = {}, delay = {};
   function bump(tbl, key, cohort) { (tbl[key] = tbl[key] || {})[cohort] = (tbl[key][cohort] || 0) + 1; }
@@ -1364,7 +1488,12 @@ function writeTriage_(state, oldest, stamp) {
     });
   }
   // late supersedes warm: >2 transit days (Parcel Panel) reclassifies Arrived Warm -> Delayed
-  var ppT = ppLookup_(entries.map(function (e) { return e.onum; }).filter(Boolean));
+  // 🔴 This leg is why F1/P11 lives inside ppLookup_ rather than at a call site. The block above
+  // caches Shopify AND Gorgias precisely so we "don't re-hit them for same rows hourly" — and
+  // ParcelPanel, the only METERED one of the three, was the single API left re-bought every run.
+  // The cache now covers all three legs because it sits in the helper, not in the callers.
+  var ppT = ppLookup_(entries.map(function (e) { return e.onum; }).filter(Boolean),
+                      shipByOrder);
   entries.forEach(function (e) {
     if (e.onum && ppT[e.onum] && ppT[e.onum].transit != null && ppT[e.onum].transit > 2 && isWarmCanon_(e.issue)) {
       e.issue = 'Shipping::Delayed in transit';
