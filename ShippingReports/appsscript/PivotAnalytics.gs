@@ -34,10 +34,32 @@ var PA_SLA = 2;
 var PA_ACTIVE_HRS = 24;
 var PA_NO_TAG = '(no routing tag)';
 var PA_PAGE = 25;
-// Daily-trigger guards (Kurt 2026-08-07). PP budget is 2,500 calls/WEEK and Exceptions' hourly job
-// is the dominant consumer; this leg must stay a rounding error against it (~45 × 4 ≈ 180/wk).
+// 🔴 THE "2,500 CALLS/WEEK" THESE GUARDS WERE WRITTEN AGAINST DOES NOT EXIST (directive P12 in
+// EXCEPTIONS_ALERT_RULES.md — read it before touching any ParcelPanel call path). That number was
+// Kurt's average weekly ORDER count misread as a request budget. ParcelPanel's only limit is
+// **120 requests/minute per API key**, reported in `x-ratelimit-limit` on every response.
+// 🔴 BOTH GUARDS SURVIVE — but on the 6-MINUTE EXECUTION CEILING, which is real, not on a budget:
+//   - PA_PP_MIN_AGE_DAYS: on day 0-2 almost the whole cohort is still undelivered, so the rescue
+//     set is ~2,300 orders. That is 23 minutes at PA_PP_TARGET_PER_MIN and cannot finish inside
+//     360s. Shopify carries the union alone until then and PP reconciles on later runs.
+//   - PA_PP_MAX_CALLS: 200 calls at 100/min is ~2 minutes of a 360s ceiling shared with the
+//     Shopify fetches and two cohort legs. It is a WALL, not a ration, and it is not a coverage
+//     loss because the cohort column SELF-HEALS daily until PA_MATURITY_DAYS: an unrescued box is
+//     re-offered tomorrow, and `cand` is sorted oldest-scan-first so the neediest go first.
+//     🔴 If the ceiling ever stops binding, this number rises with it — never lower it to "save
+//     calls", which is the exact reasoning P12 deletes.
 var PA_PP_MIN_AGE_DAYS = 3;    // Tue/Wed run Shopify-only — the rescue set is ~the whole cohort then
-var PA_PP_MAX_CALLS = 200;     // hard backstop per RUN (shared across both cohort legs)
+var PA_PP_MAX_CALLS = 200;     // 6-min ceiling backstop per RUN (shared across both cohort legs)
+// 🔴 PACING (directive P12). This leg used to fire UrlFetchApp.fetchAll(slice(i, i + 50)) with no
+// pause and no retry — 42% of a minute's allowance dispatched in one instant. Exceptions.gs has
+// documented that exact failure since day one ("batches of 50 with no pause and no retry: 780 of
+// 900 fetches failed") and this call site was never fixed. 10 requests per 6.0s cycle == 100/min,
+// with the cycle measured from DISPATCH so the fetch's own duration counts against it.
+var PA_PP_BATCH = 10;                     // requests per fetchAll == max in flight
+var PA_PP_TARGET_PER_MIN = 100;           // 83% of the measured 120/min ceiling
+var PA_PP_CYCLE_MS = Math.round(60000 * PA_PP_BATCH / PA_PP_TARGET_PER_MIN);   // 6000
+var PA_PP_BRAKE_REMAINING = 12;           // below our own ~20 trough; >= one batch. See P12.
+var PA_PP_RETRY_MS = [2000, 4000, 8000, 16000, 32000];   // P13: a 429 is retried, never dropped
 // 🔴 MATURITY (D15, Kurt 2026-08-07). A cohort column is SCRIPT-OWNED and self-heals daily from age
 // 1 until it hits this age, then FREEZES — the script refuses it forever after and it becomes
 // Kurt-owned. This is what makes stale wrongness recoverable: a box frozen as 3+ Day / Not Arrived
@@ -354,32 +376,55 @@ function paDerive_(node) {
  * resolved to a May shipment). Dates outside the cohort window are rejected as a reused label or a
  * stale row rather than trusted.
  */
+/** Case-insensitive response-header read. Local copy on purpose: PivotAnalytics.gs must not
+ *  depend on Exceptions.gs for its own pacing — that file has been deleted from this project once
+ *  (2026-08-14), and a MISSING limiter looks exactly like a working one until you are rate-limited. */
+function paPpHeader_(resp, name) {
+  try {
+    var h = (resp.getAllHeaders && resp.getAllHeaders()) || (resp.getHeaders && resp.getHeaders()) || {};
+    var want = String(name).toLowerCase();
+    for (var k in h) {
+      if (String(k).toLowerCase() === want) {
+        var v = h[k];
+        return String(v && v.length && typeof v !== 'string' ? v[0] : v);
+      }
+    }
+  } catch (e) {}
+  return '';
+}
+
 function paPpFetch_(orderNums, winLo, winHi) {
   var out = {}, key = PropertiesService.getScriptProperties().getProperty('PARCELPANEL_API_KEY');
   // 🔴 LOUD, never silent. PP only ever RESCUES boxes Shopify does not already show delivered, so a
   // total PP failure is invisible everywhere except those few orders — on the 2026-08-07 preview it
   // cost exactly 2 (#166228, #166660) out of 2,305 and looked like a rounding wobble. Count every
   // stage and shout if PP contributed nothing.
-  // 🔴 ONE ACCOUNTANT (directive P3, 2026-08-19). This leg spent the shared 2,500/wk ParcelPanel
-  // account quota WITHOUT reporting a single call, so `PP_WEEK_USED` — the number every pacing
-  // decision in Exceptions.gs is computed from — was a fiction. `charged` counts requests
-  // ParcelPanel actually SERVED (anything that is not a 429/503 refusal) and books them to the
-  // shared ledger under 'pa'. This leg is NOT capped by the ledger: the analytics column is a
-  // shipped surface Dan reads, and starving it to protect the sweep trades a visible number for an
-  // invisible one. It reports honestly; the exceptions sweep is the consumer that yields.
-  var stats = { asked: orderNums.length, ok: 0, http: {}, delivered: 0, charged: 0 };
+  // 🔴 `charged` is a HEALTH/RATE metric, never a balance (directive P3 as rewritten by P12).
+  // Nothing caps anything using it; it exists so a consumer's draw stays measurable, which is how
+  // the reship report's 31.9x waste was found in the first place.
+  var stats = { asked: orderNums.length, ok: 0, http: {}, delivered: 0, charged: 0,
+                throttled: 0, brakes: 0, remainingMin: null };
   if (!key) { paLog_('  🔴 PP SKIPPED — PARCELPANEL_API_KEY not set; union degraded to Shopify-only'); return out; }
   if (!orderNums.length) return out;
-  for (var i = 0; i < orderNums.length; i += 50) {
-    var slice = orderNums.slice(i, i + 50);
-    var resp = UrlFetchApp.fetchAll(slice.map(function (n) {
-      return { url: 'https://open.parcelwill.com/api/v2/tracking/order?order_number=' + encodeURIComponent(n),
-               headers: { 'x-parcelpanel-api-key': key }, muteHttpExceptions: true };
-    }));
+
+  function reqFor(n) {
+    return { url: 'https://open.parcelwill.com/api/v2/tracking/order?order_number=' + encodeURIComponent(n),
+             headers: { 'x-parcelpanel-api-key': key }, muteHttpExceptions: true };
+  }
+
+  // Returns the orders ParcelPanel REFUSED (429/503) — they must be re-asked, never dropped (P13).
+  function consume(slice, resp) {
+    var retry = [];
     resp.forEach(function (r, k) {
       var code = r.getResponseCode();
+      var rem = parseInt(paPpHeader_(r, 'x-ratelimit-remaining'), 10);
+      if (isFinite(rem)) {
+        stats.remainingMin = (stats.remainingMin == null) ? rem : Math.min(stats.remainingMin, rem);
+      }
       stats.http[code] = (stats.http[code] || 0) + 1;
-      if (code !== 429 && code !== 503) stats.charged++;   // served, whatever it answered
+      // 🔴 P13: refused is NOT an answer. Do not count it served, do not let the box fall out.
+      if (code === 429 || code === 503) { retry.push(slice[k]); return; }
+      stats.charged++;                                    // served, whatever it answered
       if (code !== 200) return;
       stats.ok++;
       try {
@@ -399,17 +444,55 @@ function paPpFetch_(orderNums, winLo, winHi) {
         out[slice[k]] = { delivered: del, pk: pk, dl: dl };
       } catch (e) {}
     });
+    return retry;
   }
-  // Book the spend to the shared weekly ledger. Guarded: Exceptions.gs owns the accountant, and a
-  // missing/renamed helper must degrade to an unreported call, never take the refresh down.
+
+  for (var i = 0; i < orderNums.length; i += PA_PP_BATCH) {
+    var slice = orderNums.slice(i, i + PA_PP_BATCH);
+    var t0 = new Date().getTime();
+    var retry = consume(slice, UrlFetchApp.fetchAll(slice.map(reqFor)));
+    // 🔴 P13 — retry the refused with backoff. A 429 costs TIME, never a box.
+    for (var a = 0; retry.length && a < PA_PP_RETRY_MS.length; a++) {
+      var wait = PA_PP_RETRY_MS[a];
+      Utilities.sleep(Math.round(wait + Math.random() * wait * 0.25));      // jitter
+      retry = consume(retry, UrlFetchApp.fetchAll(retry.map(reqFor)));
+    }
+    // Exhausted the ladder. The box is simply not rescued THIS run; the column self-heals daily
+    // until PA_MATURITY_DAYS, so it is re-offered tomorrow. Loud, because a silent one reads as
+    // "PP found nothing".
+    if (retry.length) stats.throttled += retry.length;
+    // --- pace: brake on the live header if the bucket is nearly gone, else hold the cycle ---
+    if (stats.remainingMin != null && stats.remainingMin < PA_PP_BRAKE_REMAINING) {
+      var ms = 60000 - (new Date().getTime() % 60000) + 500;
+      paLog_('  PP brake: x-ratelimit-remaining below ' + PA_PP_BRAKE_REMAINING + ' — parking ' +
+             Math.round(ms / 100) / 10 + 's to the next minute boundary. Frequent braking means ' +
+             'ANOTHER CONSUMER is on this API key; that is signal, not noise.');
+      Utilities.sleep(ms);
+      stats.brakes++;
+      stats.remainingMin = null;
+    } else if (i + PA_PP_BATCH < orderNums.length) {
+      var rest = PA_PP_CYCLE_MS - (new Date().getTime() - t0);
+      if (rest > 0) Utilities.sleep(rest);
+    }
+  }
+  // Record the call RATE. Guarded: Exceptions.gs owns the counter, and a missing/renamed helper must
+  // degrade to an unreported call, never take the refresh down. 🔴 Nothing is capped by this.
   try {
-    if (typeof excBudgetCharge_ === 'function') excBudgetCharge_(stats.charged, 'pa');
-    else paLog_('  ⚠️ PP spend NOT recorded — excBudgetCharge_ missing (Exceptions.gs); ' +
-                'the shared PP_WEEK_USED ledger is under-counting by ' + stats.charged);
-  } catch (eB) { paLog_('  ⚠️ PP ledger charge failed: ' + eB); }
+    if (typeof excPpRecordCalls_ === 'function') excPpRecordCalls_(stats.charged, 'pa');
+    else paLog_('  ⚠️ PP call count NOT recorded — excPpRecordCalls_ missing (Exceptions.gs); ' +
+                'the PP_CALLS_TODAY rate metric is under-counting by ' + stats.charged +
+                '. Harmless: it gates nothing.');
+  } catch (eB) { paLog_('  ⚠️ PP call count failed: ' + eB); }
   paLog_('  PP: asked ' + stats.asked + '  http ' + JSON.stringify(stats.http) +
          '  parsed ' + Object.keys(out).length + '  delivered ' + stats.delivered +
-         '  billed to shared ledger ' + stats.charged);
+         '  served ' + stats.charged + '  throttled-after-retries ' + stats.throttled +
+         '  brakes ' + stats.brakes + '  min x-ratelimit-remaining ' +
+         (stats.remainingMin == null ? 'n/a' : stats.remainingMin) + '/120');
+  if (stats.throttled) {
+    paLog_('  🔴 ' + stats.throttled + ' order(s) still refused after ' + PA_PP_RETRY_MS.length +
+           ' retries — NOT rescued this run. The column self-heals daily until age ' +
+           PA_MATURITY_DAYS + 'd, so they are re-offered tomorrow, oldest-scan-first.');
+  }
   if (!stats.ok) paLog_('  🔴 PP RETURNED NOTHING USABLE — union degraded to Shopify-only this run');
   return out;
 }
@@ -812,20 +895,25 @@ function paRefreshOne_(shipWeek, dry, budget, allowAppend) {
   paLog_('PP rescue candidates: ' + cand.length + ' of ' + recs.length);
   var pp = {};
   if (age < PA_PP_MIN_AGE_DAYS) {
-    // 🔴 GUARD 2 — PP budget is 2,500 calls/WEEK (Kurt, standing) and Exceptions' hourly job is the
-    // dominant consumer. Early in the week almost the whole cohort is still undelivered, so the
-    // rescue set ≈ 2,300 and one uncapped Tuesday run could eat the week's budget. Deliveries
-    // stream in via Shopify fine mid-week and PP reconciles on later runs, so skip the leg outright.
+    // 🔴 GUARD 2 — THE 6-MINUTE CEILING, not a budget (directive P12; the "2,500/wk" this was
+    // originally written against never existed). Early in the week almost the whole cohort is still
+    // undelivered, so the rescue set is ~2,300 orders — 23 minutes at PA_PP_TARGET_PER_MIN, which
+    // cannot finish inside 360s. Deliveries stream in via Shopify fine mid-week and PP reconciles on
+    // later runs, so skip the leg outright rather than start something that cannot complete.
     paLog_('  PP: skipped (cohort age <' + PA_PP_MIN_AGE_DAYS + 'd) — Shopify-only this run');
   } else {
-    // 🔴 GUARD 3 — hard backstop regardless of day. Oldest first: a box silent longest is the one
-    // most worth rescuing. Loud when it bites; a silent truncation would read as "PP found nothing".
+    // 🔴 GUARD 3 — the per-RUN wall, shared across both legs. Oldest first: a box silent longest is
+    // the one most worth rescuing, so truncation costs the LEAST-needy box, never the neediest.
+    // Loud when it bites; a silent truncation would read as "PP found nothing".
+    // 🔴 This is a CEILING, not a ration (directive P12): the cohort column self-heals daily until
+    // PA_MATURITY_DAYS, so a box not reached today is re-offered tomorrow and the set converges.
     cand.sort(function (a, b) { return String(a.lastScanIso || '') < String(b.lastScanIso || '') ? -1 : 1; });
-    // budget is shared across legs — both cohorts together respect the per-RUN cap
+    // the wall is shared across legs — both cohorts together respect the per-RUN cap
     var take = cand.slice(0, Math.max(0, budget.left));
     if (cand.length > take.length) {
-      paLog_('  PP: capped at ' + budget.left + ' remaining this run, skipped ' +
-             (cand.length - take.length) + ' candidates (oldest-scan first)');
+      paLog_('  PP: hit the per-run ceiling at ' + budget.left + ' remaining, deferred ' +
+             (cand.length - take.length) + ' candidate(s) to the next daily run (oldest-scan ' +
+             'first, so the neediest went first). NOT a budget — the 6-minute wall.');
     }
     budget.left -= take.length;
     pp = paPpFetch_(take.map(function (r) { return r.order; }), lo, hi);
@@ -1108,7 +1196,8 @@ function paRefreshCurrentColumn_(shipWeek) {
     }
   }
   paLog_('total ' + ((new Date().getTime() - t0) / 1000).toFixed(1) + 's of the 360s ceiling; ' +
-         'PP calls used ' + (PA_PP_MAX_CALLS - budget.left) + ' of ' + PA_PP_MAX_CALLS);
+         'PP calls placed ' + (PA_PP_MAX_CALLS - budget.left) + ' of the ' + PA_PP_MAX_CALLS +
+         ' this run can fit at ' + PA_PP_TARGET_PER_MIN + '/min (a WALL, not a budget — P12)');
   paLog_('=== done (' + (dry ? 'DRY RUN — nothing written' : 'written') + ') ===');
   return out;
 }

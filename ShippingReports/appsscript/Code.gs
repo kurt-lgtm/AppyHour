@@ -866,15 +866,25 @@ function ppDateStr_(s) { var m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})
 function ppDayDiff_(a, b) {
   return Math.round((new Date(b + 'T00:00:00Z') - new Date(a + 'T00:00:00Z')) / 86400000);
 }
-// 🔴 ONE ACCOUNTANT (Kurt 2026-08-19, directive P3 in EXCEPTIONS_ALERT_RULES.md). ParcelPanel's
-// quota is 2,500/week ACCOUNT-WIDE. This helper is UNCAPPED and runs with the hourly refresh plus
-// enrichTransitOverride_, and until now it reported NOTHING to the shared `PP_WEEK_USED` counter —
-// so that counter, which every pacing decision in the exceptions sweep is computed from, measured
-// one of at least four drains and read as complete. It now books what it spends.
-// 🔴 DELIBERATELY NOT CAPPED BY THE LEDGER. The reship report is a shipped surface Dan reads and a
-// missing carrier/transit silently corrupts it; the exceptions sweep can retry an hour later and
-// this cannot. So this one reports and is allowed to overdraw, and the sweep is what yields.
-// Reconsider the moment the ParcelPanel -> DigitalOcean webhook replaces polling.
+// 🔴 THE QUOTA THIS WAS METERED AGAINST DOES NOT EXIST (directive P12 in
+// EXCEPTIONS_ALERT_RULES.md — read it before touching any ParcelPanel call path here).
+// "2,500 calls/week, account-wide" is Kurt's average weekly ORDER count (10,000/month plan / 4)
+// misread as an API request budget. ParcelPanel's plan quota counts ORDERS TRACKED — "1 order = 1
+// quota", "order lookups do not consume quota". The only real limit is 120 REQUESTS PER MINUTE per
+// API key, reported in `x-ratelimit-limit` on every response.
+// 🔴 SO THIS HELPER NEVER STARVED THE EXCEPTIONS SWEEP. Its measured ~4,141 calls/week is 0.35% of
+// what the account serves. What starved the sweep was `excBudgetTake_` subtracting from a phantom
+// balance, and that whole layer is deleted.
+// 🔴 WHAT WAS REAL, AND WHAT REPLACES IT:
+//   - The waste was real. Re-buying a DELIVERED box's carrier and transit_days every hour is waste
+//     at any price — and it also costs wall-clock inside a 6-minute ceiling that IS scarce. The
+//     `_pp_cache` below therefore STAYS, on its own merits, not as budget scaffolding.
+//   - The BURST was the actual bug. This call site fired fetchAll(slice(i, i + 50)) with no pause —
+//     42% of a minute's allowance in one instant — and Exceptions.gs had documented that exact
+//     failure ("batches of 50 with no pause and no retry: 780 of 900 fetches failed") long before
+//     this was written. It now paces at PP_TARGET_PER_MIN and retries 429s instead of dropping them.
+//   - The counting survives as a RATE metric, never a balance: `excPpRecordCalls_`, daily, and
+//     nothing anywhere caps or skips based on it.
 // ---------------------------------------------------------------- PP answer cache (F1, P11)
 // 🔴 THIS EXISTS BECAUSE THE REPORT WAS RE-BUYING FACTS THAT CANNOT CHANGE, AND IT STARVED THE
 // EXCEPTIONS SWEEP TO ZERO. Measured 2026-08-20: ppLookup_ was called 3x per hourly build_ over
@@ -907,6 +917,33 @@ function ppDayDiff_(a, b) {
 var PP_CACHE_TAB = '_pp_cache';
 var PP_CACHE_COLS = ['order', 'carrier', 'transit', 'asked', 'terminal'];
 var PP_CACHE_GIVEUP_DAYS = 21;   // == the report's own window (WEEKS_BACK 2 -> 3 cohorts)
+// 🔴 PACING (directive P12). 10 requests per 6.0s cycle == 100/min, 83% of ParcelPanel's measured
+// 120/min ceiling. The cycle is measured from DISPATCH: sleeping a flat interval AFTER a fetch that
+// itself took 3s under-runs the target by the fetch's own duration, silently.
+var PP_BATCH = 10;                       // requests per fetchAll == max in flight
+var PP_TARGET_PER_MIN = 100;             // the rest of the 120 is margin for the other consumers
+var PP_CYCLE_MS = Math.round(60000 * PP_BATCH / PP_TARGET_PER_MIN);   // 6000
+// Below our own ~20 steady-state trough, and >= one batch so we never dispatch what we cannot
+// afford. Frequent braking means ANOTHER consumer is on this key — signal, not noise. See P12.
+var PP_BRAKE_REMAINING = 12;
+var PP_RETRY_MS = [2000, 4000, 8000, 16000, 32000];   // P13: a 429 is retried, never dropped
+
+/** Case-insensitive response-header read. Local copy on purpose: Code.gs must not depend on
+ *  Exceptions.gs for its own pacing — that file has been deleted from this project once
+ *  (2026-08-14), and a MISSING limiter looks exactly like a working one until you are throttled. */
+function ppHeader_(resp, name) {
+  try {
+    var h = (resp.getAllHeaders && resp.getAllHeaders()) || (resp.getHeaders && resp.getHeaders()) || {};
+    var want = String(name).toLowerCase();
+    for (var k in h) {
+      if (String(k).toLowerCase() === want) {
+        var v = h[k];
+        return String(v && v.length && typeof v !== 'string' ? v[0] : v);
+      }
+    }
+  } catch (e) {}
+  return '';
+}
 
 function ppCacheDayKey_() {
   return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
@@ -977,20 +1014,29 @@ function ppLookup_(orderNums, cohortOf) {
   var skipped = uniq.length - ask.length;
   if (!ask.length) {
     Logger.log('ppLookup_: ' + uniq.length + ' asked, 0 fetched (all cached: ' + skipped +
-               ') — 0 billed to the shared ParcelPanel ledger [rpt]');
+               ') — 0 ParcelPanel calls placed');
     return out;
   }
   var charged = 0;
-  var reqs = ask.map(function (n) {
-    return { url: 'https://open.parcelwill.com/api/v2/tracking/order?order_number=' + encodeURIComponent(n),
-             headers: { 'x-parcelpanel-api-key': key }, muteHttpExceptions: true };
-  });
-  for (var i = 0; i < reqs.length; i += 50) {
-    var resp = UrlFetchApp.fetchAll(reqs.slice(i, i + 50));
+  var throttled = 0, brakes = 0, remainingMin = null;
+
+  // 🔴 P13: `consume` returns the orders ParcelPanel REFUSED. They are re-asked, never dropped —
+  // dropping one silently blanks that order's carrier / transit_days in Dan's column for the run.
+  function consume(nums) {
+    var retry = [];
+    var resp = UrlFetchApp.fetchAll(nums.map(function (n) {
+      return { url: 'https://open.parcelwill.com/api/v2/tracking/order?order_number=' + encodeURIComponent(n),
+               headers: { 'x-parcelpanel-api-key': key }, muteHttpExceptions: true };
+    }));
     resp.forEach(function (r, k) {
-      var onum = ask[i + k];
+      var onum = nums[k];
       var code = r.getResponseCode();
-      if (code === 429 || code === 503) return;      // not served — do not bill, do not stamp
+      var rem = parseInt(ppHeader_(r, 'x-ratelimit-remaining'), 10);
+      if (isFinite(rem)) remainingMin = (remainingMin == null) ? rem : Math.min(remainingMin, rem);
+      // 🔴 REFUSED IS NOT AN ANSWER (P13). Do not count it, and above all DO NOT STAMP `asked` —
+      // stamping a 429 would suppress the re-ask for the rest of the day under rule 3 and turn
+      // backpressure into a permanently missing value.
+      if (code === 429 || code === 503) { retry.push(onum); return; }
       charged++;                                     // served, whatever it answered
       // 🔴 STAMP THE ASK EVEN ON A NON-200. A 404 is a served call and an answer ("no such
       // order"); not stamping it would re-ask the same dead record every run and rebuild the
@@ -1015,6 +1061,34 @@ function ppLookup_(orderNums, cohortOf) {
         if (rec.transit != null) cur.transit = rec.transit;
       } catch (e) {}
     });
+    return retry;
+  }
+
+  for (var i = 0; i < ask.length; i += PP_BATCH) {
+    var slice = ask.slice(i, i + PP_BATCH);
+    var t0 = new Date().getTime();
+    var retry = consume(slice);
+    // 🔴 P13 — retry the refused with backoff. A 429 costs TIME, never a value in Dan's column.
+    for (var a = 0; retry.length && a < PP_RETRY_MS.length; a++) {
+      var wait = PP_RETRY_MS[a];
+      Utilities.sleep(Math.round(wait + Math.random() * wait * 0.25));      // jitter
+      retry = consume(retry);
+    }
+    // Ladder exhausted: leave them UNSTAMPED so the next hourly run asks again. Never a hole.
+    if (retry.length) throttled += retry.length;
+    // --- pace: brake on the live header if the bucket is nearly gone, else hold the cycle ---
+    if (remainingMin != null && remainingMin < PP_BRAKE_REMAINING) {
+      var ms = 60000 - (new Date().getTime() % 60000) + 500;
+      Logger.log('  PP brake: x-ratelimit-remaining below ' + PP_BRAKE_REMAINING + ' — parking ' +
+                 Math.round(ms / 100) / 10 + 's to the next minute boundary. Frequent braking ' +
+                 'means ANOTHER CONSUMER is on this API key; that is signal, not noise.');
+      Utilities.sleep(ms);
+      brakes++;
+      remainingMin = null;
+    } else if (i + PP_BATCH < ask.length) {
+      var rest = PP_CYCLE_MS - (new Date().getTime() - t0);
+      if (rest > 0) Utilities.sleep(rest);
+    }
   }
   // Settle terminality AFTER the fetch, so an order always contributes at least one real answer
   // (and therefore its carrier) to the cache before it can be retired.
@@ -1022,20 +1096,31 @@ function ppLookup_(orderNums, cohortOf) {
   ask.forEach(function (n) {
     var cur = cache[n];
     if (!cur || cur.terminal) return;
+    // 🔴 P13 — an order still refused after every retry produced NO answer this run, so it must not
+    // be retired. `asked` is only stamped on a served response, so an unstamped-today entry is
+    // exactly the throttled set; retiring it here would let a 429 silently make a box terminal.
+    if (cur.asked !== today) return;
     if (cur.carrier && cur.transit != null) { cur.terminal = true; wentTerminal++; return; }  // rule 1
     var age = ppCohortAgeDays_(cohortOf && cohortOf[n]);                                      // rule 2
     if (age != null && age > PP_CACHE_GIVEUP_DAYS) { cur.terminal = true; wentTerminal++; }
   });
   if (dirty) { try { ppCacheSave_(cache); } catch (eC) { Logger.log('⚠️ PP cache save failed: ' + eC); } }
-  // Guarded: the accountant lives in Exceptions.gs. If it is ever absent the call must still
-  // return — but the under-count has to be SAID, never left as a number that looks complete.
+  // Record the call RATE. Guarded: the counter lives in Exceptions.gs, and a missing/renamed
+  // helper must degrade to an unreported call, never take the reship refresh down.
+  // 🔴 This is DESCRIPTIVE ONLY (directive P3 as rewritten by P12) — nothing caps, paces or skips
+  // based on it, so an under-count here is harmless. It exists because knowing this consumer's
+  // call rate is exactly what made its 31.9x waste findable.
   try {
-    if (typeof excBudgetCharge_ === 'function') excBudgetCharge_(charged, 'rpt');
-    else Logger.log('⚠️ PP spend NOT recorded — excBudgetCharge_ missing (Exceptions.gs); the ' +
-                    'shared PP_WEEK_USED ledger is under-counting by ' + charged + ' call(s).');
-  } catch (eB) { Logger.log('⚠️ PP ledger charge failed: ' + eB); }
+    if (typeof excPpRecordCalls_ === 'function') excPpRecordCalls_(charged, 'rpt');
+    else Logger.log('⚠️ PP call count NOT recorded — excPpRecordCalls_ missing (Exceptions.gs); ' +
+                    'the PP_CALLS_TODAY rate metric is under-counting by ' + charged +
+                    ' call(s). Harmless: it gates nothing.');
+  } catch (eB) { Logger.log('⚠️ PP call count failed: ' + eB); }
   Logger.log('ppLookup_: ' + uniq.length + ' asked, ' + ask.length + ' fetched (' + skipped +
-             ' cached), ' + charged + ' served and billed to the shared ParcelPanel ledger [rpt]; ' +
+             ' cached), ' + charged + ' served at ' + PP_TARGET_PER_MIN + '/min, ' + throttled +
+             ' still throttled after ' + PP_RETRY_MS.length + ' retries (unstamped — the next run ' +
+             'asks again), ' + brakes + ' brake(s), min x-ratelimit-remaining ' +
+             (remainingMin == null ? 'n/a' : remainingMin) + '/120; ' +
              wentTerminal + ' went terminal');
   return out;
 }

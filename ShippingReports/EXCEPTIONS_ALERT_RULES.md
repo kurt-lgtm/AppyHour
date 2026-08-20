@@ -1200,6 +1200,94 @@ stamped `last_seen`, so they stay at the head of the longest-unpolled ordering a
 work the next run takes. The run says so out loud. Deferral-to-the-next-run is the only form of
 "later" this platform permits, and it is bounded by the cadence, not by a balance.
 
+#### 🔴 THE SHARED KEY — why the header brake is load-bearing, not belt-and-braces
+
+The 120/min bucket is **per API key**, and the Apps Script sweep, the reship report, the analytics
+union, the Python client and the cloud worker all hold the **same key**. Three processes each
+targeting 100/min is 300/min against a 120 ceiling, and **each one's own pacing would look perfectly
+healthy** — a local token bucket only knows what that process spent.
+
+`x-ratelimit-remaining` is the only place another consumer's draw appears, which is why it is read
+off **every** response rather than only on failure, and why the brake exists at all. Under
+contention the limiter degrades to a fair share and keeps going; without the brake it would degrade
+to a 429 storm. 🔴 **This is also the honest limit of the design: the brake makes contention SAFE,
+it does not make it EFFICIENT.** If braking becomes routine, the answer is a genuinely shared
+counter or the webhook cutover — never a lower brake threshold and never a smaller poll set.
+
+#### As implemented (2026-08-20)
+
+| directive / constant | status | where |
+|---|---|---|
+| P1 charge/refund — `excBudgetTake_`, `excBudgetSettle_` | 🗑️ deleted | `Exceptions.gs` |
+| P2 week key — `excWeekKey_` | 🗑️ deleted | `Exceptions.gs` |
+| P3 ledger-as-budget — `excBudgetRead_/Write_/Charge_/LeftAccount_/BindingLeg_`, `PP_WEEK_USED` | ♻️ → `excPpRecordCalls_` + daily `PP_CALLS_TODAY` | `Exceptions.gs` |
+| P6 pace floor — `EXC_PP_MIN_PER_RUN` | 🗑️ deleted | `Exceptions.gs` |
+| P7 reset lever — `excResetWeeklyBudget` + its menu item | 🗑️ deleted | `Exceptions.gs` |
+| F2 — `EXC_PP_WEEKLY_BUDGET` 1800, `EXC_PP_RPT_ALLOC` 200, `EXC_PP_PA_ALLOC` 180, `EXC_PP_ACCOUNT_QUOTA` 2500 | 🗑️ deleted | `Exceptions.gs` |
+| F3 schedule guard — `EXC_RUN_HOURS_ET`, `EXC_RUN_HOUR_SLOP`, `excRunsLeftThisWeek_`, `excOnScheduleET_` | 🗑️ deleted (it rationed coverage) | `Exceptions.gs` |
+| thin-day cap — `EXC_THIN_DAY_CAP` 100, `EXC_THIN_DAY_PROP`, `excThinDayLeft_/Add_` | 🗑️ deleted; the sweep stays **flagged-only and complete** | `Exceptions.gs` |
+| STARVED alarm | 🗑️ deleted (it can no longer fire) | `Exceptions.gs` |
+| F4 binding-leg alarm — `excBudgetBindingLeg_` | ♻️ → throttle guard, `EXC_PP_THROTTLE_RATIO` 0.2 | `Exceptions.gs` |
+| D28 metering — `excBudgetCharge_(charged, 'rpt')` | ♻️ → `excPpRecordCalls_(charged, 'rpt')` | `Code.gs` |
+| **the limiter** — `EXC_PP_TARGET_PER_MIN` 100, `EXC_PP_CYCLE_MS` 6000, `EXC_PP_BRAKE_REMAINING` 12, `EXC_PP_RETRY_MS` | 🆕 | `Exceptions.gs` |
+| **per-run cap** — `EXC_PP_MAX_PER_RUN` 150 → **400**, redefined as the 6-min ceiling | ♻️ | `Exceptions.gs` |
+| `ppLookup_` 50-wide burst → batch 10 + paced cycle + 429 retry | 🔧 **the actual bug** | `Code.gs` |
+| `paPpFetch_` 50-wide burst → batch 10 + paced cycle + 429 retry | 🔧 **the actual bug** | `PivotAnalytics.gs` |
+| `excPpFetch_` ~600/min → 100/min, `EXC_PP_PAUSE_MS`/`EXC_PP_BACKOFF_MS` replaced | 🔧 | `Exceptions.gs` |
+| F1 `_pp_cache` (terminal memo + 21-day give-up) | ✅ **kept**, re-justified in D28 | `Code.gs` |
+| P5(a) Shopify-triages-first · P5(b) once-per-day · P5(c) 3-day age gate | ✅ **kept**, de-linked from budget | `Exceptions.gs` |
+| P4 · P8 · P9 quarantine · P10 scope · classifier · both absence-derived classes · day gate | ✅ **kept**, untouched | — |
+| **BLINDSPOT alarm** | ✅ **kept — now the ONLY coverage alarm** | `Exceptions.gs` |
+
+#### Measured behaviour (`scratchpad/p12_limiter_test.js` — 70/70 PASS)
+
+Drives the **real** `excPpFetch_`, `ppLookup_` and `paPpFetch_` sources in a stubbed Apps Script
+context on a **virtual clock**, so the rate is *measured*, not asserted:
+
+| property | measured |
+|---|---|
+| batch width | **10** (was 50 in two of the three call sites) |
+| dispatch-to-dispatch interval | **6,000 ms exactly**, whether the fetch itself takes 100 ms or 3,000 ms |
+| 🔴 worst-case requests in any 60 s window | **100** — 20 under the 120 ceiling, at steady state over a 500-order run |
+| a 429, retried | order still **answered**; `throttled` 0, `deferred` 0 |
+| a 429 that survives all 5 retries | `served` **0**, `throttled` 10/10, `deferred` 10/10, `failed` **0**, `seen` **empty** ⇒ never stamped, stays queued |
+| brake at `remaining = 5` | fires, parks to the minute boundary |
+| brake at `remaining = 20` (our own trough) | **does not fire** — this is why the threshold is 12, not 30 |
+| execution ceiling reached | `served + deferred == asked` (nothing lost), log says CEILING and "NOT dropped" |
+| `PP_CALLS_TODAY` at 999,999 | still serves every order ⇒ **nothing gates on the counter** |
+| `ppLookup_` on a 429 | stamps **nothing** in `_pp_cache`, and the order **never goes terminal** |
+
+**Today's demand against it:** the alarm's 73 due boxes are **44 seconds** of fetching. The
+worst case in the capacity table, 1,344, is 13.4 minutes — i.e. four hourly runs, or ~400 per run
+against the ceiling.
+
+#### Verification
+
+- **`scratchpad/p12_limiter_test.js` — 70/70 PASS** (above).
+- **Regression suites, all re-run green against the patched sources:** `p8_route_test.js` 9/9,
+  `p9_dead_test.js` 31/31, `p10_scope_test.js` PASS, `f1_cache_test.js` PASS.
+  🔴 Two of these needed **test-side** updates, and the distinction matters: `p9` asserted
+  `pp.charged` (renamed to `pp.served` — same number, and it is a rate now, not a bill), and `f1`
+  counted fetch *attempts* on an order that always 429s, which under P13 is retried 6 times instead
+  of dropped once. Its substantive cache assertions never moved.
+  🗑️ **`f234_pace_test.js` is RETIRED** (`f234_pace_test.RETIRED.js`) — it asserts the pacing math
+  P12 deletes. It is kept unrun as the record of what was believed; do not "fix" it.
+- **`scratchpad/gas_lint2.js`:** SYNTAX OK ×4 + the concatenated project, **COLLISIONS NONE**, and a
+  **deleted-symbol sweep** proving no *live* reference (comments excluded) to any of the 25 removed
+  budget identifiers survives in any file, plus every new limiter symbol declared exactly once and
+  in one file.
+- **The 120/min limit was re-probed live before any of this was written**, not taken from the prior
+  analysis: `x-ratelimit-limit: 120`, `remaining` 119→118→117→116 across four calls, back to **119**
+  after 65 s. Four ParcelPanel calls total were spent on this entire change.
+- 🔴 **NOT VERIFIED — no live Apps Script execution.** Apps Script cannot be run from here; the
+  Apps Script REST API cannot execute functions, list triggers, or read Script Properties. Every
+  figure above is measured against the real source on a stubbed clock, not observed in production.
+  The first real numbers arrive in the `PP fetch:` / `ppLookup_:` log lines on Kurt's next run.
+- 🔴 **NOT VERIFIED — the `PP_WEEK_USED` property itself.** Its final reading is recorded above from
+  the alarm text, because Script Properties are not readable over the REST API. It is now dead data
+  and should be deleted by hand.
+- 🔴 **NOT VERIFIED — the Python side.** Unchanged in this pass; proposed separately.
+
 ### P13 — NO CONSUMER MAY DROP A 429 (Kurt GO, 2026-08-20)
 
 A 429 is **backpressure, not an answer.** An order refused by one is in exactly the state it was in

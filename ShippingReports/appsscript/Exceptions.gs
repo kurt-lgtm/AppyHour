@@ -134,16 +134,44 @@ function excChannelOps_() {
 }
 var EXC_LOG_TAB = 'Exceptions';
 var EXC_STATE_TAB = '_exc_state';
-// 🔴 PACING: ParcelPanel rate-limits hard and per-minute. The proven client
-// (GelPackCalculator/parcel_panel.py) sleeps 0.3s between calls and backs off SIXTY-FIVE seconds
-// on a 429. The first live run here fired UrlFetchApp.fetchAll in batches of 50 with no pause and
-// no retry: 780 of 900 fetches failed — it throttled itself out after roughly the first two
-// batches. Small batches with a pause between them, and a single backoff retry, stay under it.
-// A 65s backoff cannot be repeated inside the 6-minute execution ceiling, so throttled orders are
-// left for the next run rather than retried to death.
-var EXC_PP_BATCH = 10;                    // requests per fetchAll
-var EXC_PP_PAUSE_MS = 1000;               // pause between batches -> ~10 req/s
-var EXC_PP_BACKOFF_MS = 5000;             // one retry for a batch that came back throttled
+// 🔴 THE RATE LIMITER (directive P12, 2026-08-20). ParcelPanel's ONLY limit is **120 requests per
+// minute per API key** — docs.parcelpanel.com/shopify/api-webhook/api-v2/, and it is reported in
+// `x-ratelimit-limit` on EVERY response. Probed live 2026-08-20: limit 120, `x-ratelimit-remaining`
+// counting 119/118/117/116 down a one-minute bucket and back to 119 after 65s.
+// 🔴 THE "2,500 CALLS/WEEK" THIS FILE USED TO RATION AGAINST NEVER EXISTED. It is Kurt's average
+// weekly ORDER count (10,000/month plan quota / 4) misread as a request budget; ParcelPanel's plan
+// quota counts ORDERS TRACKED ("1 order = 1 quota", "order lookups do not consume quota"). 55 boxes
+// went unchecked to protect it. COVERAGE IS NEVER RATIONED. ONLY SPEED IS.
+// 🔴 THE FAULT WAS ALWAYS BURST SHAPE, NOT VOLUME — see the note below, which has been in this file
+// since day one and describes the exact bug that was still live in TWO other call sites:
+//   "The first live run here fired UrlFetchApp.fetchAll in batches of 50 with no pause and no
+//    retry: 780 of 900 fetches failed — it throttled itself out after roughly the first two
+//    batches. Small batches with a pause between them, and a single backoff retry, stay under it."
+var EXC_PP_BATCH = 10;                    // requests per fetchAll == max in flight
+var EXC_PP_TARGET_PER_MIN = 100;          // 83% of 120; the rest is margin for the OTHER consumers
+// 🔴 A CYCLE, NOT A PAUSE. 10 requests per 6.0s == 100/min — but only if the fetch's own duration
+// counts against the cycle. Sleeping a flat 6s AFTER a fetch that itself took 3s yields 66/min, and
+// the rate under-runs silently. The sleep is always max(0, CYCLE_MS - elapsedSinceDispatch).
+var EXC_PP_CYCLE_MS = Math.round(60000 * EXC_PP_BATCH / EXC_PP_TARGET_PER_MIN);   // 6000
+// 🔴 THE ADAPTIVE BRAKE — and why it is 12 and NOT the 30 that was proposed. This is the REAL
+// cross-runtime coordination the `PP_WEEK_USED` ledger could never be: GAS, Kurt's PC and the
+// DigitalOcean worker cannot read each other's Script Properties, but they all see the same bucket
+// drain in `x-ratelimit-remaining`. The threshold must be BELOW our own steady-state trough, or it
+// fires on our own correct pacing and means nothing: spending 100 of a 120 bucket every minute puts
+// our own trough at ~20, so a brake at 30 would trip every single minute. It must also be >= one
+// batch, so we never dispatch 10 requests we cannot afford. 12 satisfies both.
+// 🔴 IF THIS BRAKE FIRES OFTEN, A SECOND CONSUMER IS ON THIS KEY. That is signal, not noise, and
+// the fix is not to lower the threshold.
+var EXC_PP_BRAKE_REMAINING = 12;
+// 🔴 A 429 IS BACKPRESSURE, NOT AN ANSWER (directive P13). Retry in-run; honour Retry-After when
+// ParcelPanel sends one, else back off 2/4/8/16/32s with jitter. An order whose retries are
+// exhausted is left UNSTAMPED and queued — it is the next run's FIRST work, never a hole.
+var EXC_PP_RETRY_MS = [2000, 4000, 8000, 16000, 32000];
+// Share of a run's requests still refused after every retry that means "this is an outage, not a
+// busy minute". Deliberately its OWN counter and its OWN threshold, never fused with
+// EXC_PP_FAIL_RATIO: throttling means slow down, transport failure means something is broken, and
+// P9 is the record of what happens when two opposite conditions share one number.
+var EXC_PP_THROTTLE_RATIO = 0.2;
 // 🔴 THROUGHPUT: 400/run was set by guessing, not by measuring, and it starved the queue — on
 // 2026-08-07 4,287 of 4,587 seeded orders had NEVER been polled, including 2,325 of the 2,361 in
 // the LIVE cohort, so 26 of 27 no-scan boxes aged 3-5 days undetected. At the pacing above, 400
@@ -199,70 +227,40 @@ var EXC_COHORT_LOOKBACK_WEEKS = 3;
 var EXC_SCOPE_PROP = 'EXC_SCOPE_CURRENT';
 var EXC_SCOPE_TAGS_ = null;               // memoized for the life of one execution
 
-// 🔴 PARCELPANEL WEEKLY BUDGET — 2,500 calls/week, ACCOUNT-WIDE (Kurt, standing). This job polls
-// hourly = 168 runs/week and was never measured against it. Measured 2026-08-10: 487 open orders
-// x 168 runs = 81,816 calls/week, THIRTY-THREE TIMES the cap, and a full fresh cohort (~2,300
-// open) would project 386k. The reship refresh's ~180/week was never the risk; this was.
-// Three controls, in order of how much they save:
-//   1. excResolveDelivered_ closes delivered orders using SHOPIFY (free) before PP is called at
-//      all — the same narrowing that took the analytics refresh from 2,300 to 45.
-//   2. a shared WEEKLY counter both jobs draw from, so total consumption is visible in one place.
-//   3. a per-run cap as a backstop.
-// 🔴 F2/P11: 2000 -> 1800. The 2,500/wk plan is now SPLIT explicitly instead of leaving one
-// consumer uncapped and discovering the split by starvation. Measured sweep demand at the P10
-// scope: Mon/Tue thin 100/day = 200, Wed-Sun 5 x 261 = 1,305 -> ~1,505 of 1,800. It fits with
-// headroom for the first time.
-var EXC_PP_WEEKLY_BUDGET = 1800;          // this sweep's RESERVATION inside the account quota
-// 🔴 F3/P11: 120 -> 150. At 2 runs/day the fair share is ~129/run, and a 120 cap would clip it.
-var EXC_PP_MAX_PER_RUN = 150;             // backstop; the weekly counter normally binds first
+// 🔴 THE PER-RUN CAP IS THE EXECUTION CEILING, NOT A BUDGET (directive P12). Apps Script kills an
+// execution at 6 minutes. At EXC_PP_TARGET_PER_MIN against EXC_TIME_BUDGET_MS (4 minutes of
+// fetching, 2 reserved to write state) a single run can place ~400 calls. That is a WALL, not a
+// ration: orders this run does not reach are never stamped `last_seen`, so they stay at the head of
+// the longest-unpolled ordering and are the FIRST thing the next run takes, and the run says so.
+// 🔴 Do not re-derive this from a quota. If the cadence ever changes, this number does not: it is
+// (EXC_TIME_BUDGET_MS / 60000) * EXC_PP_TARGET_PER_MIN, and nothing else.
+var EXC_PP_MAX_PER_RUN = 400;
 /**
- * 🔴 ALLOCATIONS FOR THE CONSUMERS THAT REPORT BUT ARE NOT CAPPED (F2, directive P11).
+ * 🔴 CALL COUNTS ARE A HEALTH METRIC, NEVER A BALANCE (directive P3 as rewritten by P12).
  *
- * These are NOT gates. P3's reasoning stands and is deliberately preserved: `ppLookup_` and
- * `paPpFetch_` feed columns Dan reads, a missing carrier/transit corrupts a number silently, and
- * the sweep is the consumer that can retry an hour later. Starving them to protect the sweep
- * trades a visible number for an invisible one.
+ * What was here: `PP_WEEK_USED`, a weekly ledger "<wkKey>|<total>|<exc>|<rpt>|<pa>" that
+ * `excBudgetTake_` SUBTRACTED FROM to decide how many boxes to check. Its cap, 2,500/week, was
+ * Kurt's average weekly ORDER count misread as a request budget. On 2026-08-20 it read
+ * `total 4382/2500` and allowed the sweep **0 of 73 due boxes** — 0.4% of what the account can
+ * actually serve, and 55 boxes went unchecked.
  *
- * 🔴 WHAT P3 GOT WRONG, AND WHAT THESE CONSTANTS FIX. P3 exempted `rpt` from the cap believing
- * the overdraw was marginal. Measured for the first time on 2026-08-20 it was **31.9x the entire
- * account plan** — and "the sweep yields" against a consumer that large is not yielding, it is an
- * unconditional shutdown of the sweep. The rule to keep: **a consumer may only be exempt from a
- * budget while its MEASURED draw is a minority of that budget — measure before granting the
- * exemption, never after.** So the exemption stays and the OVERDRAW BECOMES LOUD (see
- * `excBudgetBindingLeg_`), because the failure mode was never the spend, it was the silence.
+ * What is here now: the same per-consumer counts, made impossible to read as a fence.
+ *   - DAILY, not weekly. A daily count is a RATE; a weekly count against a cap invites subtraction.
+ *   - 🔴 NOTHING READS IT TO DECIDE ANYTHING. There is no gate, no pace, no cap, no skip anywhere
+ *     that consults this property. If one ever appears, that is the regression this exists to stop.
+ *     The only thing that shapes traffic is the limiter and `x-ratelimit-remaining`.
+ *   - Renamed at every call site (`excBudgetCharge_` -> `excPpRecordCalls_`), because a helper with
+ *     "budget" in its name reads as correct at a call site that is about to ration something.
+ *
+ * 🔴 IT IS STILL A LOWER BOUND AND THAT IS NOW HARMLESS. `sync_delivery_status.py` and ad-hoc
+ * probes spend the same key from runtimes that cannot reach these properties — which is exactly why
+ * this number is no longer allowed to decide anything. The cross-runtime fact P3 wanted and could
+ * not have is `x-ratelimit-remaining`, and it is in every response.
+ *
+ * Kept at all because knowing each consumer's call RATE is what found the reship report's 31.9x
+ * waste in the first place. The observability was worth having; the subtraction was not.
  */
-var EXC_PP_RPT_ALLOC = 200;               // Code.gs ppLookup_, post-F1 measured ~77/wk
-var EXC_PP_PA_ALLOC = 180;                // PivotAnalytics paPpFetch_, ~180/wk
-// 🔴 THE COUNTER WAS FICTION — ONE ACCOUNTANT, FOUR SPENDERS (Kurt 2026-08-19, directive P3).
-// `PP_WEEK_USED` was decremented by THIS FILE ONLY, while `Code.gs ppLookup_` (UNCAPPED, hourly
-// with the reship refresh) and `PivotAnalytics.gs paPpFetch_` (200/run, daily) spent the same
-// ACCOUNT-WIDE 2,500/wk quota silently. A number that measures one of at least four drains cannot
-// answer "how much is left", and every pacing decision above was computed from it.
-// The counter is now a LEDGER: "<wkKey>|<total>|<exc>|<rpt>|<pa>".
-//   exc = this sweep · rpt = Code.gs ppLookup_ (reship report) · pa = PivotAnalytics paPpFetch_
-// 🔴 NOT COUNTED, AND THE NUMBER IS THEREFORE A LOWER BOUND — say so, never imply completeness:
-//   - `ShipRouting/server/sync_delivery_status.py` (PP_CAP_PER_RUN=300, hourly on the cloud ingest
-//     worker, gated DELIVERY_SYNC). It is a different runtime with no access to these properties.
-//     If that flag is 1 the account quota is being spent entirely outside this project.
-//   - ad-hoc local python probes.
-// The webhook standing up on DigitalOcean replaces polling outright; this ledger is interim.
-var EXC_PP_ACCOUNT_QUOTA = 2500;          // ParcelPanel PLAN, account-wide, ALL consumers
-var EXC_PP_BUDGET_PROP = 'PP_WEEK_USED';  // "<wkKey>|<total>|<exc>|<rpt>|<pa>" — shared ledger
-// 🔴 THE BUDGET MUST BE PACED, NOT SPENT FIRST-COME (Kurt 2026-08-19). Measured on _exc_state's
-// own last_seen column for week 33: Mon 8/11 polled 1,676 orders and Tue 8/12 polled 651 — then
-// Wed 8/13, Thu 8/14 and Fri 8/15 polled ZERO. Mon/Tue are exactly the days this job is FORBIDDEN
-// to post on (record-only, per the Wed-Sun day gate), so the entire weekly ParcelPanel allowance
-// was consumed by the two silent days and the whole ping window ran starved. A run that takes 0
-// finds no exceptions, throws nothing and posts nothing — indistinguishable from a quiet week,
-// which is the exact failure this job exists to prevent.
-// The fix is arithmetic, not a bigger number: 2,000 calls / 168 hourly runs is ~12 per run, but
-// the per-run cap was 120, so ~17 consecutive runs could drain the week. Each run now takes at
-// most its fair share of what REMAINS, spread over the runs still left in the week.
-// 🔴 THE FLOOR IS NOW CONDITIONAL (directive P6). An unconditional floor is not a floor, it is a
-// second budget: 109 runs still left in a week x 10 = 1,090 calls that pacing is powerless to
-// prevent, spent on a poll set that the once-per-day tier says is not due. The floor may only
-// apply when the remaining budget can AFFORD it for EVERY remaining run.
-var EXC_PP_MIN_PER_RUN = 10;              // floor; applied only while left >= runsLeft * floor
+var EXC_PP_CALLS_PROP = 'PP_CALLS_TODAY';   // "<yyyy-MM-dd>|<total>|<exc>|<rpt>|<pa>" — descriptive
 // 🔴 POLL POLICY — Kurt-approved interim (a)+(b)+(c), 2026-08-19. See directive P5.
 // (a) SHOPIFY TRIAGES FIRST. `excResolveDelivered_` already fetches fulfillment displayStatus and
 //     events for the whole triage window on a request that was being made anyway — free against
@@ -277,8 +275,10 @@ var EXC_POLL_MIN_AGE_DAYS = 3;            // cohort age before the untriaged mas
 // routine facility scans by Wednesday is invisible forever — the exact #170893 failure mode that
 // 112ba5a was written to fix. So Mon/Tue keep a THIN sweep, restricted to boxes Shopify already
 // flags (DELAYED / ATTEMPTED_DELIVERY / no movement scan at all), which cost nothing to identify.
-var EXC_THIN_DAY_CAP = 100;               // hard per-DAY ceiling for the Mon/Tue record-only sweep
-var EXC_THIN_DAY_PROP = 'EXC_THIN_DAY';   // "<yyyy-MM-dd>|<charged>" in the stamp's timezone
+// 🔴 THIN MEANS FLAGGED-ONLY. IT DOES NOT MEAN CAPPED (directive P12). `EXC_THIN_DAY_CAP = 100` and
+// its day counter are DELETED. The FILTER is work avoidance — a box Shopify shows moving normally
+// is not worth a call. The CAP was rationing, and a Monday with 140 flagged boxes silently left 40
+// unchecked going into the ping window, which is the failure this whole file exists to prevent.
 // Heartbeat + silent-starvation alarm. A dead trigger and a zero-budget run look identical from
 // the outside — both are silence — so the sweep stamps every run and shouts when it polls nothing.
 var EXC_HEARTBEAT_PROP = 'EXC_LAST_RUN_AT';
@@ -317,217 +317,63 @@ function excNeverPolledDue_(st, openKeys) {
 }
 
 /**
- * 🔴 THE PACER MUST COUNT SCHEDULED RUNS, NOT HOURS (F3, directive P11). This returned hours to
- * Sunday-midnight, which was right only while the trigger was hourly. At 2 runs/day, dividing the
- * remaining balance by ~168 instead of ~14 would hand out ~12 calls a run and leave ~1,600 of the
- * 1,800 unspent every week — a NEW starvation, wearing the old one's clothes.
+ * 🔴 THE SCHEDULE CONSTANTS AND THE OFF-SCHEDULE GUARD ARE DELETED (directive P12).
+ * `EXC_RUN_HOURS_ET`, `EXC_RUN_HOUR_SLOP`, `excRunsLeftThisWeek_` and `excOnScheduleET_` existed
+ * to divide a weekly balance by the number of scheduled runs, and to make a run outside those
+ * slots take ZERO ParcelPanel calls so it could not over-draw the denominator.
  *
- * 🔴 EXC_RUN_HOURS_ET IS THE SSOT AND THE TRIGGER MUST MATCH IT. Apps Script cannot list or create
- * triggers over the REST API, so the schedule lives in Kurt's hands and this constant is the only
- * thing the code can reason from. If they drift, `excOnScheduleET_` catches it and the run refuses
- * to spend rather than silently over-drawing at 24 runs/day against a 14-run plan.
+ * With no balance there is no denominator, and refusing to poll because a run was unscheduled is
+ * simply coverage rationing — the thing P12 forbids. **The sweep is now cadence-agnostic:** more
+ * runs are fresher and never more expensive per box, because the once-per-day tier (P5b) bounds
+ * the day's work by the number of OPEN BOXES, not by the number of runs. An extra trigger is free.
  *
- * 🔴 THESE HOURS ARE **ET** AND THE PROJECT TIMEZONE IS **America/Chicago** (appsscript.json), so
- * the trigger Kurt sets is CENTRAL and lands one hour earlier on the clock: ET 9 == CT 8,
- * ET 16 == CT 15. Both zones observe DST together, so the offset does not move across the year.
+ * 🔴 The one true limit on a single run is the 6-minute execution ceiling, and that is expressed
+ * where it belongs — `EXC_TIME_BUDGET_MS` and `EXC_PP_MAX_PER_RUN`, not a schedule.
  */
-var EXC_RUN_HOURS_ET = [9, 16];           // 09:00 and 16:00 ET == 08:00 and 15:00 CT triggers
-var EXC_RUN_HOUR_SLOP = 1;                // Apps Script fires within a ~1h window; tolerate drift
-
-function excRunsLeftThisWeek_() {
-  var now = new Date();
-  var dow = Number(Utilities.formatDate(now, EXC_TZ, 'u'));   // 1=Mon .. 7=Sun
-  var hr = Number(Utilities.formatDate(now, EXC_TZ, 'H'));    // 0..23
-  var todayLeft = 0;
-  EXC_RUN_HOURS_ET.forEach(function (h) { if (h + EXC_RUN_HOUR_SLOP >= hr) todayLeft++; });
-  return Math.max(1, (7 - dow) * EXC_RUN_HOURS_ET.length + todayLeft);
-}
-
-/** Is this run one of the scheduled slots? A run that is not must never spend paced budget. */
-function excOnScheduleET_() {
-  var hr = Number(Utilities.formatDate(new Date(), EXC_TZ, 'H'));
-  for (var i = 0; i < EXC_RUN_HOURS_ET.length; i++) {
-    if (Math.abs(EXC_RUN_HOURS_ET[i] - hr) <= EXC_RUN_HOUR_SLOP) return true;
-  }
-  return false;
-}
 
 /**
- * 🔴 MONDAY-ANCHORED WEEK KEY (directive P2). The old key was
- * `formatDate(now, tz, 'ww')` — Java's `ww` is LOCALE week-of-year and the US locale starts the
- * week on SUNDAY, while `excRunsLeftThisWeek_` counts hours to Sunday-midnight from a MONDAY
- * start. The two disagreed by a day, and the disagreement is not theoretical: week 33 was already
- * drained (1,676 + 651 = 2,327 >= 2,000) yet Sun 2026-08-16 20:00 and 21:00 stamped 22 and 63
- * orders — only possible if the counter had already reset before Sunday evening. With pacing in
- * force that mismatch is WORSE, not better: on a Sunday `runsLeft = 24 - hr <= 24` against
- * `left = 2000`, so `pace = ceil(2000/24) = 84` and 24 Sunday runs x 84 = 2,016 — the entire
- * week's allowance legally spent on the one day, recurring Sun 2026-08-23.
+ * 🔴 DELETED WITH THE BUDGET (directive P12): `excWeekKey_`, `excBudgetRead_`, `excBudgetWrite_`,
+ * `excBudgetLeftAccount_`, `excBudgetTake_`, `excBudgetSettle_`, `excBudgetBindingLeg_`,
+ * `excResetWeeklyBudget`, `excThinDayLeft_`, `excThinDayAdd_`, `excRunsLeftThisWeek_` and
+ * `excOnScheduleET_`. There is no weekly quota, so there is no week, no balance, no reservation,
+ * no refund, no pacing denominator and no binding leg to name.
  *
- * ONE CONVENTION, STATED: the ParcelPanel week runs **Monday 00:00 ET through Sunday 24:00 ET**.
- * The key is that Monday's ET calendar date. `excRunsLeftThisWeek_` already uses it.
+ * 🔴 DO NOT REINTRODUCE A WEEK KEY FOR ANYTHING. The bug `excWeekKey_` fixed was real and subtle —
+ * Java's `ww` is LOCALE week-of-year and the US locale starts weeks on SUNDAY while the pacer
+ * counted from MONDAY, so a Sunday run could legally spend the whole following week's allowance.
+ * If some genuinely weekly fact ever needs a boundary, build it from an ET-calendar anchor at UTC
+ * noon so a DST transition cannot shift it a day — and do not make it a budget.
  *
- * The day arithmetic is done on a UTC noon anchor built from the ET calendar parts, so a DST
- * transition cannot shift the answer to the previous day (a naive `now - 6*86400000` formatted in
- * ET lands on Sunday 23:00 for a Sunday-00:30 run in a fall-back week).
- *
- * ⚠️ The key FORMAT changes with this deploy ('2026-W34' -> 'WK2026-08-17'), so the first run
- * after the push sees a key mismatch and resets the ledger to zero. That is deliberate — see
- * directive P7 for why zeroing this week is the correct opening balance.
+ * 🔴 `excOnScheduleET_` IS GONE ON PURPOSE. It made a run outside the two scheduled slots take ZERO
+ * ParcelPanel calls, to protect a pacing denominator. With no denominator that is simply coverage
+ * rationing, which P12 forbids outright. The sweep is now CADENCE-AGNOSTIC: extra runs are fresher
+ * and never more expensive per box, because the once-per-day tier (P5b) bounds the daily work by the
+ * number of open boxes, not by the number of runs.
  */
-function excWeekKey_() {
-  var now = new Date();
-  var dow = Number(Utilities.formatDate(now, EXC_TZ, 'u'));                 // 1=Mon .. 7=Sun
-  var ymd = Utilities.formatDate(now, EXC_TZ, 'yyyy-MM-dd').split('-');
-  var anchor = new Date(Date.UTC(Number(ymd[0]), Number(ymd[1]) - 1, Number(ymd[2]), 12, 0, 0));
-  anchor.setUTCDate(anchor.getUTCDate() - (dow - 1));
-  return 'WK' + Utilities.formatDate(anchor, 'UTC', 'yyyy-MM-dd');
-}
-
-/** Read the shared ledger, rolling it to zero when the week key has changed. */
-function excBudgetRead_() {
-  var raw = String(PropertiesService.getScriptProperties().getProperty(EXC_PP_BUDGET_PROP) || '');
-  var p = raw.split('|'), wk = excWeekKey_();
-  if (p[0] !== wk) {
-    if (p[0]) Logger.log('  PP ledger: new week ' + wk + ', reset from "' + raw + '"');
-    return { wk: wk, total: 0, exc: 0, rpt: 0, pa: 0 };
-  }
-  var total = parseInt(p[1], 10) || 0;
-  // Legacy "<key>|<count>" rows carried one number, and it was this sweep's spend.
-  return { wk: wk, total: total,
-           exc: (p.length > 2 ? (parseInt(p[2], 10) || 0) : total),
-           rpt: parseInt(p[3], 10) || 0,
-           pa:  parseInt(p[4], 10) || 0 };
-}
-
-function excBudgetWrite_(b) {
-  PropertiesService.getScriptProperties().setProperty(
-    EXC_PP_BUDGET_PROP, [b.wk, b.total, b.exc, b.rpt, b.pa].join('|'));
-}
 
 /**
- * Move `n` calls onto (n > 0) or off (n < 0) the shared ledger for one consumer.
- * `who` is 'exc' | 'rpt' | 'pa'. Never throws — an accounting failure must not take a caller down.
- *
- * 🔴 This is a RECORDER for `rpt`/`pa`, not a gate. The reship report's carrier/transit enrichment
- * and the analytics union are shipped surfaces Dan reads; starving them to protect this sweep
- * would trade a visible number for an invisible one. They report honestly and are allowed to
- * overdraw; the sweep is the consumer that yields, because it is the one that can retry next hour.
+ * Record ParcelPanel calls made by one consumer today. `who` is 'exc' | 'rpt' | 'pa'.
+ * 🔴 DESCRIPTIVE ONLY — nothing reads this to decide anything (directive P3 as rewritten by P12).
+ * Never throws: an observability failure must not take a caller down.
  */
-function excBudgetCharge_(n, who) {
+function excPpRecordCalls_(n, who) {
   n = Math.round(Number(n) || 0);
   if (!n) return;
   try {
-    var b = excBudgetRead_();
+    var props = PropertiesService.getScriptProperties();
+    var today = excStampDay_();
+    var p = String(props.getProperty(EXC_PP_CALLS_PROP) || '').split('|');
+    var b = (p[0] === today)
+      ? { total: parseInt(p[1], 10) || 0, exc: parseInt(p[2], 10) || 0,
+          rpt: parseInt(p[3], 10) || 0, pa: parseInt(p[4], 10) || 0 }
+      : { total: 0, exc: 0, rpt: 0, pa: 0 };
     var k = (who === 'rpt' || who === 'pa') ? who : 'exc';
     b[k] = Math.max(0, b[k] + n);
     b.total = Math.max(0, b.total + n);
-    excBudgetWrite_(b);
-    Logger.log('  PP ledger ' + (n > 0 ? '+' : '') + n + ' [' + k + '] -> total ' + b.total +
-               '/' + EXC_PP_ACCOUNT_QUOTA + ' (exc ' + b.exc + ', rpt ' + b.rpt + ', pa ' + b.pa +
-               ') week ' + b.wk);
-    if (b.total > EXC_PP_ACCOUNT_QUOTA) {
-      Logger.log('  🔴 PP ACCOUNT QUOTA EXCEEDED: ' + b.total + ' > ' + EXC_PP_ACCOUNT_QUOTA +
-                 ' this week. Every consumer is now spending into 429 territory.');
-    }
-  } catch (e) { Logger.log('  PP ledger charge failed (' + who + ', ' + n + '): ' + e); }
-}
-
-/** Calls still available account-wide this week, across every consumer that reports. */
-function excBudgetLeftAccount_() {
-  try { return Math.max(0, EXC_PP_ACCOUNT_QUOTA - excBudgetRead_().total); }
-  catch (e) { Logger.log('  PP ledger read failed: ' + e); return EXC_PP_ACCOUNT_QUOTA; }
-}
-
-/**
- * Reserve up to `want` ParcelPanel calls for THIS SWEEP. Returns how many are allowed. Loud when
- * it bites: a silently truncated poll set reads as "no exceptions found", which is the failure
- * mode this whole job exists to prevent.
- *
- * 🔴 RESERVE-THEN-SETTLE (directive P1). This used to charge the counter BEFORE `excPpFetch_` ran
- * and never credit anything back, so a run that was throttled out or killed at the 6-minute
- * ceiling spent its whole reservation on nothing. Week 34 is the proof: 2,000 charged by
- * Wednesday while `_exc_state` recorded ZERO orders polled Mon/Tue/Wed — ~1,912 calls that bought
- * no observation at all, and the live `_SHIP_2026-08-17` cohort (1,344 open) never polled once.
- * The reservation still happens first (two concurrent runs must not both spend the same balance),
- * but `excBudgetSettle_` credits back everything ParcelPanel never actually served.
- */
-/**
- * 🔴 NAME WHO TOOK THE BUDGET (F4, directive P11). The starvation alarm said "budget allowed 0 of
- * 271 due" and stopped there — which is WHY 2026-08-20 took a reconstruction from `_exc_state`
- * instead of a one-line read: the message proved the sweep got nothing but not that the reship
- * report had taken the account quota. P5 already requires the ledger be LOGGED every run; an alarm
- * that reaches a human must carry it too, and must say which leg is binding.
- *
- * Returns a one-line human string. Never throws — diagnostics must not take an alarm down.
- */
-function excBudgetBindingLeg_(b) {
-  try {
-    b = b || excBudgetRead_();
-    var leftMine = Math.max(0, EXC_PP_WEEKLY_BUDGET - b.exc);
-    var leftAcct = Math.max(0, EXC_PP_ACCOUNT_QUOTA - b.total);
-    var leg = (leftAcct <= leftMine)
-      ? ('the ACCOUNT quota (' + b.total + '/' + EXC_PP_ACCOUNT_QUOTA + ' spent account-wide)')
-      : ("this sweep's OWN weekly budget (" + b.exc + '/' + EXC_PP_WEEKLY_BUDGET + ')');
-    var over = [];
-    if (b.rpt > EXC_PP_RPT_ALLOC) over.push('rpt ' + b.rpt + ' OVER its ' + EXC_PP_RPT_ALLOC +
-                                            '/wk allocation (Code.gs ppLookup_ — the reship report)');
-    if (b.pa > EXC_PP_PA_ALLOC) over.push('pa ' + b.pa + ' OVER its ' + EXC_PP_PA_ALLOC +
-                                          '/wk allocation (PivotAnalytics paPpFetch_)');
-    return 'ledger ' + b.wk + ' total ' + b.total + '/' + EXC_PP_ACCOUNT_QUOTA +
-           ' (exc ' + b.exc + ', rpt ' + b.rpt + ', pa ' + b.pa + '); binding leg is ' + leg +
-           (over.length ? '. 🔴 ' + over.join('; ') + '.' : '.') +
-           ' NOTE the ledger is a LOWER BOUND — sync_delivery_status.py cannot report into it.';
-  } catch (e) { return 'ledger unreadable (' + e + ')'; }
-}
-
-function excBudgetTake_(want) {
-  var b = excBudgetRead_();
-  // 🔴 AN UNSCHEDULED RUN MUST NOT SPEND (F3). `excRunsLeftThisWeek_` divides the balance by the
-  // number of SCHEDULED slots left. A run outside those slots — a leftover hourly trigger that was
-  // never deleted, say — is not in that denominator, so letting it poll would over-draw by exactly
-  // the ratio of real runs to planned runs and drain the week early. Costing it nothing makes the
-  // trigger migration fail-SAFE, and the sweep says so out loud rather than quietly overspending.
-  if (!excOnScheduleET_()) {
-    Logger.log('  🔴 OFF-SCHEDULE RUN at ET hour ' +
-               Utilities.formatDate(new Date(), EXC_TZ, 'H') + ' — scheduled slots are ET ' +
-               EXC_RUN_HOURS_ET.join(', ') + ' (+/-' + EXC_RUN_HOUR_SLOP + 'h). Taking 0 PP calls: ' +
-               'this run is not in the pacing denominator. If this repeats, the trigger and ' +
-               'EXC_RUN_HOURS_ET have drifted — fix the trigger, do not widen the constant.');
-    return 0;
-  }
-  var leftMine = Math.max(0, EXC_PP_WEEKLY_BUDGET - b.exc);
-  var leftAcct = Math.max(0, EXC_PP_ACCOUNT_QUOTA - b.total);
-  var left = Math.min(leftMine, leftAcct);
-  var runsLeft = excRunsLeftThisWeek_();
-  var fair = Math.ceil(left / runsLeft);
-  // The floor only applies while the budget can afford it for every run still to come.
-  var pace = (left >= runsLeft * EXC_PP_MIN_PER_RUN) ? Math.max(EXC_PP_MIN_PER_RUN, fair) : fair;
-  var take = Math.max(0, Math.min(want, left, EXC_PP_MAX_PER_RUN, pace));
-  Logger.log('  PP pace: ' + pace + '/run (' + left + ' left over ' + runsLeft + ' runs; mine ' +
-             leftMine + ', account ' + leftAcct + ')');
-  if (take < want) {
-    Logger.log('  🔴 PP BUDGET BIT: wanted ' + want + ', taking ' + take +
-               ' (per-run cap ' + EXC_PP_MAX_PER_RUN + '). ' + excBudgetBindingLeg_(b) +
-               ' Unpolled orders stay queued, NOT silently dropped.');
-  }
-  excBudgetCharge_(take, 'exc');
-  return take;
-}
-
-/**
- * Credit back the part of a reservation ParcelPanel never served. `charged` is what `excPpFetch_`
- * counted as genuinely dispatched-and-answered (any response that was not 429/503); everything
- * else — throttled batches, requests never reached before the time budget, orders the run died
- * before touching — is refunded. Returns the refund for logging.
- */
-function excBudgetSettle_(reserved, charged, who) {
-  var refund = Math.max(0, (Number(reserved) || 0) - (Number(charged) || 0));
-  if (refund) {
-    Logger.log('  PP refund: ' + refund + ' of ' + reserved + ' reserved were never served ' +
-               '(throttled / unreached) — credited back, not burned.');
-    excBudgetCharge_(-refund, who);
-  }
-  return refund;
+    props.setProperty(EXC_PP_CALLS_PROP, [today, b.total, b.exc, b.rpt, b.pa].join('|'));
+    Logger.log('  PP calls +' + n + ' [' + k + '] -> ' + b.total + ' today (exc ' + b.exc +
+               ', rpt ' + b.rpt + ', pa ' + b.pa + '); rate metric only, nothing is capped by it');
+  } catch (e) { Logger.log('  PP call counter failed (' + who + ', ' + n + '): ' + e); }
 }
 
 /** Day key in the SAME timezone `last_seen` is stamped in, so "already polled today" is exact. */
@@ -535,43 +381,19 @@ function excStampDay_(d) {
   return Utilities.formatDate(d || new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
 }
 
-/** Calls left in today's Mon/Tue thin-sweep allowance. Independent of the weekly ledger. */
-function excThinDayLeft_() {
-  var raw = String(PropertiesService.getScriptProperties().getProperty(EXC_THIN_DAY_PROP) || '');
-  var p = raw.split('|'), today = excStampDay_();
-  var used = (p[0] === today) ? (parseInt(p[1], 10) || 0) : 0;
-  return Math.max(0, EXC_THIN_DAY_CAP - used);
-}
-
-function excThinDayAdd_(n) {
-  n = Math.round(Number(n) || 0);
-  if (!n) return;
-  try {
-    var props = PropertiesService.getScriptProperties();
-    var raw = String(props.getProperty(EXC_THIN_DAY_PROP) || '');
-    var p = raw.split('|'), today = excStampDay_();
-    var used = (p[0] === today) ? (parseInt(p[1], 10) || 0) : 0;
-    props.setProperty(EXC_THIN_DAY_PROP, today + '|' + Math.max(0, used + n));
-    Logger.log('  thin-sweep day counter: ' + Math.max(0, used + n) + '/' + EXC_THIN_DAY_CAP +
-               ' (' + today + ')');
-  } catch (e) { Logger.log('  thin-sweep counter failed: ' + e); }
-}
-
 /**
- * MANUAL LEVER — zero the shared weekly ledger for the CURRENT week. Menu item, never automatic.
- * Use only when the recorded spend is known to be fiction (e.g. week 34, where 1,912 of 2,000
- * were charged for calls that produced no observation). State the reason in the log.
+ * 🔴 DELETED (directive P12): `excThinDayLeft_`, `excThinDayAdd_`, `EXC_THIN_DAY_CAP`,
+ * `EXC_THIN_DAY_PROP`, and the manual lever `excResetWeeklyBudget` with its menu item.
+ *
+ * The Mon/Tue sweep keeps its SHAPE (Shopify-flagged boxes only — work avoidance, since a box
+ * Shopify shows moving normally cannot produce an answer worth a call) and loses its CAP. A hard
+ * 100/day ceiling meant a Monday with 140 flagged boxes silently left 40 unchecked going into the
+ * ping window, and `EXC_CP_SCAN = 5` is the reason that matters: a Monday exception buried under
+ * more than five routine facility scans by Wednesday is invisible forever. That is the #170893
+ * failure mode, and rationing the Monday sweep re-opened it.
+ *
+ * There is no ledger left to reset, so there is nothing for a reset lever to do.
  */
-function excResetWeeklyBudget() {
-  var before = String(PropertiesService.getScriptProperties().getProperty(EXC_PP_BUDGET_PROP) || '(unset)');
-  var b = { wk: excWeekKey_(), total: 0, exc: 0, rpt: 0, pa: 0 };
-  excBudgetWrite_(b);
-  var msg = 'PP weekly ledger reset\n  was: ' + before + '\n  now: ' +
-            [b.wk, b.total, b.exc, b.rpt, b.pa].join('|');
-  Logger.log(msg);
-  try { SpreadsheetApp.getUi().alert('ParcelPanel budget', msg, SpreadsheetApp.getUi().ButtonSet.OK); } catch (e) {}
-  return msg;
-}
 
 /**
  * 🔴 FILTER BEFORE CALLING PP (Kurt 2026-08-10). Shopify already knows which of these boxes are
@@ -664,8 +486,9 @@ function excCohortAgeDays_(cohort) {
 
 /**
  * The `_SHIP_` tag for the Monday of the ET week `offsetWeeks` weeks back. Day arithmetic on a
- * UTC-noon anchor built from the ET calendar parts, so a DST transition cannot shift it a day
- * (same construction as `excWeekKey_`).
+ * UTC-noon anchor built from the ET calendar parts, so a DST transition cannot shift it a day.
+ * (`excWeekKey_` used the identical construction before P12 deleted it — if a week boundary is
+ * ever needed again, build it THIS way, and do not make it a budget.)
  */
 function excMondayTag_(offsetWeeks) {
   var now = new Date();
@@ -978,6 +801,9 @@ function excDaysSince_(iso) {
  * Throttled (429) is counted apart from failed: throttling is expected backpressure and is
  * retried next run, whereas a real failure rate means something is broken and must be loud.
  *
+ * 🔴 `throttled` IS NOT `failed` AND NEVER SHARES ITS THRESHOLD (directive P13). One means slow
+ * down, the other means something is broken.
+ *
  * 🔴 THREE OUTCOMES, NOT TWO (directive P9). `failed` used to mean "any non-200", which fused two
  * opposite conditions under one number:
  *   TRANSPORT  — 5xx, a network-class throw, a 200 whose body will not parse. The REQUEST broke.
@@ -989,13 +815,51 @@ function excDaysSince_(iso) {
  * ten perfectly good answers, every hour, forever. `dead` is per-order because the caller has to
  * count consecutive failures against the order to quarantine it — a bare tally cannot.
  */
+/**
+ * 🔴 THE LIMITER (directives P12/P13). Three things happen here that did not before:
+ *   1. the batch cycle is PACED to EXC_PP_TARGET_PER_MIN, measuring from the moment the fetch was
+ *      dispatched — sleeping a flat interval AFTER a fetch under-runs the rate by the fetch's own
+ *      duration, silently;
+ *   2. `x-ratelimit-remaining` is read off EVERY response, and a reading below
+ *      EXC_PP_BRAKE_REMAINING parks us until the next minute boundary. This is the real
+ *      cross-runtime coordination: every consumer sharing the API key sees the same bucket drain,
+ *      which is exactly the fact the `PP_WEEK_USED` ledger tried and structurally failed to
+ *      approximate across three runtimes that cannot read each other's properties;
+ *   3. a 429 is RETRIED, never dropped — Retry-After when ParcelPanel sends one, else
+ *      2/4/8/16/32s jittered. An order whose retries are exhausted is left UNSTAMPED, so it stays
+ *      at the head of the longest-unpolled ordering and is the next run's FIRST work.
+ */
+function excPpHeader_(resp, name) {
+  try {
+    var h = (resp.getAllHeaders && resp.getAllHeaders()) || (resp.getHeaders && resp.getHeaders()) || {};
+    var want = String(name).toLowerCase();
+    for (var k in h) {
+      if (String(k).toLowerCase() === want) {
+        var v = h[k];
+        return String(v && v.length && typeof v !== 'string' ? v[0] : v);
+      }
+    }
+  } catch (e) {}
+  return '';
+}
+
+/** Sleep to the start of the next minute — the ParcelPanel bucket refills whole on that boundary. */
+function excPpBrakeSleep_(deadline) {
+  var now = new Date().getTime();
+  var ms = 60000 - (now % 60000) + 500;
+  if (deadline && now + ms > deadline) return false;   // the ceiling is closer than the refill
+  Logger.log('  PP brake: x-ratelimit-remaining below ' + EXC_PP_BRAKE_REMAINING +
+             ' — parking ' + Math.round(ms / 100) / 10 + 's to the next minute boundary. ' +
+             'If this is frequent, ANOTHER CONSUMER is on this API key (that is signal, not noise).');
+  Utilities.sleep(ms);
+  return true;
+}
+
 function excPpFetch_(orderNums, deadline) {
-  // 🔴 `charged` is the ONLY honest unit of spend (directive P1): a request ParcelPanel actually
-  // served, whatever it answered. A 429/503 is refused backpressure, and a request never dispatched
-  // (time budget, 6-minute kill) never existed — neither may be billed to the weekly ledger, which
-  // is precisely how week 34 charged 2,000 for 88 observed polls.
-  var out = { ships: {}, failed: 0, throttled: 0, attempted: 0, charged: 0, seen: {},
-              dead: {}, budgetHit: false };
+  // 🔴 `served` is a HEALTH metric, never a balance (directive P3 as rewritten by P12): a request
+  // ParcelPanel actually answered, whatever it answered. Nothing caps anything using it.
+  var out = { ships: {}, failed: 0, throttled: 0, attempted: 0, served: 0, seen: {},
+              dead: {}, deferred: 0, ceilingHit: false, brakes: 0, remainingMin: null };
   var key = PropertiesService.getScriptProperties().getProperty('PARCELPANEL_API_KEY');
   if (!key || !orderNums.length) return out;
   var uniq = orderNums.filter(function (n, i) { return n && orderNums.indexOf(n) === i; });
@@ -1009,12 +873,18 @@ function excPpFetch_(orderNums, deadline) {
     };
   }
 
+  // Consume one response set. Returns the orders that were REFUSED (429/503) and must be re-asked.
   function consume(slice, resp) {
     var retry = [];
     resp.forEach(function (rp, k) {
       var on = slice[k], code = rp.getResponseCode();
-      if (code === 429 || code === 503) { retry.push(on); return; }   // refused — not billable
-      out.charged++;                                                  // served, whatever it said
+      var rem = parseInt(excPpHeader_(rp, 'x-ratelimit-remaining'), 10);
+      if (isFinite(rem)) {
+        out.remainingMin = (out.remainingMin == null) ? rem : Math.min(out.remainingMin, rem);
+      }
+      // 🔴 P13: refused is NOT answered. Do not count it, do not stamp it, do not lose it.
+      if (code === 429 || code === 503) { retry.push(on); return; }
+      out.served++;
       // 404/410 = PP answered "I have no such order". A verdict about the RECORD, not a transport
       // fault (directive P9). Kept per-order so the caller can quarantine on repeats.
       if (code === 404 || code === 410) { out.dead[on] = code; return; }
@@ -1030,30 +900,60 @@ function excPpFetch_(orderNums, deadline) {
   }
 
   for (var i = 0; i < uniq.length; i += EXC_PP_BATCH) {
-    if (deadline && new Date().getTime() > deadline) { out.budgetHit = true; break; }
+    // 🔴 THE CEILING IS A WALL, NOT A RATION. Orders past it are never stamped, so they stay at the
+    // head of the queue and the NEXT run takes them first. Say so; do not let it read as coverage.
+    if (deadline && new Date().getTime() > deadline) {
+      out.ceilingHit = true;
+      out.deferred += uniq.length - i;
+      break;
+    }
     var slice = uniq.slice(i, i + EXC_PP_BATCH);
+    var t0 = new Date().getTime();
     var retry;
     try {
       retry = consume(slice, UrlFetchApp.fetchAll(slice.map(reqFor)));
     } catch (err) {
-      // fetchAll threw: the requests may well have left the building. Bill them — an under-count
-      // of spend is the failure this whole ledger exists to end.
+      // fetchAll threw: the requests may well have left the building. Count them as failures —
+      // an under-count of what we sent is how a broken run looks like a quiet one.
       out.failed += slice.length;
-      out.charged += slice.length;
-      continue;
+      out.served += slice.length;
+      retry = [];
     }
-    if (retry.length) {                       // one backoff pass, then leave it for next run
-      Utilities.sleep(EXC_PP_BACKOFF_MS);
+    // --- P13: retry the refused, with backoff, until the ladder or the ceiling runs out ---
+    for (var a = 0; retry.length && a < EXC_PP_RETRY_MS.length; a++) {
+      var wait = EXC_PP_RETRY_MS[a];
+      wait = Math.round(wait + Math.random() * wait * 0.25);          // jitter
+      if (deadline && new Date().getTime() + wait > deadline) break;  // ceiling wins; stays queued
+      Utilities.sleep(wait);
       try {
-        var still = consume(retry, UrlFetchApp.fetchAll(retry.map(reqFor)));
-        out.throttled += still.length;
+        retry = consume(retry, UrlFetchApp.fetchAll(retry.map(reqFor)));
       } catch (err2) {
-        out.throttled += retry.length;
-        out.charged += retry.length;      // dispatched, outcome unknown — bill it
+        out.failed += retry.length;
+        out.served += retry.length;
+        retry = [];
       }
     }
-    if (i + EXC_PP_BATCH < uniq.length) Utilities.sleep(EXC_PP_PAUSE_MS);
+    if (retry.length) {
+      // Exhausted the ladder (or ran out of clock). NOT an answer, NOT a failure — backpressure.
+      out.throttled += retry.length;
+      out.deferred += retry.length;
+    }
+    // --- pace: brake on the header if the bucket is nearly gone, else hold the cycle ---
+    if (out.remainingMin != null && out.remainingMin < EXC_PP_BRAKE_REMAINING) {
+      if (excPpBrakeSleep_(deadline)) { out.brakes++; out.remainingMin = null; }
+    } else if (i + EXC_PP_BATCH < uniq.length) {
+      var elapsed = new Date().getTime() - t0;
+      var rest = EXC_PP_CYCLE_MS - elapsed;
+      if (rest > 0) Utilities.sleep(rest);
+    }
   }
+  if (out.served) excPpRecordCalls_(out.served, 'exc');
+  Logger.log('  PP fetch: ' + out.attempted + ' asked, ' + out.served + ' served, ' +
+             out.throttled + ' still throttled after ' + EXC_PP_RETRY_MS.length + ' retries, ' +
+             out.deferred + ' deferred to the next run' + (out.ceilingHit ? ' (6-MIN CEILING)' : '') +
+             ', ' + out.brakes + ' brake(s), min x-ratelimit-remaining seen ' +
+             (out.remainingMin == null ? 'n/a' : out.remainingMin) + ' of 120/min.' +
+             (out.deferred ? ' 🔴 Deferred orders are NOT dropped — unstamped, still first in queue.' : ''));
   return out;
 }
 
@@ -1378,19 +1278,18 @@ function excCheckProperties() {
   // They are the only values printed verbatim here, and none of them is a secret.
   lines.push('',
     'last sweep run (heartbeat): ' + (props.getProperty(EXC_HEARTBEAT_PROP) || '(never — trigger may be gone)'),
-    'ParcelPanel ledger (wk|total|exc|rpt|pa): ' + (props.getProperty(EXC_PP_BUDGET_PROP) || '(unset)'),
-    '  week key now ' + excWeekKey_() + ' (Mon 00:00 ET - Sun 24:00 ET), runs left ' +
-      excRunsLeftThisWeek_() + ', sweep budget ' + EXC_PP_WEEKLY_BUDGET +
-      ' inside account quota ' + EXC_PP_ACCOUNT_QUOTA + ', account left ' + excBudgetLeftAccount_(),
-    '  ' + excBudgetBindingLeg_(),
-    '  schedule: ' + EXC_RUN_HOURS_ET.length + ' run(s)/day at ET ' + EXC_RUN_HOURS_ET.join(', ') +
-      ' (== CT ' + EXC_RUN_HOURS_ET.map(function (h) { return h - 1; }).join(', ') +
-      ' — the TRIGGER is set in the project timezone, America/Chicago). This run is ' +
-      (excOnScheduleET_() ? 'ON schedule.' : '🔴 OFF schedule and would take 0 PP calls.'),
-    '  🔴 LOWER BOUND — ShipRouting sync_delivery_status.py and ad-hoc probes spend the same' +
-      ' account quota and cannot report into this ledger.',
-    '  thin Mon/Tue sweep today: ' + (EXC_THIN_DAY_CAP - excThinDayLeft_()) + '/' + EXC_THIN_DAY_CAP +
-      ' used (' + (props.getProperty(EXC_THIN_DAY_PROP) || 'unset') + ')',
+    'ParcelPanel calls TODAY (date|total|exc|rpt|pa): ' +
+      (props.getProperty(EXC_PP_CALLS_PROP) || '(unset)'),
+    '  🔴 RATE METRIC ONLY — nothing is capped by it (directive P3 as rewritten by P12). The real ' +
+      'limit is ' + EXC_PP_TARGET_PER_MIN + '/min targeted against ParcelPanel\'s 120/min, read ' +
+      'live from x-ratelimit-remaining on every response.',
+    '  a single run can place ~' + EXC_PP_MAX_PER_RUN + ' calls (' + EXC_TIME_BUDGET_MS / 60000 +
+      ' min of fetching at ' + EXC_PP_TARGET_PER_MIN + '/min) before the Apps Script 6-minute ' +
+      'ceiling. Overflow is DEFERRED to the next run, never dropped.',
+    '  the old PP_WEEK_USED ledger is DEAD DATA — delete that property by hand if it is still set: ' +
+      (props.getProperty('PP_WEEK_USED') || '(already gone)'),
+    '  cadence is a DETECTION-LATENCY choice now, not a budget one: extra runs are free. ' +
+      'Use "Install/repair hourly trigger" to put it back on the hour.',
     'cohort scope (directive P10): ' +
       (props.getProperty(EXC_SCOPE_PROP)
         ? excCohortWindow_(props.getProperty(EXC_SCOPE_PROP)).join(' + ') +
@@ -1470,71 +1369,69 @@ function hourlyExceptionSweep() {
       var sa = String(st[a].last_seen || ''), sb = String(st[b].last_seen || '');
       return sa.localeCompare(sb);                             // never-polled ('') sorts first
     });
-    // 🔴 narrow BEFORE spending ParcelPanel budget: Shopify is free, PP is capped.
+    // 🔴 Narrow with SHOPIFY FIRST (directive P5a) — not to save budget (there is none), but
+    // because a box Shopify already shows delivered or moving normally cannot produce an answer.
+    // Work avoidance, on a request that was being made anyway.
     var pollable = excResolveDelivered_(open.slice(0, EXC_MAX_POLL_PER_RUN), st);
-    // 🔴 Directive P5 — the poll POLICY sits between the free Shopify triage and the budget, so
-    // "the budget bit" and "nothing was due" can never be confused for each other again.
+    // Directive P5 — the poll POLICY (once-per-day, age gate, Shopify-flagged) sits here. Every
+    // one of its three tiers removes work that CANNOT produce a result; none of them rations.
     var elig = excPollSet_(pollable, st);
-    // Mon/Tue thin sweep: a hard per-DAY ceiling on top of the weekly pacing (directive P5c).
-    var thinLeft = excPingDayET_() ? elig.length : excThinDayLeft_();
-    if (!excPingDayET_()) {
-      Logger.log('  thin-sweep allowance left today: ' + thinLeft + '/' + EXC_THIN_DAY_CAP);
+    // 🔴 THE ONLY CAP LEFT IS THE 6-MINUTE EXECUTION CEILING (directive P12). It is not a ration:
+    // orders past it are never stamped, so they stay at the head of the longest-unpolled ordering
+    // and the next run takes them FIRST. Say it out loud whenever it bites, so a wall can never be
+    // mistaken for coverage.
+    var batch = elig.slice(0, EXC_PP_MAX_PER_RUN);
+    var overflow = elig.length - batch.length;
+    if (overflow > 0) {
+      Logger.log('  🔴 EXECUTION CEILING: ' + elig.length + ' due, taking ' + batch.length +
+                 ' this run (' + EXC_PP_MAX_PER_RUN + ' is ' + EXC_TIME_BUDGET_MS / 60000 +
+                 ' min of fetching at ' + EXC_PP_TARGET_PER_MIN + '/min, the Apps Script 6-minute ' +
+                 'wall). The other ' + overflow + ' are NOT dropped and NOT deprioritised — they ' +
+                 'stay unstamped at the head of the queue and are the next run\'s first work.');
     }
-    var allowed = excBudgetTake_(Math.min(elig.length, thinLeft));
-    var batch = elig.slice(0, allowed);
-    Logger.log('  PP: asked ' + batch.length);
+    Logger.log('  PP: asked ' + batch.length + ' of ' + elig.length + ' due');
 
     // 🔴 SILENCE MUST FAIL LOUDLY. Constraint 7 says a PP OUTAGE cannot read as "no exceptions";
     // this is the same hole one step earlier — a run that polls ZERO boxes while boxes are open
-    // reports nothing, throws nothing, and looks exactly like a clean week. That is what happened
-    // Wed 8/13 through Fri 8/15 (weekly budget already drained by Mon+Tue) and it is why Kurt saw
-    // an alerter that "isn't working" with no error anywhere. Rate-limited to one alarm per 6h so
-    // the alarm itself can never become the noise that gets the channel muted.
-    // 🔴 Under the once-per-day tier an EMPTY batch is often correct ("everything due was already
-    // polled today"), and alarming on that would make the alarm the noise that gets the channel
-    // muted. So the alarm now distinguishes the two shapes it must never confuse:
-    //   STARVED   — work was due and the budget allowed none of it.
-    //   BLINDSPOT — nothing was judged due, yet open boxes have never been polled ONCE. That is a
-    //               policy bug, not a quiet week, and it is exactly the week-34 signature.
+    // reports nothing, throws nothing, and looks exactly like a clean week.
+    // 🔴 THE **STARVED** ARM IS DELETED (directive P12). It fired when "work was due and the budget
+    // allowed none of it", and there is no budget: with the ceiling being the only cap, a non-empty
+    // `elig` now always yields a non-empty `batch`. If that alarm ever fires again it means a cap
+    // has been reintroduced somewhere, which is the regression P12 exists to prevent.
+    // 🔴 **BLINDSPOT IS KEPT, AND IS NOW THE ONLY COVERAGE ALARM LEFT — which makes it MORE
+    // important, not less.** It is the sole remaining thing standing between "nothing was due" and
+    // "we stopped looking": nothing judged due, yet open boxes past the age gate have never been
+    // polled ONCE. That is a policy bug, not a quiet week, and it is the week-34 signature.
+    // Rate-limited to one per 6h so the alarm can never become the noise that gets the DM muted.
     var neverP_ = excNeverPolled_(st, open);
     // 🔴 The blindspot numerator is never-polled AND PAST THE AGE GATE (see excNeverPolledDue_).
     // A day-0/1/2 cohort is never-polled on purpose and firing on it would make this alarm noise.
     var neverDue_ = excNeverPolledDue_(st, open);
-    var starved_ = (elig.length > 0 && !batch.length);
     var blind_ = (!elig.length && neverDue_ > 0);
-    if (starved_ || blind_) {
+    if (blind_) {
       var props_ = PropertiesService.getScriptProperties();
       var lastAlarm = Number(props_.getProperty(EXC_SILENT_ALARM_PROP) || 0);
       if (new Date().getTime() - lastAlarm > EXC_SILENT_ALARM_EVERY_MS) {
         props_.setProperty(EXC_SILENT_ALARM_PROP, String(new Date().getTime()));
         try {
-          // 🔴 F4/P11: the alarm carries the LEDGER and NAMES THE BINDING LEG. Without it, "budget
-          // allowed 0 of 271" proves the sweep got nothing but not WHO took the quota, and the
-          // 2026-08-20 diagnosis had to be reconstructed from `_exc_state` instead of read.
-          excSlackOps_(':warning: exceptions sweep polled 0 boxes while ' + open.length +
+          excSlackOps_(':warning: exceptions sweep BLINDSPOT — polled 0 boxes while ' + open.length +
             ' are still open in ' + excScopeTags_().join(' + ') + ' (' + neverP_ +
             ' never polled once, ' + neverDue_ + ' of them past the ' + EXC_POLL_MIN_AGE_DAYS +
-            'd age gate). ' +
-            (starved_ ? 'ParcelPanel budget allowed ' + allowed + ' of ' + elig.length + ' due'
-                      : 'The poll policy judged NOTHING due while boxes have never been polled ' +
-                        '— that is a policy bug, not a quiet week') +
-            ' (' + pollable.length + ' pollable after the free Shopify triage). ' +
-            (starved_ ? excBudgetBindingLeg_() + ' ' : '') +
-            (excOnScheduleET_() ? '' : '🔴 This run was OFF SCHEDULE (ET hour ' +
-              Utilities.formatDate(new Date(), EXC_TZ, 'H') + ' vs slots ET ' +
-              EXC_RUN_HOURS_ET.join(', ') + ') and deliberately took 0 — the trigger and ' +
-              'EXC_RUN_HOURS_ET have drifted. ') +
+            'd age gate). The poll policy judged NOTHING due while boxes have never been polled — ' +
+            'that is a policy bug, not a quiet week (' + pollable.length +
+            ' pollable after the free Shopify triage). ' +
+            'There is no ParcelPanel budget any more (directive P12), so this is NOT a spend ' +
+            'problem: look at excPollSet_, the cohort scope, or _exc_state. ' +
             'Nothing was checked, so this run is NOT an all-clear.');
-        } catch (eA) { Logger.log('silent-starvation alarm failed to post: ' + eA); }
+        } catch (eA) { Logger.log('blindspot alarm failed to post: ' + eA); }
       }
       Logger.log('  🔴 ZERO POLLED with ' + open.length + ' open — not an all-clear.');
     }
 
     var pp = excPpFetch_(batch, new Date().getTime() + EXC_TIME_BUDGET_MS);
-    // 🔴 SETTLE THE RESERVATION (directive P1) — before anything below can throw. A run killed at
-    // the 6-minute ceiling after this point has already returned what it did not spend.
-    var refunded = excBudgetSettle_(allowed, pp.charged, 'exc');
-    if (!excPingDayET_()) excThinDayAdd_(pp.charged);
+    // 🔴 NOTHING TO SETTLE (directive P12). There is no reservation, so there is no refund and no
+    // thin-day counter to bump. `excPpFetch_` records what it actually served as a rate metric and
+    // nothing subtracts from anything.
 
     var stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
 
@@ -1613,6 +1510,23 @@ function hourlyExceptionSweep() {
     // ratio: they are not failures, and they must not dilute the denominator either. What remains
     // is transport-only — the condition the 20% threshold was actually chosen for. Nine cancelled
     // orders can no longer suppress ten healthy answers.
+    // 🔴 THROTTLING GETS ITS OWN GUARD AND ITS OWN THRESHOLD (directive P13). It must never share
+    // one with the transport ratio below: a 429 means SLOW DOWN, a transport failure means SOMETHING
+    // IS BROKEN, and P9 is the standing record of what happens when two opposite conditions are
+    // fused into one number. This fires only on requests still refused AFTER the full retry ladder,
+    // so a busy minute cannot trip it — but a genuine ParcelPanel outage can no longer look like a
+    // slow day, which is the whole point.
+    if (pp.attempted > 0 && pp.throttled / pp.attempted > EXC_PP_THROTTLE_RATIO) {
+      try { excSaveState_(st); } catch (eT) { Logger.log('state save before throttle throw failed: ' + eT); }
+      throw new Error('ParcelPanel THROTTLING: ' + pp.throttled + '/' + pp.attempted +
+                      ' requests still refused after ' + EXC_PP_RETRY_MS.length + ' retries ' +
+                      '(min x-ratelimit-remaining seen ' +
+                      (pp.remainingMin == null ? 'n/a' : pp.remainingMin) + ' of 120/min, ' +
+                      pp.brakes + ' brake(s)). Those orders are queued, NOT dropped — but at this ' +
+                      'rate the run is not a check. Either ParcelPanel is degraded or another ' +
+                      'consumer is saturating this API key; results suppressed rather than ' +
+                      'reported as an all-clear.');
+    }
     var transportFails = pp.failed + deadRegression.length;
     var transportDenom = pp.attempted - deadUnknown.length;
     if (transportDenom > 0 && transportFails / transportDenom > EXC_PP_FAIL_RATIO) {
@@ -1687,17 +1601,22 @@ function hourlyExceptionSweep() {
     if (!EXC_DRY_RUN || EXC_RECORD_WHEN_SILENT || EXC_SEEDING) excSaveState_(st);
     var reached = Object.keys(pp.seen).length;
     var neverPolled = open.filter(function (k) { return !String(st[k].last_seen || '').trim(); }).length;
-    // 🔴 ACTUAL SPEND PER RUN, always logged (directive P5): reserved / served / refunded. An
-    // optimisation you cannot measure is one you cannot falsify.
-    Logger.log('  PP spend this run: reserved ' + allowed + ', served (billed) ' + pp.charged +
-               ', refunded ' + refunded + ', answered ' + Object.keys(pp.seen).length +
-               '  [ledger ' + String(PropertiesService.getScriptProperties()
-                                      .getProperty(EXC_PP_BUDGET_PROP) || '(unset)') + ']');
+    // 🔴 ACTUAL CALLS PER RUN, always logged (directive P5). A rate you cannot measure is an
+    // optimisation you cannot falsify — this is the line that made the reship report's 31.9x waste
+    // findable, and it is kept for exactly that reason. It is DESCRIPTIVE: nothing caps on it.
+    Logger.log('  PP calls this run: served ' + pp.served + ', answered ' +
+               Object.keys(pp.seen).length + ', throttled-after-retries ' + pp.throttled +
+               ', deferred to next run ' + pp.deferred + ', brakes ' + pp.brakes +
+               ', min remaining ' + (pp.remainingMin == null ? 'n/a' : pp.remainingMin) + '/120' +
+               '  [today ' + String(PropertiesService.getScriptProperties()
+                                      .getProperty(EXC_PP_CALLS_PROP) || '(unset)') + ']');
     Logger.log('exceptions sweep: reached ' + reached + ' of ' + batch.length + ' polled (' +
                open.length + ' open in scope, ' + ignoredOut + ' open out of scope and ignored, ' +
                neverPolled + ' still never polled, throttled ' +
                pp.throttled + ', hard failures ' + pp.failed +
-               (pp.budgetHit ? ', TIME BUDGET hit' : '') + '), posted ' + posted +
+               (pp.ceilingHit ? ', 6-MIN CEILING hit' : '') +
+               (pp.deferred ? ', ' + pp.deferred + ' deferred to next run (queued, not dropped)' : '') +
+               '), posted ' + posted +
                ', recorded ' + recorded +
                (EXC_DRY_RUN ? (EXC_RECORD_WHEN_SILENT
                   ? ' [SLACK SILENT — ' + recorded + ' row(s) written to the ' + EXC_LOG_TAB +
@@ -1711,7 +1630,9 @@ function hourlyExceptionSweep() {
     return { posted: posted, recorded: recorded, wouldPost: wouldPost.length, reached: reached,
              open: open.length, ignoredOutOfScope: ignoredOut, scope: excScopeTags_().slice(),
              neverPolled: neverPolled, neverPolledDue: neverDue_, eligible: elig.length,
-             reserved: allowed, charged: pp.charged, refunded: refunded, dryRun: EXC_DRY_RUN };
+             asked: batch.length, overflow: overflow, served: pp.served,
+             throttled: pp.throttled, deferred: pp.deferred, brakes: pp.brakes,
+             remainingMin: pp.remainingMin, dryRun: EXC_DRY_RUN };
   } catch (e) {
     try {
       // 🔴 THE STOP-WRITE NO LONGER COVERS THIS (changed 2026-08-19, directive P8). It used to:
@@ -1788,7 +1709,6 @@ function onOpenExceptions() {
     .addItem('Replay classifier self-test', 'excSelfTest')
     .addItem('Repair _exc_state (clear stale logged rows)', 'excRepairLoggedState')
     .addItem('Mark recorded rows as alerted (do BEFORE unmuting)', 'excMarkRecordedAsAlerted')
-    .addItem('Reset ParcelPanel weekly ledger (manual — read the doc first)', 'excResetWeeklyBudget')
     .addItem('Show scheduled triggers', 'excListTriggers')
     .addItem('Install/repair hourly trigger', 'installExceptionsTrigger')
     .addToUi();
