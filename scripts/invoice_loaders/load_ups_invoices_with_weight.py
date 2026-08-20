@@ -42,11 +42,30 @@ CSV_FILES = [
 DB = (os.environ.get("APPYHOUR_DB_PATH") or (r"C:\AppyHourData\shipping.db" if os.path.exists(r"C:\AppyHourData\shipping.db") else os.path.expandvars(r"%APPDATA%\AppyHour\shipping.db")))
 
 
+class WrongDialect(RuntimeError):
+    """This file is not UPS Detailed Billing v2.1. Raised instead of returning nothing."""
+
+
 def parse_invoice(filepath):
+    """🔴 THIS READER HANDLES ONE DIALECT: UPS Detailed Billing v2.1 — no header, 250+ positional
+    fields. It is NOT the reader for the 32-column headered export.
+
+    The burn (2026-08-20): `if len(r) < 53: continue` used to skip every row of a headered export
+    and return an EMPTY list with no error and exit code 0. Handed the wrong dialect, this loader
+    reported a successful load of nothing straight into the engine's lane economics. Parsing was
+    never the problem — `ShippingReports/parsers/ups.py` reads BOTH dialects — the wrong reader was
+    simply wired to the file.
+
+    A width check that does not match now RAISES. Skipping rows you do not understand is how an
+    entire file becomes a silent no-op (INVOICE_INGEST_RULES §2).
+    """
     rows_out = []
+    seen, too_narrow = 0, 0
     with open(filepath, encoding="utf-8-sig", errors="replace") as f:
         for r in csv.reader(f):
+            seen += 1
             if len(r) < 53:
+                too_narrow += 1
                 continue
             # Main freight rows only
             if r[30] != "PKG" or r[34] != "SHP" or r[44] != "003":
@@ -85,6 +104,18 @@ def parse_invoice(filepath):
                 })
             except (ValueError, IndexError):
                 continue
+    # 🔴 Rows written is the only success signal. A file whose every line was too narrow is the
+    # WRONG DIALECT, not an empty invoice — say so loudly instead of returning [] (§2).
+    if seen and too_narrow == seen:
+        raise WrongDialect(
+            f"{Path(filepath).name}: all {seen} lines are narrower than 53 fields, so this is NOT "
+            f"UPS Detailed Billing v2.1. It is most likely the 32-column headered export — read it "
+            f"with ShippingReports/parsers/ups.py::parse_ups_csv, which auto-detects both dialects. "
+            f"Refusing to report a successful load of zero rows.")
+    if seen and not rows_out:
+        raise WrongDialect(
+            f"{Path(filepath).name}: {seen} lines parsed but ZERO freight rows matched "
+            f"(PKG/SHP/003). Refusing to report a successful empty load — check the dialect.")
     return rows_out
 
 
