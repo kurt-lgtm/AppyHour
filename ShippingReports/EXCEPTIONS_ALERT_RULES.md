@@ -242,7 +242,12 @@ ping day. Stale heartbeat ⇒ the trigger is gone (`installExceptionsTrigger()`)
 the fault is downstream. The Apps Script REST API cannot list triggers, so without this stamp the
 question has no answer short of opening the editor.
 
-## 🔴 PARCELPANEL BUDGET DIRECTIVE P1–P9 (Kurt GO, 2026-08-19) — SSOT for every PP call
+## 🔴 PARCELPANEL BUDGET DIRECTIVE P1–P11 — SSOT for every PP call
+
+> 🔴 **Do not stop reading at P9.** P1–P9 are Kurt GO, 2026-08-19. **P10** scopes the candidate set,
+> and **P11 (2026-08-20) is the one that explains why the sweep still polls ZERO after all of them** —
+> the sweep is starved by the *reship report's* uncapped share of the account quota, not by its own
+> budget. P3's "the sweep is the consumer that yields" is the rule P11 corrects.
 
 **Pacing (`edadb7b`, above) was never the whole fault and was never given a week to work** — it
 deployed 2026-08-19 10:19 ET, by which time week 34's counter already read 2,000/2,000. What the
@@ -785,6 +790,160 @@ reads that table instead of calling PP:
   `scratchpad/gas_lint.js` SYNTAX OK ×4 + concat, COLLISIONS NONE — all unchanged by this edit.
 - 🔴 **NOT verified: any live execution.** Apps Script cannot be run from here; the sweep's own
   numbers arrive on Kurt's next hourly run.
+
+### P11 — THE SWEEP IS STARVED BY THE REPORT, NOT BY ITS OWN BUDGET (2026-08-20)
+
+> Kurt's ops DM, twice in seven hours: *"exceptions sweep polled 0 boxes while 271 are still open…
+> ParcelPanel budget allowed 0 of 271 due"* / *"…allowed 0 of 261 due."*
+
+🔴 **STATUS: root cause PROVEN, fix PROPOSED, code NOT pushed.** F1–F3 below change allocation
+policy and touch a shipped surface Dan reads, so they wait for Kurt's word. This section is the
+constraint written first, per the ordering gate at the top of this file.
+
+#### The arithmetic that makes the diagnosis forced, not inferred
+
+`excBudgetTake_` is `take = max(0, min(want, left, EXC_PP_MAX_PER_RUN, pace))` with
+`pace = ceil(left / runsLeft)` (floored at `EXC_PP_MIN_PER_RUN` only under P6's condition).
+`want = 271 > 0` and `EXC_PP_MAX_PER_RUN = 120 > 0`, and `ceil(left/runsLeft) >= 1` for any
+`left >= 1`. **So `take = 0` is possible for exactly one reason: `left = 0`.** Pacing did not
+mis-divide, the floor did not misfire, the shrunken poll set changed nothing — the balance is zero.
+
+`left = min(EXC_PP_WEEKLY_BUDGET - exc, EXC_PP_ACCOUNT_QUOTA - total)`. Which leg is zero is
+decided by measurement, not by assumption: **`exc` can only grow when the sweep actually polls, and
+every poll stamps `_exc_state.last_seen`.**
+
+| measured on live `_exc_state`, zero ParcelPanel calls | value |
+|---|---|
+| orders stamped `last_seen` in week `WK2026-08-17` | **94** (8/19: 90 · 8/20: 4) |
+| therefore `exc <=` | **94** |
+| therefore `leftMine = 2000 - exc >=` | **1,906 — NOT the binding leg** |
+| open rows in scope (`_SHIP_2026-08-17` 244 + `_SHIP_2026-08-10` 17) | **261 — exactly the "0 of 261 due" in the 10:46 DM** |
+
+🔴 **`left = 0` with `leftMine >= 1906` forces `leftAcct = 0`, i.e. ledger `total >= 2500`. `exc`
+cannot reach 2,500 from 94. The drain is `rpt`.** The sweep's own 2,000 was barely touched.
+
+#### What `rpt` actually spends, measured
+
+`Code.gs ppLookup_` is called **three times per hourly `build_()`**, and the sets are re-asked from
+scratch every run:
+
+| leg | asks | per run |
+|---|---|---|
+| `enrichTransitOverride_` | window rows with `transit_days` blank | 11 |
+| `productMixBreakdown_` | every distinct order on the **whole `Raw Data` tab** — not windowed | **388** |
+| `writeTriage_` | active triage entries | ~75 |
+| **total** | | **~474 / run** |
+
+**~474 × 168 = ~79,600 calls/week against a 2,500/week account plan — 31.9×.** From a zeroed
+ledger the account quota is gone in **5.3 hours**.
+
+🔴 **The consequence, stated exactly.** The ledger rolls at Monday 00:00 ET (P2). The sweep gets a
+paced ~12 calls/run for about five runs, and `leftAcct` hits zero somewhere around 05:00 Monday.
+**For the remaining ~163 hours of every week `take` is structurally 0.** So the sweep's entire
+weekly allowance — roughly 60 calls — is spent on **Monday, the one day the day gate forbids it to
+post on**, and the whole Wed–Sun ping window runs on nothing.
+
+🔴 **That is the ORIGINAL burn, reproduced through a different door.** The top of this file records
+it as *"Mon/Tue polled 2,327, Wed/Thu/Fri polled ZERO — the record-only days ate the whole allowance
+and the entire ping window ran with nothing left."* P5's pacing fixed that for the sweep's **own**
+budget. P3 then added the **account** leg, and the account leg reintroduces the identical shape with
+the reship report as the consumer that eats Monday. Fixing a starvation inside one budget does
+nothing if a second, larger budget starves the same job from outside.
+
+#### Why this is a CONCEPTUAL failure of P3, not an arithmetic bug
+
+P3 made `rpt` report-but-never-yield and said so deliberately: *"an overdrawing report throttles the
+sweep rather than the reverse."* That rule is sound **only if the overdraw is marginal.** P3 also
+said the honest `rpt` figure was itself a deliverable of that change — this is that figure, and it
+is **31.9× the entire account plan**. Yielding to a consumer that alone exceeds the plan by a
+factor of thirty is not yielding; it is an unconditional shutdown of the yielding job.
+
+🔴 **The rule to keep: a consumer may only be exempt from a budget while its measured draw is a
+minority of that budget. An uncapped consumer must have its draw measured before it is granted the
+exemption, never after.** `ppLookup_` was exempted on the strength of an unmeasured assumption, and
+the first measurement invalidates the exemption.
+
+#### The waste is re-asking for facts that cannot change
+
+`ppLookup_` re-fetches a **delivered** box's carrier and transit days every hour, forever.
+`transit_days` is set only when a box is delivered with both dates known — it is immutable
+thereafter — and 66 of the 77 window rows already have it. `writeTriage_` even carries the comment
+*"so we don't re-hit Shopify/Gorgias for same rows hourly"*: **every other API in that function is
+cached, and ParcelPanel is the one that is not.**
+
+#### Proposed fix — F1 is the one that matters
+
+- **F1 (the real fix).** Give `ppLookup_` the same once-per-calendar-day-per-order tier the sweep
+  already has (P5b), plus a terminal memo: once an order has a carrier and a `transit_days`, never
+  ask ParcelPanel about it again. Expected draw: **~474/run → <= ~11/day.** No allocation policy
+  changes and Dan's columns keep their values — they simply stop being re-bought hourly.
+- **F2 (allocation).** With F1 in place, state the split of the 2,500 plan instead of leaving one
+  consumer uncapped: `rpt` <= 200/wk, `pa` ~180/wk, sweep `EXC_PP_WEEKLY_BUDGET` 1,800.
+  Measured sweep demand: Mon/Tue thin 100/day = 200, Wed–Sun 5 × 261 = 1,305, **total ~1,505 of
+  1,800.** It fits with headroom for the first time.
+- **F3 (cadence).** See below.
+- **F4 (observability).** The starved ops DM prints `allowed` and `elig.length` but **not the
+  ledger**, which is why this took a `_exc_state` reconstruction instead of a one-line read. P5
+  already requires the ledger be logged every run; the alarm must also carry `exc/rpt/pa` and
+  **name which leg is binding**. A starvation alarm that cannot say who took the budget is the
+  silent-failure shape this file exists to prevent, one level up again.
+
+#### Cadence: 2 runs/day, and why throughput is not the reason
+
+Pacing makes weekly throughput **cadence-invariant** — every option below delivers the same
+~257 calls/day against a 261/day due set, so cadence must be chosen on other grounds:
+
+| cadence | runs/wk | fair share of 1,800 | calls/day | note |
+|---|---|---|---|---|
+| hourly | 168 | 10.7/run | 257 | 24 full sweeps to place 257 calls |
+| 4×/day | 28 | 64/run | 257 | works |
+| **2×/day** | **14** | **129/run** | **257** | **recommended**; needs `EXC_PP_MAX_PER_RUN` 120 → 150 |
+| 1×/day | 7 | 257/run | 257 | needs `MAX_PER_RUN` >= 300 and presses the 6-min ceiling |
+
+**Recommend 2×/day.**
+- Two runs exactly cover the daily due set: the first takes ~130 of 261, and because the
+  once-per-day tier retires those, the second takes the remaining ~131.
+- **12× less Apps Script overhead.** Each run pays the free Shopify triage over up to
+  `EXC_MAX_POLL_PER_RUN = 1200` open rows plus a read/write of a 9,333-row `_exc_state`. Paying
+  that 168 times to place 10 calls each is the starved-run shape itself.
+- **Latency is free here.** Every ping class has a >= 3-day floor
+  (`EXC_NEVER_PICKED_MIN_DAYS = 3`, `EXC_DELAYED_MIN_DAYS = 3`). A box polled twice a day cannot
+  lose a case that needs three days of evidence to fire — the same argument this file already makes
+  for the floor: **it delays, it cannot lose.**
+- **Not 1×/day:** no slack. One run killed at the 6-minute ceiling loses the whole day.
+- **Not hourly:** a 10-of-271 grant is barely distinguishable from the zero Kurt is complaining
+  about, and would keep tripping STARVED.
+
+🔴 **2×/day REQUIRES the once-per-day tier (P5b) to stay.** Without it the second run re-polls the
+first run's boxes and the day's coverage halves.
+
+#### What becomes dead at the ParcelPanel → DigitalOcean webhook cutover
+
+- **DEAD:** F2's allocation constants and the whole ledger (as P10 already records).
+- **SURVIVES as a latency choice:** F3's cadence. Reading MySQL is free, so cadence stops being a
+  budget question and becomes purely "how fresh must an alert be".
+- 🔴 **SURVIVES, and is a GAP IN THE CUTOVER PLAN — Kurt decision.** F1 is `Code.gs ppLookup_`,
+  the **reship report's** enrichment. P10's dead-list retires `excPpFetch_` — the **sweep's**
+  polling. The sweep is budgeted at <= 2,000/wk and measured at ~60. The report is the ~79,600/wk
+  consumer and the cutover as documented does not touch it. **Retiring the sweep's polling frees a
+  quota the sweep was not the one spending**, and the account stays ~32× oversubscribed the day
+  after the webhook lands. Either F1 ships, or the report moves to the same table.
+
+#### Verification
+
+- Arithmetic above re-derived from the **live** `Exceptions.gs` (`22d8ae6ceefe`) and `Code.gs`
+  (`88b44f93ce14`), re-GET immediately before this edit and byte-identical to the worktree.
+- `scratchpad/exc_leg_probe.py` — leg elimination from live `_exc_state`. Independent corroboration:
+  the in-scope open count it computes (261) equals the "0 of **261** due" in Kurt's 10:46 DM,
+  measured from state, not copied from the message.
+- `scratchpad/rpt_measure.py` / `rpt_measure2.py` — the `rpt` draw, from live `_state` and
+  `Raw Data`. **Zero ParcelPanel calls were made by any of this.**
+- 🔴 **NOT verified:** the `PP_WEEK_USED` property itself. Script Properties are not readable over
+  the Apps Script REST API and the local token holds only `script.projects` / `script.deployments`,
+  so `total >= 2500` is established **by elimination**, not by reading the counter. The direct read
+  is one click: **Shipping Exceptions → Check properties**. F4 exists so this is never again a
+  reconstruction.
+- 🔴 **NOT verified: any live execution.** No GAS was pushed by this section.
 
 ## Alert classes (Kurt 2026-07-30)
 
