@@ -1954,13 +1954,60 @@ Total 2316 · Arrived 2300 · Placed 2289 / 98.83% · Shipped email 2316 / 100.0
 40.07%, engaged 348 · Delivered email 2153 / 92.96% · Delivered SMS 940 / 40.59%, engaged 283 ·
 Time 3744 day / 154 night.
 
-🔴 **`_SHIP_2026-08-03` (column E) still holds OLD-WINDOW numbers** — written 2026-08-19 before this
-rule. Fill-blanks-only did not correct them; each is REPORTED as a disagreement instead
-(`delivered email 2142` vs 2132, `delivered SMS 854` vs 848, `engaged 259` vs 255, `shipped SMS 704`
-vs 698, `engaged 272` vs 265, time `3456/180` vs `3440/174`, and the pre-existing hand-typed
-`Arrived 2075` vs 2268). **Re-stating a column Kurt has already seen is his call, not a silent
-rewrite.** `_SHIP_2026-07-13/-20/-27` remain refused on the denominator gate (cohort 1,944/2,038/2,169
-vs published 2,025/2,075/2,227) — unchanged by this rule.
+#### `_SHIP_2026-08-03` (column E) was RESTATED — the one time the never-overwrite guard was lifted
+
+Column E was written 2026-08-19 under the `+12d` window, so 10 of its cells disagreed with the
+maturity measurement. Fill-blanks-only left them alone and reported them; **Kurt then explicitly
+lifted the guard for THIS column and THESE cells** (2026-08-20) and they were overwritten.
+
+🔴 **That authorisation is narrow and it is spelled out in `nt_restate_e.py`, not carried by a flag.**
+The cohort is hard-pinned (no loop, no argument, no other column reachable), `own||Arrived` is
+hard-EXCLUDED and the exclusion is asserted, only differing cells are written, and every write is
+read back. **The default everywhere else is still: report the disagreement, never correct it.**
+
+| cell | row | before | after |
+|---|---|---|---|
+| `E10` | Shipped → SMS Engaged | 272 | **265** |
+| `E11` | Shipped → SMS Sent | 704 | **698** |
+| `E12` | Shipped → SMS % of Total | 30.54% | **30.28%** |
+| `E14` | Delivered → Email Sent | 2,142 | **2,132** |
+| `E15` | Delivered → Email % of Total | 92.93% | **92.49%** |
+| `E16` | Delivered → SMS Engaged | 259 | **255** |
+| `E17` | Delivered → SMS Sent | 854 | **848** |
+| `E18` | Delivered → SMS % of Total | 37.05% | **36.79%** |
+| `E20` | Time of Sending — day | 3,456 | **3,440** |
+| `E21` | Time of Sending — night | 180 | **174** |
+
+**10 written, 10 verified on read-back, 0 failed.** Unchanged and not rewritten: `E2` 2,305, `E5`
+2,283, `E6` 99.05%, `E8` 2,305, `E9` 100.00% (Shopify-sourced rows are window-independent).
+🔴 **These numbers MOVED after publication — Dan may have quoted the old ones.** That is the reason
+the before/after is recorded here rather than the change being made silently.
+
+🔴 **`Arrived` (E3) was NOT touched and the disagreement still stands: the sheet holds a hand-typed
+2,075 against an authority value of 2,268 on `Lost in Transit`.** That is a separate, pre-existing
+problem (a mid-flight copy that was never refreshed — the motivating case for D29c) and Kurt has not
+ruled on it. It is not part of this restatement and must not be swept into one.
+
+**Re-measured from a FRESH sweep, not re-sliced from the union cache** — re-slicing would make the
+restatement depend on the same bytes that produced the value being replaced. 08-03's own closed
+windows were paged into a separate cache namespace (44,762 + 26,943 + 13,326 events, 3.7 min) and
+the Shopify cohort re-pulled (2,305 orders, identical population). Both gates passed before any
+write: our retained per-flow counts vs Klaviyo's server-side `by:["$flow"]` aggregate **9 of 9
+exact**; the fresh sweep vs the union-cache re-slice **0 differences — two independent measurements
+reproducing each other**; computed Total 2,305 == published 2,305; every Sent ≤ Total; time split
+3,440 + 174 + 64 MISSING = 3,678 sends.
+
+**No other column is owed this.** `_SHIP_2026-07-13/-20/-27` (columns B/C/D) hold **only** rows 2–3
+(`Total Shipments`, `Arrived`) — rows 5–21 are blank, so there is nothing measured to restate; they
+remain refused on the denominator gate (cohort 1,944/2,038/2,169 vs published 2,025/2,075/2,227),
+which this rule does not touch. `_SHIP_2026-08-17` (column G) needs nothing either: at age 3 both the
+old `+12d` edge (2026-08-29) and the new maturity edge (2026-08-22T04:00:00Z) are still in the
+FUTURE, so no cell there is wrong today, and it walks onto the new boundary by itself (full runs
+through day 5, then mirror-only, then frozen).
+
+> Open, unrelated to maturity: `_SHIP_2026-07-20`'s cohort/published gap is 1.78%, **inside**
+> `NT_DENOM_TOLERANCE` (2%), yet the writer refuses it because its gate demands EXACT equality with
+> the published total. Two gates with different thresholds; not reconciled here.
 
 #### 🔴 TnT2 / Lost in Transit / Routing Match are NOT changed here — reported for Kurt
 
