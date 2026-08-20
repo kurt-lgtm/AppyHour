@@ -7,6 +7,13 @@ HERE first, in the same commit as the code. Constraints were authored before the
 **Status:** APPROVED design, NOT yet built. Kurt decisions 2026-07-30 (Slack #exceptions thread
 with Dan, screenshots in session). Sibling doc: `RESHIP_REPORT_RULES.md` (the host job).
 
+🔴 **IF YOU ARE HERE ABOUT PARCELPANEL CALL VOLUME, READ [P12](#p12--coverage-is-never-rationed-only-speed-is-kurt-go-2026-08-20)
+FIRST.** Roughly a third of this file was written to ration ParcelPanel calls against a limit that
+**does not exist** — "2,500/week" is Kurt's average weekly *order* count, not an API budget. The
+real limit is **120 requests per minute**, reported in `x-ratelimit-limit` on every response.
+**Coverage is never rationed; only speed is.** Everything above P12 that subtracts, allocates,
+paces against a balance, or caps a run is either deleted or a tombstone — do not implement from it.
+
 ---
 
 ## 🧭 NORTH STAR
@@ -182,6 +189,14 @@ Mon/Tue record to the tab and never alert.
 
 ## 🔴 The weekly PP budget starved the ping window — and the starvation was SILENT (2026-08-19)
 
+> 🗑️ **SUPERSEDED BY P12 (2026-08-20) — HISTORY ONLY, DO NOT IMPLEMENT FROM THIS SECTION.**
+> Every fix below is pacing arithmetic against a phantom 2,000/week. The *diagnosis* holds and is
+> why this section is kept: **a run that polls ZERO is not an all-clear**, and a dead trigger and a
+> starved run were indistinguishable from outside. Those two lessons are load-bearing and survive.
+> The *cure* — pacing, floors, a per-run cap, a weekly ledger — was treating a symptom of a limit
+> nobody had measured. Sections 2 (zero-is-not-an-all-clear) and 3 (heartbeat) remain LIVE;
+> section 1 (pace the budget) is dead.
+
 Kurt: *"I need the exceptions to work."* It wasn't. Measured, not inferred:
 
 | evidence | value |
@@ -242,85 +257,103 @@ ping day. Stale heartbeat ⇒ the trigger is gone (`installExceptionsTrigger()`)
 the fault is downstream. The Apps Script REST API cannot list triggers, so without this stamp the
 question has no answer short of opening the editor.
 
-## 🔴 PARCELPANEL BUDGET DIRECTIVE P1–P11 — SSOT for every PP call
+## 🔴 PARCELPANEL DIRECTIVE P1–P13 — SSOT for every PP call
 
-> 🔴 **Do not stop reading at P9.** P1–P9 are Kurt GO, 2026-08-19. **P10** scopes the candidate set,
-> and **P11 (2026-08-20) is the one that explains why the sweep still polls ZERO after all of them** —
-> the sweep is starved by the *reship report's* uncapped share of the account quota, not by its own
-> budget. P3's "the sweep is the consumer that yields" is the rule P11 corrects.
+> 🔴 **READ P12 FIRST. IT DELETES THE PREMISE THE REST WAS BUILT ON.** P1–P11 rationed ParcelPanel
+> calls against **"2,500/week"** — a number that is Kurt's average weekly **ORDER count**
+> (10,000/month plan ÷ 4), never an API request budget. The real limit is **120 requests per
+> MINUTE**, ~1.2M/week, and it is in `x-ratelimit-limit` on every response. **P12 replaces the whole
+> budget layer with a rate limiter; P13 forbids dropping a 429.** The directives below are kept only
+> as tombstones, so nobody re-derives the fence from the burns that motivated it.
 
-**Pacing (`edadb7b`, above) was never the whole fault and was never given a week to work** — it
-deployed 2026-08-19 10:19 ET, by which time week 34's counter already read 2,000/2,000. What the
-post-mortem actually found, measured on `_exc_state`, `C:\AppyHourData\shipping.db` and the live
-GAS source (ZERO ParcelPanel calls spent investigating):
-
-| evidence | value |
+| directive | status |
 |---|---|
-| orders polled Mon 8/17 · Tue 8/18 · Wed 8/19 | **0 · 0 · 0** |
-| orders polled in the whole of week 34 | **88**, all on Sun 8/16 (h20: 22, h21: 63) |
-| calls charged to `PP_WEEK_USED` in week 34 | **2,000** — so ~1,912 bought **no recorded observation** |
-| live cohort `_SHIP_2026-08-17`, 1,344 open | **never polled once** |
+| **P1** charge/refund | 🗑️ **DELETED** — there was nothing to charge |
+| **P2** week key `excWeekKey_` | 🗑️ **DELETED** — there is no week |
+| **P3** one accountant | ♻️ **REWRITTEN** — per-consumer call counts survive as a *health/rate metric*, never a balance |
+| **P4** a crash is not a ping | ✅ **KEPT**, unchanged |
+| **P5** poll policy (a)(b)(c) | ✅ **KEPT**, re-justified below — none of the three was ever about budget |
+| **P6** conditional pace floor | 🗑️ **DELETED** — nothing to pace against |
+| **P7** week-34 counter reset | 🗑️ **DELETED** with the counter |
+| **P8** two classes, two channels | ✅ **KEPT**, unchanged |
+| **P9** dead record ≠ outage | ✅ **KEPT**, unchanged |
+| **P10** cohort scope | ✅ **KEPT**, unchanged |
+| **P11** the report starved the sweep | ♻️ **F1 KEPT** (waste is waste); F2/F3/F4 rewritten — see below |
+| **P12** coverage is never rationed | 🆕 **THE RULE** |
+| **P13** no consumer may drop a 429 | 🆕 **THE RULE** |
 
-🔴 **The rule the whole directive turns on: a call that ParcelPanel refuses or never receives is
-not spend, and a counter that bills it is worse than no counter — it is a wrong number that every
-pacing decision is computed from.**
+🔴 **THE FINAL, HONEST READING OF THE LEDGER, RECORDED BEFORE DELETION** (from the alarm that ended
+it, 2026-08-20 — the only place this number survives, since Script Properties are not readable over
+the Apps Script REST API):
 
-⏳ **This is INTERIM — weeks, not months.** A ParcelPanel → DigitalOcean webhook is being stood up
-separately and replaces polling outright (with a slow daily reconciliation poll as the permanent
-backstop). Do not build further on this ledger; retire it with the polling.
+```
+ledger WK2026-08-17  total 4382/2500  (exc 225, rpt 4141, pa 16)
+binding leg: the ACCOUNT quota
+🔴 rpt 4141 OVER its 200/wk allocation (Code.gs ppLookup_ — the reship report)
+ParcelPanel budget allowed 0 of 73 due
+```
 
-### P1 — CHARGE FOR WHAT WAS SERVED, REFUND WHAT WAS NOT
+**Read it against the truth: 4,382 calls is 0.4% of the ~1.2M/week the account can actually serve.**
+Every one of those legs was measured honestly and against the wrong denominator. 🔴 Note what the
+ledger *did* get right and what survives it: `rpt 4141` really was a wasteful consumer — F1's cache
+stays, because **re-buying a fact that cannot change is waste at any price**, and that argument
+never depended on the budget. What dies is the conclusion that the waste had to *starve* something.
 
-`excBudgetTake_` charged the counter **before** `excPpFetch_` ran and never credited anything back,
-so a run throttled out or killed at the 6-minute ceiling spent its full reservation on nothing —
-**and was indistinguishable from a clean run**, because a fully-throttled batch counts as
-`out.throttled`, never `out.failed`, so the `EXC_PP_FAIL_RATIO` throw cannot fire.
+⏳ **Still interim.** A ParcelPanel → DigitalOcean webhook replaces polling outright (with a slow
+daily reconciliation poll as the permanent backstop). P12's limiter is what polling looks like until
+then; retire it with the polling, not before.
 
-The reservation still happens first (two concurrent runs must not spend the same balance), then
-**`excBudgetSettle_(reserved, pp.charged)` credits back the difference, before anything downstream
-can throw.** `pp.charged` counts only responses that were **not 429/503** — a request ParcelPanel
-actually served, whatever it answered. 🔴 Never bill on `pp.seen` instead: a 404 is a served call
-that yields no `seen` entry, and refunding it would under-count real spend.
+### P1 — 🗑️ DELETED (was: CHARGE FOR WHAT WAS SERVED, REFUND WHAT WAS NOT)
 
-### P2 — ONE WEEK BOUNDARY: **Monday 00:00 ET → Sunday 24:00 ET**
+**Deleted by P12.** `excBudgetTake_` / `excBudgetSettle_` and the reserve-then-settle contract are
+gone, because there was never a balance to reserve from.
 
-`excWeekKey_` used `formatDate(now, tz, 'ww')`. Java's `ww` is **locale** week-of-year and the US
-locale starts the week on **Sunday**, while `excRunsLeftThisWeek_` counts hours from a **Monday**
-start. Proof it really rolled on Sunday, not inference: week 33 was already drained (1,676 + 651 =
-2,327 ≥ 2,000) yet Sun 8/16 20:00 and 21:00 still stamped 22 and 63 orders.
+🔴 **The observation underneath it was real and is preserved in P13**: a request ParcelPanel
+*refused* (429/503) is categorically different from one it *served*, and fusing them produces a
+number every downstream decision is then computed from. P1 used that distinction to keep an
+accounting fiction honest; P13 uses it for the thing it was always actually good for — **a refused
+request means retry, and must never be recorded as an answer.**
 
-🔴 **With pacing deployed the mismatch gets WORSE:** on a Sunday `runsLeft = 24 − hr ≤ 24` against
-`left = 2000`, so `pace = ceil(2000/24) = 84` and **24 Sunday runs × 84 = 2,016 — the entire week's
-allowance legally spent on the one day**, recurring Sun 2026-08-23. The key is now that week's
-Monday ET date (`WK2026-08-17`), computed on a **UTC-noon anchor built from the ET calendar parts**
-so a DST transition cannot shift it a day (a naive `now − 6×86400000` formatted in ET lands on
-Saturday 23:00 for a Sunday-00:30 run in a fall-back week — covered by tests).
+### P2 — 🗑️ DELETED (was: ONE WEEK BOUNDARY, Monday 00:00 ET → Sunday 24:00 ET)
 
-### P3 — ONE ACCOUNTANT. And say out loud that it is still a LOWER BOUND
+**Deleted by P12.** `excWeekKey_` existed only to bound a weekly budget. There is no weekly budget,
+so there is no week.
 
-`PP_WEEK_USED` was decremented by `Exceptions.gs` **only**, while three other consumers spent the
-same **account-wide 2,500/wk** quota silently. The property is now a ledger,
-`"<wkKey>|<total>|<exc>|<rpt>|<pa>"`:
+🔴 **Do not reintroduce a week key for anything.** The bug it fixed was real and subtle — Java's
+`ww` is *locale* week-of-year and the US locale starts weeks on **Sunday**, while the pacer counted
+from **Monday**, so a Sunday run could legally spend the entire following week's allowance. If any
+future code ever needs a week boundary for a genuinely weekly fact, it must build it from an
+ET-calendar anchor at UTC noon (so a DST transition cannot shift it a day) — **and it must not be a
+budget.**
 
-| consumer | cadence | counted? | capped by the ledger? |
-|---|---|---|---|
-| `Exceptions.gs excPpFetch_` | hourly | ✅ `exc` | ✅ yes — this is the consumer that yields |
-| `Code.gs ppLookup_` | hourly `refresh()` + `enrichTransitOverride_` | ✅ `rpt` | ❌ **deliberately not** |
-| `PivotAnalytics.gs paPpFetch_` | daily, 200/run | ✅ `pa` | ❌ **deliberately not** |
-| `ShipRouting/server/sync_delivery_status.py` | hourly on the cloud worker, `PP_CAP_PER_RUN=300` | ❌ **cannot** | ❌ |
-| ad-hoc local python probes | ad hoc | ❌ | ❌ |
+### P3 — ♻️ REWRITTEN: CALL COUNTS ARE A HEALTH METRIC, NEVER A BALANCE
 
-🔴 **`ppLookup_` and `paPpFetch_` report but are NOT starved.** They feed columns Dan reads, and a
-missing carrier/transit corrupts a number silently; the sweep can retry an hour later and they
-cannot. The sweep is fenced by **both** its own `EXC_PP_WEEKLY_BUDGET` (2,000) **and** the account
-`EXC_PP_ACCOUNT_QUOTA` (2,500) minus everything reported, so an overdrawing report throttles the
-sweep rather than the reverse.
+**What is deleted:** the ledger-as-budget. `PP_WEEK_USED`, `EXC_PP_ACCOUNT_QUOTA`,
+`EXC_PP_WEEKLY_BUDGET`, `EXC_PP_RPT_ALLOC`, `EXC_PP_PA_ALLOC`, `excBudgetRead_/Write_/Take_/
+Settle_/LeftAccount_/BindingLeg_` and the "who yields" hierarchy. No consumer yields to another,
+because there is nothing to yield.
 
-🔴 **The ledger is a LOWER BOUND and must always be described as one.** `sync_delivery_status.py`
-runs in a different runtime with no access to these Script Properties. **⚠️ UNVERIFIED: whether the
-App Platform env sets `DELIVERY_SYNC=1`.** If it does, that path alone projects up to 300 × 168 =
-50,400 calls/wk against a 2,500 cap and the quota is being spent entirely outside this project —
-which would also explain the throttling. **Kurt decision A, still open.**
+**What survives, and why it is worth keeping:** knowing *how many calls each consumer makes* is
+genuinely useful — it is how `rpt`'s 31.9× waste was found in the first place. So the counters stay,
+with three changes that make them impossible to read as a fence:
+
+1. **Daily, not weekly** — `PP_CALLS_TODAY` = `"<yyyy-MM-dd>|<total>|<exc>|<rpt>|<pa>"`. A daily
+   count is a **rate**; a weekly count against a cap invites subtraction.
+2. **Nothing reads it to decide anything.** 🔴 There is no code path anywhere that gates, paces,
+   caps or skips based on this property. If one ever appears, that is the regression this directive
+   exists to prevent. The only thing that shapes traffic is the rate limiter and
+   `x-ratelimit-remaining`.
+3. **Renamed at every call site** — `excBudgetCharge_` → `excPpRecordCalls_`. The word *budget* is
+   removed from the ParcelPanel vocabulary of this project on purpose: a helper called
+   `excBudgetCharge_` reads as correct at a call site that is about to ration something.
+
+🔴 **P3's original complaint remains valid and is now answered properly.** It said the counter was a
+**lower bound** because `sync_delivery_status.py` and ad-hoc probes run in other runtimes and cannot
+reach these Script Properties. That is still true of `PP_CALLS_TODAY` and always will be — which is
+exactly why it is no longer allowed to decide anything. **The cross-runtime coordination that P3
+wanted, and could not have, is `x-ratelimit-remaining`:** every runtime sharing the API key sees the
+same bucket drain, exactly, in every response. The fix for "my counter cannot see the other
+consumers" was never a better counter.
 
 ### P4 — A CRASH IS NOT A PING: failure alerts bypass the Wed–Sun gate
 
@@ -335,21 +368,35 @@ to hide a broken sweep. 🔴 **Exception PINGS keep the gate; health and failure
   `displayStatus` + events for the whole triage window on a request that was being made anyway —
   free against this quota. ParcelPanel is asked **only** about the ambiguous remainder:
   `DELAYED`, `ATTEMPTED_DELIVERY`, or **no movement scan at all** (`excShopifyFlagged_`).
-- **(b) At most once per calendar day per box, longest-unpolled first.**
+- **(b) At most once per calendar day per box, longest-unpolled first.** 🔴 **KEPT under P12, and
+  explicitly DE-LINKED from budget:** this is *work avoidance*, not rationing. Every ping class has
+  a ≥3-day evidence floor, so a second poll of the same box on the same day cannot produce a case
+  the first one missed. It is also what makes any cadence safe — daily work is bounded by the number
+  of open boxes, never by the number of runs.
 - **(c) Cohort age ≥ 3 days**, OR Shopify-flagged. Measured on mature cohorts (07-20, 07-27, 08-03,
   08-10): **94–99% of a cohort is still legitimately in transit on day +1/+2, and no ping class can
   fire then** (`EXC_NEVER_PICKED_MIN_DAYS = 3`, `EXC_DELAYED_MIN_DAYS = 3`). Polling the day-1/-2
   mass is where the whole budget went and it can produce nothing.
 - 🔴 **But NOT zero on Mon/Tue.** `EXC_CP_SCAN = 5`: a Monday exception buried under more than five
   routine facility scans by Wednesday is invisible forever — the exact `#170893` failure mode
-  `112ba5a` was written to fix. Mon/Tue keep a **thin sweep, Shopify-flagged only, hard 100/day**
-  (`EXC_THIN_DAY_CAP`).
+  `112ba5a` was written to fix. Mon/Tue keep a **thin sweep — Shopify-flagged only, and COMPLETE.**
+  🔴 **`EXC_THIN_DAY_CAP = 100` is DELETED (P12).** The *shape* of the thin sweep is work avoidance
+  (a box Shopify shows moving normally is not worth asking about); the *cap* was rationing, and a
+  Monday with 140 flagged boxes silently left 40 unchecked going into the ping window. Flagged-only
+  is the filter. There is no ceiling on it.
 - 🔴 **An empty batch is now often CORRECT**, so the starvation alarm splits into two shapes it must
   never confuse: **STARVED** (work was due, budget allowed none) and **BLINDSPOT** (nothing judged
   due while open boxes have never been polled once — a policy bug, and the week-34 signature).
 - 🔴 **Log actual spend every run:** `reserved / served / refunded / answered` plus the ledger.
 
-**Projected weekly spend (why (a)+(b)+(c) fits and the alternatives do not):**
+**Projected weekly spend — 🔴 SUPERSEDED BY P12, kept because the SURVIVAL CURVE it measures is
+still the reason (a) is right.** The "fits / does not fit" verdicts below were computed against
+the phantom 2,000/wk and mean nothing; (b) alone at 10,500–16,100 calls/wk is ~1% of what the
+account serves. What survives is the measurement itself: **94–99% of a cohort is legitimately in
+transit on day +1/+2 and no ping class can fire then**, so polling that mass is work that cannot
+produce an answer. That is work avoidance, not rationing, and it stays.
+
+**The original projection, as written:**
 
 | leg | calls/wk |
 |---|---|
@@ -367,28 +414,26 @@ visible for the first time) — the first honest `rpt` figure is itself a delive
 (5 ping days × 1,500–2,300 = 7,500–11,500). Only **(a)** removes the day-1/-2 mass, and the survival
 curve is what makes it cheap.
 
-### P6 — THE PACE FLOOR IS CONDITIONAL
+### P6 — 🗑️ DELETED (was: THE PACE FLOOR IS CONDITIONAL)
 
-An unconditional `EXC_PP_MIN_PER_RUN` is not a floor, it is a second budget: 109 runs still left in
-a week × 10 = **1,090 calls pacing is powerless to prevent**, spent on a set the once-per-day tier
-says is not due. The floor applies **only while `left ≥ runsLeft × floor`** — i.e. only when the
-budget can afford it for every run still to come.
+**Deleted by P12**, with `EXC_PP_MIN_PER_RUN`, `excRunsLeftThisWeek_` and the whole pacing
+denominator. A floor and a ceiling on a budget that does not exist are both zero-valued.
 
-### P7 — THE WEEK-34 COUNTER IS RESET TO ZERO, AND HERE IS WHY THAT IS SAFE
+🔴 **The reasoning was sound and is worth remembering in the abstract:** *an unconditional floor is
+not a floor, it is a second budget* — 109 remaining runs × 10 = 1,090 calls that pacing is powerless
+to prevent. Any future "minimum per run" anywhere in this project should be read that way first.
 
-The key **format** changes with this deploy (`2026-W34` → `WK2026-08-17`), so the first run after
-the push sees a key mismatch and rolls the ledger to `WK2026-08-17|0|0|0|0`. **Deliberate.**
-Leaving it exhausted means ~109 more dead runs this week for a balance that was charged for nothing.
+### P7 — 🗑️ DELETED (was: THE WEEK-34 COUNTER IS RESET TO ZERO)
 
-Why zeroing is defensible and not just convenient: (i) 1,912 of the 2,000 provably bought no
-recorded observation; (ii) under P1, if ParcelPanel's own quota really is depleted the sweep now
-throttles, **refunds**, and the 6-hourly `excSlackHealth_` alarm says so — the failure is loud
-instead of silent; (iii) the remaining Wed→Sun window at the new policy is ~400–600 calls.
-🔴 **What is NOT known: ParcelPanel's own quota state and its reset schedule.** The zero is a
-deliberate restart of *our* accounting, never a claim about *theirs*.
+**Deleted with the counter.** The manual lever `excResetWeeklyBudget` and its menu item *Reset
+ParcelPanel weekly ledger* are removed — there is no ledger to reset.
 
-Manual lever: **Shipping Exceptions → Reset ParcelPanel weekly ledger** (`excResetWeeklyBudget`).
-Use it only when the recorded spend is known to be fiction; it is never automatic.
+🔴 **What P7 said that is still true, and now applies to a real number:** *"What is NOT known is
+ParcelPanel's own quota state and its reset schedule."* It is known now, and it is not a mystery
+requiring a proxy — `x-ratelimit-limit` and `x-ratelimit-remaining` arrive with every single
+response. The property `PP_WEEK_USED` is now dead data on the project; 🔴 **Kurt should delete it by
+hand** (Project Settings → Script Properties), since the Apps Script REST API cannot write
+properties and a stale key invites someone to read it as live.
 
 ### P8 — TWO CLASSES, TWO CHANNELS, TWO HELPERS (Kurt 2026-08-19)
 
@@ -901,7 +946,11 @@ cached, and ParcelPanel is the one that is not.**
   explicitly *"so we don't re-hit them for same rows hourly"* — and ParcelPanel, **the only metered
   one of the three**, was the single API left re-bought every run. One cache inside the helper
   covers all three legs.
-- **F2 (allocation).** The 2,500 plan is now SPLIT explicitly rather than discovered by starvation:
+- **F2 (allocation). 🗑️ DELETED BY P12 — there was no plan to split.** `EXC_PP_RPT_ALLOC`,
+  `EXC_PP_PA_ALLOC` and `EXC_PP_WEEKLY_BUDGET` are gone. Kept below as the record of what was
+  believed, because the *reasoning* ("measure a consumer's draw before exempting it") is sound and
+  outlives the numbers. **As written at the time:**
+  The 2,500 plan is now SPLIT explicitly rather than discovered by starvation:
   `EXC_PP_RPT_ALLOC = 200`, `EXC_PP_PA_ALLOC = 180`, `EXC_PP_WEEKLY_BUDGET` 2,000 **→ 1,800**
   (1,800 + 200 + 180 = 2,180 ≤ 2,500). Measured sweep demand: Mon/Tue thin 100/day = 200, Wed–Sun
   5 × 261 = 1,305, **total ~1,505 of 1,800** — it fits with headroom for the first time.
@@ -909,8 +958,23 @@ cached, and ParcelPanel is the one that is not.**
   `paPpFetch_` feed columns Dan reads; starving them trades a visible number for an invisible one.
   The exemption stays and **the overdraw becomes LOUD** — because the failure was never the spend,
   it was the silence.
-- **F3 (cadence).** `EXC_PP_MAX_PER_RUN` 120 **→ 150**; see the cadence section below.
-- **F4 (observability).** The starved ops DM printed `allowed` and `elig.length` but **not the
+- **F3 (cadence). ♻️ REWRITTEN BY P12.** Cadence was chosen as budget yielding; with no budget it is
+  purely a **detection-latency** choice, and the capacity table in P12 shows 2×/day cannot cover a
+  fresh cohort in a day while hourly clears every case with ≥7× headroom. `EXC_PP_MAX_PER_RUN`
+  survives ONLY as the 6-minute execution-ceiling cap (**400**), and the off-schedule guard
+  (`excOnScheduleET_`, `EXC_RUN_HOURS_ET`, `excRunsLeftThisWeek_`) is **deleted** — it existed to
+  protect a pacing denominator, and making an off-slot run take 0 calls is exactly the coverage
+  rationing P12 forbids. **The code is now cadence-agnostic:** more runs are fresher and never more
+  expensive per box, because (b) bounds the daily work.
+- **F4 (observability). ♻️ REWRITTEN BY P12 into a THROTTLE alarm.** There is no binding leg to name
+  any more, so `excBudgetBindingLeg_` and the STARVED alarm are deleted. What replaces them fires on
+  the condition that can actually still stop a sweep: **429s over threshold after retries, or
+  `x-ratelimit-remaining` hitting 0** — naming the run, the window, and the counts. 🔴 **The
+  BLINDSPOT alarm is KEPT and is now the only remaining coverage alarm**, which makes it more
+  important than it was, not less: with STARVED gone it is the sole thing standing between "nothing
+  was due" and "we stopped looking." F4's original reasoning, which stands: **an alarm that cannot
+  say WHY is the silent-failure shape one level up.** As written at the time:
+  The starved ops DM printed `allowed` and `elig.length` but **not the
   ledger** — which is precisely why 2026-08-20 took a `_exc_state` reconstruction instead of a
   one-line read. `excBudgetBindingLeg_` now puts the full ledger, **the name of the binding leg**,
   and any consumer over its allocation into the alarm, the *"budget bit"* log line, and the *Check
@@ -1039,6 +1103,126 @@ observed 03:46 → 10:46 spacing on 2026-08-20 is exactly that rate limiter at w
   (`N asked, M fetched (K cached)`) on Kurt's next run.
 - 🔴 **NOT verified: the trigger edit.** F3's pacing assumes 2 runs/day; until Kurt makes the
   trigger change, `excOnScheduleET_` holds every off-slot run to 0 calls.
+
+### P12 — COVERAGE IS NEVER RATIONED. ONLY SPEED IS. (Kurt GO, 2026-08-20)
+
+> Kurt's alarm, the one that ended the budget era: *"exceptions sweep polled 0 boxes while 87 are
+> still open … 55 never polled once … ParcelPanel budget allowed 0 of 73 due … Nothing was
+> checked, so this run is NOT an all-clear."*
+
+🔴 **THE PREMISE UNDER P1–P11 WAS FALSE.** Every rationing directive in this file was arithmetic on
+**"2,500 ParcelPanel calls per week."** That number is Kurt's **average weekly ORDER count** — the
+10,000/month plan quota divided by four — misread as an API request budget. It was never a limit on
+requests, and no such limit was ever measured. 55 boxes went unchecked to protect a fence that does
+not exist.
+
+**What the limit actually is, measured on this account, not quoted:**
+
+| fact | evidence |
+|---|---|
+| **120 requests per minute, per API key** | `docs.parcelpanel.com/shopify/api-webhook/api-v2/`, and every response carries it |
+| `x-ratelimit-limit: 120` in EVERY response | live probe 2026-08-20 against `open.parcelwill.com` |
+| the window is ONE MINUTE and refills whole | probe: `remaining` 119 → 118 → 117 → 116 on four calls, back to **119** after 65 s |
+| **quota is ORDERS TRACKED, not requests** | ParcelPanel pricing: *"1 order = 1 quota"*, *"Order lookups do not consume quota … unlimited lookups"* |
+| corroboration that lookups are free | monthly fulfilled orders 9,574 / 9,779 / 11,977 / 8,710 track the 10,000 plan, while we issue 19k–33k requests/month. If requests consumed quota we would carry **$500–1,150/month of overage against a $215 plan**, and we do not |
+
+**120/min = 7,200/hr ≈ 1.2M/week. The entire ledger's final reading, 4,382 calls, is 0.4% of it.**
+
+🔴 **THE RULE.** *Coverage is never rationed. Only speed is.* Every ParcelPanel client in this
+project:
+
+1. **paces under 120 req/min** — target **100/min** (83%, leaving margin for the other consumers on
+   the same key);
+2. **reads `x-ratelimit-remaining` from every response** and brakes on it — this, not a Script
+   Property, is the real cross-runtime coordination;
+3. **never abandons an order because of a 429** — it waits and asks again;
+4. **never has a per-run or per-week cap whose effect is that a box goes unchecked.**
+
+**A run may take longer. A box is always checked.**
+
+🔴 **THE HEADER WAS THE ANSWER ALL ALONG.** `PP_WEEK_USED` existed to approximate account-wide
+consumption across GAS, Kurt's PC and DigitalOcean — and it **structurally could not**, because
+those three runtimes cannot read each other's Script Properties. P3 admitted this and called the
+number "a lower bound." `x-ratelimit-remaining` is the same fact, exact, in every response, from
+every runtime, and has been there since before any of this was written. **A shared counter was
+invented to estimate a number the server was already reporting.** Before building a meter, check
+whether the thing being metered already meters itself.
+
+🔴 **THE FAULT WAS NEVER VOLUME — IT WAS BURST SHAPE.** At the moment of the alarm this project had
+three ParcelPanel call sites and **two of them fired `UrlFetchApp.fetchAll(slice(i, i + 50))` with
+no pause and no retry** (`Code.gs ppLookup_`, `PivotAnalytics.gs paPpFetch_`), while the third
+(`Exceptions.gs excPpFetch_`) paced at batch-10 / 1,000 ms — **~600/min, five times the ceiling**.
+`Exceptions.gs` has documented this exact class since day one — *"fired fetchAll in batches of 50
+with no pause and no retry: 780 of 900 fetches failed"* — so these were **two unfixed instances of a
+bug this codebase had already diagnosed and written down.** A 50-wide burst against a 120/min bucket
+is 42% of a minute's allowance dispatched in one instant; the budget layer could not have prevented
+a single one of those 429s, and rationing coverage to "save" calls made the bursts no smaller.
+
+#### The limiter (numbers derived here, not inherited)
+
+| knob | value | why this value |
+|---|---|---|
+| target rate | **100 req/min** | 83% of the measured 120; the remaining 20/min is margin for the Python client and the cloud worker on the same key |
+| batch / max in flight | **10** | `fetchAll` is Apps Script's only concurrency primitive, and 10 is the value that ended the 780-of-900 failure. 10 requests per 6.0 s cycle **is** 100/min |
+| cycle | **6,000 ms, measured from the START of the fetch** | 🔴 sleeping 6 s *after* a fetch that itself took 3 s yields 66/min, not 100. The sleep is `max(0, 6000 − elapsed)`; pacing must subtract the work, or the rate silently under-runs |
+| adaptive brake | `remaining < 12` → sleep to the next minute boundary | 🔴 **not** the proposed 30 — see the sanity-check below |
+| 429 retry | `Retry-After` if present, else 2/4/8/16/32 s jittered, **5 attempts** | a refused request is not an answer (P13) |
+| run-level guard | **>20% of a run's requests still 429 after retries → throw** | so a genuine ParcelPanel outage can never look like a slow day |
+
+🔴 **WHY THE BRAKE IS 12 AND NOT 30 — the one number that did not survive its own sanity check.**
+The proposal specified `remaining < 30`. But if we deliberately spend 100 of a 120 bucket every
+minute, **our own steady-state trough IS ~20** — already below 30. A brake at 30 would therefore
+fire on our own correct pacing, every single minute, and would carry no information about anyone
+else. The brake's whole purpose is to detect that **another consumer on this key is eating the
+bucket**, so its threshold must sit *below* our own trough and *at or above one batch* (never
+dispatch 10 requests you cannot afford). 12 satisfies both. 🔴 **If this brake starts firing often,
+that is the signal that a second consumer is active — it is not noise, and the fix is not to lower
+the threshold.**
+
+🔴 **THE ONE PLACE "TAKE LONGER" HAS A HARD WALL: the 6-minute Apps Script execution ceiling.**
+Waiting is free everywhere except here. At 100/min against `EXC_TIME_BUDGET_MS = 240000` (4 minutes
+of fetching, 2 minutes reserved to write state), **one sweep run can place ~400 ParcelPanel calls**
+— fewer if a brake or a backoff eats into it. Does current demand fit?
+
+| demand (once-per-day tier ⇒ calls/day ≈ boxes due/day) | calls/day | hourly (24 runs → ~9,600/day) | 2×/day (2 runs → ~800/day) |
+|---|---|---|---|
+| today's alarm: 87 open, 73 due | 73 | **131× headroom** | 11× headroom |
+| measured 2026-08-20 | 261 | **37× headroom** | 3.1× headroom |
+| measured 2026-08-10, all open | 487 | **20× headroom** | 1.6× headroom |
+| 🔴 worst case — a fresh cohort past the age gate (`_SHIP_2026-08-17` held **1,344** open) | 1,344 | **7.1× headroom** | **0.6× — DOES NOT FIT** |
+
+**Hourly fits every observed and worst-case demand with ≥7× headroom. 2×/day does not survive a
+fresh-cohort day** — it would need two days to cover one, which is precisely the coverage gap P12
+forbids. This is a hard capacity argument for hourly, independent of the latency argument.
+
+🔴 **A run that hits the ceiling is NOT a run that rationed.** The orders it did not reach are never
+stamped `last_seen`, so they stay at the head of the longest-unpolled ordering and are the *first*
+work the next run takes. The run says so out loud. Deferral-to-the-next-run is the only form of
+"later" this platform permits, and it is bounded by the cadence, not by a balance.
+
+### P13 — NO CONSUMER MAY DROP A 429 (Kurt GO, 2026-08-20)
+
+A 429 is **backpressure, not an answer.** An order refused by one is in exactly the state it was in
+before the request: unknown. Every consumer must therefore treat it as *not yet asked* —
+🔴 **never stamp it, never count it as served, never let it fall out of the set.**
+
+**What this forbids, concretely — all three were live at the moment of the alarm:**
+
+| call site | the drop | consequence |
+|---|---|---|
+| `Code.gs ppLookup_` | `if (code === 429 || code === 503) return;` with no retry pass | that order's carrier / `transit_days` silently missing from Dan's column for the run |
+| `PivotAnalytics.gs paPpFetch_` | same shape, inside a 50-wide burst | the box drops out of the delivered-union — and PP only ever *rescues* boxes Shopify does not already show delivered, so the loss is invisible everywhere except the few orders where it matters |
+| `ShipRouting/server/sync_delivery_status.py` and the `ParcelPanelClient` consumers | ~85 boxes/run, ~340/week | Python side — **proposed separately, not changed in this pass** |
+
+**The contract.** A 429 is retried inside the run (`Retry-After`, else 2/4/8/16/32 s jittered,
+5 attempts). If the retries are exhausted, or the execution ceiling arrives first, the order is
+**left unstamped and queued** — it is the next run's first work, not a hole. The only thing a 429
+may ever cost is time.
+
+🔴 **AND IT MUST BE COUNTED SEPARATELY FROM A FAILURE.** P9 established that fusing two opposite
+conditions under one number is how nine dead records suppressed ten good answers. Throttling and
+transport failure are exactly such a pair: one means *slow down*, the other means *something is
+broken*. They keep their own counters and their own thresholds, and they must never share one.
 
 ## Alert classes (Kurt 2026-07-30)
 

@@ -1367,36 +1367,63 @@ promise, and **zero** boxes on either cohort are actually still moving past thei
 column at all, the insert and a refresh must happen **before then**; after that the column is
 Kurt-owned forever and the new row stays blank there.
 
-### D28 — `ppLookup_` REPORTS ITS PARCELPANEL SPEND TO THE SHARED LEDGER, AND IS NOT CAPPED BY IT (Kurt GO 2026-08-19)
+### D28 — 🗑️ DELETED (was: `ppLookup_` REPORTS ITS PARCELPANEL SPEND TO THE SHARED LEDGER)
 
-🔴 **The failure this closes:** ParcelPanel's quota is **2,500 calls/week, ACCOUNT-WIDE**, and until
-now `Code.gs ppLookup_` — **uncapped**, one GET per order in 50-request `fetchAll` batches, running
-with the hourly `refresh()` **and** `enrichTransitOverride_` — reported **nothing**. The counter
-`PP_WEEK_USED` was decremented by `Exceptions.gs` alone, so the one number every pacing decision in
-the exceptions sweep is computed from measured one of at least four drains **and read as complete**.
-That is the whole class: *a number that looks total while being partial is worse than no number.*
+🔴 **SUPERSEDED BY [`EXCEPTIONS_ALERT_RULES.md`](EXCEPTIONS_ALERT_RULES.md) DIRECTIVE P12/P13
+(Kurt GO 2026-08-20). Read those before touching any ParcelPanel call path in this project.**
 
-**The rule.** `ppLookup_` counts every response that is **not a 429/503** (a request ParcelPanel
-actually served, whatever it answered) and books it to the shared ledger under `rpt` via
-`excBudgetCharge_`. The ledger format and the reserve/settle contract are owned by
-[`EXCEPTIONS_ALERT_RULES.md`](EXCEPTIONS_ALERT_RULES.md) **directive P1–P7** — read it before
-touching any ParcelPanel call path in this project. Do not fork a second counter.
+**Why it is gone: the premise was false.** D28 metered `ppLookup_` against a **"2,500 calls/week,
+ACCOUNT-WIDE"** ParcelPanel quota. That number is Kurt's average weekly **ORDER count** (the
+10,000/month plan quota ÷ 4), misread as an API request budget. ParcelPanel's plan quota counts
+**orders tracked** — *"1 order = 1 quota"*, *"Order lookups do not consume quota … unlimited
+lookups"*. The only real limit is **120 requests per minute per API key**, ~1.2M/week, and it is
+reported in `x-ratelimit-limit` / `x-ratelimit-remaining` on **every response**.
 
-🔴 **DELIBERATELY NOT CAPPED.** The reship report is a shipped surface Dan reads and a missing
-carrier / `transit_days` corrupts it silently; the exceptions sweep can retry an hour later and this
-cannot. So this consumer reports honestly and is allowed to overdraw, and the **sweep** is what
-yields — it is fenced by both its own 2,000 reservation and the 2,500 account quota minus everything
-reported here. Reversing that (starving the report to protect the sweep) trades a visible number for
-an invisible one and is exactly wrong.
+**What that means for the reship report specifically:** `ppLookup_`'s measured draw of ~4,141
+calls/week — the number D28's ledger surfaced, and the one that got it branded the consumer that
+"starved" the exceptions sweep — is **0.35% of what the account serves.** It never starved anything.
+What starved the sweep was `excBudgetTake_` subtracting from a phantom balance.
 
-**The charge is guarded** (`typeof excBudgetCharge_ === 'function'`): the accountant lives in
-`Exceptions.gs`, and if it is ever absent the lookup still returns — but the under-count is **logged
-by size**, never left as a number that looks complete. ⚠️ The ledger remains a **lower bound**:
-`ShipRouting/server/sync_delivery_status.py` and ad-hoc probes spend the same account quota from
-runtimes that cannot reach these Script Properties.
+🔴 **DELETED here:** the `excBudgetCharge_(charged, 'rpt')` call and the `EXC_PP_RPT_ALLOC = 200`
+allocation it was measured against. There is no ledger, no allocation, and no consumer that yields.
 
-⏳ **Interim.** A ParcelPanel → DigitalOcean webhook replaces polling outright (slow daily
-reconciliation poll as the permanent backstop). Retire this metering with the polling, not before.
+🔴 **KEPT, and re-justified so nobody deletes it as budget scaffolding:** the **F1 `_pp_cache`**
+(directive P11, `_pp_cache` tab, `PP_CACHE_GIVEUP_DAYS = 21`). Its argument never depended on the
+budget:
+
+1. **The terminal memo.** `transit_days` is set only for a **DELIVERED** box, and a delivered box's
+   pickup→delivery span and its carrier are **immutable**. Re-asking can only ever return the
+   identical answer. 🔴 **Re-buying a fact that cannot change is waste at any price** — it was waste
+   when we thought calls were scarce and it is waste now that they are free, because it also costs
+   wall-clock time inside a 6-minute execution ceiling that *is* genuinely scarce.
+2. **The 21-day give-up.** 169 boxes aged **45–52 days**, never delivered, were being re-fetched
+   **24×/day forever**. An order past the report's own 3-cohort window that still has no transit is
+   never going to get one. Same class as the P9 quarantine, on the report side. It fires only after
+   at least one real fetch, so the carrier we display is captured before the order retires and
+   nothing blanks.
+
+**What replaces the metering:**
+
+- **The limiter.** `ppLookup_` no longer fires `UrlFetchApp.fetchAll(slice(i, i + 50))` with no
+  pause. 🔴 That 50-wide burst was the actual bug — 42% of a minute's allowance dispatched in one
+  instant against a 120/min bucket — and `Exceptions.gs` had documented the identical failure
+  (*"batches of 50 with no pause and no retry: 780 of 900 fetches failed"*) long before this call
+  site was written. It now paces **batch 10 per 6.0 s cycle ≈ 100 req/min**, measured from the start
+  of the fetch so the fetch's own duration counts against the cycle.
+- **No dropped 429s (P13).** `if (code === 429 || code === 503) return;` silently left that order's
+  carrier and `transit_days` missing from Dan's column for the run. A refused request is **not an
+  answer**: it is retried in-run (`Retry-After`, else 2/4/8/16/32 s jittered, 5 attempts), and if the
+  retries are exhausted the order is **left unstamped in the cache** so the next run asks again.
+  🔴 Never stamp `asked` on a 429 — stamping it would suppress the re-ask for the rest of the day and
+  turn backpressure into a permanently missing value.
+- **Counting survives as a health metric, never a balance.** `excBudgetCharge_` → `excPpRecordCalls_`,
+  writing a **daily** `PP_CALLS_TODAY`. 🔴 Nothing reads it to decide anything. Knowing each
+  consumer's call rate is what found the 31.9× waste in the first place, so the observability is
+  worth keeping; the subtraction is not.
+
+⏳ **Still interim.** A ParcelPanel → DigitalOcean webhook replaces polling outright. Retire the
+limiter with the polling, not before — and note that the cache above survives the cutover on its own
+merits, since re-reading an immutable fact is waste against a database too.
 
 ### D29 — THE KLAVIYO SWEEP IS RESUMABLE; A PARTIAL SWEEP WRITES NOTHING (Kurt 2026-08-19: "can't we just slow it down?")
 
