@@ -455,9 +455,14 @@ The trigger UI cannot express any of the following, so all four live in `refresh
   undelivered and — under the survivorship rule (D9) — **LATE**. Anchored on cohort **age**, not
   day-of-week, so a shifted ship day (holiday week) cannot defeat it.
 - **PP leg gated by cohort age.** Age `<3d` (Tue/Wed) → Shopify-only, log `PP: skipped (cohort age
-  <3d)`. PP budget is **2,500 calls/week** (standing) and Exceptions' hourly job is the dominant
-  consumer. Early in the week the rescue set ≈ the whole cohort (~2,300), so one uncapped Tuesday
-  run could eat the week. Deliveries stream via Shopify fine mid-week and PP reconciles later.
+  <3d)`. 🗑️ **The budget half of this rule is DELETED by P12 (2026-08-20).** The
+  "2,500 calls/week" it rationed against never existed — that number is Kurt's average weekly
+  ORDER count misread as an API budget; the real limit is **120 requests/minute per API key**
+  (`x-ratelimit-limit`), ≈ 1.2M/week. A ~2,300-box Tuesday cohort is **23 minutes** of paced
+  fetching, not a week's allowance. ✅ **The age gate itself SURVIVES on its own merits:** at
+  <3d nothing has been scanned yet, so PP has nothing to add — it is work avoidance, not
+  rationing, and no box goes unchecked because of it. Deliveries stream via Shopify fine mid-week
+  and PP reconciles later.
 - **Hard cap 200 PP calls/run**, any day, **oldest-scan first** — the box silent longest is the one
   most worth rescuing. Logs `PP: capped, skipped N candidates` when it bites. A silent truncation
   would read as "PP found nothing", which is the failure this whole leg already burned us on.
@@ -1554,9 +1559,11 @@ elsewhere / read-only here" framing in D24 and in the `Notifications.gs` header;
   not come from the thing being measured.
 - 🔴 **`Arrived` IS MIRRORED FROM `Lost in Transit`, AND MIRRORING IS THE SAFER CHOICE FOR THIS ROW.**
   `arrived` is not a Shopify-only fact: PivotAnalytics derives it from fulfillment event trees **plus
-  ParcelPanel**, whose quota is 2,500 calls/week **account-wide** (D28). This file's cohort query is
-  deliberately light and fetches no fulfillments, so recomputing would mean rebuilding that pipeline
-  **and spending the shared PP quota a second time** — and any drift between two derivations would
+  ParcelPanel** (🗑️ the "2,500 calls/week account-wide" quota this cited is DELETED by
+  P12 — it never existed; the real limit is 120 req/min per key, and lookups consume no plan
+  quota at all). This file's cohort query is deliberately light and fetches no fulfillments, so
+  recomputing would mean rebuilding that pipeline **and paying its latency a second time** — the
+  argument for mirroring was never really about spend, and any drift between two derivations would
   put two different numbers under the same label on two tabs. One derivation, published once,
   mirrored. `Lost in Transit` is refreshed by the same daily walk-forward job, so the mirror inherits
   a fresh value, not a stale one.

@@ -1286,7 +1286,7 @@ against the ceiling.
 - 🔴 **NOT VERIFIED — the `PP_WEEK_USED` property itself.** Its final reading is recorded above from
   the alarm text, because Script Properties are not readable over the REST API. It is now dead data
   and should be deleted by hand.
-- 🔴 **NOT VERIFIED — the Python side.** Unchanged in this pass; proposed separately.
+- ✅ **The Python side is now DONE** — see “P12/P13 — THE PYTHON SIDE” below (2026-08-20, same day). It was unchanged in the Apps Script pass.
 
 #### 🔴 DEPLOYED (2026-08-20) — and what still needs Kurt's click
 
@@ -1377,6 +1377,110 @@ may ever cost is time.
 conditions under one number is how nine dead records suppressed ten good answers. Throttling and
 transport failure are exactly such a pair: one means *slow down*, the other means *something is
 broken*. They keep their own counters and their own thresholds, and they must never share one.
+
+### P12/P13 — THE PYTHON SIDE (2026-08-20)
+
+The Apps Script pass fixed three call sites in one runtime. Python holds **eight order-loops across
+TWO INDEPENDENT HTTP TRANSPORTS**, and that second transport is the part a single fix would have
+missed:
+
+| transport | who | why it is separate |
+|---|---|---|
+| **A** — `ParcelPanelClient` (`AppyHour/GelPackCalculator/parcel_panel.py`) | 7 loops: `sync_orders`, `pp_fetch_concurrent`, `daily_shipping_sync`, `backfill_sync.sync_parcel_panel` (which `pipeline_run.py` and `sync_logon.py` both call), `backfill_pp`, `pp_backfill_aged_out`, `kori/gel_pack_webview` ×2, `ShipRouting/phase0_origin_backfill` | one `requests.Session`, on Kurt's PC |
+| **B** — `ShipRouting/server/sync_delivery_status.py` | 1 loop, `fetch_pp` | builds its OWN Session and never imports `parcel_panel` — it deploys to DigitalOcean App Platform where `GelPackCalculator/` does not exist. 🔴 **A limiter on `ParcelPanelClient` therefore does NOT cover everything.** |
+
+#### The limiter — `ShipRouting/server/pp_ratelimit.py` (stdlib-only, deploys with the server)
+
+Kurt's call (2026-08-20): **extract, do not duplicate.** It lives under `server/` so the cloud
+writer can import it, and `parcel_panel.py` reaches it through the same `sys.path` shim
+`phase0_origin_backfill.py:19-21` already used. One implementation, one set of constants, and no
+parity test to rot. If the import fails, `parcel_panel.py` **raises** — an unpaced client is the
+bug this exists to prevent, so it must never be the fallback.
+
+| knob | value | why |
+|---|---|---|
+| target | **100 req/min** | 83% of the measured 120; 20/min of margin for the other consumers on this key |
+| bucket capacity | **10** | see the sanity check below — **not** the 20 that was proposed |
+| max in flight | **8** | process-wide per key, enforced regardless of a caller's `workers=` |
+| brake | `x-ratelimit-remaining < 12` → park to the minute boundary | same threshold and same reasoning as the GAS side |
+| retry | `Retry-After`, else 2/4/8/16/32 s jittered, **5 retries** (6 requests) | identical ladder to `excPpFetch_`, so both runtimes back off the same way |
+| run guard | `exhausted > 20% of asked` → throw | an outage can never look like a slow day |
+
+🔴 **THE SECOND NUMBER THAT DID NOT SURVIVE ITS OWN SANITY CHECK — capacity 10, not 20.** The
+proposal specified a bucket of 20. But the worst case in any sliding 60-second window is
+`capacity + target`, because a full bucket dispatches instantly and *then* refills at the target
+rate: capacity 20 gives **20 + 100 = 120/min — exactly the hard ceiling, with zero margin**, which
+contradicts the entire reason the target is 100 and not 120. Capacity 10 puts the worst window at
+**110**, keeps the 10/min of headroom, and matches the batch width that ended the 780-of-900 Apps
+Script failure. Same class of error as the brake-30, found the same way: by doing the arithmetic on
+the proposed number instead of adopting it.
+
+🔴 **THE LIMITER IS PROCESS-GLOBAL, REGISTERED BY `api_key`.** `pp_fetch_concurrent` builds a
+**fresh client per worker thread** (`client.__class__(api_key)`), so a per-instance limiter would
+have handed 12 threads 12× the budget — a limiter that makes the burst *worse* while reading as a
+fix. The 120/min bucket is per KEY, so the registry is keyed by KEY. `--workers` no longer sets the
+rate; raising it buys nothing.
+
+#### What each call site was doing, and what it does now
+
+| site | the fault | now |
+|---|---|---|
+| `parcel_panel.sync_orders` | `time.sleep(0.3)`; `except Exception: pass` carrying a **404 rationale** ("might not exist in PP yet") applied to *every* failure class | limiter-paced; 404 still an ordinary empty answer, a throttled order is left absent-and-queued, everything else increments `failed` |
+| `parcel_panel.pp_fetch_concurrent` | string-sniffed `"429" in str(e)`, slept 65 s, retried **once**, then returned None — per-thread and unsynchronised | retries belong to the limiter; `max_retries` is dead and ignored (kept so callers don't break); None means UNKNOWN, never "no data" |
+| `daily_shipping_sync.run_pp_sync` | 0.3 s loop; the dead-feed guard fired on `written == 0` and would have called a **throttle storm a dead feed** | the throttle storm is diagnosed FIRST and separately — the two demand opposite actions |
+| `backfill_sync.sync_parcel_panel` | 0.3 s loop; "log the first 3 errors" swallow | limiter-paced, `stats.check()` runs after the store so a partial batch is still persisted |
+| `backfill_pp` | advertised its runtime as `orders × 0.3 s` | quotes the 100/min target; a long run is the intended outcome |
+| `pp_backfill_aged_out` | `--workers 12` was the de-facto rate control | workers no longer set the rate; a throttled row stays `aged_out` **on purpose**, and the dry-run hit-rate is labelled a **floor** whenever a row was refused |
+| `kori/gel_pack_webview.sync_parcel_panel` | 🔴 selected the **ENTIRE fulfillments table** (80k+ rows, all history, no date filter, no delivered filter) and polled every row | reuses the windowed predicate `sync_all_data` step 4 already used (56 days, not-yet-delivered). **A bug fix, not rationing** — narrowing the QUESTION is not rationing the ANSWER; re-asking a box delivered in 2025 answers nothing and crowds out boxes in flight |
+| `ShipRouting/phase0_origin_backfill` | `time.sleep(0.12)` = **~500 req/min, 4× the ceiling** — the worst offender anywhere in Python — plus `gap[:pp_limit]` with `build.py:537` passing **1500** | sleep gone; the row cap is replaced by a **wall-clock budget plus a persisted resume cursor** (`phase0_pp_cursor.json`, beside the DB), so a bounded run resumes where the last one stopped and the tail is reached |
+
+🔴 **A ROW CAP AND A TIME BUDGET ARE NOT THE SAME BOUND.** A row cap's effect is that a row goes
+unchecked, with nothing recording that it went unchecked. A time budget plus a resume cursor bounds
+the RUN while guaranteeing the ROW — that is what makes it P12-legal. Without the cursor,
+"newest-first + a limit" re-asks the same head forever and never reaches the tail.
+
+#### 🔴 STILL OPEN — Transport B (`ShipRouting/server/sync_delivery_status.py`)
+
+Not changed here: `ShipRouting/server/**` is claimed by another session (ACTIVE-CLAIMS,
+`codex-routing-dashboard`; the repo branch by `routing-coordinator-wk0818`). It is currently
+flag-off (`DELIVERY_SYNC=0`), so nothing is burning today — **but it must not be flipped on in its
+current shape.** Three compounding faults, and the second is the one that matters most:
+
+1. `PP_CAP_PER_RUN = 300` is applied **per cohort tag**, inside `for tag in _recent_cohorts(cur)`
+   with `LOOKBACK_WEEKS = 3` — so the name lies by roughly 3×, and it is a coverage cap either way.
+2. 🔴 **The caller sorts `sorted(shop)` — lexical, not the oldest-need-first the docstring
+   promises.** With a per-tag cap, **the same first 300 order numbers are re-polled every run,
+   forever, and the tail is never reached.** This is the exact shape P12 exists to kill: a job that
+   reports a healthy-looking number while a fixed subset of boxes is never checked once.
+3. The run guard only fires on `not out and errors >= asked * 0.5` — it cannot see throttling at
+   all, and a half-empty run passes it.
+
+The directive for the owning session is
+`_outputs/reports/2026-08-20-pp-p12-directive-sync-delivery-status.md`. Prefer a **wall-clock budget
+with a persisted resume queue** (stop dispatching after ~45 min, resume next hour, oldest-need-first)
+over any call cap — the real constraint there is not ParcelPanel but
+`server/ingest_worker.py:263-293`, a single-threaded ordered REGISTRY where `delivery_status_sync` is
+index 8 on a 1-hour timer with `invoice_ingest` / `weather_fetch` / `prewarm` queued **behind** it,
+and a `freshness()` that raises when the newest `synced_at` is over 3h old.
+
+#### Verification
+
+- **`ShipRouting/server/tests/test_pp_ratelimit.py` — 18/18 PASS.** Rates are **measured** on a
+  virtual clock, not asserted: worst 60 s window **110** (≤ 120), sustained **~100/min**, work time
+  proven not to leak into the pacing (a 0.5 s request does not slow the cycle), in-flight peak ≤ 8
+  under 24 threads, brake fires at `remaining = 5` and **does not** fire at 20, 12 threads building
+  their own clients get **one** limiter, and an always-429 order is answered 0 times, retried
+  exactly 6, and never counted as served.
+- **`ShipRouting/server/tests/test_phase0_pp_cursor.py` — 8/8 PASS**, including a replay proving
+  every gap row is reached within one rotation with no row polled twice before the tail.
+- **`AppyHour/GelPackCalculator/tests/test_pp_p12_call_sites.py` — 10/10 PASS** (client level: one
+  limiter per key, a throttled order absent from results, transport fault counted apart from
+  throttling, run guard throws on a storm, 404 still an ordinary empty answer).
+- Whole `GelPackCalculator/tests` suite green (14/14); all eight touched modules import clean.
+- 🔴 **NOT VERIFIED — no live ParcelPanel traffic.** No Python path was run against the real API in
+  this pass. The first real numbers arrive in the `[pp] asked … served … throttled … exhausted …`
+  line and `min x-ratelimit-remaining`, which should sit near 20 of 120.
+- 🔴 **NOT VERIFIED — Transport B**, unchanged and still flag-off (above).
 
 ## Alert classes (Kurt 2026-07-30)
 
