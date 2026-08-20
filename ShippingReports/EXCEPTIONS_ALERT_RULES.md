@@ -797,7 +797,7 @@ reads that table instead of calling PP:
 > ParcelPanel budget allowed 0 of 271 due"* / *"…allowed 0 of 261 due."*
 
 🔴 **STATUS: root cause PROVEN. Kurt GO 2026-08-20 on F1–F4 — all four DEPLOYED.**
-`Code 88b44f93ce14 → 810e02c41d4f` (F1), `Exceptions 22d8ae6ceefe → <see commit>` (F2/F3/F4).
+`Code 88b44f93ce14 → 810e02c41d4f` (F1), `Exceptions 22d8ae6ceefe → 7d0dd0edfba0` (F2/F3/F4).
 🔴 **F3 is NOT fully live until Kurt edits the triggers by hand** — the Apps Script REST API cannot
 list or create them. Until he does, `excOnScheduleET_` makes every leftover hourly run take **0**
 PP calls and say so, so the migration is fail-safe rather than fail-expensive.
