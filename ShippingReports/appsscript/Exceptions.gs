@@ -208,8 +208,31 @@ var EXC_SCOPE_TAGS_ = null;               // memoized for the life of one execut
 //      all — the same narrowing that took the analytics refresh from 2,300 to 45.
 //   2. a shared WEEKLY counter both jobs draw from, so total consumption is visible in one place.
 //   3. a per-run cap as a backstop.
-var EXC_PP_WEEKLY_BUDGET = 2000;          // this sweep's RESERVATION inside the account quota
-var EXC_PP_MAX_PER_RUN = 120;             // backstop; the weekly counter normally binds first
+// 🔴 F2/P11: 2000 -> 1800. The 2,500/wk plan is now SPLIT explicitly instead of leaving one
+// consumer uncapped and discovering the split by starvation. Measured sweep demand at the P10
+// scope: Mon/Tue thin 100/day = 200, Wed-Sun 5 x 261 = 1,305 -> ~1,505 of 1,800. It fits with
+// headroom for the first time.
+var EXC_PP_WEEKLY_BUDGET = 1800;          // this sweep's RESERVATION inside the account quota
+// 🔴 F3/P11: 120 -> 150. At 2 runs/day the fair share is ~129/run, and a 120 cap would clip it.
+var EXC_PP_MAX_PER_RUN = 150;             // backstop; the weekly counter normally binds first
+/**
+ * 🔴 ALLOCATIONS FOR THE CONSUMERS THAT REPORT BUT ARE NOT CAPPED (F2, directive P11).
+ *
+ * These are NOT gates. P3's reasoning stands and is deliberately preserved: `ppLookup_` and
+ * `paPpFetch_` feed columns Dan reads, a missing carrier/transit corrupts a number silently, and
+ * the sweep is the consumer that can retry an hour later. Starving them to protect the sweep
+ * trades a visible number for an invisible one.
+ *
+ * 🔴 WHAT P3 GOT WRONG, AND WHAT THESE CONSTANTS FIX. P3 exempted `rpt` from the cap believing
+ * the overdraw was marginal. Measured for the first time on 2026-08-20 it was **31.9x the entire
+ * account plan** — and "the sweep yields" against a consumer that large is not yielding, it is an
+ * unconditional shutdown of the sweep. The rule to keep: **a consumer may only be exempt from a
+ * budget while its MEASURED draw is a minority of that budget — measure before granting the
+ * exemption, never after.** So the exemption stays and the OVERDRAW BECOMES LOUD (see
+ * `excBudgetBindingLeg_`), because the failure mode was never the spend, it was the silence.
+ */
+var EXC_PP_RPT_ALLOC = 200;               // Code.gs ppLookup_, post-F1 measured ~77/wk
+var EXC_PP_PA_ALLOC = 180;                // PivotAnalytics paPpFetch_, ~180/wk
 // 🔴 THE COUNTER WAS FICTION — ONE ACCOUNTANT, FOUR SPENDERS (Kurt 2026-08-19, directive P3).
 // `PP_WEEK_USED` was decremented by THIS FILE ONLY, while `Code.gs ppLookup_` (UNCAPPED, hourly
 // with the reship refresh) and `PivotAnalytics.gs paPpFetch_` (200/run, daily) spent the same
@@ -293,11 +316,40 @@ function excNeverPolledDue_(st, openKeys) {
   }).length;
 }
 
+/**
+ * 🔴 THE PACER MUST COUNT SCHEDULED RUNS, NOT HOURS (F3, directive P11). This returned hours to
+ * Sunday-midnight, which was right only while the trigger was hourly. At 2 runs/day, dividing the
+ * remaining balance by ~168 instead of ~14 would hand out ~12 calls a run and leave ~1,600 of the
+ * 1,800 unspent every week — a NEW starvation, wearing the old one's clothes.
+ *
+ * 🔴 EXC_RUN_HOURS_ET IS THE SSOT AND THE TRIGGER MUST MATCH IT. Apps Script cannot list or create
+ * triggers over the REST API, so the schedule lives in Kurt's hands and this constant is the only
+ * thing the code can reason from. If they drift, `excOnScheduleET_` catches it and the run refuses
+ * to spend rather than silently over-drawing at 24 runs/day against a 14-run plan.
+ *
+ * 🔴 THESE HOURS ARE **ET** AND THE PROJECT TIMEZONE IS **America/Chicago** (appsscript.json), so
+ * the trigger Kurt sets is CENTRAL and lands one hour earlier on the clock: ET 9 == CT 8,
+ * ET 16 == CT 15. Both zones observe DST together, so the offset does not move across the year.
+ */
+var EXC_RUN_HOURS_ET = [9, 16];           // 09:00 and 16:00 ET == 08:00 and 15:00 CT triggers
+var EXC_RUN_HOUR_SLOP = 1;                // Apps Script fires within a ~1h window; tolerate drift
+
 function excRunsLeftThisWeek_() {
   var now = new Date();
   var dow = Number(Utilities.formatDate(now, EXC_TZ, 'u'));   // 1=Mon .. 7=Sun
   var hr = Number(Utilities.formatDate(now, EXC_TZ, 'H'));    // 0..23
-  return Math.max(1, (7 - dow) * 24 + (24 - hr));
+  var todayLeft = 0;
+  EXC_RUN_HOURS_ET.forEach(function (h) { if (h + EXC_RUN_HOUR_SLOP >= hr) todayLeft++; });
+  return Math.max(1, (7 - dow) * EXC_RUN_HOURS_ET.length + todayLeft);
+}
+
+/** Is this run one of the scheduled slots? A run that is not must never spend paced budget. */
+function excOnScheduleET_() {
+  var hr = Number(Utilities.formatDate(new Date(), EXC_TZ, 'H'));
+  for (var i = 0; i < EXC_RUN_HOURS_ET.length; i++) {
+    if (Math.abs(EXC_RUN_HOURS_ET[i] - hr) <= EXC_RUN_HOUR_SLOP) return true;
+  }
+  return false;
 }
 
 /**
@@ -399,8 +451,50 @@ function excBudgetLeftAccount_() {
  * The reservation still happens first (two concurrent runs must not both spend the same balance),
  * but `excBudgetSettle_` credits back everything ParcelPanel never actually served.
  */
+/**
+ * 🔴 NAME WHO TOOK THE BUDGET (F4, directive P11). The starvation alarm said "budget allowed 0 of
+ * 271 due" and stopped there — which is WHY 2026-08-20 took a reconstruction from `_exc_state`
+ * instead of a one-line read: the message proved the sweep got nothing but not that the reship
+ * report had taken the account quota. P5 already requires the ledger be LOGGED every run; an alarm
+ * that reaches a human must carry it too, and must say which leg is binding.
+ *
+ * Returns a one-line human string. Never throws — diagnostics must not take an alarm down.
+ */
+function excBudgetBindingLeg_(b) {
+  try {
+    b = b || excBudgetRead_();
+    var leftMine = Math.max(0, EXC_PP_WEEKLY_BUDGET - b.exc);
+    var leftAcct = Math.max(0, EXC_PP_ACCOUNT_QUOTA - b.total);
+    var leg = (leftAcct <= leftMine)
+      ? ('the ACCOUNT quota (' + b.total + '/' + EXC_PP_ACCOUNT_QUOTA + ' spent account-wide)')
+      : ("this sweep's OWN weekly budget (" + b.exc + '/' + EXC_PP_WEEKLY_BUDGET + ')');
+    var over = [];
+    if (b.rpt > EXC_PP_RPT_ALLOC) over.push('rpt ' + b.rpt + ' OVER its ' + EXC_PP_RPT_ALLOC +
+                                            '/wk allocation (Code.gs ppLookup_ — the reship report)');
+    if (b.pa > EXC_PP_PA_ALLOC) over.push('pa ' + b.pa + ' OVER its ' + EXC_PP_PA_ALLOC +
+                                          '/wk allocation (PivotAnalytics paPpFetch_)');
+    return 'ledger ' + b.wk + ' total ' + b.total + '/' + EXC_PP_ACCOUNT_QUOTA +
+           ' (exc ' + b.exc + ', rpt ' + b.rpt + ', pa ' + b.pa + '); binding leg is ' + leg +
+           (over.length ? '. 🔴 ' + over.join('; ') + '.' : '.') +
+           ' NOTE the ledger is a LOWER BOUND — sync_delivery_status.py cannot report into it.';
+  } catch (e) { return 'ledger unreadable (' + e + ')'; }
+}
+
 function excBudgetTake_(want) {
   var b = excBudgetRead_();
+  // 🔴 AN UNSCHEDULED RUN MUST NOT SPEND (F3). `excRunsLeftThisWeek_` divides the balance by the
+  // number of SCHEDULED slots left. A run outside those slots — a leftover hourly trigger that was
+  // never deleted, say — is not in that denominator, so letting it poll would over-draw by exactly
+  // the ratio of real runs to planned runs and drain the week early. Costing it nothing makes the
+  // trigger migration fail-SAFE, and the sweep says so out loud rather than quietly overspending.
+  if (!excOnScheduleET_()) {
+    Logger.log('  🔴 OFF-SCHEDULE RUN at ET hour ' +
+               Utilities.formatDate(new Date(), EXC_TZ, 'H') + ' — scheduled slots are ET ' +
+               EXC_RUN_HOURS_ET.join(', ') + ' (+/-' + EXC_RUN_HOUR_SLOP + 'h). Taking 0 PP calls: ' +
+               'this run is not in the pacing denominator. If this repeats, the trigger and ' +
+               'EXC_RUN_HOURS_ET have drifted — fix the trigger, do not widen the constant.');
+    return 0;
+  }
   var leftMine = Math.max(0, EXC_PP_WEEKLY_BUDGET - b.exc);
   var leftAcct = Math.max(0, EXC_PP_ACCOUNT_QUOTA - b.total);
   var left = Math.min(leftMine, leftAcct);
@@ -413,9 +507,8 @@ function excBudgetTake_(want) {
              leftMine + ', account ' + leftAcct + ')');
   if (take < want) {
     Logger.log('  🔴 PP BUDGET BIT: wanted ' + want + ', taking ' + take +
-               ' (exc ' + b.exc + '/' + EXC_PP_WEEKLY_BUDGET + ', account total ' + b.total + '/' +
-               EXC_PP_ACCOUNT_QUOTA + ', per-run cap ' + EXC_PP_MAX_PER_RUN +
-               '). Unpolled orders stay queued, NOT silently dropped.');
+               ' (per-run cap ' + EXC_PP_MAX_PER_RUN + '). ' + excBudgetBindingLeg_(b) +
+               ' Unpolled orders stay queued, NOT silently dropped.');
   }
   excBudgetCharge_(take, 'exc');
   return take;
@@ -1289,6 +1382,11 @@ function excCheckProperties() {
     '  week key now ' + excWeekKey_() + ' (Mon 00:00 ET - Sun 24:00 ET), runs left ' +
       excRunsLeftThisWeek_() + ', sweep budget ' + EXC_PP_WEEKLY_BUDGET +
       ' inside account quota ' + EXC_PP_ACCOUNT_QUOTA + ', account left ' + excBudgetLeftAccount_(),
+    '  ' + excBudgetBindingLeg_(),
+    '  schedule: ' + EXC_RUN_HOURS_ET.length + ' run(s)/day at ET ' + EXC_RUN_HOURS_ET.join(', ') +
+      ' (== CT ' + EXC_RUN_HOURS_ET.map(function (h) { return h - 1; }).join(', ') +
+      ' — the TRIGGER is set in the project timezone, America/Chicago). This run is ' +
+      (excOnScheduleET_() ? 'ON schedule.' : '🔴 OFF schedule and would take 0 PP calls.'),
     '  🔴 LOWER BOUND — ShipRouting sync_delivery_status.py and ad-hoc probes spend the same' +
       ' account quota and cannot report into this ledger.',
     '  thin Mon/Tue sweep today: ' + (EXC_THIN_DAY_CAP - excThinDayLeft_()) + '/' + EXC_THIN_DAY_CAP +
@@ -1410,6 +1508,9 @@ function hourlyExceptionSweep() {
       if (new Date().getTime() - lastAlarm > EXC_SILENT_ALARM_EVERY_MS) {
         props_.setProperty(EXC_SILENT_ALARM_PROP, String(new Date().getTime()));
         try {
+          // 🔴 F4/P11: the alarm carries the LEDGER and NAMES THE BINDING LEG. Without it, "budget
+          // allowed 0 of 271" proves the sweep got nothing but not WHO took the quota, and the
+          // 2026-08-20 diagnosis had to be reconstructed from `_exc_state` instead of read.
           excSlackOps_(':warning: exceptions sweep polled 0 boxes while ' + open.length +
             ' are still open in ' + excScopeTags_().join(' + ') + ' (' + neverP_ +
             ' never polled once, ' + neverDue_ + ' of them past the ' + EXC_POLL_MIN_AGE_DAYS +
@@ -1418,6 +1519,11 @@ function hourlyExceptionSweep() {
                       : 'The poll policy judged NOTHING due while boxes have never been polled ' +
                         '— that is a policy bug, not a quiet week') +
             ' (' + pollable.length + ' pollable after the free Shopify triage). ' +
+            (starved_ ? excBudgetBindingLeg_() + ' ' : '') +
+            (excOnScheduleET_() ? '' : '🔴 This run was OFF SCHEDULE (ET hour ' +
+              Utilities.formatDate(new Date(), EXC_TZ, 'H') + ' vs slots ET ' +
+              EXC_RUN_HOURS_ET.join(', ') + ') and deliberately took 0 — the trigger and ' +
+              'EXC_RUN_HOURS_ET have drifted. ') +
             'Nothing was checked, so this run is NOT an all-clear.');
         } catch (eA) { Logger.log('silent-starvation alarm failed to post: ' + eA); }
       }
