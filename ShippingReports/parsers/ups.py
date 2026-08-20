@@ -12,6 +12,14 @@ from typing import List
 from .common import Shipment, parse_date_flexible, identify_hub
 
 
+def _f(v):
+    """float or None — a blank or unparseable weight is ABSENT, never 0.0."""
+    try:
+        return float(str(v).strip()) if str(v or '').strip() else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _is_detailed_billing(filepath: str) -> bool:
     """Detect UPS Detailed Billing File (v2.1) — no header row, first field is '2.1'."""
     with open(filepath, 'r', encoding='latin-1') as fh:
@@ -146,6 +154,11 @@ def _parse_header_csv(filepath: str) -> List[Shipment]:
                 delivery_date=None,
                 invoice_id=invoice_id,
                 source_file=filepath,
+                # 🔴 -> billed_weight, NOT weight. This dialect's `Weight` is integer
+                # chargeable weight; `weight` already holds a billed-else-actual coalesce from the
+                # 250-col dialect, and blending the two would put different facts in one column
+                # per row, invisibly (Kurt caught this 2026-08-20).
+                billed_weight=_f(row.get('Weight')),
             ))
 
     return shipments

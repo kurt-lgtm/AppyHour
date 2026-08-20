@@ -24,7 +24,10 @@ class Shipment:
     invoice_id: str = ""       # invoice number for traceability
     source_file: str = ""      # original file path
     # Weight + dimensional fields (Optional — not all carriers/invoice formats expose them)
-    weight: Optional[float] = None         # billed/chargeable weight (lb) — primary for cost analysis
+    weight: Optional[float] = None         # 🔴 COALESCED: billed if >0 else actual. Two facts in
+                                           # one column — kept for back-compat, do NOT add to it.
+    billed_weight: Optional[float] = None  # the carrier's CHARGEABLE weight, verbatim, never
+                                           # coalesced. Thin UPS exports carry only this.
     actual_weight: Optional[float] = None  # scale weight if reported separately
     dim_l: Optional[float] = None          # outer length (in)
     dim_w: Optional[float] = None          # outer width (in)
