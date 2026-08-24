@@ -1597,6 +1597,63 @@ Still to verify on the live host:
   channel with `chat:write` + `groups:read` + `groups:history`. The Apps Script property has NOT
   been confirmed to be that same app.
 
+### P14 — A FAILURE COUNT IS NOT A DIAGNOSIS (2026-08-24)
+
+🔴 **NEVER report a ParcelPanel failure as a bare tally.** `excPpFetch_` counted every non-200 into
+`out.failed` and then threw the status code away, and the `catch (err)` around `UrlFetchApp.fetchAll`
+discarded the exception object without ever logging it. The two are indistinguishable downstream: a
+**returned** 401/403 and a **thrown** transport error ("Address unavailable", a urlfetch quota wall)
+increment the SAME counter, and neither leaves a trace.
+
+**The burn.** On 2026-08-24 the sweep posted five identical hourly alarms:
+
+> `exceptions sweep FAILED: ParcelPanel fetch failing: 400/400 hard failures (throttled: 0, dead
+> records excluded: 0) — results suppressed rather than reported as all-clear`
+
+Everything about that message is true and none of it is useful. `400/400` is not a status code — it
+is `EXC_PP_MAX_PER_RUN` attempted and all of them failed. From outside the runtime it was not
+possible to tell whether ParcelPanel refused the key, Cloudflare blocked Google's egress, or
+`fetchAll` never got a response at all. Diagnosis burned an incident and still could not name the
+cause, because **the evidence was destroyed at the point of failure**. Independent probes proved only
+what it was NOT: the API was up (HTTP 200 with full payloads for five of the sweep's own orders), the
+key in `.env` was valid, an unknown order returned a clean 404 (which classifies as `dead`, not
+`failed`), and Apps Script's exact User-Agent was not blocked.
+
+#### The rules
+
+1. **Every non-200 records its status code** into a histogram, and the FIRST one records a truncated
+   body sample. Both ride into the Slack alarm and the execution log (`excPpNote_` / `excPpDiag_`).
+2. **A thrown fetch is never swallowed.** `catch (err)` logs `err` and records it separately from
+   returned statuses (`out.threw` / `out.throwMsg`). "It threw" and "it answered 403" are different
+   incidents and must never share one number — the same principle P9 established for dead records
+   and P13 for throttling. This is the third time fusing two conditions into one counter has cost a
+   diagnosis; stop doing it.
+3. **🔴 A blanket wall is abandoned, not spent.** If the first two full batches produce nothing but
+   failures — no 200, no 404, no 429 — the run stops and reports the remainder as `abandoned`.
+   Pre-P14 it spent all 400 calls and four minutes proving the same point, every hour, against an API
+   refusing every request.
+   **This is NOT a ration and must never become one (directive P12).** It arms only at a 100% failure
+   rate, a single successful answer anywhere disarms it (`seen_any_ok`), and abandoned orders are
+   left UNSTAMPED — so they stay at the head of the longest-unpolled ordering and are the next run's
+   first work. If it ever fires on a run that had even one good answer, that is a bug.
+
+#### What is still open
+
+- **The 2026-08-24 root cause is NOT established.** The failures began abruptly at 04:25 ET on 08-24,
+  two days after the P12/P13 deploy and after ~2 days of the limiter working correctly (real pings
+  posted 08-21 06:57 through 08-22 22:21). A mechanical diff proves P12 changed neither the request
+  URL, the headers, `muteHttpExceptions`, the `fetchAll` shape, nor the non-200 classification. The
+  perfectly constant `400/400` across five consecutive hours points at a deterministic per-request
+  rejection rather than a quota or a race.
+- **First thing to check, and it needs no push:** the sheet menu → *Exceptions* → **Check properties**
+  prints whether `PARCELPANEL_API_KEY` is set and its character length WITHOUT printing the value.
+  The working key is a 36-character UUID. A different length means the Script Property and `.env`
+  have diverged, which reproduces this signature exactly — a wrong key returns
+  `401 {"errors":"[API] Invalid API key or access token"}`, which lands in `failed`, with
+  `throttled: 0` and `dead: 0`. Script Properties are not readable from outside the runtime, which is
+  why this check cannot be done for you.
+- P14 does not by itself restore the sweep. It guarantees the NEXT failure names its own cause.
+
 ## Known gaps (v1)
 
 - **Returned-to-origin reads as delivered.** Order 154810 (FedEx, dest AL) shows

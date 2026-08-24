@@ -843,6 +843,39 @@ function excPpHeader_(resp, name) {
   return '';
 }
 
+/**
+ * 🔴 RECORD WHAT ACTUALLY CAME BACK (directive P14). `failed` used to be a bare tally: a run could
+ * report "400/400 hard failures" while throwing away the one thing that says WHAT failed — the
+ * status code and the body. On 2026-08-24 that produced five identical hourly alarms that could not
+ * be told apart from an auth failure, a Cloudflare block, or a thrown transport error, because a
+ * thrown error and a returned 4xx increment the SAME counter and neither is ever printed.
+ * A count is not a diagnosis. Keep a code histogram and ONE short body sample; both go in the alarm.
+ */
+function excPpNote_(out, code, rp) {
+  out.codes[code] = (out.codes[code] || 0) + 1;
+  if (out.sample) return;                      // first one only — this rides into a Slack message
+  try {
+    var b = String(rp.getContentText() || '').replace(/\s+/g, ' ').slice(0, 200);
+    if (b) out.sample = 'HTTP ' + code + ' body: ' + b;
+  } catch (e) { out.sample = 'HTTP ' + code + ' (body unreadable: ' + e + ')'; }
+}
+
+/** Render the fetch outcome as a DIAGNOSIS, not a number. Safe on a zero-failure run. */
+function excPpDiag_(pp) {
+  var codes = Object.keys(pp.codes || {}).sort().map(function (c) {
+    return c + 'x' + pp.codes[c];
+  }).join(', ');
+  var bits = [];
+  if (codes) bits.push('response codes: ' + codes);
+  if (pp.threw) {
+    bits.push(pp.threw + ' request(s) THREW before any status was seen (transport, not HTTP) — ' +
+              'first: ' + String(pp.throwMsg || '(unrecorded)').slice(0, 200));
+  }
+  if (pp.sample) bits.push(pp.sample);
+  if (!bits.length) return ' (no per-response detail captured)';
+  return ' — ' + bits.join(' | ');
+}
+
 /** Sleep to the start of the next minute — the ParcelPanel bucket refills whole on that boundary. */
 function excPpBrakeSleep_(deadline) {
   var now = new Date().getTime();
@@ -859,7 +892,10 @@ function excPpFetch_(orderNums, deadline) {
   // 🔴 `served` is a HEALTH metric, never a balance (directive P3 as rewritten by P12): a request
   // ParcelPanel actually answered, whatever it answered. Nothing caps anything using it.
   var out = { ships: {}, failed: 0, throttled: 0, attempted: 0, served: 0, seen: {},
-              dead: {}, deferred: 0, ceilingHit: false, brakes: 0, remainingMin: null };
+              dead: {}, deferred: 0, ceilingHit: false, brakes: 0, remainingMin: null,
+              // P14 evidence: what came back, and whether it came back at all.
+              codes: {}, sample: '', threw: 0, throwMsg: '', abandoned: 0, blanket: false,
+              seen_any_ok: false };
   var key = PropertiesService.getScriptProperties().getProperty('PARCELPANEL_API_KEY');
   if (!key || !orderNums.length) return out;
   var uniq = orderNums.filter(function (n, i) { return n && orderNums.indexOf(n) === i; });
@@ -888,13 +924,18 @@ function excPpFetch_(orderNums, deadline) {
       // 404/410 = PP answered "I have no such order". A verdict about the RECORD, not a transport
       // fault (directive P9). Kept per-order so the caller can quarantine on repeats.
       if (code === 404 || code === 410) { out.dead[on] = code; return; }
-      if (code !== 200) { out.failed++; return; }
+      if (code !== 200) { out.failed++; excPpNote_(out, code, rp); return; }
       try {
         var o = JSON.parse(rp.getContentText());
         var ships = ((o.order || {}).shipments) || ((o.data || {}).shipments) || o.shipments || [];
         out.seen[on] = true;
+        out.seen_any_ok = true;      // P14: proof a real answer arrived; disarms the blanket abort
         if (ships.length) out.ships[on] = ships[0];
-      } catch (e) { out.failed++; }
+      } catch (e) {
+        // A 200 whose body will not parse is still a TRANSPORT failure — but say so.
+        out.failed++;
+        excPpNote_(out, 200, rp);
+      }
     });
     return retry;
   }
@@ -915,8 +956,14 @@ function excPpFetch_(orderNums, deadline) {
     } catch (err) {
       // fetchAll threw: the requests may well have left the building. Count them as failures —
       // an under-count of what we sent is how a broken run looks like a quiet one.
+      // 🔴 P14: NEVER swallow `err`. A thrown transport error ("Address unavailable", a urlfetch
+      // quota wall) and a returned 403 land on the SAME counter; the message is the only thing that
+      // separates them, and it used to be dropped on the floor here.
       out.failed += slice.length;
       out.served += slice.length;
+      out.threw += slice.length;
+      if (!out.throwMsg) out.throwMsg = String(err);
+      Logger.log('  🔴 PP fetchAll THREW on a batch of ' + slice.length + ': ' + err);
       retry = [];
     }
     // --- P13: retry the refused, with backoff, until the ladder or the ceiling runs out ---
@@ -930,6 +977,9 @@ function excPpFetch_(orderNums, deadline) {
       } catch (err2) {
         out.failed += retry.length;
         out.served += retry.length;
+        out.threw += retry.length;
+        if (!out.throwMsg) out.throwMsg = String(err2);
+        Logger.log('  🔴 PP retry fetchAll THREW on ' + retry.length + ': ' + err2);
         retry = [];
       }
     }
@@ -938,6 +988,25 @@ function excPpFetch_(orderNums, deadline) {
       out.throttled += retry.length;
       out.deferred += retry.length;
     }
+    // 🔴 P14: A BLANKET WALL IS NOT WORK. If the first two full batches produced nothing but
+    // failures — no 200, no 404, no 429 — the next 38 batches will do the same. Pre-P14 this run
+    // spent all 400 calls and four minutes proving it, hourly, against an API that was refusing
+    // every request. Stop, and report what is left as ABANDONED so it can never read as coverage.
+    // Deliberately NOT a ration (directive P12): it triggers only on a 100% failure rate, so a
+    // single good answer anywhere disarms it, and the untouched orders stay unstamped and first
+    // in the queue for the next run.
+    if (out.failed >= 2 * EXC_PP_BATCH && out.failed === out.served &&
+        !out.seen_any_ok && Object.keys(out.ships).length === 0 &&
+        Object.keys(out.dead).length === 0) {
+      out.blanket = true;
+      out.abandoned = uniq.length - (i + slice.length);
+      Logger.log('  🔴 BLANKET FAILURE: ' + out.failed + ' of ' + out.failed + ' requests failed ' +
+                 'with no successful answer at all' + excPpDiag_(out) + '. Abandoning the remaining ' +
+                 out.abandoned + ' rather than spending them against a wall. They are NOT dropped — ' +
+                 'unstamped, still first in the queue.');
+      break;
+    }
+
     // --- pace: brake on the header if the bucket is nearly gone, else hold the cycle ---
     if (out.remainingMin != null && out.remainingMin < EXC_PP_BRAKE_REMAINING) {
       if (excPpBrakeSleep_(deadline)) { out.brakes++; out.remainingMin = null; }
@@ -953,7 +1022,8 @@ function excPpFetch_(orderNums, deadline) {
              out.deferred + ' deferred to the next run' + (out.ceilingHit ? ' (6-MIN CEILING)' : '') +
              ', ' + out.brakes + ' brake(s), min x-ratelimit-remaining seen ' +
              (out.remainingMin == null ? 'n/a' : out.remainingMin) + ' of 120/min.' +
-             (out.deferred ? ' 🔴 Deferred orders are NOT dropped — unstamped, still first in queue.' : ''));
+             (out.deferred ? ' 🔴 Deferred orders are NOT dropped — unstamped, still first in queue.' : '') +
+             (out.failed ? excPpDiag_(out) : ''));
   return out;
 }
 
@@ -1534,9 +1604,13 @@ function hourlyExceptionSweep() {
       // mechanism that retires a permanent failure; discarding them on the way out is what made the
       // failure permanent in the first place. A suppressed run still has to record what it learned.
       try { excSaveState_(st); } catch (eS) { Logger.log('state save before suppression failed: ' + eS); }
+      // 🔴 P14: the alarm carries the EVIDENCE. "400/400 hard failures" with no status code and
+      // no body cost a full incident to diagnose from outside, and the answer was not in it.
       throw new Error('ParcelPanel fetch failing: ' + transportFails + '/' + transportDenom +
                       ' hard failures (throttled: ' + pp.throttled + ', dead records excluded: ' +
-                      deadUnknown.length + ')' +
+                      deadUnknown.length + ')' + excPpDiag_(pp) +
+                      (pp.blanket ? ' | BLANKET WALL: abandoned ' + pp.abandoned +
+                                    ' unspent rather than firing them at a refusing API' : '') +
                       ' — results suppressed rather than reported as all-clear');
     }
 
