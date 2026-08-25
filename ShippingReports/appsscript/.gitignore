@@ -1,0 +1,5 @@
+# `gas_swap.py get` writes a snapshot of the LIVE project here. It is a regenerable
+# copy of the .gs files sitting beside the real sources — never commit it, never edit it,
+# never treat it as source. (clasp already ignores it: `**/**` in .claspignore is not
+# undone by `!Code.gs`, which matches only the top-level path.)
+live/
