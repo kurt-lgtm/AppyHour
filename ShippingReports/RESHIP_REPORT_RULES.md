@@ -42,9 +42,34 @@ One tab per ship week (`_SHIP_<Monday>`), refreshed daily by a scheduled task; a
 🔴 **The report you actually touch is the PIVOT sheet `1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU`**
 (the old `1JgyYknIxJ3-…` "Reship Sheet" above is RETIRED — engine no longer writes it). Bound Apps
 Script project **"Running Reship"**, scriptId `15K0MrUssFqacWybQAToz6CeHTouRU4IeNY4-DzZ4NeE1rBCCNGpGjAjv`,
-hourly time-trigger on Kurt's account. Deploy = REST `updateContent` (or `clasp push -f`); source of
-truth = `ShippingReports/appsscript/Code.gs`. Local `scratchpad/rebuild_mix_triage.py` = the immediate
-manual mirror (reads `shipments.db` for carrier/transit); GAS is authoritative, the two stay in PARITY.
+hourly time-trigger on Kurt's account. Source of truth = `ShippingReports/appsscript/*.gs`.
+
+🔴 **Deploy = `appsscript/gas_swap.py` — NEVER `clasp push` (and never `clasp push -f`).** The REST
+`projects/{id}/content` PUT **replaces the whole file set**, so a push carrying a subset DELETES
+every file it omitted. `.claspignore` here is a two-file allow-list (`**/**`, then `!Code.gs`,
+`!appsscript.json`), so `clasp status` reports exactly `[appsscript.json, Code.gs]` as the push
+payload — on 2026-08-14 that push deleted `Exceptions.gs` and `PivotAnalytics.gs` from the live
+project. `gas_swap.py` is the gate: it GETs live, swaps in only the files you name, then after the
+PUT re-reads live and asserts the file SET is unchanged and every untouched file came back
+byte-identical. Adding a file the live project lacks is a CREATE and needs `--allow-create` by hand.
+
+```bash
+cd "C:\Users\Work\Claude Projects\AppyHour\ShippingReports\appsscript" && python gas_swap.py get
+```
+
+- `get` — read-only. Lists every live file with `live=`/`local=` sha + SAME/DIFF, and snapshots live
+  into `appsscript/live/` (gitignored + claspignored; regenerable, never source, never edit).
+- `diff <Name>` — read-only unified diff, live vs local, one file, no extension (`Notifications`).
+- `push <Name> [<Name2> ...]` — deploy those files; everything else preserved byte-for-byte.
+  `push <Name>=<path>` pins the bytes to an explicit file (restore from a snapshot, not from a
+  worktree that may hold uncommitted work). `--allow-create` is the ONLY way to add a file absent
+  from live.
+
+Creds: reads `~/.clasprc.json` and refreshes the token in place — never copy or commit that file.
+`gas_swap.py` lives beside `.clasp.json` and hardcodes the matching `SCRIPT_ID`/`SRC`; clasp ignores
+it (verified via `clasp status`), so its presence beside the `.gs` files cannot widen a push.
+
+Local `scratchpad/rebuild_mix_triage.py` = the immediate manual mirror (reads `shipments.db` for carrier/transit); GAS is authoritative, the two stay in PARITY.
 
 **Tabs (all self-maintaining):**
 - **Raw Data** — walk-forward append-only ledger (R17), the entered reships. Issue in col D (SHORT label).
@@ -254,6 +279,7 @@ Applies to **TnT2 · Lost in Transit · Routing Match · Reship**. In this order
 | `PA_ASSERT_NOTARRIVED_PARTITION` | lost + still-active == Not Arrived |
 | `PA_ASSERT_OBSERVATION_PARTITION` | the three observation rows sum to Not Arrived |
 | `PA_ASSERT_PENDING_SUBSET` | pending sits INSIDE still-moving, never beside it |
+| `PA_ASSERT_SECTION_SUM` | every `By X` block sums to the headline it breaks down (**D34** — runs on the sheet AFTER the write, never before) |
 
 ### 🔴 BLOCKER / precondition gate — do NOT wire until BOTH clear (verify each, don't assume)
 
@@ -1050,7 +1076,7 @@ in the change-log entry below.
 refresh (`PivotAnalytics.gs`) reading telemetry via Jdbc + Shopify for assigned tags/box/state;
 (c) add a **Reship Report** menu item + reuse the hourly trigger; (d) **verify against the local
 builder's numbers on a matured cohort** before trusting the headless path (identical figures, not
-"it ran"). Deploy = same REST `updateContent`/`clasp push` path as `Code.gs`.
+"it ran"). Deploy = the same gated `gas_swap.py push` path as `Code.gs` (see "Current shipped state"; never `clasp push`).
 
 ### D24 — `Notifications` tab: WHERE EACH ROW'S NUMBER COMES FROM (Kurt 2026-08-18)
 
@@ -2285,3 +2311,122 @@ the four deployed files: NONE). The tab is named **`Hold`**, not `_HOLD` — `_H
 **Open, NOT built (recommendation only).** A `Last refreshed (UTC)` row on the tab would make
 staleness visible to a human reading the sheet rather than only to the ops DM. It changes the row
 list, so it waits for Dan/Kurt.
+
+### D34 — THE `By-State` BLOCK SUMMED **186** AGAINST A HEADLINE OF **7**, AND NOTHING CAUGHT IT (2026-08-25)
+
+> `Lost in Transit` published `_SHIP_2026-08-17` with `Not Arrived` = **7** at the top of the tab and
+> a `By State` block underneath it summing **186** — `ME · Not Arrived` = **19** against **19** total
+> Maine boxes (the entire state), `NC` = 42, `LA` = 10, `MS` = 10, `DE` = 9. `By Hub` summed **88**
+> off a single cell (`RMFG choice (2+ hubs open)` = 79); `By Carrier` summed 10. `_SHIP_2026-08-10`
+> was corrupt the same way on **both** tabs. Five of the twelve published cohort columns were wrong,
+> for weeks, on the numbers Dan actually reads.
+
+**The failure, negatives first.**
+
+1. 🔴 **A COUNT ROW THAT FALLS TO ZERO IS NEVER WRITTEN, SO IT KEEPS ITS HIGH-WATER MARK FOREVER.**
+   `paValues_` built each `dim||{bucket} · {grain}` key by INCREMENTING over matching records, so a
+   bucket with **zero** matches this run emitted **no key at all**. `paWriteOwned_` is label-driven
+   and skips any label it has no key for — correct behaviour, and exactly why Dan's formula rows
+   survive — so the cell silently kept the number from the last run where the bucket was non-empty.
+   `Not Arrived` and `3+ Day` DECAY across the week (that is the entire point of the daily self-heal),
+   so every bucket that emptied froze at its peak and the blocks over-summed a little more each day.
+   The published number is a **stale high-water mark**, not a mis-computation: the run computed 0 and
+   had nowhere to put it.
+2. 🔴 **THE ONE BLOCK A READER SPOT-CHECKS IS THE ONE BLOCK THAT COULD NOT EXPRESS THE BUG.**
+   `By Box` was correct in **every** column, because its three buckets (Regular Box / Medium Tray /
+   Large Tray) are never empty. Hub, carrier and state have buckets that empty routinely — a state
+   with one box, a hub that closes (Indianapolis), a carrier that goes away (Veho), and above all
+   `RMFG choice (2+ hubs open)`, a **residual** bucket that DRAINS to ~0 during the week as routing
+   tags are corrected. That is why it survived every eyeball: the block people check is structurally
+   incapable of showing it.
+3. 🔴 **THE FIX WAS ALREADY IN THE FILE, ONE SCREEN AWAY, WITH THIS EXACT BUG NAMED IN ITS COMMENT.**
+   The per-hub TNT1 rows (D22b) are zero-filled, and the comment justifying it says *"a count row
+   that silently keeps LAST run's value is the stale-number bug"* and even notes that the sibling
+   dimension rows "emit only non-zero". The reasoning was correct, written down, and never applied
+   to the rows next to it. A guard written for one row does not cover the row beside it.
+4. 🔴 **NOT a partial-label / cross-section collision** — the first hypothesis, and it was ruled out
+   with evidence, not assumed. The section-scoped `dim||label` keys and `paColumnByKey_`'s
+   header-tracking are working: in `_SHIP_2026-08-17` the five *live* hubs sum to exactly the
+   headline (473+353+471+451+569 = 2,317 = `Arrived`) and the entire excess is one residual bucket
+   that should read 0. A collision would have moved the live buckets too.
+5. 🔴 **NO ASSERT HAD EVER LOOKED BELOW THE TOP BLOCK.** `PA_ASSERT_TOTAL_PARTITION`,
+   `PA_ASSERT_NOTARRIVED_PARTITION` and `PA_ASSERT_OBSERVATION_PARTITION` all partition the HEADLINE
+   block; `PA_ASSERT_TNT1_SUBSET` / `PA_ASSERT_PENDING_SUBSET` bound nested rows against their
+   parent. Roughly 120 of the ~150 numbers on each tab — every dimension cell — had no invariant on
+   them at all. Every headline assert passed on all five corrupt columns.
+
+**🔴 The rules.**
+
+1. **ZERO-FILL EVERY BUCKET IN THE COHORT'S UNIVERSE.** `paValues_` now emits an explicit `0` for
+   every `{bucket} · {grain}` where that bucket appears in **at least one** grain this run.
+2. **THE UNIVERSE IS THIS COHORT'S BUCKETS, NOT THE SHEET'S ROWS. Blank still ≠ zero.** A bucket with
+   no boxes at all in the cohort emits NOTHING and its cells stay **blank** — `0` asserts "shipped,
+   and none are in this grain", blank asserts "did not ship / did not exist". Never widen the
+   zero-fill to the sheet's row list: that would stamp `0` into Indianapolis (closed) and into states
+   nobody ordered from, which is the A5 / D19 error in the other direction.
+3. **`PA_ASSERT_SECTION_SUM` — every section block that partitions a headline must sum to it.**
+   Throws, named, from the refresh path.
+4. 🔴 **IT RUNS ON THE SHEET, AFTER THE WRITE — AND THAT ORDERING IS THE RULE, NOT AN ACCIDENT.**
+   - *Not on the computed value map*: the headline and the buckets come out of the same loop over the
+     same records with the same predicate, so a map-level version is **derivable from the code that
+     produced it** and is not an independent check — it cannot fail on this defect and did not.
+     The defect lives in the gap between what was computed and what the column ENDS UP HOLDING, and
+     only a read-back can see that gap.
+   - *Not before the write*: the corrupt column is repaired **by** the write, so a pre-write refusal
+     would freeze the damage and refuse every run forever. A fail-closed guard must not close the
+     door on its own fix. (Compare `PA_ASSERT_HEADERLESS_COLUMN`, which correctly refuses *before*
+     writing, because writing onto that damage makes it worse.)
+   - A **dry run** asserts the simulation — the current column overlaid with this run's values,
+     restricted to labels that exist as rows — so the refusal surfaces before anything is armed.
+5. **A computed bucket with NO ROW now REFUSES the column, where it used to be a `⚠️` log line.**
+   That is the Swedesboro gap (D19: `· Arrived = 570` computed and written nowhere for days) turned
+   into a hard stop, because a block missing a bucket does not partition its headline either. The
+   remedy is the human-invoked row tool (`addSwedesboroRows` / `paAddHub_`), and the refusal is loud
+   via the D20 wrapper. Cost of this choice, stated: a brand-new **state** has no equivalent tool, so
+   its first appearance will refuse the run until a row is added by hand.
+6. **`auditSectionSums()` REPORTS, it does not throw.** Read-only, every column on both tabs. The
+   refusal belongs on the write path; this is how a human inspects the frozen history the refresh is
+   not allowed to touch. It takes no arguments, so a time-driven trigger's event object cannot be
+   mistaken for one (the bug that killed `paRefreshCurrentColumn_` for two nights).
+
+**Proof it fires on the real thing, not on a fixture.** Run against the ACTUAL bytes read out of the
+live sheet (`paColumnByKey_` over the unformatted grid, every cohort column, both tabs):
+
+| Column | Lost in Transit | TnT2 |
+|---|---|---|
+| `_SHIP_2026-07-13` · `-07-20` · `-07-27` | ✅ pass | ✅ pass |
+| `_SHIP_2026-08-03` | 🔴 `state · Not Arrived` 38 vs 37 | ✅ pass |
+| `_SHIP_2026-08-10` | 🔴 hub 21 · carrier 23 · state 149, vs 16 | 🔴 hub 91 · carrier 98 · state 107, vs 89 |
+| `_SHIP_2026-08-17` | 🔴 hub 88 · carrier 10 · state 186, vs 7; `hub · Arrived` 2,318 vs 2,317 | 🔴 `hub · 2 Day` 2,265 vs 2,264 |
+
+Seven columns clean, five refused — and the five refused are exactly the five independently found to
+be corrupt. Replaying the OLD writer over a seeded column reproduces the defect shape (block sums 20
+against a headline of 1) and the assert fires; the NEW writer passes the same replay.
+
+**🔴 The already-written cells: ONE column self-heals, the rest are NOT re-derivable.**
+
+- **`_SHIP_2026-08-17` (col G) — re-derivable, by the ordinary refresh, no one-shot.** At age 8 it is
+  still script-owned (D15), so the first armed run after this change rewrites every dimension cell
+  with the zero-fill in place and the post-write assert confirms it. 🔴 **It freezes at age 10 =
+  2026-08-27.** Deployed and run before then, it repairs itself; after then it is frozen wrong like
+  the others. That deadline is the only time-critical part of this change.
+- **`_SHIP_2026-08-10` (col F, both tabs) and `_SHIP_2026-08-03` (col E, `Lost` state block) — NOT
+  re-derivable, per cell, and deliberately left alone.** The frozen headline is the reading taken
+  inside D32's measurement window; **the dimension split of that reading was never persisted
+  anywhere**. `_nt_sweep` holds Klaviyo sweep signatures and volumes, `_pp_cache` holds carrier and
+  transit days per order with no cohort or arrival snapshot, `_state` is the reship ledger — none of
+  them records which boxes were Not Arrived at the freeze. A recompute today measures a **later
+  world** (boxes Not Arrived at the freeze have since delivered), so it would restate the headline as
+  well as the split — the rebuild A1/D4 forbid, and the one Kurt already refused once for column D
+  when he took an even haircut instead. **No value is estimated and no correction one-shot is
+  built**: which specific cells the writer skipped is not recoverable, only that each block over-sums
+  (Lost F: hub +5, carrier +7, state +133; Lost E: state +1; TnT2 F: hub +2, carrier +9, state +18).
+  Restating them is a Kurt decision with no derivation behind it, so it is not offered.
+
+**Implementation:** `PivotAnalytics.gs` — zero-fill inside `paValues_`; new `paHeadlineLabel_`,
+`paSectionSums_`, `paAssertSectionSums_`, `auditSectionSums`. All four names are unique across the
+four deployed files (collision sweep: 417 top-level names, no duplicate; `node --check` clean per
+file and over the concatenation, `PivotSheet.gs` excluded as local-only). No new trigger-bindable
+function takes an argument. Grain resolution splits on the **last** ` · ` and compares the whole
+token — never `endsWith`, never a substring — because `Not Arrived` ends with `Arrived` and this file
+has burned four separate times on partial-label matching.

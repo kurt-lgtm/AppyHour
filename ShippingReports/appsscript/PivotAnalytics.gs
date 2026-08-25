@@ -607,6 +607,53 @@ function paValues_(recs, tab) {
       });
     });
   });
+  /**
+   * 🔴 D34 — ZERO-FILL EVERY BUCKET IN THIS COHORT'S UNIVERSE. Without this, the loop above emits a
+   * `dim||{bucket} · {grain}` key ONLY when at least one record lands in it, `paWriteOwned_` skips
+   * any label it has no key for, and the cell therefore KEEPS THE PREVIOUS RUN'S NUMBER FOREVER.
+   * A count that decays to zero across the week — which is what `Not Arrived` and `3+ Day` DO, that
+   * is the whole point of the daily self-heal — freezes at its HIGH-WATER MARK and is never reset.
+   *
+   * That is not hypothetical: on `_SHIP_2026-08-17` the `By State` block summed **186** against a
+   * headline `Not Arrived` of **7** (`ME · Not Arrived` = 19 against 19 Maine boxes total — the
+   * whole state, stuck at its day-0 value; `NC` 42, `LA`/`MS` 10, `DE` 9), `By Hub` summed 88
+   * (`RMFG choice (2+ hubs open)` = 79, a residual bucket that DRAINS to ~0 as tags are corrected
+   * during the week), and `By Carrier` 10. wk0810 was the same shape on both tabs. `By Box` never
+   * corrupted because its three buckets are never empty — which is exactly why the bug hid: the one
+   * block a reader spot-checks is the one block that cannot express it.
+   *
+   * The fix is the same one already applied to the per-hub TNT1 rows below, whose comment names this
+   * failure ("a count row that silently keeps LAST run's value is the stale-number bug") — it was
+   * simply never applied to the sibling dimension rows it was written next to.
+   *
+   * 🔴 THE UNIVERSE IS THIS COHORT'S BUCKETS, NOT THE SHEET'S ROWS. A bucket is zero-filled only if
+   * it appears in at least ONE grain this run, i.e. at least one box in this cohort landed in it.
+   * A bucket with no boxes at all (Indianapolis after it closed; a state nobody ordered from) emits
+   * NOTHING and its cells stay BLANK — never 0. Blank means "did not exist / shipped nothing"; 0
+   * means "shipped, and none of them are in this grain". Same rule as the TNT1 zero-fill (D22b) and
+   * as `paInsertHubRows_` leaving history blank (D19).
+   */
+  var uni = {};
+  Object.keys(m).forEach(function (key) {
+    var p = key.indexOf('||');
+    var dim = key.slice(0, p), lab = key.slice(p + 2);
+    if (PA_DIMS.indexOf(dim) < 0) return;
+    // split on the LAST ' · ' — never a substring/endsWith test. `Not Arrived` ends with `Arrived`,
+    // and this file has burned four separate times on partial-label matching.
+    var i = lab.lastIndexOf(' · ');
+    if (i < 0) return;
+    var bucket = lab.slice(0, i), grain = lab.slice(i + 3);
+    if (!Object.prototype.hasOwnProperty.call(PRED, grain)) return;   // nested rows are not grains
+    (uni[dim] = uni[dim] || {})[bucket] = 1;
+  });
+  Object.keys(uni).forEach(function (dim) {
+    Object.keys(uni[dim]).forEach(function (bucket) {
+      Object.keys(PRED).forEach(function (grain) {
+        var kk = paKey_(dim, bucket + ' · ' + grain);
+        if (!Object.prototype.hasOwnProperty.call(m, kk)) m[kk] = 0;
+      });
+    });
+  });
   // 🔴 THREE-ROW MODEL (D16, Kurt 2026-08-07: "fine we go with tnt3, tnt4+, still in transit").
   // Both nested rows sit INSIDE `3+ Day Shipments` and neither may be summed into any total. They
   // PARTITION Not Arrived, which is why churn between them is legitimate: a box going dark is a
@@ -724,6 +771,133 @@ function paColumnByKey_(sheet, col) {
     out[paKey_(dim, lab)] = grid[i][col - 1];
   }
   return out;
+}
+
+/** Headline row label for a grain. `paGrains_` yields the ROW-SUFFIX form (`2 Day`); the top block
+ *  spells the same grain `2 Day Shipments` on TnT2 and unchanged on Lost in Transit — exactly the
+ *  two spellings `paValues_` emits. Kept in one place so the assert can never drift from the writer. */
+function paHeadlineLabel_(tabName, grain) {
+  return (tabName === PA_TABS.tnt2) ? (grain + ' Shipments') : grain;
+}
+
+/**
+ * Sum each `By X` block per grain, from a `dim||label` map — the shape BOTH `paValues_` (computed)
+ * and `paColumnByKey_` (what the sheet actually holds) already produce.
+ *
+ * 🔴 FULL-LABEL, DIMENSION-SCOPED, and the grain is taken from the LAST ` · ` — never `endsWith`,
+ * never a substring. `Not Arrived` ends with `Arrived`; `Unknown` exists in two blocks; `Anaheim ·
+ * TNT1` sits between two grain rows. Four separate bugs in this file came from a lookup matching a
+ * partial label or straying into a neighbouring block, and every one was fixed the same way.
+ * Nested rows (`· TNT1`, the observations) refine their parent and are summed into NOTHING — they
+ * are excluded twice over: by `paIsNested_`, and by their grain not being in `paGrains_`.
+ * Only NUMBERS are summed. A blank cell is "no such bucket in this cohort", not a zero (A5/D19).
+ */
+function paSectionSums_(byKey, tabName) {
+  var grains = paGrains_(tabName), out = {};
+  Object.keys(byKey).forEach(function (key) {
+    var p = key.indexOf('||');
+    var dim = key.slice(0, p), lab = key.slice(p + 2);
+    if (PA_DIMS.indexOf(dim) < 0) return;                  // '' == the headline block
+    if (paIsNested_(lab)) return;
+    var i = lab.lastIndexOf(' · ');
+    if (i < 0) return;
+    var bucket = lab.slice(0, i), grain = lab.slice(i + 3);
+    if (grains.indexOf(grain) < 0) return;
+    var v = byKey[key];
+    if (typeof v !== 'number') return;
+    var g = (out[dim] = out[dim] || {});
+    var s = (g[grain] = g[grain] || { sum: 0, cells: 0, top: [] });
+    s.sum += v; s.cells++;
+    s.top.push({ bucket: bucket, v: v });
+  });
+  return out;
+}
+
+/**
+ * 🔴 PA_ASSERT_SECTION_SUM — EVERY SECTION BLOCK THAT PARTITIONS A HEADLINE MUST SUM TO IT.
+ *
+ * THE FAILURE THIS EXISTS FOR (D34, found 2026-08-25): `Lost in Transit` `_SHIP_2026-08-17` published
+ * a headline `Not Arrived` of **7** above a `By State` block summing **186**, a `By Hub` block
+ * summing **88** and a `By Carrier` block summing **10**. `_SHIP_2026-08-10` was corrupt the same way
+ * on both tabs. Nothing caught it, for weeks, because no assert had ever looked at a section block
+ * against its own headline: `PA_ASSERT_TOTAL_PARTITION`, `PA_ASSERT_NOTARRIVED_PARTITION` and
+ * `PA_ASSERT_OBSERVATION_PARTITION` all partition the TOP block only, and the subset asserts
+ * (`PA_ASSERT_TNT1_SUBSET`, `PA_ASSERT_PENDING_SUBSET`) bound nested rows. The dimension blocks —
+ * ~120 of the ~150 numbers on each tab, and the ones Dan actually reads — were unguarded.
+ *
+ * 🔴 IT RUNS ON THE SHEET, AFTER THE WRITE — NOT ON THE COMPUTED MAP, AND NOT BEFORE.
+ *   - On the computed map it could not fail: the headline and the buckets come out of the same loop
+ *     over the same records with the same predicate, so the map version is DERIVABLE from the code
+ *     that produced it and is not an independent check. The defect lives in the gap between what was
+ *     computed and what the column ENDS UP HOLDING — a skipped cell, a bucket with no row, a hand
+ *     edit — and only a read-back can see that gap.
+ *   - Before the write it would be actively harmful: the corrupt column is repaired BY the write, so
+ *     a pre-write refusal would freeze the damage in place and refuse every run forever. Fail-closed
+ *     must not close the door on its own fix.
+ *
+ * A dry run asserts the SIMULATION — the current column overlaid with this run's values, restricted
+ * to labels that actually exist as rows — so the refusal surfaces before anything is armed.
+ *
+ * A block with no numeric cells at all is SKIPPED (a freshly appended column, a dimension not on the
+ * tab). A non-numeric headline (blank, `n/a (immature)`) is skipped for the same reason.
+ */
+function paAssertSectionSums_(byKey, tabName, where) {
+  var sums = paSectionSums_(byKey, tabName), bad = [];
+  paGrains_(tabName).forEach(function (grain) {
+    var head = byKey[paKey_('', paHeadlineLabel_(tabName, grain))];
+    if (typeof head !== 'number') return;
+    PA_DIMS.forEach(function (dim) {
+      var s = sums[dim] && sums[dim][grain];
+      if (!s || !s.cells) return;                          // block not present in this column
+      if (s.sum === head) return;
+      s.top.sort(function (a, b) { return b.v - a.v; });
+      var worst = s.top.slice(0, 5).map(function (t) { return t.bucket + '=' + t.v; }).join(', ');
+      bad.push(dim + ' · ' + grain + ': block sums ' + s.sum + ' over ' + s.cells +
+               ' bucket(s) but the headline "' + paHeadlineLabel_(tabName, grain) + '" is ' + head +
+               ' (largest: ' + worst + ')');
+    });
+  });
+  if (bad.length) {
+    throw new Error('PA_ASSERT_SECTION_SUM: ' + tabName + ' — ' + where + ' — ' + bad.length +
+                    ' section block(s) do not partition their headline: ' + bad.join(' | ') +
+                    '. Every box is counted in exactly ONE bucket of every dimension, so each ' +
+                    '`By X` block must sum to the headline it breaks down. A block that over-sums ' +
+                    'is holding cells the writer did not refresh (a bucket that fell to zero keeps ' +
+                    'its previous value unless it is zero-filled); a block that under-sums is ' +
+                    'missing a row for a bucket that was computed. Refusing to publish it.');
+  }
+}
+
+/**
+ * Menu/editor entry: report section-sum health for EVERY column on both tabs. Read-only, and it
+ * REPORTS rather than throws — the refresh path is where the refusal belongs; this is how a human
+ * sees the frozen history the refresh is not allowed to touch. Takes no arguments, so a time-driven
+ * trigger's event object cannot be mistaken for one.
+ */
+function auditSectionSums() {
+  var ss = SpreadsheetApp.openById(PIVOT_SHEET_ID), bad = 0, checked = 0;
+  [PA_TABS.tnt2, PA_TABS.lost].forEach(function (name) {
+    var sh = ss.getSheetByName(name);
+    if (!sh) { paLog_('⚠️ missing tab ' + name); return; }
+    var lastCol = Math.max(1, sh.getLastColumn());
+    var headers = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+    for (var c = 2; c <= lastCol; c++) {
+      var hdr = String(headers[c - 1]).trim();
+      if (!/^_SHIP_\d{4}-\d{2}-\d{2}$/.test(hdr)) continue;
+      checked++;
+      try {
+        paAssertSectionSums_(paColumnByKey_(sh, c), name, hdr);
+        paLog_('  ✅ ' + name + ' ' + hdr);
+      } catch (e) {
+        bad++;
+        paLog_('  🔴 ' + String(e && e.message ? e.message : e));
+      }
+    }
+  });
+  paLog_(bad ? ('🔴 ' + bad + ' of ' + checked + ' cohort column(s) have a section block that does ' +
+                'not partition its headline')
+             : ('✅ all ' + checked + ' cohort column(s) partition cleanly'));
+  return { columns: checked, bad: bad };
 }
 
 /**
@@ -1040,8 +1214,25 @@ function paRefreshOne_(shipWeek, dry, budget, allowAppend) {
     var col = paCurrentCol_(sh, shipWeek, allowAppend);
     if (!col) { paLog_('  ⚠️ ' + name + ': no column for ' + shipWeek + ' — skipped (never appended left)'); return; }
     paLog_('  ' + name + ' col ' + col);
-    paWriteOwned_(sh, col, paValues_(recs, name), dry);
-    if (!dry) { SpreadsheetApp.flush(); paAssertColumns_(sh); }   // post-write: still exactly one, still headed
+    var vals = paValues_(recs, name);
+    paWriteOwned_(sh, col, vals, dry);
+    if (!dry) {
+      SpreadsheetApp.flush();
+      paAssertColumns_(sh);                             // post-write: still exactly one, still headed
+      // 🔴 D34 — read the column BACK and check every `By X` block against its own headline. This is
+      // deliberately the LAST thing that happens: the assert must see what a reader will see, and it
+      // must not be able to refuse the write that repairs the very damage it is looking for.
+      paAssertSectionSums_(paColumnByKey_(sh, col), name, 'col ' + col + ' after write');
+    } else {
+      // Dry run: assert the SIMULATION — the column as it stands, overlaid with the values this run
+      // would write, restricted to labels that exist as rows (a computed bucket with no row is
+      // written NOWHERE, and that under-sum is exactly what the assert must still see).
+      var sim = paColumnByKey_(sh, col);
+      Object.keys(vals).forEach(function (k) {
+        if (Object.prototype.hasOwnProperty.call(sim, k)) sim[k] = vals[k];
+      });
+      paAssertSectionSums_(sim, name, 'col ' + col + ' dry-run simulation');
+    }
   });
   var rm = ss.getSheetByName(PA_TABS.routing);
   if (rm) {
