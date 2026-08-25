@@ -57,6 +57,9 @@ function onOpen() {
     .addItem('Preview Triage decisions (writes NOTHING)', 'menuPreviewTriageDecisions')
     .addItem('Refresh Daily counts only', 'menuRefreshDaily')
     .addSeparator()
+    .addItem('Refresh Hold tab', 'menuRefreshHold')
+    .addItem('Preview Hold tab (writes NOTHING)', 'menuPreviewHold')
+    .addSeparator()
     .addItem('Backfill Gorgias + enrich reships', 'menuBackfillGorgias')
     .addToUi();
   // 🔴 Running Reship Report is KING (Kurt 2026-08-06): this file owns the reserved
@@ -194,6 +197,11 @@ function build_() {
   try { writeTriage_(state, oldest, stamp); writeProductMixT_(); }
   catch (e) { Logger.log('triage failed (non-fatal): ' + e); }
   writeDaily_(state, stamp);
+  // Hold tab (D33) — the migration backlog. NON-FATAL, like the Triage call above: a hold-tag
+  // sweep failing must never cost the reship report. Cheap by construction — once today's column
+  // is stamped every later invocation returns after ONE Sheets read and zero Shopify calls.
+  try { holdRefresh_(); }
+  catch (e) { Logger.log('hold tab failed (non-fatal): ' + e); }
 }
 
 function orderNum_(key) { var n = parseInt(String(key).replace(/[^0-9]/g, ''), 10); return isNaN(n) ? 0 : n; }
@@ -1716,4 +1724,675 @@ function writeTabTo_(sheetId, name, rows, userEntered) {
                       ' has no row-1 header after write.');
     }
   }
+}
+
+// =====================================================================================
+// Hold tab (D33) — the `_HOLD` -> `_CSHOLD` / `_FLOWHOLD` / `_UNRESOLVED` migration backlog.
+//
+// 🔴 WHY THIS EXISTS: the `Hold` tab was rebuilt and hand-filled ONCE, on 2026-08-20 (column J),
+// by a local one-shot. It had NO writer in this project — a grep for the hold tags over the five
+// .gs files returned only the Reship tab's "Unresolved" COUNTIFS — so columns K..N (08-21..08-24)
+// went blank and nobody was told. Dead-cadence class: a writer with no scheduled owner is not
+// shipped. This is that owner. Constraints SSOT: RESHIP_REPORT_RULES.md D33.
+//
+// 🔴 WRITE-ONCE PER DATE. A cell that already holds something is NEVER overwritten — not by a
+// re-run, not by a backfill. A hold snapshot is unreconstructible (Shopify order tags carry no
+// application timestamp and the Orders API exposes no tag history), so a clobbered column is gone
+// for good. Same rule as `Routing Match` (D23) and the never-overwrite-a-dated-output rule.
+//
+// 🔴 BLANK != ZERO. Snapshot rows go into TODAY's column only; 08-12..08-19 stay blank forever
+// rather than carry a fabricated back-cast. The four HOLDS-OPENED rows key on order `createdAt`,
+// which IS historical, so they are backfilled across every past date column — and a 0 there is a
+// real observation, not a gap.
+//
+// 🔴 SHOPIFY TAG COUNTS ONLY — ZERO ParcelPanel calls. PP has no weekly budget to spend here and
+// is in a failure state; nothing on this tab needs a tracking event.
+// =====================================================================================
+
+var HOLD_TAB = 'Hold';
+// 🔴 NOT Session.getScriptTimeZone(): this project's manifest timeZone is America/Chicago, so the
+// script clock is CENTRAL. The tab's date columns are Eastern. Passing HOLD_TZ explicitly is the
+// difference between stamping the right column and stamping tomorrow's at 23:30 CT.
+var HOLD_TZ = 'America/New_York';
+var HOLD_TAGS = ['_HOLD', '_CSHOLD', '_FLOWHOLD', '_UNRESOLVED'];
+var HOLD_ACTIVE_TAGS = ['_HOLD', '_CSHOLD', '_FLOWHOLD'];   // _UNRESOLVED is TERMINAL, not active
+var HOLD_REASON_TAGS = ['_DUP_SFO_10MINS', '_DUP_SRO_1DAY', '_POBOX'];
+var HOLD_CUTOVER = '2026-08-15';        // Dan states the new taxonomy in the group DM
+var HOLD_PAGE = 250;
+var HOLD_MAX_SWEEP = 6000;              // a sweep this big means the query broke — refuse, don't truncate
+var HOLD_GAP_ALERT_DAYS = 2;            // columns missed before the job tells on itself
+var HOLD_PROP_LAST_RUN = 'HOLD_LAST_RUN_AT';
+var HOLD_PROP_GAP_ALERTED = 'HOLD_GAP_ALERTED_ON';
+var HOLD_PROP_ALLOW_ALL_ZERO = 'HOLD_ALLOW_ALL_ZERO';
+
+// (kind, label). Rows are resolved by LABEL against column A — NEVER by index. The label strings
+// are byte-copies of the live tab (generated, not transcribed); three of them are deliberately
+// INDENTED and those leading spaces are part of the key.
+var HOLD_ROWS = [
+  ['SNAP', "Orders on _HOLD  (LEGACY - migration backlog, target 0)"],
+  ['SNAP', "Orders on _CSHOLD"],
+  ['SNAP', "Orders on _FLOWHOLD"],
+  ['SNAP', "Orders on _UNRESOLVED  (terminal, not an active hold)"],
+  ['SNAP', "Total on active hold  (_HOLD + _CSHOLD + _FLOWHOLD, union)"],
+  ['SNAP', "Legacy share of active holds"],
+  ['SNAP', "_HOLD unfulfilled  (actionable backlog)"],
+  ['SNAP', "_HOLD fulfilled  (shipped, tag never cleared - noise)"],
+  ['SNAP', "_HOLD other fulfillment status"],
+  ['SNAP', "_HOLD created on/after 2026-08-15  (new holds still on the legacy tag)"],
+  ['SNAP', "_HOLD also carrying _UNRESOLVED  (double-tagged, should be 0)"],
+  ['SNAP', "Customers with 1 Orders on _HOLD"],
+  ['SNAP', "Customers with 2 Orders on _HOLD"],
+  ['SNAP', "Customers with 2+ Orders on _HOLD"],
+  ['DAILY', "Orders moved to _HOLD status  (proxy: created that date, hold tag present now)"],
+  ['DAILY', "   By Flow  (_FLOWHOLD)"],
+  ['DAILY', "   By Customer Support  (_CSHOLD)"],
+  ['DAILY', "   Legacy _HOLD, origin not recorded"],
+  ['SNAP', "_DUP_SFO_10MINS  (marker, sits on BOTH of the pair)"],
+  ['SNAP', "_DUP_SRO_1DAY  (marker, sits on BOTH of the pair)"],
+  ['SNAP', "_POBOX"],
+  ['SNAP', "_FLOWHOLD with no reason tag  (should be 0)"],
+  ['SNAP', "$ held on _HOLD  (unfulfilled)"],
+  ['SNAP', "$ held on _CSHOLD + _FLOWHOLD  (unfulfilled)"],
+  ['SNAP', "$ held on _UNRESOLVED  (unfulfilled)"],
+  ['SNAP', "Active holds unfulfilled  (aging denominator)"],
+  ['SNAP', "Aged 0-7 days (since order created)"],
+  ['SNAP', "Aged 8-30 days"],
+  ['SNAP', "Aged 31+ days"],
+  ['SNAP', "Oldest unfulfilled hold (order)"],
+  ['SNAP', "Oldest unfulfilled hold (days)"],
+  ['SNAP', "Unfulfilled active holds carrying a _SHIP_ cohort tag"],
+  ['SNAP', "Unfulfilled _UNRESOLVED carrying a _SHIP_ cohort tag"],
+  ['SNAP', "List of Order IDs - held in a live cohort"],
+  ['SNAP', "List of Order IDs - _UNRESOLVED in a live cohort"],
+  ['SNAP', "List of Order IDs HELD  (_HOLD, unfulfilled)"],
+  ['SNAP', "List of Order IDs - _HOLD fulfilled (clear the tag)"],
+  ['SNAP', "List of Order IDs - _CSHOLD"],
+  ['SNAP', "List of Order IDs - _FLOWHOLD"],
+  ['SNAP', "List of Order IDs - _UNRESOLVED (unfulfilled)"],
+];
+
+// ---------- dates ----------
+
+/** Today in ET, or an explicit yyyy-MM-dd. Anything else (an event object) means "today". */
+function holdTodayIso_(dateIso) {
+  if (typeof dateIso === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateIso)) return dateIso;
+  return Utilities.formatDate(new Date(), HOLD_TZ, 'yyyy-MM-dd');
+}
+
+/**
+ * A row-1 header cell -> yyyy-MM-dd. Handles both a text header and a real date cell.
+ * Duck-typed rather than `instanceof Date`: a Date handed across a realm boundary fails
+ * instanceof, and a header silently reading as '' would send the writer off to append a
+ * duplicate column.
+ */
+function holdIsDate_(v) { return !!v && typeof v.getFullYear === 'function'; }
+function holdIsoOf_(v) {
+  if (holdIsDate_(v)) return Utilities.formatDate(v, HOLD_TZ, 'yyyy-MM-dd');
+  var m = String(v === null || v === undefined ? '' : v).trim().match(/^\d{4}-\d{2}-\d{2}/);
+  return m ? m[0] : '';
+}
+
+/** Days since epoch for a yyyy-MM-dd, anchored at UTC so no DST hour can shift a day count. */
+function holdDayNum_(iso) {
+  var p = String(iso).split('-');
+  return Math.floor(Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2])) / 86400000);
+}
+
+// ---------- fetch ----------
+
+/**
+ * Every uncancelled order carrying `tag`, with only the fields the metrics need.
+ * Nodes whose `tags` array does not actually contain the tag are DROPPED — Shopify's `tag:` search
+ * is exact here (measured 2026-08-25: raw == exact on all seven tags), and the filter keeps it that
+ * way if the search ever loosens.
+ */
+function holdSweep_(tag) {
+  var q = 'tag:"' + tag + '" AND -status:cancelled';
+  var out = [], cursor = null, raw = 0;
+  var gq = 'query($q:String!,$c:String){orders(first:' + HOLD_PAGE + ',query:$q,after:$c){' +
+           ' pageInfo{hasNextPage endCursor}' +
+           ' nodes{name createdAt displayFulfillmentStatus tags customer{id}' +
+           ' totalPriceSet{shopMoney{amount}}}}}';
+  while (true) {
+    var d = shopifyGql_(gq, { q: q, c: cursor }).orders;
+    for (var i = 0; i < d.nodes.length; i++) {
+      var n = d.nodes[i];
+      raw++;
+      var tags = n.tags || [];
+      if (tags.indexOf(tag) < 0) continue;
+      out.push({
+        name: n.name,
+        created: String(n.createdAt).slice(0, 10),   // UTC calendar date — see D33 "date basis"
+        ff: n.displayFulfillmentStatus,
+        tags: tags,
+        cust: (n.customer && n.customer.id) || null,
+        amt: parseFloat(n.totalPriceSet.shopMoney.amount),
+      });
+    }
+    if (raw > HOLD_MAX_SWEEP) {
+      throw new Error('HOLD_ASSERT_SWEEP: >' + HOLD_MAX_SWEEP + ' rows for ' + q +
+                      ' — refusing a partial sweep.');
+    }
+    if (!d.pageInfo.hasNextPage) break;
+    cursor = d.pageInfo.endCursor;
+  }
+  if (raw !== out.length) Logger.log('  Hold NOTE ' + tag + ': sweep ' + raw + ', exact-tag ' + out.length);
+  return out;
+}
+
+/**
+ * The four hold tags are PAGED (their per-order fields drive nearly every row). The three
+ * _FLOWHOLD reason tags feed count rows only, so they use `ordersCount` — one cheap query instead
+ * of a 250-node page. Equivalence measured live 2026-08-25: ordersCount == exact-tag sweep length
+ * on all seven tags (4/2/1 for the reason tags).
+ */
+function holdFetch_() {
+  var pop = { tags: {}, counts: {} }, i;
+  for (i = 0; i < HOLD_TAGS.length; i++) pop.tags[HOLD_TAGS[i]] = holdSweep_(HOLD_TAGS[i]);
+  for (i = 0; i < HOLD_REASON_TAGS.length; i++) {
+    pop.counts[HOLD_REASON_TAGS[i]] =
+      ordersCount_('tag:"' + HOLD_REASON_TAGS[i] + '" AND -status:cancelled');
+  }
+  return pop;
+}
+
+// ---------- metric helpers ----------
+
+function holdUnf_(rows) {
+  return rows.filter(function (r) { return r.ff === 'UNFULFILLED'; });
+}
+function holdFul_(rows) {
+  return rows.filter(function (r) { return r.ff === 'FULFILLED'; });
+}
+/** Sum in integer CENTS. Float addition of 200+ order totals is order-dependent at the 1e-10; the
+ *  cell is a currency value and must not depend on which page an order arrived on. */
+function holdMoney_(rows) {
+  var cents = 0;
+  for (var i = 0; i < rows.length; i++) cents += Math.round(rows[i].amt * 100);
+  return '$' + (cents / 100).toFixed(2);
+}
+/** Stable sort by created date — V8's sort is stable, so same-date orders keep sweep order. */
+function holdByCreated_(rows) {
+  return rows.slice().sort(function (a, b) {
+    return a.created < b.created ? -1 : (a.created > b.created ? 1 : 0);
+  });
+}
+/** 🔴 "(none)", never "" — an empty cell reads as NOT MEASURED. Zero orders is a measurement. */
+function holdIds_(rows) {
+  if (!rows.length) return '(none)';
+  return holdByCreated_(rows).map(function (r) { return r.name; }).join(', ');
+}
+function holdShipTags_(r) {
+  return r.tags.filter(function (t) { return t.indexOf('_SHIP_') === 0; });
+}
+function holdCohortIds_(rows) {
+  if (!rows.length) return '(none)';
+  return holdByCreated_(rows).map(function (r) {
+    return r.name + ' [' + holdShipTags_(r).join(',') + ']';
+  }).join(', ');
+}
+function holdOrdNum_(name) {
+  var d = String(name).replace(/[^0-9]/g, '');
+  return d ? parseInt(d, 10) : 0;
+}
+
+/**
+ * Every value the tab reports, from a fetched population. PURE — no sheet, no network — so the
+ * port can be differentially tested against the Python reference on a frozen capture.
+ */
+function holdMetrics_(pop, todayIso) {
+  var T = pop.tags, i, r;
+  var H = T['_HOLD'], CS = T['_CSHOLD'], FH = T['_FLOWHOLD'], UN = T['_UNRESOLVED'];
+
+  var byName = {};
+  for (i = 0; i < HOLD_TAGS.length; i++) {
+    T[HOLD_TAGS[i]].forEach(function (x) { byName[x.name] = x; });
+  }
+
+  // 🔴 Union in a FIXED order (_HOLD, _CSHOLD, _FLOWHOLD; first-seen wins). The Python one-shot
+  // iterated a set here, so `Oldest unfulfilled hold` and the cohort ID list could differ between
+  // two runs over identical data. Deterministic by construction.
+  var activeRows = [], seen = {};
+  for (i = 0; i < HOLD_ACTIVE_TAGS.length; i++) {
+    T[HOLD_ACTIVE_TAGS[i]].forEach(function (x) {
+      if (seen[x.name]) return;
+      seen[x.name] = true;
+      activeRows.push(byName[x.name]);
+    });
+  }
+  var activeUnf = holdUnf_(activeRows);
+
+  var custN = {};
+  H.forEach(function (x) { if (x.cust) custN[x.cust] = (custN[x.cust] || 0) + 1; });
+  function custWith(pred) {
+    var n = 0;
+    for (var k in custN) if (custN.hasOwnProperty(k) && pred(custN[k])) n++;
+    return n;
+  }
+
+  function age(x) { return holdDayNum_(todayIso) - holdDayNum_(x.created); }
+
+  var shipHeld = activeUnf.filter(function (x) { return holdShipTags_(x).length > 0; });
+  var flowNoReason = FH.filter(function (x) {
+    for (var j = 0; j < HOLD_REASON_TAGS.length; j++) {
+      if (x.tags.indexOf(HOLD_REASON_TAGS[j]) >= 0) return false;
+    }
+    return true;
+  });
+
+  // _CSHOLD + _FLOWHOLD as a set of ORDERS (an order can carry both; it must not be counted twice)
+  var csFh = [], csFhSeen = {};
+  CS.concat(FH).forEach(function (x) {
+    if (csFhSeen[x.name]) return;
+    csFhSeen[x.name] = true;
+    csFh.push(byName[x.name]);
+  });
+
+  var V = {};
+  V["Orders on _HOLD  (LEGACY - migration backlog, target 0)"] = H.length;
+  V["Orders on _CSHOLD"] = CS.length;
+  V["Orders on _FLOWHOLD"] = FH.length;
+  V["Orders on _UNRESOLVED  (terminal, not an active hold)"] = UN.length;
+  V["Total on active hold  (_HOLD + _CSHOLD + _FLOWHOLD, union)"] = activeRows.length;
+  V["Legacy share of active holds"] = activeRows.length
+    ? (100 * H.length / activeRows.length).toFixed(2) + '%' : '0.00%';
+
+  V["_HOLD unfulfilled  (actionable backlog)"] = holdUnf_(H).length;
+  V["_HOLD fulfilled  (shipped, tag never cleared - noise)"] = holdFul_(H).length;
+  V["_HOLD other fulfillment status"] = H.length - holdUnf_(H).length - holdFul_(H).length;
+  V["_HOLD created on/after 2026-08-15  (new holds still on the legacy tag)"] =
+    H.filter(function (x) { return x.created >= HOLD_CUTOVER; }).length;
+  V["_HOLD also carrying _UNRESOLVED  (double-tagged, should be 0)"] =
+    H.filter(function (x) { return x.tags.indexOf('_UNRESOLVED') >= 0; }).length;
+  V["Customers with 1 Orders on _HOLD"] = custWith(function (n) { return n === 1; });
+  V["Customers with 2 Orders on _HOLD"] = custWith(function (n) { return n === 2; });
+  V["Customers with 2+ Orders on _HOLD"] = custWith(function (n) { return n >= 2; });
+
+  V["_DUP_SFO_10MINS  (marker, sits on BOTH of the pair)"] = pop.counts['_DUP_SFO_10MINS'];
+  V["_DUP_SRO_1DAY  (marker, sits on BOTH of the pair)"] = pop.counts['_DUP_SRO_1DAY'];
+  V["_POBOX"] = pop.counts['_POBOX'];
+  V["_FLOWHOLD with no reason tag  (should be 0)"] = flowNoReason.length;
+
+  V["$ held on _HOLD  (unfulfilled)"] = holdMoney_(holdUnf_(H));
+  V["$ held on _CSHOLD + _FLOWHOLD  (unfulfilled)"] = holdMoney_(holdUnf_(csFh));
+  V["$ held on _UNRESOLVED  (unfulfilled)"] = holdMoney_(holdUnf_(UN));
+
+  V["Active holds unfulfilled  (aging denominator)"] = activeUnf.length;
+  V["Aged 0-7 days (since order created)"] = activeUnf.filter(function (x) { return age(x) <= 7; }).length;
+  V["Aged 8-30 days"] = activeUnf.filter(function (x) { return age(x) >= 8 && age(x) <= 30; }).length;
+  V["Aged 31+ days"] = activeUnf.filter(function (x) { return age(x) >= 31; }).length;
+
+  var oldest = null;
+  for (i = 0; i < activeUnf.length; i++) {
+    r = activeUnf[i];
+    if (!oldest || r.created < oldest.created ||
+        (r.created === oldest.created && holdOrdNum_(r.name) < holdOrdNum_(oldest.name))) oldest = r;
+  }
+  V["Oldest unfulfilled hold (order)"] = oldest ? oldest.name : '';
+  V["Oldest unfulfilled hold (days)"] = oldest ? age(oldest) : 0;
+
+  var unShip = holdUnf_(UN).filter(function (x) { return holdShipTags_(x).length > 0; });
+  V["Unfulfilled active holds carrying a _SHIP_ cohort tag"] = shipHeld.length;
+  V["Unfulfilled _UNRESOLVED carrying a _SHIP_ cohort tag"] = unShip.length;
+  V["List of Order IDs - held in a live cohort"] = holdCohortIds_(shipHeld);
+  V["List of Order IDs - _UNRESOLVED in a live cohort"] = holdCohortIds_(unShip);
+
+  V["List of Order IDs HELD  (_HOLD, unfulfilled)"] = holdIds_(holdUnf_(H));
+  V["List of Order IDs - _HOLD fulfilled (clear the tag)"] = holdIds_(holdFul_(H));
+  V["List of Order IDs - _CSHOLD"] = holdIds_(CS);
+  V["List of Order IDs - _FLOWHOLD"] = holdIds_(FH);
+  V["List of Order IDs - _UNRESOLVED (unfulfilled)"] = holdIds_(holdUnf_(UN));
+
+  // per-day origin rows — backfillable, because they key on createdAt, which is historical
+  var daily = {}, dates = {};
+  activeRows.forEach(function (x) { dates[x.created] = true; });
+  Object.keys(dates).sort().forEach(function (d) {
+    var dayH = H.filter(function (x) { return x.created === d; });
+    var dayCs = CS.filter(function (x) { return x.created === d; });
+    var dayFh = FH.filter(function (x) { return x.created === d; });
+    var legacyOnly = dayH.filter(function (x) {
+      return x.tags.indexOf('_CSHOLD') < 0 && x.tags.indexOf('_FLOWHOLD') < 0;
+    });
+    var names = {};
+    dayH.concat(dayCs).concat(dayFh).forEach(function (x) { names[x.name] = true; });
+    var row = {};
+    row["Orders moved to _HOLD status  (proxy: created that date, hold tag present now)"] =
+      Object.keys(names).length;
+    row["   By Flow  (_FLOWHOLD)"] = dayFh.length;
+    row["   By Customer Support  (_CSHOLD)"] = dayCs.length;
+    row["   Legacy _HOLD, origin not recorded"] = legacyOnly.length;
+    daily[d] = row;
+  });
+
+  return { snapshot: V, daily: daily };
+}
+
+/**
+ * 🔴 Every partition must close before a single cell is planned. A partition that does not close
+ * means the sweep was partial, and a partial sweep writes a number that looks like progress.
+ * Returns a list of failures; non-empty => the whole write is refused.
+ */
+function holdGates_(S) {
+  var bad = [];
+  var h = S["Orders on _HOLD  (LEGACY - migration backlog, target 0)"];
+  var parts = S["_HOLD unfulfilled  (actionable backlog)"] +
+              S["_HOLD fulfilled  (shipped, tag never cleared - noise)"] +
+              S["_HOLD other fulfillment status"];
+  if (parts !== h) bad.push('_HOLD fulfilment partition ' + parts + ' != total ' + h);
+
+  var den = S["Active holds unfulfilled  (aging denominator)"];
+  var ag = S["Aged 0-7 days (since order created)"] + S["Aged 8-30 days"] + S["Aged 31+ days"];
+  if (ag !== den) bad.push('aging buckets ' + ag + ' != unfulfilled active holds ' + den);
+
+  var act = S["Total on active hold  (_HOLD + _CSHOLD + _FLOWHOLD, union)"];
+  var cs = S["Orders on _CSHOLD"], fh = S["Orders on _FLOWHOLD"];
+  var tot = h + cs + fh;
+  if (act > tot || act < Math.max(h, cs, fh)) {
+    bad.push('active-hold union ' + act + ' is impossible against per-tag ' + tot);
+  }
+
+  var lst = S["List of Order IDs HELD  (_HOLD, unfulfilled)"];
+  var nIds = lst === '(none)' ? 0 : lst.split(',').filter(function (x) { return x.trim(); }).length;
+  if (nIds !== S["_HOLD unfulfilled  (actionable backlog)"]) {
+    bad.push('ID list has ' + nIds + ' orders, count row says ' +
+             S["_HOLD unfulfilled  (actionable backlog)"]);
+  }
+  return bad;
+}
+
+// ---------- sheet ----------
+
+/** label -> 1-based row, resolved against column A. Throws rather than fall back to a position. */
+function holdRowMap_(grid) {
+  var want = {}, i;
+  for (i = 0; i < HOLD_ROWS.length; i++) want[HOLD_ROWS[i][1]] = true;
+
+  var exact = {}, trimmed = {}, dupes = [];
+  for (var r = 2; r <= grid.length; r++) {
+    var cell = grid[r - 1] && grid[r - 1].length ? grid[r - 1][0] : '';
+    var lab = String(cell === null || cell === undefined ? '' : cell);
+    if (!lab.replace(/\s/g, '')) continue;
+    if (exact[lab] !== undefined) { if (want[lab]) dupes.push(lab); } else { exact[lab] = r; }
+    var t = lab.trim();
+    trimmed[t] = trimmed[t] === undefined ? r : -1;
+  }
+  if (dupes.length) {
+    throw new Error('HOLD_ASSERT_DUP_LABEL: column A repeats ' + JSON.stringify(dupes) +
+                    ' — resolution by label would be ambiguous.');
+  }
+
+  var map = {}, missing = [], loose = [];
+  for (i = 0; i < HOLD_ROWS.length; i++) {
+    var lbl = HOLD_ROWS[i][1];
+    if (exact[lbl] !== undefined) { map[lbl] = exact[lbl]; continue; }
+    var t2 = trimmed[lbl.trim()];
+    if (t2 !== undefined && t2 > 0) { map[lbl] = t2; loose.push(lbl); continue; }
+    missing.push(lbl);
+  }
+  if (missing.length) {
+    throw new Error('HOLD_ASSERT_ROW_SHAPE: ' + missing.length + ' of ' + HOLD_ROWS.length +
+                    ' labels are not in column A, e.g. ' + JSON.stringify(missing.slice(0, 3)) +
+                    ' — refusing to write by position.');
+  }
+  if (loose.length) {
+    Logger.log('  Hold: ' + loose.length + ' row(s) matched only after trimming: ' +
+               JSON.stringify(loose));
+  }
+  return map;
+}
+
+/** Is the cell already exactly what we would write? Money/percent read back as NUMBERS. */
+function holdSameValue_(cell, want) {
+  if (cell === '' || cell === null || cell === undefined) return String(want) === '';
+  var w = String(want);
+  if (typeof cell === 'number') {
+    if (w.charAt(0) === '$') return Math.abs(cell - parseFloat(w.slice(1).replace(/,/g, ''))) < 5e-3;
+    if (w.charAt(w.length - 1) === '%') return Math.abs(cell - parseFloat(w.slice(0, -1)) / 100) < 5e-7;
+    var n = parseFloat(w);
+    return !isNaN(n) && Math.abs(cell - n) < 1e-9;
+  }
+  return String(cell).trim() === w.trim();
+}
+
+/**
+ * Today's column is absent -> append ONE column at the right edge and stamp row 1.
+ * 🔴 Refuses if today is EARLIER than the last header date: appending would put the date columns
+ * out of order, and every consumer of this tab reads it left-to-right.
+ */
+function holdAppendColumn_(sh, hdr, today, dry) {
+  var lastIdx = -1;
+  for (var i = 1; i < hdr.length; i++) if (hdr[i]) lastIdx = i;
+  if (lastIdx < 0) {
+    throw new Error('HOLD_ASSERT_HEADER: row 1 of "' + HOLD_TAB + '" carries no yyyy-MM-dd column ' +
+                    'at all — refusing to guess where the date columns start.');
+  }
+  if (today <= hdr[lastIdx]) {
+    throw new Error('HOLD_ASSERT_HEADER_ORDER: ' + today + ' is absent but row 1 already runs to ' +
+                    hdr[lastIdx] + '. Appending would break the left-to-right date order — fix row 1 by hand.');
+  }
+  var ci = lastIdx + 1;   // 0-based
+  if (!dry) {
+    if (ci + 1 > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), ci + 1 - sh.getMaxColumns());
+    var cell = sh.getRange(1, ci + 1);
+    if (holdIsDate_(sh.getRange(1, lastIdx + 1).getValue())) {
+      cell.setValue(new Date(today + 'T12:00:00'));   // noon: no timezone can move the calendar day
+    } else {
+      cell.setNumberFormat('@');                      // keep row 1 the TEXT it already is
+      cell.setValue(today);
+    }
+  }
+  return ci;
+}
+
+/**
+ * The writer. Fill-blanks-only, one cell at a time, read back after the flush.
+ *
+ * The cheap gate comes FIRST: one Sheets read decides whether anything is missing. On 23 of the 24
+ * hourly invocations of a day the answer is no and the function returns having made ZERO Shopify
+ * calls. That is what makes hosting this on an existing hourly trigger free.
+ */
+function holdRefresh_(dateIso, dry) {
+  var today = holdTodayIso_(dateIso);
+  var out = { date: today, dry: !!dry, planned: 0, written: 0, filled: 0, disagree: [],
+              appended: false, plan: [], skipped: false };
+  var props = PropertiesService.getScriptProperties();
+
+  var sh = SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName(HOLD_TAB);
+  if (!sh) throw new Error('HOLD_ASSERT_TAB: no "' + HOLD_TAB + '" tab on ' + PIVOT_SHEET_ID);
+
+  var nRows = Math.max(sh.getLastRow(), 1), nCols = Math.max(sh.getLastColumn(), 1);
+  var grid = sh.getRange(1, 1, nRows, nCols).getValues();
+  var rowMap = holdRowMap_(grid);
+  var hdr = grid[0].map(holdIsoOf_);
+
+  function cellAt(row1, ci) {
+    var row = grid[row1 - 1] || [];
+    var v = ci < row.length ? row[ci] : '';
+    return (v === null || v === undefined) ? '' : v;
+  }
+  function blank(row1, ci) { return String(cellAt(row1, ci)).trim() === ''; }
+
+  var col = hdr.indexOf(today);
+  if (col < 0) {
+    col = holdAppendColumn_(sh, hdr, today, dry);
+    hdr[col] = today;
+    out.appended = true;
+    Logger.log('Hold: ' + (dry ? 'WOULD append' : 'appended') + ' column ' + (col + 1) +
+               ' and stamp ' + today);
+  }
+
+  // freshness: tell on ourselves BEFORE writing, while the gap is still visible
+  holdGapAlert_(grid, hdr, rowMap, today, col, props, dry);
+
+  var past = [];
+  for (var i = 1; i < hdr.length; i++) if (hdr[i] && hdr[i] <= today) past.push({ iso: hdr[i], ci: i });
+
+  var needSnap = [], needDaily = [];
+  HOLD_ROWS.forEach(function (kv) {
+    if (kv[0] === 'SNAP') {
+      if (out.appended || blank(rowMap[kv[1]], col)) needSnap.push(kv[1]);
+    } else {
+      past.forEach(function (d) {
+        if ((out.appended && d.ci === col) || blank(rowMap[kv[1]], d.ci)) {
+          needDaily.push({ label: kv[1], iso: d.iso, ci: d.ci });
+        }
+      });
+    }
+  });
+
+  if (!needSnap.length && !needDaily.length) {
+    out.skipped = true;
+    Logger.log('Hold: ' + today + ' already stamped and no past origin cell is blank — ' +
+               'nothing to do (0 Shopify calls).');
+    return out;
+  }
+  Logger.log('=== Hold ' + today + ' — ' + (dry ? 'DRY RUN (writes NOTHING)' : 'WRITING') + ' — ' +
+             needSnap.length + ' snapshot cell(s), ' + needDaily.length + ' origin cell(s) blank ===');
+
+  var pop = holdFetch_();
+  var total = 0, t;
+  for (t in pop.tags) if (pop.tags.hasOwnProperty(t)) total += pop.tags[t].length;
+  for (t in pop.counts) if (pop.counts.hasOwnProperty(t)) total += pop.counts[t];
+  // 🔴 A zero is a claim. One tag at zero is a real state (_HOLD reaching zero IS the goal, and
+  // _CSHOLD was legitimately 0 on 08-20). ALL SEVEN at zero simultaneously is a dead token or a
+  // broken query far more often than it is the truth, and the fabricated column it would write is
+  // unrecoverable. Override with Script Property HOLD_ALLOW_ALL_ZERO=1 when it is genuinely true.
+  if (!total && props.getProperty(HOLD_PROP_ALLOW_ALL_ZERO) !== '1') {
+    throw new Error('HOLD_ASSERT_ALL_ZERO: all seven hold/reason tags returned zero orders. ' +
+                    'Refusing to stamp a column that is far more likely a broken query than an ' +
+                    'empty queue. Set HOLD_ALLOW_ALL_ZERO=1 if it is real.');
+  }
+
+  var m = holdMetrics_(pop, today);
+  var bad = holdGates_(m.snapshot);
+  if (bad.length) {
+    throw new Error('HOLD_ASSERT_PARTITION: nothing written — ' + bad.join(' | '));
+  }
+
+  var plan = [];
+  HOLD_ROWS.forEach(function (kv) {
+    if (kv[0] !== 'SNAP') return;
+    var row = rowMap[kv[1]], v = m.snapshot[kv[1]];
+    if (v === undefined) throw new Error('HOLD_ASSERT_UNMAPPED: row ' + kv[1] + ' has no metric.');
+    if (!out.appended && !blank(row, col)) {
+      var cur = cellAt(row, col);
+      out.filled++;
+      if (!holdSameValue_(cur, v)) {
+        out.disagree.push(kv[1] + ' @' + today + ': sheet=' + cur + ' computed=' + v);
+      }
+      return;   // 🔴 write-once: a filled cell is somebody's reading, not ours to correct
+    }
+    plan.push({ row: row, ci: col, label: kv[1], date: today, value: v });
+  });
+  needDaily.forEach(function (d) {
+    var day = m.daily[d.iso] || {};
+    // 0 here is a real observation: the sweep covered every hold-tagged order and none was
+    // created that day.
+    plan.push({ row: rowMap[d.label], ci: d.ci, label: d.label, date: d.iso,
+                value: day[d.label] === undefined ? 0 : day[d.label] });
+  });
+
+  out.planned = plan.length;
+  plan.forEach(function (p) {
+    out.plan.push(p.date + '  r' + p.row + 'c' + (p.ci + 1) + '  ' + p.label + '  = ' + p.value);
+  });
+  out.disagree.forEach(function (d) { Logger.log('  Hold DISAGREEMENT (kept the sheet value) ' + d); });
+  Logger.log('  Hold: ' + plan.length + ' cell(s) to write, ' + out.filled + ' already filled, ' +
+             out.disagree.length + ' disagreement(s)');
+  if (dry) {
+    out.plan.forEach(function (line) { Logger.log('    WOULD WRITE ' + line); });
+    Logger.log('Hold: DRY RUN — nothing was written.');
+    return out;
+  }
+
+  plan.forEach(function (p) { sh.getRange(p.row, p.ci + 1).setValue(p.value); });
+  SpreadsheetApp.flush();
+
+  var after = sh.getRange(1, 1, Math.max(sh.getLastRow(), nRows),
+                          Math.max(sh.getLastColumn(), nCols)).getValues();
+  var failed = [];
+  plan.forEach(function (p) {
+    var got = (after[p.row - 1] || [])[p.ci];
+    if (holdSameValue_(got, p.value)) out.written++;
+    else failed.push(p.label + ' @' + p.date + ': wrote ' + p.value + ', read back ' + got);
+  });
+  if (failed.length) {
+    throw new Error('HOLD_ASSERT_READBACK: ' + failed.length + ' cell(s) did not survive the ' +
+                    'write — ' + failed.slice(0, 3).join(' | '));
+  }
+  props.setProperty(HOLD_PROP_LAST_RUN, new Date().toISOString());
+  Logger.log('Hold: ' + out.written + ' cell(s) written and read back clean.');
+  return out;
+}
+
+/**
+ * 🔴 Freshness assert — the writer-ownership gate's second half. Silence must fail loudly: this is
+ * the tab that sat five days stale with nobody told. If the newest stamped snapshot column is more
+ * than HOLD_GAP_ALERT_DAYS behind today, name the missing dates in the ops DM. Once per ET day.
+ */
+function holdGapAlert_(grid, hdr, rowMap, today, col, props, dry) {
+  var probe = null, i;
+  for (i = 0; i < HOLD_ROWS.length; i++) if (HOLD_ROWS[i][0] === 'SNAP') { probe = HOLD_ROWS[i][1]; break; }
+  var row = (grid[rowMap[probe] - 1] || []);
+  var last = '';
+  for (i = 1; i < hdr.length; i++) {
+    if (!hdr[i] || hdr[i] > today || i === col) continue;
+    var v = i < row.length ? row[i] : '';
+    if (String(v === null || v === undefined ? '' : v).trim() !== '') last = hdr[i];
+  }
+  if (!last) return;
+  var gap = holdDayNum_(today) - holdDayNum_(last);
+  if (gap <= HOLD_GAP_ALERT_DAYS) return;
+  Logger.log('  Hold GAP: newest stamped column is ' + last + ', ' + gap + ' day(s) behind ' + today);
+  if (dry || props.getProperty(HOLD_PROP_GAP_ALERTED) === today) return;
+  props.setProperty(HOLD_PROP_GAP_ALERTED, today);
+  slack_('Hold tab is ' + gap + ' days stale — newest stamped column is ' + last + ', today is ' +
+         today + '. A hold snapshot cannot be back-filled, so those columns are lost. ' +
+         'Check the hourly `refresh` trigger.', false);
+}
+
+// ---------- entry points ----------
+
+/**
+ * 🔴 TRIGGER-ARG GUARD. A time-driven trigger passes an EVENT OBJECT as argument 1 — the exact bug
+ * that killed paRefreshCurrentColumn_ in prod for two nights. Anything that is not a bare
+ * yyyy-MM-dd string means "today"; a date is never derived from an event.
+ *
+ * Nothing needs to be scheduled for this: holdRefresh_ is called from build_(), which runs on the
+ * project's existing hourly `refresh` trigger. These entries exist for the menu and for a manual
+ * catch-up run.
+ */
+function holdRefreshNow(dateIso) {
+  if (typeof dateIso !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dateIso)) dateIso = '';
+  return holdRefresh_(dateIso, false);
+}
+
+/** DRY — computes the whole plan and writes NOTHING. Same shape as ntPreviewCurrentColumn. */
+function holdPreview(dateIso) {
+  if (typeof dateIso !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(dateIso)) dateIso = '';
+  return holdRefresh_(dateIso, true);
+}
+
+function menuRefreshHold() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  ss.toast('Refreshing the Hold tab…', 'Reship Report', -1);
+  var r = holdRefreshNow();
+  ss.toast(r.skipped ? 'Already stamped for ' + r.date + ' — nothing to do.'
+                     : r.written + ' cell(s) written for ' + r.date + '.', 'Reship Report', 6);
+}
+
+function menuPreviewHold() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  ss.toast('Previewing the Hold tab (writes NOTHING)…', 'Reship Report', -1);
+  var r = holdPreview();
+  var msg = 'PREVIEW ONLY — nothing was written.\n\ncolumn: ' + r.date +
+    (r.appended ? '  (would be APPENDED)' : '') +
+    '\ncells that would be written: ' + r.planned +
+    '\ncells already filled (left alone): ' + r.filled +
+    '\n\nDISAGREEMENTS (sheet value kept):\n  ' +
+    (r.disagree.length ? r.disagree.join('\n  ') : 'none') +
+    '\n\nPLAN:\n  ' + (r.plan.length ? r.plan.slice(0, 80).join('\n  ') : 'nothing to write');
+  Logger.log(msg);
+  try { SpreadsheetApp.getUi().alert('Hold tab — preview', msg, SpreadsheetApp.getUi().ButtonSet.OK); }
+  catch (e) { ss.toast('Preview logged (View > Executions).', 'Reship Report', 8); }
 }

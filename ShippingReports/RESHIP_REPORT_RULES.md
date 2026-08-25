@@ -2068,3 +2068,151 @@ too. **They are deliberately left alone**, because the tradeoff is not the same 
 
 **Deployed:** `Notifications.gs` `803c3ea257af` → `68e3b2245faf` via the gated pusher (other four
 files verified byte-identical to live before and after the PUT; never `clasp push`).
+
+### D33 — THE `Hold` TAB HAD NO WRITER, AND A HOLD SNAPSHOT CANNOT BE BACK-FILLED (2026-08-25)
+
+> The tab was rebuilt and hand-filled ONCE, on 2026-08-20, by a local one-shot
+> (`scratchpad/hold_compute.py` + `hold_write.py`). Column **J = 2026-08-20** is the only column it
+> ever wrote. **K–N (08-21…08-24) are blank and always will be.**
+
+**The failure this prevents (negatives first).** A `grep -E '_HOLD|_CSHOLD|_FLOWHOLD|_UNRESOLVED'`
+over all five `.gs` files returned 18 hits, every one of them the *Reship* tab's "Unresolved"
+COUNTIFS. **Nothing in the deployed project had ever touched this tab.** So the rebuild produced a
+report with a date column per day and no cadence — the dead-cadence class (`ontrac_master`,
+`mfg_translations`, `shopify_orders`, `fulfillments-sync`), except worse: those three could be
+caught up by re-running the ingest, and **this one cannot**. Shopify order tags carry no
+application timestamp and the Orders API exposes no tag history, so a hold snapshot exists only on
+the day it is taken. Five columns were not "late", they were **lost**. The tab looked maintained
+the whole time, because a blank cell and a not-yet-measured cell are the same pixel.
+
+**🔴 The rules.**
+
+1. **WRITE-ONCE PER DATE.** A cell that already holds anything is never overwritten, never blanked
+   and rewritten, never "corrected" — by a re-run, by a backfill, or by a human-invoked menu click.
+   Same shape as `Routing Match` (D23) and the never-overwrite-a-dated-output rule, and for a
+   harder reason than D23's: Routing Match *degrades* with age, this one **does not exist** after
+   the day. Cells are written **one at a time, only when blank**; a range write over this tab
+   destroys history and is forbidden.
+2. **A disagreement is REPORTED, not repaired.** A filled cell whose value differs from what we
+   would compute is logged (`Hold DISAGREEMENT`) and left alone. It is somebody's reading; this
+   writer is not the authority on a cell it did not write.
+3. **BLANK ≠ ZERO.** Snapshot rows are written into **today's column only**. 08-12…08-19 stay blank
+   forever rather than carry a fabricated back-cast. The four **HOLDS OPENED** rows are the sole
+   exception: they key on order `createdAt`, which *is* historical, so they are filled for every
+   past date column — and a `0` there is a real observation (the sweep covered every hold-tagged
+   order and none was created that day), not a gap.
+4. **Rows resolve by LABEL against column A, columns by the row-1 DATE. Never by index.**
+   `HOLD_ASSERT_ROW_SHAPE` throws if any of the 40 labels is missing, `HOLD_ASSERT_DUP_LABEL` if one
+   repeats. Three labels are deliberately INDENTED (`"   By Flow  (_FLOWHOLD)"`) and the leading
+   spaces are part of the key; a trimmed match is accepted but logged.
+5. **Every partition must close before a single cell is planned** (`HOLD_ASSERT_PARTITION`, refuses
+   the whole write): `_HOLD` unfulfilled + fulfilled + other == the `_HOLD` total; the three aging
+   buckets == the unfulfilled-active denominator; the active union is between `max(per-tag)` and
+   `sum(per-tag)`; the HELD id list length == the `_HOLD unfulfilled` count row. A partial sweep
+   otherwise writes a smaller number that reads as progress on the migration.
+6. **A zero is a claim** (`HOLD_ASSERT_ALL_ZERO`). One tag at zero is a real state — `_HOLD`
+   reaching zero **is the goal**, and `_CSHOLD` was legitimately 0 on 08-20. All **seven**
+   simultaneously is a dead token or a broken query far more often than it is the truth, and the
+   column it would stamp is unrecoverable. Override with Script Property `HOLD_ALLOW_ALL_ZERO=1`.
+7. **A sweep over `HOLD_MAX_SWEEP` (6000) rows refuses** rather than truncating.
+8. **Money and percent are written as typed literals** (`"$5045.01"`, `"97.92%"`) so they land as
+   NUMBERS under a currency/percent format, not as text that breaks every later sum. Money is summed
+   in integer **cents** — float addition of 200+ order totals is page-order dependent at the 1e-10,
+   and a currency cell must not depend on which page an order arrived on.
+9. **An empty id list writes `(none)`, never `""`.** An empty cell reads as NOT MEASURED; zero
+   orders is a measurement.
+10. **Shopify tag counts ONLY — zero ParcelPanel calls.** Nothing on this tab needs a tracking
+    event, PP has no weekly budget to spend here, and PP is in a failure state.
+
+**Definitions Dan has NOT stated; the observable one was chosen and is named here.** These are the
+only places this tab departs from a directly-measured quantity, and none of them is an invented
+business rule:
+- **"active hold"** = `_HOLD ∪ _CSHOLD ∪ _FLOWHOLD`, by order. `_UNRESOLVED` is **not** counted — it
+  is what replaces the hold tag after 2 CS pings with the ticket closed, i.e. terminal, not an order
+  awaiting a decision. It gets its own row.
+- **"moved to _HOLD"** is **NOT OBSERVABLE**. The proxy is *orders CREATED on that date that carry a
+  hold tag NOW*. It undercounts any hold already released, and a CS hold applied days after the
+  order was placed lands on the order's creation date, not the day CS acted. The row label says so.
+- **"aging"** = days since order CREATED, not days since held — same reason.
+- **`_HOLD created on/after 2026-08-15`** uses the taxonomy cutover date Dan gave in the group DM.
+
+**🔴 DATE BASIS — the one place this port does not follow "all date math in ET" (Kurt's call).**
+- **Which column is today → EASTERN.** `HOLD_TZ = 'America/New_York'`, passed explicitly. Note the
+  project manifest's `timeZone` is **America/Chicago**, so `Session.getScriptTimeZone()` is CENTRAL:
+  using it would stamp tomorrow's column after 23:00 CT.
+- **An order's calendar date → UTC**, i.e. `createdAt.slice(0,10)`, unchanged from the one-shot,
+  which documents it as "matching every prior verified count". Measured on the 2026-08-25 population
+  (310 orders): ET dating moves **10 of 310** across a day boundary, changes **0 of 36** snapshot
+  rows, and changes **12 HOLDS-OPENED cells** — including 08-14, 08-15, 08-18, 08-19 and 08-20,
+  which are **already written on the UTC basis**. Switching would leave one row reading on two
+  different bases with nothing on the tab to say where the seam is. Kurt owns this; if he wants ET,
+  the nine existing columns have to be understood as UTC and marked, not silently reinterpreted.
+- Consequence, stated rather than hidden: aging is `ET-today − UTC-created`. On the 08-25 population
+  neither basis changes a single aging bucket.
+
+**Two determinism fixes vs the one-shot** (the port is not a transcription of a bug):
+- The active-hold union was built by iterating a Python **set**, so `Oldest unfulfilled hold` and the
+  cohort id list could differ between two runs over identical data. The port unions in a fixed order
+  (`_HOLD`, `_CSHOLD`, `_FLOWHOLD`; first-seen wins).
+- `Oldest unfulfilled hold` ties on the created DATE now break on the **lowest order number**.
+
+**🔴 WRITER OWNERSHIP — the scheduled owner and what fails loudly.**
+- **Owner: the project's existing hourly `refresh` trigger.** `build_()` calls `holdRefresh_()`
+  in a non-fatal `try/catch`, beside the identical Triage call — a hold sweep failing must never
+  cost the reship report. **No new trigger.** It is hosted there and not on `ntRefreshCurrentColumn`
+  or `hourlyExceptionSweep` because those live in `Notifications.gs` / `Exceptions.gs`, and this
+  change is confined to `Code.gs`; and not on a new one because this project has a history of
+  triggers that pass an event object and die.
+- **Cost is bounded by construction:** the cheap gate runs FIRST. One Sheets read decides whether
+  any target cell is blank; if none is, the function returns having made **zero** Shopify calls. Only
+  the first invocation of each ET day does the work — 4 paged sweeps + 3 `ordersCount` calls, ~8
+  GraphQL round-trips on a 317-order population. Nowhere near the 360s ceiling. Idempotent, so
+  24 invocations a day are safe.
+- **Fails loudly:** if the newest stamped snapshot column is more than `HOLD_GAP_ALERT_DAYS` (2)
+  behind today, `holdGapAlert_` names the gap in the ops DM via `slack_` — once per ET day, and
+  BEFORE writing, while the gap is still visible. That is the freshness assert the writer-ownership
+  gate requires; it is inside the reader itself rather than in the weekly sweep because the fact it
+  guards (a column that can never be recovered) has a two-day fuse, not a seven-day one.
+  `HOLD_LAST_RUN_AT` is stamped on every successful write.
+- If the host trigger itself dies, the whole reship report dies with it and `refresh()`'s catch
+  already alerts. The failure mode this directive closes is the *silent* one: a live report whose
+  Hold tab quietly stopped.
+
+**🔴 TRIGGER-ARG GUARD.** `holdRefreshNow(dateIso)` and `holdPreview(dateIso)` are trigger-bindable,
+so both reject anything that is not a bare `yyyy-MM-dd` string and fall back to today. A time-driven
+trigger passes an **event object** as argument 1 — the bug that killed `paRefreshCurrentColumn_` in
+prod for two nights.
+
+**Menu.** `Reship Report → Refresh Hold tab` and `→ Preview Hold tab (writes NOTHING)`. The preview
+is the `ntPreviewCurrentColumn` shape: it computes the entire plan, prints every cell it would
+write, lists every disagreement, and writes nothing.
+
+**Verification (2026-08-25, before deploy).**
+- **Differential, same inputs:** `holdMetrics_` run over a frozen live Shopify capture
+  (`scratchpad/hold_rows_0825.json`, 317 orders) matches the Python reference over the *same*
+  capture on **36 of 36** snapshot metrics and **132 of 132** daily origin cells, exactly.
+- **Behavioural, real tab:** `holdRefresh_` driven over the actual live `Hold` tab contents in a
+  stubbed Sheets/Shopify context — 50 assertions, all passing: column J is byte-identical after a
+  wet run; a second run is a no-op with zero Shopify calls; a pre-filled cell is excluded and
+  reported; an inserted row does not shift a single target; a renamed label throws; a date past the
+  header appends one column and a date behind it refuses; all-seven-zero refuses and writes nothing.
+  `scratchpad/hold_port_test.js`.
+- **The 08-20 fixture is NOT reproducible and was not faked.** `hold_counts.json` looks like a
+  capture of the fixture run and is not one — it was taken at 08:42:41Z, 16½ minutes before
+  `hold_metrics.json` (08:59:19Z), and in that window `#173703` moved `_HOLD`→`_FLOWHOLD`, two orders
+  lost their `_SHIP_2026-08-24` tag, and one gained `_DUP_SFO_10MINS`. Where the two populations
+  agree the reference reproduces the fixture exactly (**20/20** snapshot metrics, **30/32** daily
+  cells); **every** divergence traces to one of those named input differences, none to logic — the
+  two daily cells that differ are 08-15's Flow/Legacy split, which is `#173703`'s own creation date.
+- **`ordersCount` == exact-tag sweep on all seven tags** (measured live 08-25), which is what
+  licenses the count-only query for the three `_FLOWHOLD` reason tags.
+
+**Implementation:** `Code.gs` — `holdRefresh_` (writer), `holdMetrics_` (pure, testable),
+`holdFetch_`/`holdSweep_`, `holdGates_`, `holdRowMap_`, `holdAppendColumn_`, `holdGapAlert_`,
+`holdRefreshNow`/`holdPreview` (entry points), `menuRefreshHold`/`menuPreviewHold`. All 38 new
+top-level names are `hold`/`HOLD_`-prefixed and declared in `Code.gs` only (collision sweep across
+the four deployed files: NONE). The tab is named **`Hold`**, not `_HOLD` — `_HOLD` is the Shopify tag.
+
+**Open, NOT built (recommendation only).** A `Last refreshed (UTC)` row on the tab would make
+staleness visible to a human reading the sheet rather than only to the ops DM. It changes the row
+list, so it waits for Dan/Kurt.
