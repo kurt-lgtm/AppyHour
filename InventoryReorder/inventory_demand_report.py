@@ -116,10 +116,38 @@ PICKABLE_PREFIXES = ("CH-", "MT-", "AC-", "MR-", "PK-")
 # explosion adds only the components that are genuinely missing. Never re-add
 # what a container already lists.
 BUNDLE_RECIPE_OVERRIDES = {
+    # Durable snapshots from the user-approved MON 2026-08-17 cut order. Shopify's
+    # Simple Bundles metafields were intermittent between the Monday/Tuesday runs.
+    "AHB-XABR": {"AC-LFOLIVE": 1, "AC-MARC3": 1, "AC-SLL": 1,
+                  "AC-TCRISP": 1, "CH-ASST": 1, "CH-CARO": 1,
+                  "CH-CTUF": 1, "CH-PCROT": 1, "MT-IBRES": 1,
+                  "MT-PTUF": 1, "PK-TCUST": 1},
+    "AHB-XCUR": {"EX-EC": 8},
+    "AHB-XLCHZ": {"AC-ACRISP": 1, "AC-DTCH": 1, "AC-PBLINI": 1,
+                   "AC-SMAL": 1, "CH-CONI": 1, "CH-FENG": 1,
+                   "CH-LOSC": 1, "CH-OGK": 1, "CH-SMG": 1, "CH-WWBC": 1},
+    "AHB-XMCHZ": {"AC-ACRISP": 1, "AC-DTCH": 1, "AC-SMAL": 1,
+                   "CH-CONI": 1, "CH-FENG": 1, "CH-LOSC": 1,
+                   "CH-OGK": 1, "CH-WWBC": 1},
+    "AHB-XMONG": {"AC-DTCH": 1, "AC-PRPE": 1, "AC-SLL": 1,
+                   "AC-TCRISP": 1, "CEX-EC-MONG": 1, "CH-BRZ": 1,
+                   "CH-MAFT": 1, "MT-LONZ": 1, "MT-TUSC": 1,
+                   "PK-TCUST": 1},
+    "BL-3JAM": {"AC-BLUCAR": 1, "AC-FLH": 1, "AC-SLL": 1},
+    "BL-4USA": {"AC-BLUCAR": 1, "AC-KETT": 1, "CH-FAG": 1, "MT-PARM": 1},
     # Recharge-native bundle, absent from Simple Bundles. Confirmed live from
     # Recharge charge 1816643580 + Kurt 2026-07-28: 4 Baked Lemon Ricotta +
     # 2 Blackberry Balsamic jam.
     "BL-BLR4": {"CH-BLR": 4, "AC-BLBALS": 2},
+    # Simple Bundles metafield is absent, but recent active Shopify orders show
+    # these four component lines consistently. Confirmed by Kurt 2026-08-11.
+    "BL-BBB": {"CH-BARI": 1, "AC-MARC3": 1, "AC-PBLINI": 1, "MT-SCHI": 1},
+    "BL-FSJ": {"AC-RPJ": 1, "AC-SRHUB": 1},
+    "BL-PAP": {"AC-CARM": 1, "AC-DTCH": 1, "CH-SHADOW": 1},
+    "BL-SDB": {"AC-HON": 1, "AC-MARC": 1, "CH-BLR": 1},
+    "BL-SIF": {"AC-FLH": 1, "AC-RHAZ": 1, "CH-UCONE": 1, "MT-COPPA": 1},
+    "BL-USA": {"AC-BLUCAR": 1, "AC-KETT": 1, "CH-FAG": 1, "MT-PARM": 1},
+    "BL-XLL": {"AC-MAME": 1, "AC-RAWH": 1, "CH-SHADOW": 1, "MT-STUF": 1},
 }
 _BUNDLE_RECIPE_CACHE: dict = {}
 
@@ -720,6 +748,9 @@ def fetch_shopify_orders(settings, out_specialty=None, out_bundles=None):
 
     store = settings.get("shopify_store_url", "").strip()
     token = settings.get("shopify_access_token", "").strip()
+    # Tag marking orders whose assignment items are already applied as line items.
+    APPLIED_TAG = (settings.get("assignments_applied_tag") or "").strip()
+    applied_skipped = [0]
     if not store or not token:
         print("  WARNING: Shopify credentials not configured, skipping")
         empty = {}
@@ -854,6 +885,16 @@ def fetch_shopify_orders(settings, out_specialty=None, out_bundles=None):
             cur = resolve_curation(box_sku)
             is_lg = is_large_box(box_sku)
 
+            # Orders whose assignment items were ALREADY applied onto the order
+            # (e.g. a Matrixify import, tagged like "8_24") carry those components
+            # as real line items — counted just above in the Shopify column. Their
+            # box must NOT also feed the assignment tables, or +Assign re-counts the
+            # same units via SUMIF. Skip the curation/box tally for them only; their
+            # pickable line items still count. (Kurt 2026-08-25)
+            if APPLIED_TAG and APPLIED_TAG in {t.strip() for t in tags.split(",")}:
+                applied_skipped[0] += 1
+                continue
+
             if cur == "MONTHLY":
                 # Plain AHB-MED/AHB-LGE/AHB-CMED — count as box totals
                 is_cmed = "CMED" in box_sku
@@ -910,6 +951,9 @@ def fetch_shopify_orders(settings, out_specialty=None, out_bundles=None):
             out_bundles, "WK1" if is_wk1 else "WK2",
         )
 
+    if APPLIED_TAG:
+        print(f"  Shopify: {applied_skipped[0]} order(s) tagged '{APPLIED_TAG}' excluded from the "
+              f"assignment tables (their items are already line items)")
     print(
         f"  Shopify WK1: {wk1_count} orders ({sum(wk1_curations.values())} subs, "
         f"{wk1_count - sum(wk1_curations.values())} addon-only)"

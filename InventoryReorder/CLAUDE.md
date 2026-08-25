@@ -31,6 +31,11 @@ Demand forecasting + cut order generation + fulfillment web dashboard. Single-fi
   BEFORE the ROUNDUP — rounding first then padding under-orders wheels. Same model as the vault's
   `RAWINVCONVERSIONS` (raw → processed at a yield %). The rate is printed in the sheet subtitle so it's
   never a silent assumption.
+- 🔴 **Avail comes ONLY from the HAVE Kurt supplies — never add anything to it** (Kurt 2026-08-25).
+  Do NOT add planned Cut quantities, packing-list receipts, or manual SKU corrections on top of a fresh
+  RMFG count. **Monday's cut is a DRAFT; there is ONE cut per week**, so Monday's Cut column is a plan
+  that has not been produced and must never land in Avail. Burn: added Monday's Cut to the 8/25 count and
+  CH-ASST read 668 against a true HAVE of 150. If a number looks wrong, ask for a fresh HAVE — don't patch it.
 - **Avail = corrected_inventory_path** — update BEFORE running cut order
 - **Calibri everywhere** in `build_cut_order_xlsx_v2.py` output
 - **Bundle/limited-release explosion (BL-*, AHB-X*)** — recipes come LIVE from Shopify Simple Bundles

@@ -371,6 +371,27 @@ def _fetch_all_data(settings: dict) -> dict:
         sh_wk1_addon = _apply_aliases(sh_wk1_addon)
         sh_wk2_addon = _apply_aliases(sh_wk2_addon)
 
+    # Shopify demand offsets — units ALREADY applied onto orders out-of-band (e.g. a
+    # Matrixify "add line item" import of the week's assignments). Those units are now
+    # real Shopify line items AND are still counted by the +Assign SUMIF, so leaving
+    # them in the Shopify column double-counts them. Subtract, floored at 0.
+    _offsets = settings.get("shopify_demand_offsets") or {}
+    if _offsets:
+        _apl = {}
+        for _s, _q in _offsets.items():
+            _s = _normalize_sku(_s)
+            _before = sh_wk1_addon.get(_s, 0)
+            if _before:
+                sh_wk1_addon[_s] = max(0, _before - int(_q))
+                _apl[_s] = (_before, sh_wk1_addon[_s])
+        print(f"  Shopify demand offsets applied to {len(_apl)} SKU(s) "
+              f"(-{sum(b - a for b, a in _apl.values())} units total)")
+        for _s, (_b, _a) in sorted(_apl.items(), key=lambda x: x[1][0] - x[1][1], reverse=True)[:12]:
+            print(f"     {_s:14} {_b} -> {_a}")
+        _miss = [k for k in _offsets if _normalize_sku(k) not in _apl]
+        if _miss:
+            print(f"  !! {len(_miss)} offset SKU(s) had no Shopify demand to reduce: {', '.join(sorted(_miss)[:12])}")
+
     rc_wk1_total = sum(rc_wk1.values())
     rc_wk2_total = sum(rc_wk2.values())
     rc_wk1_curs = sum(rc_wk1_curations.values())
