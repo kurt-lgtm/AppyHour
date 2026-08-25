@@ -88,6 +88,7 @@ Run via `C:\Users\Work\anaconda3\python.exe <path>`.
 |---|---|---|---|
 | Weekly RMFG cut order (3-tab xlsx) | `InventoryReorder/build_cut_order_xlsx_v2.py` (or `/cut-order`) | 🔒✍️ | v1 `build_cut_order_xlsx.py`; `agents/tuesday_cut_order.py` (empty demand) |
 | Weekly RMFG cheese portion yield audit (Before/After xlsx, oz/slice vs spec) | `_outputs/artifacts/2026-06-17-rmfg-production-invoices/` pipeline (or `/rmfg-yield-audit`) | 🔒✍️ | hand-rolling from the PDF; confusing w/ `inventory_reorder.py` wheel→slice yield |
+| Order checks for a production run (child-SKU counts vs RULE SET, peer outliers, sheet↔Shopify) | `python -m order_checks.cli --tag <RMFG_/8_24> --ship <_SHIP_> --sheet <vF.xlsx>` (or `/order-checks`) | 🔒 | 🔴 count-only, never the LIKELY type-mix (Kurt 8/25); run AFTER child SKUs are applied; `currentQuantity` not `quantity` (727 flags vs 44); paid = line `total_discount`, NEVER `pre_tax_price`/`discount_allocations`. Rules: `order_checks/ORDER_CHECKS_RULES.md` |
 | Carrier-invoice ingest → shipping.db | `GelPackCalculator/auto_import.py [--dir]` | ✅✍️ | hand SQL inserts; double-import via Kori "Sync All" |
 | **Manual carrier download → auto-ingest** (UPS/FedEx working path) | `GelPackCalculator/ingest_downloads.py [--watch]` | ✅✍️ | `portal_pull.py` (PARKED) |
 | **UPS invoice pull** (billing.ups.com, captcha-free via logged-in Chrome session) | claude-in-chrome real-session → My Invoices → Download **CSV:Full(250)** → `ingest_downloads.py --no-import` (stage) → **human** runs `auto_import.py` in real terminal. Rules: `GelPackCalculator/UPS_INVOICE_PULL_RULES.md` | 🔒✍️ | 🔴 Claude NEVER runs auto_import (MSIX corrupts shipping.db); NEVER fresh-login/captcha-solve (portal_pull PARKED); download CSV flat-file NOT PDF; never enter creds |
@@ -147,6 +148,7 @@ Canonical pipeline: `build.py` (I/O driver) → `lib/engine.compute_routing` (th
 |---|---|---|
 | Build the weekly cut order | `/cut-order` | 🔒✍️ |
 | Weekly RMFG cheese portion yield audit (oz/slice vs spec, over/under-portion) | `/rmfg-yield-audit` | 🔒✍️ |
+| Order checks for a run (counts, peer outliers, sheet↔Shopify) | `/order-checks` | 🔒 |
 | Weekly MT-FS bulk-meat throughput (demand = trays × spec oz, NOT inventory deltas) | `/mtfs-throughput` | 🔒✍️ |
 | Automation health / dead-man-switch check (absent heartbeats, failed schtasks, stale ingest, db integrity — silent-green, Slack-on-red) | `scripts/automation_health.py --verbose` (daily task `automation-health-daily` 12:15pm; SSOT `HEARTBEAT_RULES.md`; beats via `appyhour_lib.heartbeat.beat`) | ✅ |
 | Weekly routing loop-closure scorecard (reship-recovery check, Indy pins, MILP A/B, postmortem link — matured cohort) | `ShipRouting/scripts/loop_scorecard.py [_SHIP_tag]` (weekly task `loop-scorecard-weekly` Mon 1:15pm; read-only) | ✅ |
