@@ -2136,19 +2136,88 @@ business rule:
 - **"aging"** = days since order CREATED, not days since held — same reason.
 - **`_HOLD created on/after 2026-08-15`** uses the taxonomy cutover date Dan gave in the group DM.
 
-**🔴 DATE BASIS — the one place this port does not follow "all date math in ET" (Kurt's call).**
-- **Which column is today → EASTERN.** `HOLD_TZ = 'America/New_York'`, passed explicitly. Note the
-  project manifest's `timeZone` is **America/Chicago**, so `Session.getScriptTimeZone()` is CENTRAL:
-  using it would stamp tomorrow's column after 23:00 CT.
-- **An order's calendar date → UTC**, i.e. `createdAt.slice(0,10)`, unchanged from the one-shot,
-  which documents it as "matching every prior verified count". Measured on the 2026-08-25 population
-  (310 orders): ET dating moves **10 of 310** across a day boundary, changes **0 of 36** snapshot
-  rows, and changes **12 HOLDS-OPENED cells** — including 08-14, 08-15, 08-18, 08-19 and 08-20,
-  which are **already written on the UTC basis**. Switching would leave one row reading on two
-  different bases with nothing on the tab to say where the seam is. Kurt owns this; if he wants ET,
-  the nine existing columns have to be understood as UTC and marked, not silently reinterpreted.
-- Consequence, stated rather than hidden: aging is `ET-today − UTC-created`. On the 08-25 population
-  neither basis changes a single aging bucket.
+**🔴 DATE BASIS — ALL EASTERN. SETTLED (Kurt 2026-08-25: *"it has to be all Eastern."*)**
+- **Which column is today → Eastern.** **An order's calendar date → Eastern.** One basis, no seam.
+  `HOLD_TZ = 'America/New_York'` is passed explicitly to every `Utilities.formatDate` call, and
+  aging is `ET-today − ET-created` — there is no mixed-basis subtraction left anywhere.
+- 🔴 **`Session.getScriptTimeZone()` must never reach a date calculation on this tab.** The
+  project manifest's `timeZone` is **America/Chicago**, so the script clock is CENTRAL. Using it
+  would stamp tomorrow's column after 23:00 CT *and* misdate orders for an hour every night.
+- 🔴 **`createdAt.slice(0,10)` is banned here.** Shopify returns `createdAt` in UTC, so slicing
+  it dates every order placed after 20:00 ET (19:00 EST) to TOMORROW. That is precisely the basis the
+  08-20 one-shot used, and it is what the backfill below corrects. `holdSweep_` converts with
+  `Utilities.formatDate(new Date(n.createdAt), HOLD_TZ, 'yyyy-MM-dd')`.
+- The conversion must use a real **tz database**, never a fixed −4: this population reaches back to
+  2025-11-26, which is EST (−5). Both the GAS side (`Utilities.formatDate`) and the Python reference
+  (`zoneinfo`) do; a regression test asserts a winter order dates correctly.
+
+**🔴 THE FIVE ALREADY-WRITTEN COLUMNS WERE WRITTEN ON THE OLD (UTC) BASIS — and this is the
+mixed-basis note that has to survive in the doc.** Columns **B–J (2026-08-12 … 2026-08-20)** hold
+HOLDS-OPENED values the 08-20 one-shot computed by UTC-slicing `createdAt`. Everything written from
+2026-08-21 onward is Eastern. Until the correction below is applied, **the 08-17 and 08-18 cells of
+two rows are on a different basis than the rest of their row** — which is exactly the thing that
+burns someone six months from now reading the trend, so it is written down rather than assumed
+harmless.
+
+**How big it actually is: FOUR cells, not twelve.** An earlier estimate in this thread said 12 cells
+across five columns. That estimate was **wrong twice** and is corrected here: it was computed against
+*today's* population (which contains 23 `_CSHOLD` orders that did not exist on 08-20) and with a
+fixed −4 offset instead of a tz database. Derived properly, from the 08-20 population:
+
+| date | row | UTC (in the sheet now) | Eastern (correct) |
+|------|-----|------------------------|-------------------|
+| 2026-08-17 | `Orders moved to _HOLD status  (proxy: …)` | 5 | **6** |
+| 2026-08-17 | `   Legacy _HOLD, origin not recorded` | 5 | **6** |
+| 2026-08-18 | `Orders moved to _HOLD status  (proxy: …)` | 3 | **2** |
+| 2026-08-18 | `   Legacy _HOLD, origin not recorded` | 2 | **1** |
+
+**Every one of those four cells is ONE order moving.** `#174489`, created `2026-08-18T03:10:32Z` =
+**2026-08-17 23:10 EDT**, on `_HOLD` unfulfilled. It leaves 08-18 and joins 08-17; both rows move on
+both days because a `_HOLD` order with no `_CSHOLD`/`_FLOWHOLD` counts once in the total and once in
+Legacy. **08-12, 08-13, 08-14, 08-15, 08-16, 08-19 and 08-20 do not change at all.** Six orders in
+the 08-20 population cross a day boundary (`#94595`, `#156277`, `#167253`, `#170401`, `#171472`,
+`#174489`) but only `#174489` lands inside the written range; the other five sit on dates that have
+no column on this tab.
+
+**How the corrected numbers were derived — and the trap that was avoided.** Re-running the metrics
+today and writing the answer in would be **wrong, and worse than the bug**: these rows say "created
+that date and carrying a hold tag NOW", so an August-25 recompute replaces an August-20 measurement
+with a different quantity (`_HOLD` went 94 → 46 in between). Instead the 08-20 population was
+**reconstructed** from two sources, neither of them an estimate:
+1. **Membership** from the id lists the 08-20 run published on the tab — 51 `_HOLD` unfulfilled + 43
+   `_HOLD` fulfilled = the published 94, `_CSHOLD` `(none)` = the published 0, `_FLOWHOLD` 2 ids = the
+   published 2. The lists **account for every published count**, so who was on which tag that morning
+   is a recorded fact. (No `_HOLD` order was also on `_CSHOLD`/`_FLOWHOLD` — derived from the lists,
+   not assumed, which is why Legacy tracks the total exactly.)
+2. **Timestamps** from live Shopify. `createdAt` is immutable, so today's value is the value it had on
+   08-20. All **96 of 96** orders were fetchable; **no cell is underivable**, and none was estimated.
+
+🔴 **The gate that makes those numbers believable.** The same reconstruction was first run on the
+**old UTC basis** and required to reproduce every cell the sheet already holds for 2026-08-12 …
+2026-08-20. It reproduced **36 of 36 exactly**. Only then was Eastern applied. A reconstruction that
+cannot reproduce the logged values is not a reconstruction, and nothing would have been proposed.
+Script: `scratchpad/hold_et_backfill.py`, output `hold_et_backfill.json`.
+
+**🔴 THE CORRECTION IS AN ARMED ONE-SHOT. NOTHING AUTO-CORRECTS. STATUS: NOT APPLIED.**
+`holdFixEtBasis(dry)` in `Code.gs` is the **only** thing in the file allowed past the write-once rule,
+and it is fenced on five sides:
+1. **Disarmed by default** — a wet run throws `HOLD_ASSERT_BACKFILL_DISARMED` unless Script Property
+   `HOLD_ARM_ET_BACKFILL=1`. Same shape as `HOLD_ALLOW_ALL_ZERO`.
+2. **Dry by default** — `dry` must be **explicitly** `false` to write (the `ntBackfillFrozen` shape).
+   That default is also the trigger guard: an event object is not `=== false`, so a stray binding
+   previews instead of writing.
+3. **A closed table** — `HOLD_ET_BACKFILL` names the four cells; a cell not in it cannot be reached.
+4. **Pre-state checked per cell** — a cell must currently hold the recorded `from`. Already corrected,
+   or edited by a human, and it refuses.
+5. 🔴 **All-or-nothing** — if any one cell fails its check the **whole set** is refused. The four
+   cells are one fact; applying half leaves 08-17's total saying 6 while its Legacy row still says 5,
+   and a self-inconsistent column is worse than an uncorrected one.
+On success it reads every cell back and **clears its own arm property** — a one-shot left armed is a
+standing exception to the write-once rule.
+
+**To apply (Kurt's call, after reading the table above):** set `HOLD_ARM_ET_BACKFILL=1` in Script
+Properties, run `holdFixEtBasis` once for the dry plan, then `holdFixEtBasis(false)`. **If it is never
+armed, those four cells stay on the UTC basis and this section is the record of why.**
 
 **Two determinism fixes vs the one-shot** (the port is not a transcription of a bug):
 - The active-hold union was built by iterating a Python **set**, so `Oldest unfulfilled hold` and the
@@ -2190,12 +2259,12 @@ write, lists every disagreement, and writes nothing.
 **Verification (2026-08-25, before deploy).**
 - **Differential, same inputs:** `holdMetrics_` run over a frozen live Shopify capture
   (`scratchpad/hold_rows_0825.json`, 317 orders) matches the Python reference over the *same*
-  capture on **36 of 36** snapshot metrics and **132 of 132** daily origin cells, exactly.
+  capture on **36 of 36** snapshot metrics and **140 of 140** daily origin cells, exactly — both sides on the **Eastern** basis, so the differential is not silently comparing two quantities.
 - **Behavioural, real tab:** `holdRefresh_` driven over the actual live `Hold` tab contents in a
-  stubbed Sheets/Shopify context — 50 assertions, all passing: column J is byte-identical after a
+  stubbed Sheets/Shopify context — **73 assertions**, all passing: column J is byte-identical after a
   wet run; a second run is a no-op with zero Shopify calls; a pre-filled cell is excluded and
   reported; an inserted row does not shift a single target; a renamed label throws; a date past the
-  header appends one column and a date behind it refuses; all-seven-zero refuses and writes nothing.
+  header appends one column and a date behind it refuses; all-seven-zero refuses and writes nothing; every swept order is dated on its Eastern day including a winter (EST) one; and the armed one-shot writes exactly its four cells, changes nothing else, refuses disarmed, refuses on a second run, and refuses the whole set on one bad pre-state.
   `scratchpad/hold_port_test.js`.
 - **The 08-20 fixture is NOT reproducible and was not faked.** `hold_counts.json` looks like a
   capture of the fixture run and is not one — it was taken at 08:42:41Z, 16½ minutes before
@@ -2209,7 +2278,7 @@ write, lists every disagreement, and writes nothing.
 
 **Implementation:** `Code.gs` — `holdRefresh_` (writer), `holdMetrics_` (pure, testable),
 `holdFetch_`/`holdSweep_`, `holdGates_`, `holdRowMap_`, `holdAppendColumn_`, `holdGapAlert_`,
-`holdRefreshNow`/`holdPreview` (entry points), `menuRefreshHold`/`menuPreviewHold`. All 38 new
+`holdRefreshNow`/`holdPreview` (entry points), `menuRefreshHold`/`menuPreviewHold`, and the armed one-shot `holdFixEtBasis` + `HOLD_ET_BACKFILL`. All 41 new
 top-level names are `hold`/`HOLD_`-prefixed and declared in `Code.gs` only (collision sweep across
 the four deployed files: NONE). The tab is named **`Hold`**, not `_HOLD` — `_HOLD` is the Shopify tag.
 

@@ -1750,9 +1750,11 @@ function writeTabTo_(sheetId, name, rows, userEntered) {
 // =====================================================================================
 
 var HOLD_TAB = 'Hold';
+// 🔴 EVERY date on this tab is EASTERN — which column is today AND what calendar day an order was
+// created on (Kurt 2026-08-25: "it has to be all Eastern"). There is no second basis anywhere.
 // 🔴 NOT Session.getScriptTimeZone(): this project's manifest timeZone is America/Chicago, so the
-// script clock is CENTRAL. The tab's date columns are Eastern. Passing HOLD_TZ explicitly is the
-// difference between stamping the right column and stamping tomorrow's at 23:30 CT.
+// script clock is CENTRAL. It must never reach a date calculation — using it would stamp
+// tomorrow's column at 23:30 CT and would date an order to the wrong day twice a night.
 var HOLD_TZ = 'America/New_York';
 var HOLD_TAGS = ['_HOLD', '_CSHOLD', '_FLOWHOLD', '_UNRESOLVED'];
 var HOLD_ACTIVE_TAGS = ['_HOLD', '_CSHOLD', '_FLOWHOLD'];   // _UNRESOLVED is TERMINAL, not active
@@ -1862,7 +1864,10 @@ function holdSweep_(tag) {
       if (tags.indexOf(tag) < 0) continue;
       out.push({
         name: n.name,
-        created: String(n.createdAt).slice(0, 10),   // UTC calendar date — see D33 "date basis"
+        // 🔴 EASTERN calendar date, not `createdAt.slice(0,10)`. Shopify returns createdAt in UTC,
+        // so slicing it dates every order placed after 20:00 ET (19:00 EST) to TOMORROW. That is
+        // the basis the 08-20 one-shot used and it is what D33's ET-backfill corrects.
+        created: Utilities.formatDate(new Date(n.createdAt), HOLD_TZ, 'yyyy-MM-dd'),
         ff: n.displayFulfillmentStatus,
         tags: tags,
         cust: (n.customer && n.customer.id) || null,
@@ -2395,4 +2400,122 @@ function menuPreviewHold() {
   Logger.log(msg);
   try { SpreadsheetApp.getUi().alert('Hold tab — preview', msg, SpreadsheetApp.getUi().ButtonSet.OK); }
   catch (e) { ss.toast('Preview logged (View > Executions).', 'Reship Report', 8); }
+}
+
+// -------------------------------------------------------------------------------------
+// ONE-SHOT: correct the four HOLDS-OPENED cells the 08-20 run wrote on the UTC basis (D33).
+//
+// 🔴 THIS IS THE ONLY THING IN THIS FILE ALLOWED TO OVERWRITE A CELL THAT ALREADY HAS A VALUE.
+// It is DISARMED by default, DRY by default, and can touch nothing but the four cells named
+// below. Kurt reads the diff in D33 and arms it, or does not. Nothing auto-corrects — the
+// write-once rule (D33 rule 1) is what makes this tab trustworthy and a self-healing exception
+// would quietly repeal it.
+//
+// WHAT IT CORRECTS. The 08-20 one-shot dated orders by `createdAt.slice(0,10)`, i.e. UTC.
+// Kurt's 2026-08-25 ruling is all-Eastern. Exactly ONE order in the written range crosses a day
+// boundary: #174489, created 2026-08-18T03:10:32Z = 2026-08-17 23:10 EDT. It moves off 08-18 and
+// onto 08-17, which moves two rows on each of those two days. Nothing else in 08-12..08-20 moves.
+//
+// HOW THE NUMBERS WERE DERIVED (not recomputed, not estimated). A recompute today would be WRONG:
+// these rows say "created that date and carrying a hold tag NOW", so re-running them in August
+// replaces an 08-20 measurement with an 08-25 one (`_HOLD` went 94 -> 46 in between). Instead the
+// 08-20 population was RECONSTRUCTED: membership from the id lists the 08-20 run published (94
+// _HOLD + 0 _CSHOLD + 2 _FLOWHOLD — the lists account for every published count, so who was on
+// which tag is a recorded fact), and each order's IMMUTABLE `createdAt` from live Shopify. That
+// reconstruction was then required to reproduce, on the UTC basis, all 36 cells the sheet already
+// holds for 08-12..08-20. It reproduced 36 of 36 exactly. Only then was the ET basis applied.
+// Script: scratchpad/hold_et_backfill.py.
+// -------------------------------------------------------------------------------------
+
+var HOLD_PROP_ARM_ET_BACKFILL = 'HOLD_ARM_ET_BACKFILL';
+
+// The complete, closed set. A cell not in this table is not touchable by this function.
+var HOLD_ET_BACKFILL = [
+  { date: '2026-08-17', label: "Orders moved to _HOLD status  (proxy: created that date, hold tag present now)", from: 5, to: 6 },
+  { date: '2026-08-17', label: "   Legacy _HOLD, origin not recorded", from: 5, to: 6 },
+  { date: '2026-08-18', label: "Orders moved to _HOLD status  (proxy: created that date, hold tag present now)", from: 3, to: 2 },
+  { date: '2026-08-18', label: "   Legacy _HOLD, origin not recorded", from: 2, to: 1 },
+];
+
+/**
+ * DRY BY DEFAULT — pass `false` explicitly to write, exactly like ntBackfillFrozen. That default is
+ * also the trigger guard: a time-driven trigger passes an EVENT OBJECT as argument 1, and an event
+ * object is not `=== false`, so a stray binding previews and writes nothing.
+ *
+ * 🔴 ALL-OR-NOTHING. If ANY cell's current value is not the recorded `from`, the whole set is
+ * refused. The four cells are one fact — #174489 moving off 08-18 and onto 08-17 — and applying
+ * half of it leaves 08-17 saying 6 while its Legacy row still says 5. A partially-corrected column
+ * is worse than an uncorrected one, because it is no longer internally consistent.
+ */
+function holdFixEtBasis(dry) {
+  var wet = (dry === false);
+  var props = PropertiesService.getScriptProperties();
+  Logger.log('=== holdFixEtBasis — ' + (wet ? 'WRITING' : 'DRY (pass false to write)') + ' ===');
+
+  if (wet && props.getProperty(HOLD_PROP_ARM_ET_BACKFILL) !== '1') {
+    throw new Error('HOLD_ASSERT_BACKFILL_DISARMED: set Script Property ' +
+                    HOLD_PROP_ARM_ET_BACKFILL + '=1 to overwrite a written column. This is the ' +
+                    'only writer allowed past the write-once rule and it stays off until Kurt ' +
+                    'reads the diff in RESHIP_REPORT_RULES D33.');
+  }
+
+  var sh = SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName(HOLD_TAB);
+  if (!sh) throw new Error('HOLD_ASSERT_TAB: no "' + HOLD_TAB + '" tab on ' + PIVOT_SHEET_ID);
+  var nRows = Math.max(sh.getLastRow(), 1), nCols = Math.max(sh.getLastColumn(), 1);
+  var grid = sh.getRange(1, 1, nRows, nCols).getValues();
+  var rowMap = holdRowMap_(grid);              // same label resolution, same refusals
+  var hdr = grid[0].map(holdIsoOf_);
+
+  var plan = [], refuse = [];
+  HOLD_ET_BACKFILL.forEach(function (c) {
+    var ci = hdr.indexOf(c.date);
+    if (ci < 0) { refuse.push(c.date + ' has no column on the tab'); return; }
+    var row = rowMap[c.label];
+    if (!row) { refuse.push(c.date + ' ' + c.label + ': label not on the tab'); return; }
+    var cur = (grid[row - 1] || [])[ci];
+    cur = (cur === null || cur === undefined) ? '' : cur;
+    if (holdSameValue_(cur, c.to)) { refuse.push(c.date + ' ' + c.label + ': already ' + c.to); return; }
+    if (!holdSameValue_(cur, c.from)) {
+      refuse.push(c.date + ' ' + c.label + ': holds ' + cur + ', expected the recorded ' + c.from);
+      return;
+    }
+    plan.push({ row: row, ci: ci, date: c.date, label: c.label, from: c.from, to: c.to });
+  });
+
+  plan.forEach(function (p) {
+    Logger.log('  ' + p.date + '  ' + p.label + '  ' + p.from + ' -> ' + p.to);
+  });
+  refuse.forEach(function (r) { Logger.log('  REFUSED  ' + r); });
+
+  if (refuse.length) {
+    throw new Error('HOLD_ASSERT_BACKFILL_PRECONDITION: ' + refuse.length + ' of ' +
+                    HOLD_ET_BACKFILL.length + ' cells are not in the recorded pre-state — ' +
+                    refuse.join(' | ') + '. Refusing the WHOLE set: these four cells are one ' +
+                    'fact and a half-applied correction leaves the column self-inconsistent.');
+  }
+  if (!wet) {
+    Logger.log('holdFixEtBasis: DRY — ' + plan.length + ' cell(s) would change. Nothing written.');
+    return { dry: true, planned: plan.length, plan: plan };
+  }
+
+  plan.forEach(function (p) { sh.getRange(p.row, p.ci + 1).setValue(p.to); });
+  SpreadsheetApp.flush();
+
+  var after = sh.getRange(1, 1, Math.max(sh.getLastRow(), nRows),
+                          Math.max(sh.getLastColumn(), nCols)).getValues();
+  var failed = [];
+  plan.forEach(function (p) {
+    if (!holdSameValue_((after[p.row - 1] || [])[p.ci], p.to)) {
+      failed.push(p.date + ' ' + p.label + ': wrote ' + p.to + ', read back ' +
+                  (after[p.row - 1] || [])[p.ci]);
+    }
+  });
+  if (failed.length) throw new Error('HOLD_ASSERT_READBACK: ' + failed.join(' | '));
+
+  // 🔴 Disarm immediately. This is a one-shot; leaving it armed turns the single exception to the
+  // write-once rule into a standing one.
+  props.deleteProperty(HOLD_PROP_ARM_ET_BACKFILL);
+  Logger.log('holdFixEtBasis: ' + plan.length + ' cell(s) corrected and read back clean. ' +
+             HOLD_PROP_ARM_ET_BACKFILL + ' cleared.');
+  return { dry: false, written: plan.length, plan: plan };
 }
