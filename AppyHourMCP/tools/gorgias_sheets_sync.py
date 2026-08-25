@@ -399,22 +399,57 @@ def _get_first_customer_message_date(ticket: dict, auth: tuple[str, str] | None 
     return ticket.get("created_datetime", "")
 
 
+# 🔴 A number that appears in a ticket is NOT necessarily the order that failed.
+# CS closes these tickets with "Your new order number is #177002." — that is the
+# REPLACEMENT order. Writing it into `feedback` attributes the failure to the
+# replacement's carrier instead of the one that actually caused the incident,
+# which is the exact misattribution `_resolve_original_order` exists to undo.
+# Audited 2026-08-25: 13 of the 34 orphaned wk0817 tickets carry such a line and
+# NOTHING else numeric — every one of them would have been filled WRONG by a
+# naive text pass. `from_agent` alone does not cover it: customers quote the
+# agent's sentence back in their reply (ticket 288715629 msg7).
+# Rejecting a match costs a MISSING; accepting a wrong one corrupts carrier
+# attribution silently. Reject.
+_REPLACEMENT_CONTEXT = re.compile(
+    r"(new order\b"                       # "your new order number is #X" / "new order #X"
+    r"|replacement (?:box|order|shipment)"
+    r"|reship(?:ped|ment)?"
+    r"|(?:created|arranged|sent out) (?:a |your )?(?:new|replacement)"
+    r"|redeliver)",
+    re.IGNORECASE,
+)
+# LOOKBEHIND ONLY, deliberately. The phrase always INTRODUCES the number
+# ("your new order number is #177002"), so looking behind is sufficient — and
+# looking ahead is actively wrong: in "order #171613 had a broken jar. Your new
+# order number is #176500." a forward window drags the second sentence's phrase
+# onto the first sentence's legitimate number and rejects both.
+_REPLACEMENT_LOOKBEHIND = 100
+
+
+def _in_replacement_context(text: str, start: int, end: int) -> bool:
+    """True if the number at [start:end] is introduced as a REPLACEMENT order."""
+    window = text[max(0, start - _REPLACEMENT_LOOKBEHIND): start]
+    return bool(_REPLACEMENT_CONTEXT.search(window))
+
+
 def _extract_order_from_text(text: str) -> str:
-    """Extract order number from text via regex.
+    """Extract the AFFECTED order number from ticket text via regex.
 
     Only matches Shopify-style order numbers (#NNNNN or #NNNNNN).
-    Avoids false positives from phone numbers, zip codes, etc.
+    Avoids false positives from phone numbers, zip codes, etc., and skips any
+    match introduced as a replacement/reship order (see above) — a skipped
+    match falls through to the next candidate, and an exhausted text returns
+    "" so the caller records MISSING rather than a plausible wrong number.
     """
     if not text:
         return ""
-    # Look for explicit order references first
-    match = re.search(r"[Oo]rder\s*#?\s*(\d{4,6})\b", text)
-    if match:
-        return f"#{match.group(1)}"
-    # Then look for standalone #NNNNN patterns (not inside URLs, phone numbers, etc.)
-    match = re.search(r"(?<!\d)#(\d{4,6})\b", text)
-    if match:
-        return f"#{match.group(1)}"
+    # Explicit order references first, then standalone #NNNNN patterns
+    # (not inside URLs, phone numbers, etc.).
+    for pattern in (r"[Oo]rder\s*#?\s*(\d{4,6})\b", r"(?<!\d)#(\d{4,6})\b"):
+        for match in re.finditer(pattern, text):
+            if _in_replacement_context(text, match.start(), match.end()):
+                continue
+            return f"#{match.group(1)}"
     return ""
 
 
@@ -446,7 +481,57 @@ def _resolve_original_order(order_num: str) -> str:
     return order_num
 
 
-def _extract_order_from_gorgias_integrations(ticket: dict) -> str:
+# Per-run cache of hydrated customer payloads: {customer_id: integrations dict}.
+# One sync pass sees the same customer across several tickets; without this the
+# hydration below would re-spend a rate-limited call per ticket.
+_customer_integrations_cache: dict[int, dict] = {}
+# Observability for the failure this fix closes — see _hydrate_customer_integrations.
+_integrations_source_counts = {"embedded": 0, "hydrated": 0, "unavailable": 0}
+
+
+def _hydrate_customer_integrations(customer: dict, gorgias_auth, gorgias_base) -> dict:
+    """Fetch `integrations` for a customer the LIST payload served without it.
+
+    🔴 THE 2026-08-17 OUTAGE, IN ONE FUNCTION. `GET /tickets` used to embed
+    `customer.integrations` (the Shopify side panel) on every ticket; it stopped.
+    `_extract_order_from_gorgias_integrations` reads that field off the ticket
+    dict the sync got from the LIST endpoint, so it began returning "" for every
+    ticket — and the only documented fallback, `_shopify_latest_order`, had been
+    dead code since it was written. Result: 34 of 55 wk0817 rows landed with no
+    order_number while the job reported success.
+
+    `GET /tickets/{id}` and `GET /customers/{id}` BOTH still carry the field, so
+    the panel data is not gone — only its free ride on the list payload is. We
+    re-fetch it per customer (cached), which costs one rate-limited call for a
+    ticket that passed the issue-type filter (~40-60 per run, not ~1,450).
+
+    Returns {} when it cannot be fetched — callers then fall through to the text
+    and Shopify-by-email paths rather than inventing anything.
+    """
+    cid = customer.get("id")
+    if not cid or not gorgias_auth or not gorgias_base:
+        return {}
+    if cid in _customer_integrations_cache:
+        return _customer_integrations_cache[cid]
+    integrations: dict = {}
+    try:
+        resp = _gorgias_get(f"{gorgias_base}/customers/{cid}", auth=gorgias_auth)
+        if resp.status_code == 200:
+            got = resp.json().get("integrations")
+            integrations = got if isinstance(got, dict) else {}
+        else:
+            logger.warning("customer %s integrations fetch HTTP %s", cid, resp.status_code)
+    except Exception:
+        # Loud, not silent (north star: never a silent failure) — but non-fatal:
+        # the caller still has the text + Shopify-by-email paths.
+        logger.warning("customer %s integrations fetch failed", cid, exc_info=True)
+    _customer_integrations_cache[cid] = integrations
+    return integrations
+
+
+def _extract_order_from_gorgias_integrations(
+    ticket: dict, gorgias_auth: tuple[str, str] | None = None, gorgias_base: str | None = None
+) -> str:
     """Extract order# from Gorgias customer.integrations Shopify panel.
 
     Most reliable source — Gorgias surfaces customer's full Shopify order
@@ -454,9 +539,18 @@ def _extract_order_from_gorgias_integrations(ticket: dict) -> str:
     ticket text. Picks the most-recent non-reship order created BEFORE the
     ticket itself (so if customer placed a new order after complaining,
     we still attribute to the affected order, not the replacement).
+
+    When the ticket dict came from the LIST endpoint the field is absent (it
+    stopped being embedded around 2026-08-17) — we hydrate it per customer if
+    auth was passed. Callers that omit auth get the old, embed-only behaviour.
     """
     customer = ticket.get("customer") or {}
-    integrations = customer.get("integrations") or {}
+    integrations = customer.get("integrations")
+    if isinstance(integrations, dict) and integrations:
+        _integrations_source_counts["embedded"] += 1
+    else:
+        integrations = _hydrate_customer_integrations(customer, gorgias_auth, gorgias_base)
+        _integrations_source_counts["hydrated" if integrations else "unavailable"] += 1
     if not isinstance(integrations, dict):
         return ""
     ticket_created = ticket.get("created_datetime", "") or ""
@@ -494,8 +588,11 @@ def _extract_order_number(ticket: dict, gorgias_auth: tuple[str, str] | None = N
     3. First few message bodies
     4. Shopify order lookup by customer email (legacy fallback)
     """
-    # 1. Gorgias customer.integrations (Shopify panel data)
-    order = _extract_order_from_gorgias_integrations(ticket)
+    # 1. Gorgias customer.integrations (Shopify panel data), hydrating it when
+    #    the LIST payload omitted the field (2026-08-17 regression)
+    order = _extract_order_from_gorgias_integrations(
+        ticket, gorgias_auth=gorgias_auth, gorgias_base=gorgias_base
+    )
     if order:
         return order
 
@@ -553,31 +650,23 @@ def _get_shopify_client() -> object | None:
 
 
 def _shopify_latest_order(email: str) -> str:
-    """Look up the customer's latest shipped/fulfilled non-reship order in Shopify."""
-    try:
-        client = _get_shopify_client()
-        if not client:
-            return ""
-        for fs in ("shipped", "fulfilled"):
-            resp = client._get(
-                "orders.json",
-                params={
-                    "email": email,
-                    "status": "any",
-                    "fulfillment_status": fs,
-                    "limit": 5,
-                    "order": "created_at desc",
-                    "fields": "name,tags",
-                },
-            )
-            orders = resp.get("orders", [])
-            for order in orders:
-                tags = (order.get("tags", "") or "").lower()
-                if "reship" not in tags:
-                    return order.get("name", "")
-    except Exception:
-        pass
-    return ""
+    """Look up the customer's latest shipped/fulfilled non-reship order in Shopify.
+
+    🔴 THIS WAS DEAD CODE UNTIL 2026-08-25. It called `client._get(...)`, a method
+    `ShopifyClient` has never had (check `git log -S "def _get("` on
+    GelPackCalculator/gel_pack_shopify.py — it returns nothing). The
+    AttributeError was swallowed by a bare `except: pass`, so the last-resort
+    fallback in `_extract_order_number` silently returned "" on every call for as
+    long as it existed. Nobody noticed because the integrations path above always
+    answered first — until it stopped, and there turned out to be no net.
+
+    Now delegates to `_shopify_order_by_email`, the sibling that actually works
+    (verified 2026-08-25 against 32 of the 34 orphaned wk0817 tickets: it returned
+    the same order as the Gorgias Shopify panel for every one). Two independent
+    sources agreeing is the reason this is a safe fallback and not a guess.
+    """
+    order = _shopify_order_by_email(email)
+    return (order or {}).get("name", "") or ""
 
 
 # Gorgias view ID for the operational issues view
@@ -692,6 +781,12 @@ def sync_gorgias_to_sheet(days_back: int = 14, dry_run: bool = False) -> dict[st
     Returns dict with summary and rows.
     """
     auth, base_url = _gorgias_auth()
+    # Per-RUN caches. The MCP server is long-lived; a customer's Shopify panel
+    # changes between runs, so carrying either of these across runs would serve
+    # a stale order history.
+    _customer_integrations_cache.clear()
+    for _k in _integrations_source_counts:
+        _integrations_source_counts[_k] = 0
     since = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%dT00:00:00")
 
     # Read existing order numbers from the sheet to avoid duplicates
@@ -960,7 +1055,23 @@ def sync_gorgias_to_sheet(days_back: int = 14, dry_run: bool = False) -> dict[st
 
     # Universal-DB tee: mirror to shipping.db.feedback so Kori postmortem
     # sees fresh data without a Sheets round-trip.
-    tee_written = _tee_to_shipping_db(new_rows) if new_rows else 0
+    # 🔴 dry_run means dry_run. Until 2026-08-25 this line ran unconditionally, so
+    # `--dry-run` — the flag you reach for precisely when you are unsure — still
+    # wrote production rows into shipping.db while skipping the Sheet. Every
+    # write in this function is gated on `not dry_run`; this one was not.
+    tee_written = _tee_to_shipping_db(new_rows) if (new_rows and not dry_run) else 0
+
+    # Loud, not silent: how many rows this run could not attribute to an order,
+    # and where the panel data came from. A run whose `order_number_missing` is a
+    # large share of `new_rows`, or whose integrations are all "unavailable", is
+    # the 2026-08-17 signature reappearing — see appyhour_lib/feedback_completeness.py.
+    missing_order = sum(1 for r in new_rows if not (r[2] or "").strip())
+    if missing_order and new_rows and missing_order / len(new_rows) > 0.15:
+        logger.warning(
+            "gorgias sync: %d/%d new rows have NO order number (limit 15%%) — "
+            "integrations sources %s",
+            missing_order, len(new_rows), dict(_integrations_source_counts),
+        )
 
     return {
         "checked": checked,
@@ -968,6 +1079,8 @@ def sync_gorgias_to_sheet(days_back: int = 14, dry_run: bool = False) -> dict[st
         "upserted_in_place": upserted,
         "skipped_duplicate": skipped_dup,
         "skipped_invalid_tag": skipped_tag,
+        "order_number_missing": missing_order,
+        "integrations_source": dict(_integrations_source_counts),
         "dry_run": dry_run,
         "rows": new_rows,
         "append_range": append_result.get("updates", {}).get("updatedRange", "") if append_result else None,
@@ -1775,8 +1888,9 @@ def sync_food_safety_to_sheet(days_back: int = 14, dry_run: bool = False) -> dic
                 f"API reported {updated_rows}. Range: {updated_range}"
             )
 
-    # Universal-DB tee: mirror to shipping.db.feedback (same as sister fn above).
-    tee_written = _tee_to_shipping_db(new_rows) if new_rows else 0
+    # Universal-DB tee: mirror to shipping.db.feedback (same as sister fn above),
+    # including the dry_run gate — see the note there.
+    tee_written = _tee_to_shipping_db(new_rows) if (new_rows and not dry_run) else 0
 
     return {
         "checked": checked,

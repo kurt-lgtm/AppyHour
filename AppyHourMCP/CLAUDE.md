@@ -31,7 +31,7 @@ AppyHourMCP/
 | Add new tool | `server.py`, an existing `tools/*.py` as template | desktop apps | — |
 | Order-edit bug | `tools/order_edit.py`, `tools/shopify.py` | inventory/, shipping/ | shopify-dev MCP for GraphQL validation |
 | Cut-order tool | `tools/inventory.py`, `InventoryReorder/cut_order_generator.py` | shipping/, gelcalc/ | — |
-| Gorgias sync | `tools/gorgias*.py`, `~/.knowledge/ops/gorgias*` | rest | — |
+| Gorgias sync | 🔴 **[`GORGIAS_FEEDBACK_RULES.md`](GORGIAS_FEEDBACK_RULES.md) FIRST** (constraints SSOT), then `tools/gorgias*.py`, `~/.knowledge/ops/gorgias*` | rest | — |
 | Sheets reporting | `tools/google_sheets.py` | rest | — |
 | Cache tuning / stale data | `tools/cache.py` (TTL tiers, bust contract) | rest | `APPYHOUR_NO_CACHE=1` to bypass |
 | Bulk order export (>1000) | `tools/shopify_bulk.py` (`appyhour_bulk_query`) | Matrixify for WRITES | shopify-api skill |
