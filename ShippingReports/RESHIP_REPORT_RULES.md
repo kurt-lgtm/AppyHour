@@ -2430,3 +2430,289 @@ file and over the concatenation, `PivotSheet.gs` excluded as local-only). No new
 function takes an argument. Grain resolution splits on the **last** ` · ` and compares the whole
 token — never `endsWith`, never a substring — because `Not Arrived` ends with `Arrived` and this file
 has burned four separate times on partial-label matching.
+
+### D35 — `Carrier Mix`: FEDEX 2DAY IS ITS OWN ROW, ONTRAC AND LASERSHIP ARE ONE CARRIER, AND THE COST HALF RUNS ON A SECOND CLOCK (Kurt 2026-08-25)
+
+> Kurt: *"we should be hammering ontrac as much as possible."* · *"fedex 2day air is separate from
+> home delivery."* · *"have a second row under each carrier service lane outline cost at a high
+> level. of course those cells have to be on a different refresh because digital ocean will get
+> those invoices later."* · *"the fences should resolve on monday once they're actually assigned to
+> a carrier."*
+
+A standing pivot: ship weeks as **COLUMNS** (last 4–5 `_SHIP_` Mondays), one **count** row per
+carrier·service lane, a **cost** row paired directly beneath each, `n (pct%)` cells, a `Total`.
+It is a tripwire for OnTrac share erosion — a share drop has to be visible at a glance across
+weeks, not something a reader computes.
+
+**Implementation:** `ShippingReports/carrier_mix_pivot.py` (read-only, `connect_ro`).
+**Not** in the `Running Reship` Apps Script project — see "Why it is not a `.gs` tab" below.
+
+#### 🔴 The failures this exists to prevent, negatives first
+
+1. 🔴 **FEDEX 2DAY MERGED INTO FEDEX GROUND HIDES THE AIR SPEND, AND THE TABLE STILL SUMS TO THE
+   COHORT.** Air is the expensive escape hatch: measured over the last five cohorts FedEx 2Day
+   bills **$23.82/box** against **$16.29–16.48** for FedEx Ground-HD and **$6.73–6.92** for OnTrac
+   Ground. Folded into Ground, 175 air boxes read as a slightly pricier ground row and nothing
+   about the table looks wrong. **2Day is its own row, always, and it never merges into
+   Ground-HD, into UPS, or into OnTrac.**
+2. 🔴 **ONTRAC AND LASERSHIP COUNTED AS TWO CARRIERS HALVES THE SHARE THE TABLE EXISTS TO WATCH.**
+   They are one carrier under two names (D5). Carrier normalization is
+   `ShipRouting/lib/canon.normalize_carrier` and is **never re-implemented here** — it is imported.
+   A local copy is how the two spellings drift apart again.
+3. 🔴 **NEVER INFER THE SERVICE FROM A PARTIAL OR SUBSTRING MATCH ON A CARRIER/SERVICE LABEL.**
+   This project has shipped **four** separate partial-label-matching bugs into these reports (the
+   `Unknown` section collision, the `of which` substring assert, the verifier pair-finder, the
+   monotonicity baseline). Comparison is on the **whole canonical token**, dimension-scoped.
+   `"Home Delivery" in label` would pull a `FedEx 2Day` box into Ground-HD.
+4. 🔴 **AIR IS TESTED FIRST AND POSITIVELY; GROUND-HD IS WHAT A BOX FALLS TO ONLY AFTER AIR IS
+   RULED OUT.** The other ordering — "is it Home Delivery? no → must be air" — silently
+   reclassifies anything the service map does not recognize.
+5. 🔴 **A FENCE IS NOT A CARRIER.** A `!NO …` stack, a bare `!ANY - <Hub>_AHB!`, or any row where
+   more than one hub is left open has **no carrier** until RMFG picks at the dock. Distributing
+   those boxes across OnTrac/FedEx/UPS by hub default or by "what usually happens" is fabrication
+   and inflates whichever row was assumed. On `_SHIP_2026-08-24` that is **1,397 of 2,500 boxes**
+   (742 bare `!ANY`, 609 `!ANY FedEx`, 46 fence-only) — over half the cohort.
+6. 🔴 **A BOX THAT MATCHES NO ROW MUST NOT VANISH** (the hub-literal undercount class). Every box
+   lands in exactly one row and `CM_ASSERT_ROWS_SUM_TO_COHORT` proves it on the published numbers.
+   Veho is the live instance: it is dead as a carrier (Kurt 2026-08-02) but `_SHIP_2026-07-27` —
+   inside the default 5-week window — still carries **372 Veho boxes**. They go to
+   `Other / Unmapped`, itemized by name in the run notes, never quietly into OnTrac.
+7. 🔴 **AN EMPTY COST CELL IS "NOT INVOICED YET", NEVER `$0`.** A zero claims the lane cost
+   nothing. Blank ≠ zero, and nothing downstream sums a blank.
+
+#### The four rows (exactly these, in this order), plus two residuals
+
+| Row | Contents |
+|---|---|
+| `OnTrac Ground` | carrier `OnTrac` (LaserShip folded in), air ruled out |
+| `FedEx Ground-HD` | carrier `FedEx`, air ruled out — **FedEx Ground and FedEx Home Delivery are ONE row** |
+| `FedEx 2Day Air` | carrier `FedEx`, service level `2Day` |
+| `UPS Ground` | carrier `UPS`, air ruled out |
+| `Other / Unmapped` | anything with no row: Veho, a UPS 2Day, any `Overnight`, an unrecognized carrier, or a box whose sources disagree. **Itemized by reason every run, never a bare number.** |
+| `Unresolved / Pending` | cohort orders with **no label yet** — the fence has not resolved |
+
+**Why the Ground/Home-Delivery merge is not a loss of information:** `!ANY FedEx - <Hub>_AHB!`
+(the `FENCE_FEDEX_HD` fence, ROUTING_RULES §10) deliberately leaves RMFG to pick Ground vs Home
+Delivery off the residential/commercial flag we do not carry. **648 of the 717** FedEx boxes on
+`_SHIP_2026-08-24` carry no service signal at all for exactly that reason. The merge is what makes
+that fence unambiguous — both outcomes are the same row and the same economics. Splitting them
+would put 648 boxes into a coin-flip.
+
+#### Data contract
+
+- **Source:** `fulfillments`, `tags LIKE '%_SHIP_<Mon>%'`. **Join on `order_number`, never
+  `tracking_number`** (FedEx reuses them, D12), and normalize `#132940` vs `132940` — that key
+  format mismatch has produced confident zeros here twice.
+- **Carrier = `fulfillments.tracking_company`** through `canon.normalize_carrier`. Measured
+  2026-08-25: never blank on any `_SHIP_` row, and the only unmapped value in the whole table is a
+  single `Other` from 2026-04-27.
+- **Service, in priority order: carrier invoice → `delivery_status.service` → applied routing
+  tag.** A routing-tag signal counts **only when the tag names the carrier that actually carried
+  the box** — a `!FedEx 2Day` tag on a box RMFG handed to OnTrac describes a plan that did not
+  happen. `is_any` carries **no** service and must never be read as one.
+- 🔴 **`delivery_status.service` IS A DEAD SIGNAL — NULL on all 118,909 rows**, every carrier,
+  every cohort (measured 2026-08-25). The contract names it, the code reads it, and its coverage
+  is **printed every run**: a signal that is silently always-absent is indistinguishable from one
+  that is silently always-wrong. Today the routing tag is the sole ship-time service source.
+- **Volume-normalize:** pct of the week total; denominator = the **full cohort** (the `Total` row).
+- 🔴 **Read-only, absolutely.** `appyhour_lib.db.connect_ro`, never `sqlite3.connect`, never a
+  writer (WAL corruption 6/27 + 7/01). There is deliberately **no sheet-write path in this file**.
+- 🔴 **The ship-week window is derived from the CALENDAR, anchored on Monday** — never from the
+  newest tag in the data and never from a sheet header. Reading the data pins the window to what
+  already shipped, so a new cohort can never be discovered and the table silently stops walking
+  forward. Non-Monday `_SHIP_` tags exist (`_SHIP_2026-07-24`, 7 boxes — a drift-in leg) and are
+  not ship weeks.
+
+#### 🔴 Reproduce-gate — this ran BEFORE anything was extended to other weeks
+
+`_SHIP_2026-08-24`, tag basis, reference computed 2026-08-25:
+
+| row | reference | computed |
+|---|---:|---:|
+| OnTrac Ground | 1763 | **1763** ✅ |
+| FedEx Ground-HD | 648 | **648** ✅ |
+| FedEx 2Day Air | 69 | **69** ✅ |
+| UPS Ground | 20 | **20** ✅ |
+| **Total** | **2500** | **2500** ✅ |
+
+Exact on the first run. `--verify-gate` re-runs it; `main()` **refuses to extend to other weeks**
+if it fails. Inputs are the trap, not the formula — a recompute that has not reproduced a number
+the system already produced is not evidence.
+
+**The reference was taken POST-resolution.** All 2,500 boxes were fulfilled on 08-24 itself and
+every one carries a non-blank `tracking_company`, so no fence was open in the *carrier* dimension
+when it was measured. The service dimension is a different matter — see the air reconciliation.
+
+**Exclusivity proven, not asserted.** Across all five cohorts, **zero** boxes satisfy both the air
+and the ground test (`CM_ASSERT_AIR_GROUND_EXCLUSIVE` refuses the column if one ever does). On
+08-24 the 69 air boxes are exactly the 69 the routing tag alone yields, and none of them also
+matched Ground-HD.
+
+#### 🔴 How a fence resolving is OBSERVABLE — the real signal, not an inferred one
+
+**A `fulfillments` row IS the resolution.** The row only exists once a label is cut, and
+`tracking_company` is populated on every one of them — RMFG's dock pick materializes as the label.
+So:
+
+- **Before the labels exist the cohort has NO rows in `fulfillments` at all.** A pre-Monday column
+  is not "partially pending", it is empty, and it is **not written** (`CM_NO_LABELS_YET`).
+- `Unresolved / Pending` = cohort orders with **no label yet**, computed as a **SET DIFFERENCE on
+  `order_number`** against `shopify_orders`. 🔴 Never a subtraction of two counts: labels outnumber
+  open orders whenever an order cancels *after* its label is cut, so `orders − labels` goes
+  negative on a healthy week and says nothing about which boxes are waiting.
+- 🔴 **`shopify_orders` is a replica that goes stale silently** (the 7/07 dead-cadence class).
+  Measured 2026-08-25 it held **1,005** open orders for `_SHIP_2026-08-24` against **2,500** labels
+  — 40% complete. A set difference against 40% of a cohort under-reports pending toward zero,
+  which is the flattering direction. Below `REPLICA_MIN_COMPLETENESS = 0.98` the cell reads
+  **`unknown`**, never `0`, and **the column cannot freeze**. The floor is measured, not chosen:
+  the replica sits at 99.9–100% on four of the five live cohorts and at 40% on the fifth.
+- **Pending shrinking to 0 is the freshness signal.** A column still carrying pending days after
+  its Monday means the assignment was never recorded. Live instance: `_SHIP_2026-08-17` at age 9d
+  still shows **13 orders with no label** (`CM_FENCES_OPEN`).
+
+#### 🔴 TWO INDEPENDENT CLOCKS IN ONE TABLE — and neither may freeze the other
+
+Freezing the whole column when the counts settle would permanently lock the cost cells at whatever
+partial invoice data existed that day. Counts and costs are frozen **separately**.
+
+**Clock 1 — COUNT rows. Freeze when the fences have resolved (`pending == 0`).**
+🔴 Frozen thereafter because the service half is read from the routing **TAG, which is MUTABLE
+after ship** — `_SHIP_2026-08-10` alone logged **376 corrective tag writes**
+(`_outputs/logs/wk0810_corrective_delta.jsonl`). A recompute on day 20 compares day-0 carriers
+against tags that are no longer what shipped: this number **degrades with age instead of
+converging**, exactly as D23 found for `Routing Match`. `CM_ASSERT_FROZEN_COUNTS` **refuses**, it
+never repairs — the ship-time reading is unrecoverable once overwritten.
+
+- **Backstop `COUNT_FREEZE_MAX_AGE_DAYS = 10`** (reusing `PA_MATURITY_DAYS`, D15, rather than
+  inventing a constant). Without it a single order that is never labelled holds a column
+  provisional forever and the mutable tag keeps being re-read for months. `_SHIP_2026-07-27` sat
+  at `pending = 1` at age 30d. On force-freeze the residual is **recorded** as
+  `residual_pending`, loudly, never swallowed.
+
+**Clock 2 — COST rows. Per LANE, frozen at invoice coverage ≥ `COST_COMPLETE_COVERAGE = 0.98`.**
+
+- 🔴 **The threshold is measured, not chosen for roundness.** Invoice coverage asymptotes at
+  98–100% and **never reaches 100** — `_SHIP_2026-07-06` is still at 98% at age 51d, because a
+  residue of boxes is cancelled or undeliverable and is never billed. A 100% gate would never fire
+  and every cost cell would stay provisional forever.
+- **A partial cell leads with its coverage** (`58% inv · $6.73/bx · $5,967 so far`). Spend scales
+  with coverage — a lane 58% invoiced shows a real-looking total that is 42% low — so the
+  percentage goes **first**; putting it after the dollars is how a partial reads as complete.
+- 🔴 **The per-box unit divides by INVOICED boxes, not by total boxes.** Dividing measured dollars
+  by a population that was never billed understates the unit by exactly the uninvoiced share. The
+  denominator has to come from the same place as the numerator. (The unit is coverage-independent
+  and stays comparable across weeks; the spend is not.)
+- **`Total $` is emitted only when EVERY lane in that week is complete.** A sum over a mix of
+  frozen and partial lanes is a real-looking number that is low by an unknown amount; it renders
+  `partial (3/4 lanes)` instead.
+
+#### Measured invoice lag — instrumented, not recalled
+
+Cost authority = **`shipments`** (the carrier-invoice ingest, fed by the `invoices` email ledger:
+OnTrac CSV / UPS CSV / FedEx XLSX per `ShippingReports/CLAUDE.md`). `cost` is non-NULL wherever a
+row exists. Invoice arrival, from `invoices.email_date` against the cohort Monday:
+
+| invoice | ship week | landed | lag |
+|---|---|---|---:|
+| OnTrac `AHB_00416` | 8/10 | 2026-08-21 | **11d** |
+| FedEx `AHB_00422` | 8/10 | 2026-08-25 | **15d** |
+| FedEx `AHB_00421` | 8/3 | 2026-08-25 | **22d** |
+| FedEx `AHB_00415` | 7/27 | 2026-08-21 | **25d** |
+
+Coverage by cohort age, measured 2026-08-26:
+
+| cohort | age | OnTrac | FedEx | UPS |
+|---|---:|---:|---:|---:|
+| `_SHIP_2026-07-27` | 30d | 100% | 100% | 100% |
+| `_SHIP_2026-08-03` | 23d | **79%** | 99% | 100% |
+| `_SHIP_2026-08-10` | 16d | **58%** | 86% | 100% |
+| `_SHIP_2026-08-17` | 9d | 0% | 0% | 0% |
+| `_SHIP_2026-08-24` | 2d | 0% | 0% | 0% |
+
+**OnTrac is the laggard** and is still not complete at 23 days. A whole-week `Total $` is realistic
+at **~4 weeks**, and the refresh cadence follows that measurement rather than a guess.
+
+🔴 **INVOICES ONLY — never a quoted or estimated rate, not even as a stand-in for a late invoice.**
+A ShipStation quote is an estimate, not a commitment ([[quote-endpoint-measured-accurate]]);
+blending measured and estimated dollars in one row produces a number nobody can falsify, which is
+precisely how work gets sent in the wrong direction. A late lane shows `—`, not a modelled figure.
+
+🔴 **Invoice ingest is LOCAL today, not DigitalOcean.** The gmail → `invoices` → `shipments` chain
+runs on this machine and DO holds only `shopify_orders`. When invoice ingest moves to DO the source
+of `shipments` changes and nothing else in this rule does. **Do not build toward the DO side from
+here — another session owns that epic.**
+
+#### 🔴 The air reconciliation — the tag is a PRECISE but INCOMPLETE air signal
+
+Cross-checking tag-derived air against carrier invoices on matured cohorts:
+
+| cohort | air by tag | air by invoice | hidden |
+|---|---:|---:|---:|
+| `_SHIP_2026-07-13` | 84 | 88 | **+5** |
+| `_SHIP_2026-07-20` | 208 | 217 | **+9** |
+| `_SHIP_2026-07-27` | 117 | 124 | **+7** |
+| `_SHIP_2026-08-03` | 179 | 188 | **+9** |
+| `_SHIP_2026-08-10` | 166 | 175 | **+9** |
+
+**Every box the tag calls air was billed as air — precision is 100%.** But **5–9 boxes a week are
+billed FedEx 2Day with no 2Day tag**, almost all of them `!ANY FedEx - <Hub>_AHB!` — the fence
+resolved to air at the dock. The miss is one-directional: the tag basis **always undercounts air**,
+which is the flattering direction for the number Kurt is watching. This is why the service priority
+puts **invoice above tag**: once a lane is invoiced the air row corrects upward, and because that
+happens before the count freeze on a normal week, the frozen number is the invoiced one.
+
+#### Why it is not a `.gs` tab on the `Running Reship` project
+
+**The `.gs` project cannot reach `shipping.db`, and every signal this table needs lives there.**
+The deployed tab writers pull from Shopify GraphQL and ParcelPanel; neither carries the applied
+routing tag's service token, and neither carries `shipments.service`/`shipments.cost` — the
+carrier-invoice data that is the entire cost half and the only complete air signal. The cloud
+MySQL holds only `shopify_orders` (the precondition gate above), so a Jdbc route does not exist
+either. **Forcing this into Apps Script would mean per-order ParcelPanel calls for a carrier we
+already have locally, on the exact surface another session is migrating.** A Python writer feeding
+the sheet is the honest home; a `.gs` tab is not.
+
+Consequence, stated plainly: **this does not deploy to Apps Script, no `gas_swap.py push` is
+involved, and none of the five `.gs` files change.**
+
+#### Asserts — named so a refusal is greppable, and they REFUSE rather than repair
+
+| Name | Invariant |
+|---|---|
+| `CM_REPRODUCE_GATE` | the 08-24 reference reproduces before any other week is computed |
+| `CM_ASSERT_ROWS_SUM_TO_COHORT` | every box lands in exactly one row; rows sum to the cohort |
+| `CM_ASSERT_AIR_GROUND_EXCLUSIVE` | no box satisfies both the air and the ground test |
+| `CM_ASSERT_KNOWN_KEY_PASSES` | a known-present `order_number` survives the filter — **a zero is a claim** |
+| `CM_ASSERT_FROZEN_COUNTS` | a frozen count column may not be restated |
+| `CM_UNMAPPED` | `Other / Unmapped` is itemized by reason, never a bare number |
+| `CM_PENDING_UNKNOWN` | a stale cohort replica reports `unknown`, never `0`, and blocks the freeze |
+| `CM_FENCES_OPEN` | pending > 0 keeps the column provisional and says so |
+| `CM_STALE_SOURCE` | `fulfillments` untouched > 3d (mirrors `freshness_sweep.py`'s own rule) |
+| `CM_NO_LABELS_YET` | a cohort with no labels is not written at all |
+
+#### 🔴 WRITER-OWNERSHIP GATE — **NOT MET. This is UNOWNED and is therefore NOT SHIPPED.**
+
+Per the standing gate a writer is not shipped until it has (a) a scheduled owner that survives the
+machine being off at fire time and (b) a freshness assert in a reader or in
+`_outputs/scripts/freshness_sweep.py`. **Neither is armed.** What it needs, named:
+
+- **(a) Owner:** a **logon-cycle / `StartWhenAvailable`** task — 🔴 never a bare fixed-time schtask
+  (the machine is off at 6am; five Monday 6–8am tasks never ran). Default fire ~noon.
+  Cadence follows the measured lag above: **daily** while any column in the window is provisional,
+  which is what both clocks need — counts settle within days, costs over ~4 weeks.
+- **(b) Freshness:** `CM_STALE_SOURCE` is implemented in-tool, but nothing outside the tool watches
+  whether the tool itself ran. It needs a `freshness_sweep.py` entry on
+  `_outputs/reports/carrier_mix_ledger.json` (max age ~2d). That file lives outside this repo and
+  was **not** modified here.
+
+Until both are armed this is a manually-run report. **Silence must fail loudly, and right now it
+does not.**
+
+#### Outputs
+
+`_outputs/reports/carrier_mix_ledger.json` (the write-once state: per column `counts`,
+`counts_frozen`, `residual_pending`, per-lane `cost`/`cost_frozen`, and a rolling 20-entry event
+log) and `_outputs/reports/carrier-mix-pivot.md` (the rendered table). Both are re-derivable from
+`shipping.db` *except* the frozen ship-time count reading, which is not — that is the one value
+here with no second source, and it is the reason the ledger is written atomically and never
+rewritten in place for a frozen key.
