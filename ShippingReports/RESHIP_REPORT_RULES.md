@@ -3225,3 +3225,5 @@ collision sweep no duplicate top-level names; write-shape replay under node (wri
 grid vs old extents: new-shorter-than-old blanks the tail, new-wider extends, 1-row write does not
 arm the headerless assert; holdRefresh_ run-batching emits identical cells to the per-cell loop on
 seeded plans, including gap splits).
+
+> D33 companion: hold tag taxonomy, _FLOWHOLD reason classes, _UNRESOLVED lifecycle + cancellation terms = [HOLD_BUSINESS_RULES.md](HOLD_BUSINESS_RULES.md) (mirrors Kurt's Google Doc, the authority).
