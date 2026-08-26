@@ -14,8 +14,10 @@ invisible in a weekly total. Two ways of drawing this table destroy the signal o
 * **OnTrac and LaserShip counted as two carriers** halves the share we are trying to watch.
   ``canon.normalize_carrier`` already folds the alias; this module never re-implements it.
 
-READ-ONLY BY CONSTRUCTION. ``connect_ro`` only — Claude never write-connects ``shipping.db``
-(MSIX/WAL corruption, 6/27 + 7/01). There is no sheet-write path in this file on purpose.
+DB READ-ONLY BY CONSTRUCTION. ``connect_ro`` only — Claude never write-connects ``shipping.db``
+(MSIX/WAL corruption, 6/27 + 7/01). The ONLY write anywhere is the Sheets API call behind
+``--write-sheet`` (Kurt-authorized 2026-08-26), which repaints the ``Carrier Mix`` tab of the
+Running Reship sheet as a VIEW of the ledger — see D35c. It never touches any other tab.
 
 Run::
 
@@ -24,6 +26,7 @@ Run::
     python carrier_mix_pivot.py --verify-gate   # reproduce the 2026-08-24 reference numbers
     python carrier_mix_pivot.py --self-test     # exercise the branches a normal week never hits
     python carrier_mix_pivot.py --no-ledger     # render only, touch nothing
+    python carrier_mix_pivot.py --write-sheet   # …and repaint the `Carrier Mix` sheet tab (D35c)
 
 🔴 `--verify-gate` is a HAPPY PATH and is NOT evidence on its own: it resolves before the
 Pending/denominator branch is ever reached. Run `--self-test` too, or a change lands green
@@ -97,6 +100,17 @@ COUNT_FREEZE_MAX_AGE_DAYS = 10
 OUT_DIR = _HERE.parents[2] / "_outputs" / "reports"
 LEDGER = OUT_DIR / "carrier_mix_ledger.json"
 REPORT = OUT_DIR / "carrier-mix-pivot.md"
+
+# ── Sheet view (D35c) ────────────────────────────────────────────────────────
+# The Running Reship PIVOT sheet. The tab is a VIEW of the ledger, repainted whole each run;
+# the ledger above is the memory. NOT an Apps Script tab (D35 "Why it is not a .gs tab").
+SHEET_ID = "1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU"
+SHEET_TAB = "Carrier Mix"
+SHEET_CREDS = _HERE.parents[1] / "shipping-perfomance-review-accd39ac4b78.json"  # gitignored SA key
+# A1 marker: ownership test for the repaint gate AND the tab's visible title. 🔴 Written in the
+# MAIN batch; the "Last refreshed" stamp row is written LAST in a separate call, so a missing
+# stamp row = an incomplete paint (crash between clear and finish), loudly visible.
+SHEET_TITLE = "Carrier Mix — ship weeks as columns (D35)"
 
 # The `fulfillments` ingest (sync_logon.py) is expected to touch rows at least this often;
 # mirrors `_outputs/scripts/freshness_sweep.py`'s own 3-day rule for the same table.
@@ -453,21 +467,23 @@ def _cell_cost(e, lane):
     return f"{v['coverage']:.0%} inv · ${v['per_box']:.2f}/bx · ${v['spend']:,.0f} so far"
 
 
-def render(cols, ledger):
-    """Markdown pivot: ship weeks as COLUMNS, one count row + one cost row per lane."""
+def grid(cols, ledger):
+    """The pivot as a plain 2-D grid of cell STRINGS — header row first, label in column 0.
+
+    🔴 This is the ONE place ledger state becomes cell text. Both renderers — the markdown
+    `render` below and the sheet repaint in `write_sheet` — consume this grid verbatim and add
+    only presentation (pipes/bold vs. a Sheets range). Forking either renderer onto its own cell
+    logic is how the terminal and the tab drift into showing two different tables (D35c).
+    """
     tags = [c["tag"] for c in cols]
-    head = "| Row | " + " | ".join(t.replace("_SHIP_", "") for t in tags) + " |"
-    sep = "|---|" + "---:|" * len(tags)
-    out = [head, sep]
+    rows = [["Row"] + [t.replace("_SHIP_", "") for t in tags]]
     for lane in LANES:
-        out.append("| **" + lane + "** | " + " | ".join(
+        rows.append([lane] + [
             _cell_count(ledger["columns"].get(t, {}), lane, next(c["total"] for c in cols if c["tag"] == t))
-            for t in tags) + " |")
-        out.append("| " + lane + " $ | " + " | ".join(
-            _cell_cost(ledger["columns"].get(t, {}), lane) for t in tags) + " |")
-    out.append("| " + PENDING + " | " + " | ".join(
-        ("unknown" if c["pending"] is None else str(c["pending"])) for c in cols) + " |")
-    out.append("| **" + TOTAL + "** | " + " | ".join(f"**{c['total']}**" for c in cols) + " |")
+            for t in tags])
+        rows.append([lane + " $"] + [_cell_cost(ledger["columns"].get(t, {}), lane) for t in tags])
+    rows.append([PENDING] + [("unknown" if c["pending"] is None else str(c["pending"])) for c in cols])
+    rows.append([TOTAL] + [str(c["total"]) for c in cols])
     # Total $ is only meaningful once every lane in the week is complete — a sum over a mix of
     # frozen and partial lanes is a real-looking number that is low by an unknown amount.
     tot = []
@@ -475,12 +491,123 @@ def render(cols, ledger):
         e = ledger["columns"].get(c["tag"], {})
         lanes = [ln for ln in LANES if c["counts"][ln]]
         if lanes and all(e.get("cost_frozen", {}).get(ln) for ln in lanes):
-            tot.append(f"**${sum(e['cost'][ln]['spend'] for ln in lanes):,.0f}**")
+            tot.append(f"${sum(e['cost'][ln]['spend'] for ln in lanes):,.0f}")
         else:
             done = sum(1 for ln in lanes if e.get("cost_frozen", {}).get(ln))
             tot.append("—" if not done else f"partial ({done}/{len(lanes)} lanes)")
-    out.append("| " + TOTAL + " $ | " + " | ".join(tot) + " |")
+    rows.append([TOTAL + " $"] + tot)
+    return rows
+
+
+def render(cols, ledger):
+    """Markdown pivot: `grid()` plus presentation only (pipes and the approved bolding)."""
+    g = grid(cols, ledger)
+    out = ["| " + " | ".join(g[0]) + " |", "|---|" + "---:|" * (len(g[0]) - 1)]
+    for row in g[1:]:
+        label, cells = row[0], row[1:]
+        if label in LANES or label == TOTAL:
+            label = f"**{label}**"
+        if row[0] == TOTAL:
+            cells = [f"**{c}**" for c in cells]
+        elif row[0] == TOTAL + " $":
+            cells = [f"**{c}**" if c.startswith("$") else c for c in cells]
+        out.append("| " + label + " | " + " | ".join(cells) + " |")
     return "\n".join(out)
+
+
+# ── Sheet view (D35c): repaint the `Carrier Mix` tab as a VIEW of the ledger ─
+def _foreign_tab(a1_value, tab_is_empty):
+    """True when an existing `Carrier Mix` tab is NOT ours to repaint.
+
+    Ours = A1 carries the SHEET_TITLE marker, or the tab is completely empty (a crash between
+    the clear and the main batch leaves exactly that state — it must be repaintable, not a
+    wall). Anything else is somebody's tab: 🔴 REFUSE, never overwrite. Pure so the refusal is
+    exercisable in --self-test without a network.
+    """
+    if tab_is_empty:
+        return False
+    return str(a1_value or "").strip() != SHEET_TITLE
+
+
+def write_sheet(cols, ledger, notes):
+    """Repaint the `Carrier Mix` tab from `grid()` — full repaint, stamp written LAST.
+
+    🔴 The LEDGER is the memory (write-once semantics live there and only there); this tab is a
+    VIEW and is cleared + rewritten whole every run. Do NOT "fix" the repaint into per-cell
+    write-once — that duplicates the ledger's job in a second store and the two will disagree.
+    🔴 All values go up with valueInputOption=RAW so every cell lands as literal text and Sheets
+    coerces nothing — `—` stays `—` (blank/em-dash ≠ $0; a numeric 0 in an un-invoiced cost cell
+    claims the lane cost nothing, D35 failure #7).
+    🔴 The `Last refreshed` stamp row is a SEPARATE final write: a missing stamp row = the paint
+    died partway and must be rerun. The note row (in the main batch) says exactly that.
+    """
+    from zoneinfo import ZoneInfo  # noqa: PLC0415 — sheet mode only; keep read paths dep-free
+
+    # google-api-python-client ships no py.typed/stubs — resolvable at runtime (proved by the
+    # hold_write/tnt1 writers on this same SA), invisible to a static checker. Suppressed
+    # narrowly, same pattern as `from lib import canon` above.
+    from google.oauth2.service_account import Credentials  # type: ignore[reportMissingImports]  # noqa: PLC0415
+    from googleapiclient.discovery import build  # type: ignore[reportMissingImports]  # noqa: PLC0415
+
+    if not SHEET_CREDS.exists():
+        raise CarrierMixError(f"CM_SHEET_NO_CREDS: {SHEET_CREDS} not found")
+    creds = Credentials.from_service_account_file(
+        str(SHEET_CREDS), scopes=["https://www.googleapis.com/auth/spreadsheets"])
+    svc = build("sheets", "v4", credentials=creds, cache_discovery=False)
+
+    # Metadata first: prove we can see the spreadsheet (and echo its identity) before writing.
+    meta = svc.spreadsheets().get(
+        spreadsheetId=SHEET_ID, fields="properties.title,sheets.properties.title").execute()
+    tabs = [s["properties"]["title"] for s in meta.get("sheets", [])]
+    print(f"  sheet: {meta['properties']['title']!r} ({SHEET_ID}) · tabs: {tabs}")
+
+    vals = svc.spreadsheets().values()
+    if SHEET_TAB not in tabs:
+        svc.spreadsheets().batchUpdate(
+            spreadsheetId=SHEET_ID,
+            body={"requests": [{"addSheet": {"properties": {"title": SHEET_TAB}}}]}).execute()
+        print(f"  created tab {SHEET_TAB!r}")
+    else:
+        got = vals.get(spreadsheetId=SHEET_ID, range=f"'{SHEET_TAB}'!A1:B2",
+                       valueRenderOption="UNFORMATTED_VALUE").execute().get("values", [])
+        a1 = got[0][0] if got and got[0] else ""
+        if _foreign_tab(a1, not got):
+            raise CarrierMixError(
+                f"CM_SHEET_FOREIGN_TAB: a tab named {SHEET_TAB!r} already exists and its A1 "
+                f"({str(a1)[:60]!r}) is not this tool's marker — refusing to overwrite a tab "
+                "this tool did not paint.")
+
+    g = grid(cols, ledger)
+    block = [[SHEET_TITLE], [""]] + g + [[""]] + [[
+        "Rules SSOT: AppyHour/ShippingReports/RESHIP_REPORT_RULES.md D35/D35c · the ledger "
+        "(_outputs/reports/carrier_mix_ledger.json) is the write-once MEMORY, this tab is a VIEW "
+        "repainted whole each run — do not add per-cell write-once here · '—' = not invoiced yet, "
+        "NEVER $0 · if the 'Last refreshed' row below the run notes is missing, the paint is "
+        "INCOMPLETE — rerun --write-sheet."]] \
+        + [[ln] for ln in ([f"- {n}" for n in notes] or ["- run notes: none"])] \
+        + [[""]]
+    vals.clear(spreadsheetId=SHEET_ID, range=f"'{SHEET_TAB}'").execute()
+    vals.update(spreadsheetId=SHEET_ID, range=f"'{SHEET_TAB}'!A1",
+                valueInputOption="RAW", body={"values": block}).execute()
+
+    # Read back the header row before stamping — the stamp asserts a verified paint, not a sent one.
+    hdr_row = 3  # A1 title, A2 blank, row 3 = grid header
+    back = vals.get(spreadsheetId=SHEET_ID,
+                    range=f"'{SHEET_TAB}'!A{hdr_row}:Z{hdr_row}",
+                    valueRenderOption="UNFORMATTED_VALUE").execute().get("values", [[]])[0]
+    if [str(v) for v in back[:len(g[0])]] != g[0]:
+        raise CarrierMixError(
+            f"CM_SHEET_READBACK: header row read back {back!r}, expected {g[0]!r} — "
+            "stamp NOT written, tab is marked incomplete by its absence.")
+
+    stamp_row = len(block) + 1
+    stamp = (f"Last refreshed: "
+             f"{datetime.now(ZoneInfo('America/New_York')):%Y-%m-%d %I:%M %p} ET — paint complete")
+    vals.update(spreadsheetId=SHEET_ID, range=f"'{SHEET_TAB}'!A{stamp_row}",
+                valueInputOption="RAW", body={"values": [[stamp]]}).execute()
+    print(f"  tab {SHEET_TAB!r} repainted: {len(g)} table rows, {len(notes)} note(s), "
+          f"stamp at A{stamp_row}")
+    return stamp_row
 
 
 # ── Reproduce gate ───────────────────────────────────────────────────────────
@@ -549,6 +676,15 @@ def self_test(con):
     check("canon: LaserShip folds to OnTrac",
           lambda: (_ for _ in ()).throw(AssertionError("alias drift"))
           if canon.normalize_carrier("LaserShip") != "OnTrac" else "OnTrac")
+
+    # Sheet repaint gate (D35c) — the refusal arm never runs on a normal --write-sheet.
+    def _ownership():
+        assert _foreign_tab("", True) is False, "empty tab must be repaintable"
+        assert _foreign_tab(SHEET_TITLE, False) is False, "our marker must be repaintable"
+        assert _foreign_tab("Weekly Costs", False) is True, "unknown A1 must refuse"
+        assert _foreign_tab("", False) is True, "non-empty tab with blank A1 must refuse"
+        return "empty/marker repaint · foreign refuses"
+    check("sheet: foreign-tab gate refuses (D35c)", _ownership)
 
     # unresolved_orders: all three arms, against the live DB.
     def _arms():
@@ -672,7 +808,13 @@ def main(argv=None):
     ap.add_argument("--self-test", action="store_true",
                     help="exercise every branch, including the ones a normal week never reaches")
     ap.add_argument("--no-ledger", action="store_true", help="render only; write nothing")
+    ap.add_argument("--write-sheet", action="store_true",
+                    help="repaint the `Carrier Mix` tab on the Running Reship sheet (D35c)")
     a = ap.parse_args(argv)
+    if a.write_sheet and a.no_ledger:
+        # The tab is a VIEW of the persisted ledger; painting a state that was never persisted
+        # puts the view ahead of the memory. Refuse the combination rather than pick a side.
+        raise CarrierMixError("CM_SHEET_NEEDS_LEDGER: --write-sheet cannot combine with --no-ledger")
 
     con = connect_ro()
     try:
@@ -717,6 +859,9 @@ def main(argv=None):
                           + table + "\n\n## Run notes\n\n"
                           + ("\n".join("- " + n for n in notes) or "- none") + "\n")
             print(f"  ledger → {LEDGER}\n  report → {REPORT}")
+        if a.write_sheet:
+            # After the ledger persists: the view must never be newer than the memory.
+            write_sheet(cols, led, notes)
         return 0
     finally:
         con.close()
