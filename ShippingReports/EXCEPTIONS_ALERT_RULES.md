@@ -1654,6 +1654,86 @@ key in `.env` was valid, an unknown order returned a clean 404 (which classifies
   why this check cannot be done for you.
 - P14 does not by itself restore the sweep. It guarantees the NEXT failure names its own cause.
 
+#### P14 post-mortem verdict (2026-08-26): RECOVERED BEFORE P14 EVER RAN — cause never named
+
+Read on 2026-08-26 from the ops DM (`D0BG1541F0A`) and `_exc_state`, after P14 deployed:
+
+- **The outage was FIVE runs, not two days.** The DM holds exactly five `400/400` FAILED alarms —
+  2026-08-24 16:25, 17:26, 18:25, 19:25, 20:25 **CST** (5:25–9:25pm ET) — and nothing after. The
+  "began abruptly at 04:25 ET" above is a 12/24-hour + timezone misread of the first alarm's
+  `16:25 CST` stamp; the DM is the artifact. `_exc_state` corroborates: `last_seen` stamps landed
+  on 08-24 before and after that window (1,507 that day), 178 on 08-25 (Tue thin sweep), 733 on
+  08-26 by ~12:25 CST — the 21:25 CST run on 08-24 was already answering again.
+- **No P14-instrumented run ever saw the failure.** P14 (`18522698f067`) deployed 08-26; the last
+  failing run was 08-24 20:25 CST. The histogram/body-sample/`threw` evidence for THIS incident
+  does not exist anywhere, and nothing retroactively creates it. Verdict: **recovered, cause never
+  named** — a ~5-hour deterministic per-request rejection (PP-side incident is the surviving
+  hypothesis; the key was proven valid and the API reachable by independent probes the same night).
+  P14's guarantee is prospective only.
+
+### P15 — A DOCK-MISS IS ONE EVENT, NOT N CUSTOMER PINGS (Kurt GO, 2026-08-26)
+
+> Kurt, on the ~660 `_SHIP_2026-08-24` Swedesboro boxes with zero pickup scans crossing
+> `EXC_NEVER_PICKED_MIN_DAYS = 3` on Thu 08-27, inside the Wed–Sun ping window:
+> **"i don't want another stream of exceptions though."**
+
+**The failure this prevents.** NEVER_PICKED_UP is the one class whose real-world cause is usually
+COLLECTIVE — a dock that wasn't swept strands hundreds of boxes at once — while the alerter's unit
+is the box. Unmodified, the 08-27 crossing posts ~600+ individual pings into #exceptions across 2–4
+hourly runs (each one `chat.postMessage` + an `appendRow`), which is precisely the flood that gets
+the channel muted, and a muted #exceptions is the failure this whole job exists to prevent. A
+mid-flood Slack 429 would also throw out of the posting loop AFTER `excLog_` rows landed but BEFORE
+`excSaveState_`, losing the `alerted` stamps and re-pinging the same boxes next run.
+
+**The rule.** NEVER_PICKED_UP verdicts are deferred within the run and flushed grouped by hub
+(`excNpuFlush_`). Per hub, per run:
+
+- **`count < EXC_NPU_COLLAPSE_MIN` (25): per-box behavior, verbatim** — ping-day post + tab row +
+  `alerted` + closed; Mon/Tue tab row + `logged`, alerted untouched.
+- **`count >= 25`: ONE alarm** through `excSlackPost_` (hub, count, carrier split, cohort tags,
+  8 sample orders) + **ONE summary tab row** (order cell `(N boxes)` — never '#'-prefixed, so it
+  can't be joined as an order; carrier cell carries the split verbatim). Every member is stamped
+  `alerted` + closed in `_exc_state` — covered by the hub alarm, no per-box posts, no per-box rows.
+  On Mon/Tue the group writes ONE summary row + per-box `logged` stamps (state only), `alerted`
+  stays untouched so the first ping day still alarms once; the summary row dedups on those same
+  `logged` stamps so hourly record-only runs cannot re-append it.
+
+**Why 25:** normal weeks produce 1–15 never-picked stragglers and the worst observed single run
+posted ~10 (08-19 21:46–23:46); the flood class is 500+, and a single missed pallet is ~50+ boxes.
+25 clears every observed straggler run with headroom and every real dock-miss lands far above it.
+
+**Hub attribution costs nothing and fabricates nothing.** The hub is parsed from the order's LIVE
+routing tags (`... - <Hub>_AHB!`), harvested by adding `tags` to the Shopify request
+`excResolveDelivered_` already makes (the P5a/P9 one-request-many-jobs pattern — zero extra calls
+anywhere). Assignment tags outrank `!NO` fences; several surviving hubs read `(multi-hub tags)`,
+no routing tag reads `(unknown hub)` — grouped honestly, never guessed (never-fabricate applies to
+hub attribution). Hub is re-derived each run and NEVER persisted — `_exc_state`'s schema is
+untouched, and a corrective retag moves a box's attribution instantly (the D17/D37 lesson).
+
+**What P15 deliberately does NOT change:**
+
+- 🔴 **Classification still requires the PP poll per box** (two-feed doctrine). "Classify the flood
+  off the local `delivery_status` feed + a sample of live probes" was considered and REJECTED: the
+  sweep runs in Apps Script, which cannot reach that store, and NEVER_PICKED_UP is defined as BOTH
+  feeds silent — a hub-level signal is not license to mint per-box verdicts from one feed. The cost
+  is bounded and already paced: ~1,300 due boxes on the crossing day ≈ 2–4 runs at
+  `EXC_PP_MAX_PER_RUN`/`EXC_TIME_BUDGET_MS`, inside P12/P13 discipline, no quota to protect (P12).
+- The dead-record bookkeeping, the limiter, the blanket wall (P14), and every dedup key: the hub
+  alarm stamps the same `(order, NEVER_PICKED_UP)` `alerted` token the per-box ping would have.
+- 🔴 The threshold is **PER RUN** (the alerter's natural unit). A flood wider than one run's cap
+  spans 2–4 hourly runs and emits one alarm per run with the residual count — bounded and
+  informative. Do not "improve" this into a per-day dedup that hides the residual counts, and do
+  not lower the threshold toward the straggler band (every alarm below ~15 is channel noise again).
+- `excSeedBacklogAsLogged` remains the manual full-mute lever; P15 is the automatic, targeted one.
+
+**Verification (2026-08-26):** vm replay of the deployed bytes (`p15_test.js`) 22/22 — one
+post/one row at ≥25 with alerted+closed on every member, per-box verbatim below 25, mixed hubs
+split correctly, record-only day writes one row + `logged` only, repeat record-only runs append
+nothing, the first ping day after a record-only flood alarms exactly once; `excSelfTest` 25 cases
+PASS under node (hub parsing: assignment beats fence, lone fence names its hub, multi-fence reads
+`(multi-hub tags)`, no tag reads empty); `node --check` ×5 + concat-of-4 clean; collision sweep
+0 duplicates.
+
 ## Known gaps (v1)
 
 - **Returned-to-origin reads as delivered.** Order 154810 (FedEx, dest AL) shows

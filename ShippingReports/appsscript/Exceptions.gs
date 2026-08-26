@@ -198,6 +198,20 @@ var EXC_PP_DEAD_QUARANTINE = 3;
 // time. A floor cannot lose a real case: the sweep re-polls hourly, so raising it DELAYS detection
 // rather than dropping it, and the genuine wk0803 never-collected boxes were silent 7-33 DAYS.
 var EXC_NEVER_PICKED_MIN_DAYS = 3;
+// 🔴 HUB-LEVEL COLLAPSE FOR THE NEVER-PICKED CLASS (Kurt 2026-08-26: "i don't want another stream
+// of exceptions", directive P15). When >= this many boxes from ONE hub classify NEVER_PICKED_UP in
+// a single run, that is not N customer problems — it is ONE operational event (a dock that was not
+// swept), and it gets ONE alarm naming the hub, the count, the carrier split and sample orders.
+// The individual boxes are recorded in _exc_state (alerted/closed by the hub alarm), with NO
+// per-box Slack post and NO per-box Exceptions-tab row.
+// Why 25: normal weeks produce 1-15 never-picked stragglers ACROSS the week and the worst observed
+// single run posted ~10 (2026-08-19 21:46-23:46); the failure this exists for is 500+ (wk0824:
+// ~633 Swedesboro boxes with zero scans crossing the 3-day floor together). 25 clears every
+// observed per-run straggler count with headroom while any real dock-miss — a single missed pallet
+// is ~50+ boxes — lands far above it. Below the threshold, per-box behavior is UNCHANGED.
+var EXC_NPU_COLLAPSE_MIN = 25;
+// Sample order numbers carried in a collapsed alarm (enough to spot-check, not a flood).
+var EXC_NPU_SAMPLE = 8;
 
 // 🔴 SCOPE: THE SWEEP CONSIDERS THE CURRENT COHORT AND THE PREVIOUS ONE, NOTHING OLDER
 // (Kurt 2026-08-19, directive P10). This is the CANDIDATE SET, not just the seed list — an order
@@ -411,18 +425,47 @@ var EXC_SHOPIFY_DELAYED_ = {};
 // 🔴 This map plus DELAYED plus "no movement scan at all" IS the Shopify triage of directive P5(a):
 // the set ParcelPanel is still worth asking about. Everything else Shopify has already answered.
 var EXC_SHOPIFY_ATTEMPTED_ = {};
+// order -> hub name parsed from the order's routing tags (`... - <Hub>_AHB!`). Same free ride as
+// the maps above: `tags` is one more field on the request excResolveDelivered_ already makes, so
+// the P15 hub collapse costs ZERO extra calls anywhere. Run-scoped; never persisted to _exc_state
+// (the state schema is untouched — hub is re-derived each run from live tags, which also means a
+// corrective retag moves the box's hub attribution instantly, the D17/D37 lesson).
+var EXC_SHOPIFY_HUB_ = {};
+
+/**
+ * PURE. Hub from an order's Shopify routing tags. Assignment tags win over `!NO` fences (a fence
+ * names a hub being EXCLUDED); a single surviving hub names the group, several read `(multi-hub
+ * tags)` rather than guessing — never-fabricate applies to hub attribution too. '' = no routing
+ * tag at all (grouped as unknown by the caller).
+ */
+function excHubOfTags_(tags) {
+  var assign = {}, any = {};
+  (tags || []).forEach(function (t) {
+    var m = String(t).match(/-\s*([A-Za-z][A-Za-z .]*?)_AHB!$/);
+    if (!m) return;
+    var hub = m[1].trim();
+    any[hub] = 1;
+    if (!/^!NO\s/i.test(String(t))) assign[hub] = 1;
+  });
+  var pool = Object.keys(assign).length ? assign : any;
+  var hubs = Object.keys(pool);
+  if (!hubs.length) return '';
+  return hubs.length === 1 ? hubs[0] : '(multi-hub tags)';
+}
 
 function excResolveDelivered_(orders, st) {
   EXC_SHOPIFY_MOVED_ = {};
   EXC_SHOPIFY_DELAYED_ = {};
   EXC_SHOPIFY_ATTEMPTED_ = {};
+  EXC_SHOPIFY_HUB_ = {};
   var alive = [], closed = 0, cancelled = 0, cancelledNums = [];
   for (var i = 0; i < orders.length; i += 100) {
     var batch = orders.slice(i, i + 100);
-    // 🔴 ONE Shopify call serves THREE jobs: closing delivered orders, closing CANCELLED orders
-    // (directive P9), and supplying the union's movement signal. All three therefore cost ZERO
-    // extra ParcelPanel budget — they ride on a request that was already being made.
-    var q = 'query($q:String!){orders(first:100, query:$q){edges{node{ name cancelledAt ' +
+    // 🔴 ONE Shopify call serves FOUR jobs: closing delivered orders, closing CANCELLED orders
+    // (directive P9), supplying the union's movement signal, and (P15) supplying the routing tags
+    // the hub collapse groups on. All four therefore cost ZERO extra ParcelPanel budget — they
+    // ride on a request that was already being made.
+    var q = 'query($q:String!){orders(first:100, query:$q){edges{node{ name cancelledAt tags ' +
             'fulfillments(first:10){ displayStatus events(first:50){edges{node{status}}} } }}}}';
     var qs = batch.map(function (n) { return 'name:' + n; }).join(' OR ');
     var d;
@@ -445,6 +488,8 @@ function excResolveDelivered_(orders, st) {
       // records (171813, 173555, 173559, 173560, 173562, 173596, 173632, 174409, 174413) produced
       // the "9/19 hard failures" that suppressed the whole sweep hourly. Close them here, for free.
       if (e.node.cancelledAt) { isCancelled[num] = 1; }
+      var hub = excHubOfTags_(e.node.tags);
+      if (hub) EXC_SHOPIFY_HUB_[num] = hub;
       (e.node.fulfillments || []).forEach(function (f) {
         if (f.displayStatus === 'DELIVERED') { delivered[num] = 1; }
         if (f.displayStatus === 'DELAYED') { EXC_SHOPIFY_DELAYED_[num] = 1; }
@@ -1292,8 +1337,133 @@ function excLog_(stamp, rec, cls, detail, eventAt) {
     sh.getRange(1, 1, 1, width).setValues([EXC_LOG_HEADERS]).setFontWeight('bold');
   }
   // display label in the sheet; the internal token stays in _exc_state.alerted_classes
-  sh.appendRow([stamp, eventAt || '', '#' + rec.order, rec.customer, excCarrier_(rec.carrier),
+  // P15: a hub-collapse SUMMARY row carries '(N boxes)' in the order column — no '#' prefix, so
+  // it can never be mistaken for (or joined against) a real order number — and its carrier cell
+  // is a pre-built SPLIT ('OnTrac 507 · FedEx 126') that must not be run through excCarrier_
+  // (the normalizer would collapse the whole split to its first substring match).
+  var summary = String(rec.order || '').charAt(0) === '(';
+  var ordCell = summary ? String(rec.order) : '#' + rec.order;
+  var carCell = summary ? String(rec.carrier || '') : excCarrier_(rec.carrier);
+  sh.appendRow([stamp, eventAt || '', ordCell, rec.customer, carCell,
                 rec.state, excDisplay_(cls), detail]);
+}
+
+// ---------------------------------------------------------------- P15 hub collapse
+
+/**
+ * 🔴 P15 — A DOCK-MISS IS ONE EVENT, NOT N CUSTOMER PINGS (Kurt 2026-08-26: "i don't want another
+ * stream of exceptions"). Flush the run's deferred NEVER_PICKED_UP set, grouped by the hub parsed
+ * from live routing tags (EXC_SHOPIFY_HUB_, harvested for free off excResolveDelivered_'s call).
+ *
+ * Per hub group:
+ *   count <  EXC_NPU_COLLAPSE_MIN  -> the per-box semantics of the inline path, verbatim:
+ *                                     ping day = post + tab row + alerted + closed;
+ *                                     Mon/Tue  = tab row + `logged` stamp, alerted untouched.
+ *   count >= EXC_NPU_COLLAPSE_MIN  -> ONE excSlackPost_ alarm (hub, count, carrier split, cohort
+ *                                     tags, EXC_NPU_SAMPLE sample orders) + ONE summary tab row;
+ *                                     every member stamped alerted + closed — covered by the hub
+ *                                     alarm, never pinged per box, never a per-box tab row.
+ *                                     Mon/Tue: ONE summary tab row + per-box `logged` stamps only
+ *                                     (state, not tab); `alerted` untouched so the collapse
+ *                                     re-evaluates and ALARMS on the first ping day.
+ *
+ * 🔴 What this deliberately does NOT change: classification (two-feed doctrine untouched — PP is
+ * still polled per box; a hub-level signal is not license to fabricate per-box verdicts from one
+ * feed), the dead-record bookkeeping, the pacing/limiter (P12/P13), and the dedup keys (the hub
+ * alarm stamps the same (order, class) `alerted` token the per-box ping would have).
+ * 🔴 The threshold is PER RUN. A flood larger than EXC_PP_MAX_PER_RUN spans 2-4 hourly runs and
+ * emits one alarm per run with the residual count — bounded and informative, never a stream.
+ */
+function excNpuFlush_(pending, stamp) {
+  var out = { posted: 0, recorded: 0, collapsed: 0, alarms: 0, hubs: [] };
+  if (!pending || !pending.length) return out;
+  var pingDay = excPingDayET_();
+  var byHub = {};
+  pending.forEach(function (p) {
+    var hub = EXC_SHOPIFY_HUB_[p.on] || '(unknown hub)';
+    (byHub[hub] = byHub[hub] || []).push(p);
+  });
+  Object.keys(byHub).sort().forEach(function (hub) {
+    var grp = byHub[hub];
+    if (grp.length < EXC_NPU_COLLAPSE_MIN) {
+      // Normal case — replay the inline per-box branches exactly.
+      grp.forEach(function (p) {
+        if (!pingDay) {
+          if (!p.rec.logged) p.rec.logged = [];
+          if (p.rec.logged.indexOf(p.v.cls) < 0) {
+            excLog_(stamp, p.rec, p.v.cls, p.v.detail, p.v.eventAt);
+            p.rec.logged.push(p.v.cls);
+            out.recorded++;
+          }
+          return;                                    // `alerted` untouched -> posts on Wednesday
+        }
+        excSlackPost_(excMessage_(p.rec, p.v.cls, p.v.detail, p.v.eventAt));
+        excLog_(stamp, p.rec, p.v.cls, p.v.detail, p.v.eventAt);
+        p.rec.alerted.push(p.v.cls);
+        p.rec.open = false;
+        out.posted++;
+      });
+      return;
+    }
+    // Collapse.
+    var carriers = {}, cohorts = {};
+    grp.forEach(function (p) {
+      var c = excCarrier_(p.rec.carrier) || '(unknown carrier)';
+      carriers[c] = (carriers[c] || 0) + 1;
+      cohorts[String(p.rec.cohort || '')] = 1;
+    });
+    var split = Object.keys(carriers).sort().map(function (c) {
+      return c + ' ' + carriers[c];
+    }).join(' · ');
+    var sample = grp.slice(0, EXC_NPU_SAMPLE).map(function (p) { return '#' + p.rec.order; }).join(', ');
+    var more = grp.length - Math.min(grp.length, EXC_NPU_SAMPLE);
+    var detail = 'HUB-LEVEL COLLAPSE (P15): ' + grp.length + ' boxes from ' + hub +
+                 ' have no carrier scan >= ' + EXC_NEVER_PICKED_MIN_DAYS + ' days after the ' +
+                 'label (' + split + '; ' + Object.keys(cohorts).sort().join(', ') + '). ' +
+                 'One event, not ' + grp.length + ' — the dock was likely not swept. Sample: ' +
+                 sample + (more ? ' (+' + more + ' more)' : '') +
+                 '. Individual boxes are stamped in _exc_state, not rowed here.';
+    var srec = { order: '(' + grp.length + ' boxes)', customer: hub + ' hub',
+                 carrier: split, state: '' };
+    if (pingDay) {
+      excSlackPost_(':no_entry: *never picked up by carrier — ' + hub + ': ' + grp.length +
+                    ' boxes* (' + Object.keys(cohorts).sort().join(', ') + ')\n' + split +
+                    '\n> No carrier scan >= ' + EXC_NEVER_PICKED_MIN_DAYS + ' days after the ' +
+                    'label. One alarm for the whole hub — the dock was likely not swept; ' +
+                    'individual boxes are recorded in _exc_state, not pinged.\n' +
+                    'Sample: ' + sample + (more ? ' (+' + more + ' more)' : ''));
+      excLog_(stamp, srec, 'NEVER_PICKED_UP', detail, '');
+      grp.forEach(function (p) {
+        if (p.rec.alerted.indexOf(p.v.cls) < 0) p.rec.alerted.push(p.v.cls);
+        p.rec.open = false;                          // covered by the hub alarm; a human owns it
+      });
+      out.posted++;
+      out.alarms++;
+      out.recorded++;
+      out.collapsed += grp.length;
+      out.hubs.push(hub + ':' + grp.length);
+    } else {
+      // Record-only day: the event goes on the tab ONCE; boxes get `logged` stamps in state only
+      // (no per-box rows), and `alerted` stays untouched so the first ping day still alarms.
+      // 🔴 The summary row itself dedups on the SAME `logged` stamps: a group whose members are
+      // all already logged writes nothing — otherwise every hourly record-only run would append
+      // a fresh summary row for the same event.
+      var fresh = grp.filter(function (p) {
+        return !(p.rec.logged && p.rec.logged.indexOf(p.v.cls) >= 0);
+      });
+      if (fresh.length) {
+        excLog_(stamp, srec, 'NEVER_PICKED_UP', detail, '');
+        fresh.forEach(function (p) {
+          if (!p.rec.logged) p.rec.logged = [];
+          p.rec.logged.push(p.v.cls);
+        });
+        out.recorded++;
+      }
+      out.collapsed += grp.length;
+      out.hubs.push(hub + ':' + grp.length + ' (recorded' + (fresh.length ? '' : ', already on tab') + ')');
+    }
+  });
+  return out;
 }
 
 // ---------------------------------------------------------------- entry point
@@ -1614,7 +1784,7 @@ function hourlyExceptionSweep() {
                       ' — results suppressed rather than reported as all-clear');
     }
 
-    var posted = 0, recorded = 0, wouldPost = [];
+    var posted = 0, recorded = 0, wouldPost = [], npuPending = [];
     batch.forEach(function (on) {
       var rec = st[on], ship = pp.ships[on];
       // Only stamp orders PP actually answered for. Stamping an unreached order sends it to the
@@ -1649,6 +1819,11 @@ function hourlyExceptionSweep() {
         // (order, class) must still fire on the first live sweep. See the EXC_DRY_RUN note.
         return;
       }
+      // 🔴 P15 — NEVER_PICKED_UP is DEFERRED and grouped by hub after the loop (excNpuFlush_).
+      // Below EXC_NPU_COLLAPSE_MIN per hub the flush replays the exact per-box semantics of the
+      // branches below; at or above it, ONE alarm covers the hub. Deliberately placed AFTER the
+      // seeding and dry-run branches so those modes keep their unchanged behavior.
+      if (v.cls === 'NEVER_PICKED_UP') { npuPending.push({ on: on, rec: rec, v: v }); return; }
       // 🔴 Mon/Tue: RECORD but do not alert. The gate must be here as well as inside
       // excSlackPost_ — that one only suppresses the HTTP call, while `alerted` is stamped right
       // after it returns. Relying on the post-path gate alone would mark the exception alerted
@@ -1669,6 +1844,17 @@ function hourlyExceptionSweep() {
       rec.open = false;                              // notified once; a human owns it now
       posted++;
     });
+
+    // P15 — flush the deferred never-picked set: per-box below the threshold, one hub alarm at or
+    // above it. Runs before excSaveState_ so alerted/logged/open stamps persist like every other.
+    var npu = excNpuFlush_(npuPending, stamp);
+    posted += npu.posted;
+    recorded += npu.recorded;
+    if (npu.collapsed) {
+      Logger.log('  P15 hub collapse: ' + npu.collapsed + ' never-picked box(es) covered by ' +
+                 npu.alarms + ' hub alarm(s) [' + npu.hubs.join(', ') + '] — no per-box pings, ' +
+                 'no per-box tab rows; every box stamped in _exc_state.');
+    }
 
     // Persist when recording, so the tab-write dedup (`rec.logged`) survives the next sweep and the
     // same exception is not appended hourly. `alerted` is still untouched while dry.
@@ -1706,7 +1892,8 @@ function hourlyExceptionSweep() {
              neverPolled: neverPolled, neverPolledDue: neverDue_, eligible: elig.length,
              asked: batch.length, overflow: overflow, served: pp.served,
              throttled: pp.throttled, deferred: pp.deferred, brakes: pp.brakes,
-             remainingMin: pp.remainingMin, dryRun: EXC_DRY_RUN };
+             remainingMin: pp.remainingMin, dryRun: EXC_DRY_RUN,
+             npuCollapsed: npu.collapsed, npuAlarms: npu.alarms, npuHubs: npu.hubs.slice() };
   } catch (e) {
     try {
       // 🔴 THE STOP-WRITE NO LONGER COVERS THIS (changed 2026-08-19, directive P8). It used to:
@@ -1954,6 +2141,33 @@ function excSelfTest() {
     fails.push('an older/blank cohort must NOT be in scope');
   }
   EXC_SCOPE_TAGS_ = savedScope;
+
+  // ---- P15: hub parsing (PURE) + collapse threshold sanity.
+  if (excHubOfTags_(['!ANY FedEx - Swedesboro_AHB!', '!ExtraGel24oz!']) !== 'Swedesboro') {
+    fails.push('assignment tag must yield its hub');
+  }
+  if (excHubOfTags_(['!OnTrac Ground - Anaheim_AHB!']) !== 'Anaheim') {
+    fails.push('carrier-ground assignment tag must yield its hub');
+  }
+  // a fence stack with no assignment: fences name hubs being EXCLUDED — one survivor names the
+  // group, several read (multi-hub tags), never a guess
+  if (excHubOfTags_(['!NO UPS - Dallas_AHB!']) !== 'Dallas') {
+    fails.push('a lone fence still names its hub (nothing else to group on)');
+  }
+  if (excHubOfTags_(['!NO UPS - Dallas_AHB!', '!NO FedEx - Nashville_AHB!']) !== '(multi-hub tags)') {
+    fails.push('multiple fence hubs must read (multi-hub tags), never pick one');
+  }
+  if (excHubOfTags_(['!ANY - Dallas_AHB!', '!NO OnTrac - Nashville_AHB!']) !== 'Dallas') {
+    fails.push('an assignment tag must outrank fence hubs');
+  }
+  if (excHubOfTags_(['!ExtraGel24oz!']) !== '' || excHubOfTags_([]) !== '' || excHubOfTags_(null) !== '') {
+    fails.push('no routing tag must yield the empty hub, never an invented one');
+  }
+  // threshold sits between the observed straggler ceiling (~15/week) and the flood class (500+)
+  if (!(EXC_NPU_COLLAPSE_MIN > 15 && EXC_NPU_COLLAPSE_MIN < 100)) {
+    fails.push('EXC_NPU_COLLAPSE_MIN must sit between normal stragglers and a dock-miss, got ' +
+               EXC_NPU_COLLAPSE_MIN);
+  }
 
   Logger.log(fails.length ? 'FAIL:\n' + fails.join('\n') : 'PASS: ' + (cases.length + 1) + ' cases');
   return fails;
