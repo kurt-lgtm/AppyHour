@@ -1779,13 +1779,13 @@ var HOLD_TZ = 'America/New_York';
 var HOLD_TAGS = ['_HOLD', '_CSHOLD', '_FLOWHOLD', '_UNRESOLVED'];
 var HOLD_ACTIVE_TAGS = ['_HOLD', '_CSHOLD', '_FLOWHOLD'];   // _UNRESOLVED is TERMINAL, not active
 var HOLD_REASON_TAGS = ['_DUP_SFO_10MINS', '_DUP_SRO_1DAY', '_POBOX'];
-var HOLD_CUTOVER = '2026-08-15';        // Dan states the new taxonomy in the group DM
 var HOLD_PAGE = 250;
 var HOLD_MAX_SWEEP = 6000;              // a sweep this big means the query broke — refuse, don't truncate
 var HOLD_GAP_ALERT_DAYS = 2;            // columns missed before the job tells on itself
 var HOLD_PROP_LAST_RUN = 'HOLD_LAST_RUN_AT';
 var HOLD_PROP_GAP_ALERTED = 'HOLD_GAP_ALERTED_ON';
 var HOLD_PROP_ALLOW_ALL_ZERO = 'HOLD_ALLOW_ALL_ZERO';
+var HOLD_PROP_LEGACY_ALERTED = 'HOLD_LEGACY_ALERTED_ON';   // HOLD_LEGACY_REGRESSION: once per ET day
 
 // (kind, label). Rows are resolved by LABEL against column A — NEVER by index. The label strings
 // are byte-copies of the live tab (generated, not transcribed); three of them are deliberately
@@ -1797,18 +1797,20 @@ var HOLD_PROP_ALLOW_ALL_ZERO = 'HOLD_ALLOW_ALL_ZERO';
 // physical rows can be deleted from the sheet at any time after this deploys (the row map
 // re-derives positions by label each run). A label listed here must stay byte-identical on the
 // sheet; renaming one requires sheet + this table to move in the same moment.
+// 🔴 EIGHT MORE retired 2026-08-26 (later the same day): the _HOLD migration COMPLETED — live
+// non-cancelled `_HOLD` reached 0 (43 fulfilled stripped, last 2 unfulfilled externally resolved;
+// new holds land only on _CSHOLD/_FLOWHOLD). Retired: `Orders on _HOLD (LEGACY…)`, `Legacy share
+// of active holds` (numerator structurally 0), the whole MIGRATION BACKLOG block (`_HOLD created
+// on/after 2026-08-15`, `_HOLD also carrying _UNRESOLVED`, the three `Customers with N Orders on
+// _HOLD` rows) and `List of Order IDs HELD  (_HOLD, unfulfilled)`. The sweep STILL queries _HOLD
+// (380 cancelled orders carry it; a regression must stay detectable) — the watchdog is now the
+// HOLD_LEGACY_REGRESSION tripwire in holdRefresh_, not screen rows. Pre-deletion history for the
+// retired physical rows lives only in git / the _outputs/cache PRE-FIX snapshot. D33.
 var HOLD_ROWS = [
-  ['SNAP', "Orders on _HOLD  (LEGACY - migration backlog, target 0)"],
   ['SNAP', "Orders on _CSHOLD"],
   ['SNAP', "Orders on _FLOWHOLD"],
   ['SNAP', "Orders on _UNRESOLVED  (terminal, not an active hold)"],
   ['SNAP', "Total on active hold  (_HOLD + _CSHOLD + _FLOWHOLD, union)"],
-  ['SNAP', "Legacy share of active holds"],
-  ['SNAP', "_HOLD created on/after 2026-08-15  (new holds still on the legacy tag)"],
-  ['SNAP', "_HOLD also carrying _UNRESOLVED  (double-tagged, should be 0)"],
-  ['SNAP', "Customers with 1 Orders on _HOLD"],
-  ['SNAP', "Customers with 2 Orders on _HOLD"],
-  ['SNAP', "Customers with 2+ Orders on _HOLD"],
   ['DAILY', "Orders moved to _HOLD status  (proxy: created that date, hold tag present now)"],
   ['DAILY', "   By Flow  (_FLOWHOLD)"],
   ['DAILY', "   By Customer Support  (_CSHOLD)"],
@@ -1830,7 +1832,6 @@ var HOLD_ROWS = [
   ['SNAP', "Unfulfilled _UNRESOLVED carrying a _SHIP_ cohort tag"],
   ['SNAP', "List of Order IDs - held in a live cohort"],
   ['SNAP', "List of Order IDs - _UNRESOLVED in a live cohort"],
-  ['SNAP', "List of Order IDs HELD  (_HOLD, unfulfilled)"],
   ['SNAP', "List of Order IDs - _CSHOLD"],
   ['SNAP', "List of Order IDs - _FLOWHOLD"],
   ['SNAP', "List of Order IDs - _UNRESOLVED (unfulfilled)"],
@@ -1995,14 +1996,6 @@ function holdMetrics_(pop, todayIso) {
   // survive only for the DAILY origin rows, the INTERNAL partition check, and _UNRESOLVED.
   var Hu = holdUnf_(H), CSu = holdUnf_(CS), FHu = holdUnf_(FH);
 
-  var custN = {};
-  Hu.forEach(function (x) { if (x.cust) custN[x.cust] = (custN[x.cust] || 0) + 1; });
-  function custWith(pred) {
-    var n = 0;
-    for (var k in custN) if (custN.hasOwnProperty(k) && pred(custN[k])) n++;
-    return n;
-  }
-
   function age(x) { return holdDayNum_(todayIso) - holdDayNum_(x.created); }
 
   var shipHeld = activeUnf.filter(function (x) { return holdShipTags_(x).length > 0; });
@@ -2023,32 +2016,24 @@ function holdMetrics_(pop, todayIso) {
 
   var V = {};
   // Open-holds rows: UNFULFILLED ONLY (2026-08-26 semantics — see the block comment above).
-  V["Orders on _HOLD  (LEGACY - migration backlog, target 0)"] = Hu.length;
   V["Orders on _CSHOLD"] = CSu.length;
   V["Orders on _FLOWHOLD"] = FHu.length;
   // _UNRESOLVED is TERMINAL, never an open hold — this row tracks the terminal bucket's size, so
   // it deliberately stays all-fulfillment (D33).
   V["Orders on _UNRESOLVED  (terminal, not an active hold)"] = UN.length;
   V["Total on active hold  (_HOLD + _CSHOLD + _FLOWHOLD, union)"] = activeUnf.length;
-  V["Legacy share of active holds"] = activeUnf.length
-    ? (100 * Hu.length / activeUnf.length).toFixed(2) + '%' : '0.00%';
 
-  // 🔴 INTERNAL keys — computed for the partition gate (holdGates_), NEVER written to the sheet
-  // (the write plan iterates HOLD_ROWS, and these labels are not in it). The fulfilled/other
-  // populations must stay computed: without them a partial sweep that dropped every fulfilled
-  // order would be invisible.
+  // 🔴 INTERNAL keys — computed for the partition gate (holdGates_) and the HOLD_LEGACY_REGRESSION
+  // tripwire, NEVER written to the sheet (the write plan iterates HOLD_ROWS, and these labels are
+  // not in it). The fulfilled/other populations must stay computed: without them a partial sweep
+  // that dropped every fulfilled order would be invisible. `_HOLD unfulfilled` moved from a
+  // published row to an INTERNAL key 2026-08-26 when the migration completed (target 0 reached) —
+  // the union above still counts _HOLD members, so a regression moves the published union too.
+  V["INTERNAL _HOLD unfulfilled"] = Hu.length;
   V["INTERNAL _HOLD total (uncancelled, any fulfillment)"] = H.length;
   V["INTERNAL _HOLD fulfilled"] = holdFul_(H).length;
   V["INTERNAL _HOLD other fulfillment status"] =
     H.filter(function (x) { return x.ff !== 'UNFULFILLED' && x.ff !== 'FULFILLED'; }).length;
-
-  V["_HOLD created on/after 2026-08-15  (new holds still on the legacy tag)"] =
-    Hu.filter(function (x) { return x.created >= HOLD_CUTOVER; }).length;
-  V["_HOLD also carrying _UNRESOLVED  (double-tagged, should be 0)"] =
-    Hu.filter(function (x) { return x.tags.indexOf('_UNRESOLVED') >= 0; }).length;
-  V["Customers with 1 Orders on _HOLD"] = custWith(function (n) { return n === 1; });
-  V["Customers with 2 Orders on _HOLD"] = custWith(function (n) { return n === 2; });
-  V["Customers with 2+ Orders on _HOLD"] = custWith(function (n) { return n >= 2; });
 
   V["_DUP_SFO_10MINS  (marker, sits on BOTH of the pair)"] = pop.counts['_DUP_SFO_10MINS'];
   V["_DUP_SRO_1DAY  (marker, sits on BOTH of the pair)"] = pop.counts['_DUP_SRO_1DAY'];
@@ -2079,7 +2064,6 @@ function holdMetrics_(pop, todayIso) {
   V["List of Order IDs - held in a live cohort"] = holdCohortIds_(shipHeld);
   V["List of Order IDs - _UNRESOLVED in a live cohort"] = holdCohortIds_(unShip);
 
-  V["List of Order IDs HELD  (_HOLD, unfulfilled)"] = holdIds_(Hu);
   V["List of Order IDs - _CSHOLD"] = holdIds_(CSu);
   V["List of Order IDs - _FLOWHOLD"] = holdIds_(FHu);
   V["List of Order IDs - _UNRESOLVED (unfulfilled)"] = holdIds_(holdUnf_(UN));
@@ -2118,10 +2102,10 @@ function holdMetrics_(pop, todayIso) {
  */
 function holdGates_(S) {
   var bad = [];
-  // The published _HOLD row is UNFULFILLED-only (2026-08-26); the partition closes against the
-  // INTERNAL sweep total. `other` is counted directly (not by subtraction), so this is a real
-  // three-way partition of the sweep, not an identity.
-  var h = S["Orders on _HOLD  (LEGACY - migration backlog, target 0)"];
+  // The _HOLD unfulfilled count is INTERNAL since 2026-08-26 (row retired, migration complete)
+  // but the partition still closes against the INTERNAL sweep total. `other` is counted directly
+  // (not by subtraction), so this is a real three-way partition of the sweep, not an identity.
+  var h = S["INTERNAL _HOLD unfulfilled"];
   var parts = h +
               S["INTERNAL _HOLD fulfilled"] +
               S["INTERNAL _HOLD other fulfillment status"];
@@ -2138,12 +2122,8 @@ function holdGates_(S) {
   if (act > tot || act < Math.max(h, cs, fh)) {
     bad.push('active-hold union ' + act + ' is impossible against per-tag ' + tot);
   }
-
-  var lst = S["List of Order IDs HELD  (_HOLD, unfulfilled)"];
-  var nIds = lst === '(none)' ? 0 : lst.split(',').filter(function (x) { return x.trim(); }).length;
-  if (nIds !== h) {
-    bad.push('ID list has ' + nIds + ' orders, count row says ' + h);
-  }
+  // (The old `List of Order IDs HELD` vs count-row check retired with both rows 2026-08-26: with
+  // neither side published it degenerated to holdIds_(Hu) vs Hu.length — an identity, not a check.)
   return bad;
 }
 
@@ -2308,6 +2288,26 @@ function holdRefresh_(dateIso, dry) {
     throw new Error('HOLD_ASSERT_ALL_ZERO: all seven hold/reason tags returned zero orders. ' +
                     'Refusing to stamp a column that is far more likely a broken query than an ' +
                     'empty queue. Set HOLD_ALLOW_ALL_ZERO=1 if it is real.');
+  }
+
+  // 🔴 HOLD_LEGACY_REGRESSION tripwire (2026-08-26 — the migration's watchdog rows are deleted,
+  // this replaces them). Non-cancelled `_HOLD` reached 0 that day (380 cancelled orders still
+  // carry the tag, which is why the sweep keeps querying it); ANY non-cancelled order on the tag
+  // again means something is RE-APPLYING the legacy tag — a Flow, a stale Mechanic task, a human
+  // habit — and must be said loudly. DM once per ET day (gap-alert pattern); logged every run.
+  var legacy = pop.tags['_HOLD'];
+  if (legacy.length > 0) {
+    var legacyIds = holdByCreated_(legacy).map(function (x) { return x.name; });
+    Logger.log('HOLD_LEGACY_REGRESSION: ' + legacy.length + ' non-cancelled order(s) on _HOLD: ' +
+               legacyIds.slice(0, 20).join(', ') + (legacyIds.length > 20 ? ', …' : ''));
+    if (!dry && props.getProperty(HOLD_PROP_LEGACY_ALERTED) !== today) {
+      props.setProperty(HOLD_PROP_LEGACY_ALERTED, today);
+      slack_('HOLD_LEGACY_REGRESSION: ' + legacy.length + ' non-cancelled order(s) carry the ' +
+             'legacy _HOLD tag again (migration reached 0 on 2026-08-26 — something is ' +
+             're-applying it): ' + legacyIds.slice(0, 20).join(', ') +
+             (legacyIds.length > 20 ? ', …' : '') +
+             '. New holds belong on _CSHOLD/_FLOWHOLD.', true);
+    }
   }
 
   var m = holdMetrics_(pop, today);

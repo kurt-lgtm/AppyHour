@@ -2411,6 +2411,53 @@ are deleted, the old split (rows 11/12/13) remains readable in the historical co
   check), and the entire `holdFixEtBasis` section unchanged (its four-cell table still resolves by
   label+date). `scratchpad/hold_port_test.js`.
 
+#### D33 addendum 2 — MIGRATION COMPLETE: THE LEGACY `_HOLD` ROWS ARE RETIRED (Kurt-approved, 2026-08-26)
+
+**The event.** The `_HOLD` migration reached its target the same day the unfulfilled-only cutover
+deployed: live non-cancelled `_HOLD` = **0** (the 43 fulfilled tag-noise orders were stripped; the
+last 2 unfulfilled were externally resolved). New holds land only on `_CSHOLD`/`_FLOWHOLD` —
+`_HOLD created on/after 2026-08-15` has read 0 since 08-25. The migration-backlog rows' target-0
+watchdog job is done, so the rows are retired: code first (labels removed from `HOLD_ROWS`,
+deployed), then the physical rows deleted via the service account — the same two-step as the
+morning's row removal.
+
+**Retired 2026-08-26 (8 labels + 1 section header; positions = final pre-deletion):**
+- Row 3 `Orders on _HOLD  (LEGACY - migration backlog, target 0)` — target reached.
+- Row 8 `Legacy share of active holds` — its numerator is structurally 0; the row could only ever
+  read 0.00% again. Retired WITH the legacy row (deliberate decision, recorded here).
+- Row 10 section header `-- MIGRATION BACKLOG - _HOLD must reach zero --` and its whole block:
+  row 11 `_HOLD created on/after 2026-08-15`, row 12 `_HOLD also carrying _UNRESOLVED`, rows
+  13–15 `Customers with 1/2/2+ Orders on _HOLD`.
+- Row 49 `List of Order IDs HELD  (_HOLD, unfulfilled)`.
+
+**Kept, deliberately:**
+- `Total on active hold  (_HOLD + _CSHOLD + _FLOWHOLD, union)` — label AND computation unchanged.
+  The sweep still queries `_HOLD` (below), so the union still counts any `_HOLD` member; with the
+  tag structurally at zero it equals the `_CSHOLD`+`_FLOWHOLD` union, and a regression moves this
+  published number too. Do NOT drop `_HOLD` from the union while the tag is still queried.
+- `$ held on _HOLD  (unfulfilled)` (DOLLARS AT REST), the AGING block, the HOLDS OPENED daily rows
+  (including `   Legacy _HOLD, origin not recorded` — they measure historical openings and back
+  `HOLD_ET_BACKFILL`), the HELD-INSIDE-A-LIVE-COHORT block, and every `_CSHOLD`/`_FLOWHOLD`/
+  `_UNRESOLVED` row.
+
+**🔴 The sweep KEEPS QUERYING `_HOLD`.** ~380 cancelled orders still carry the tag, and a
+regression — anything re-applying `_HOLD` to a live order — must stay detectable. The deleted
+rows' watchdog function is replaced by the **`HOLD_LEGACY_REGRESSION` tripwire** in
+`holdRefresh_`: if the non-cancelled `_HOLD` sweep ever returns > 0 orders again it logs every
+run and DMs the ops reader once per ET day (`HOLD_LEGACY_ALERTED_ON` property, gap-alert
+pattern), naming up to 20 order ids. `_HOLD unfulfilled` moved from a published row to the
+`INTERNAL _HOLD unfulfilled` key; the fulfilment partition gate and the union-impossibility gate
+still close against it. The old ID-list-vs-count gate retired with its rows (with neither side
+published it degenerated to an identity). `HOLD_CUTOVER` (the 08-15 taxonomy date) left the code
+with its only consumer; the date lives in this record.
+
+**🔴 History.** Write-once stands: the retired rows' already-stamped historical values rode along
+in the sheet until physical deletion. After deletion, the pre-deletion history for those rows
+lives ONLY in git (this repo's snapshots) and the PRE-FIX tab snapshot at
+`_outputs/cache/hold_tab_prefix_snapshot_2026-08-26.json` — taken immediately before the
+`deleteDimension` calls. Rows were deleted in DESCENDING order, each label re-verified against
+column A immediately before its deletion (abort per-row on mismatch).
+
 ### D34 — THE `By-State` BLOCK SUMMED **186** AGAINST A HEADLINE OF **7**, AND NOTHING CAUGHT IT (2026-08-25)
 
 > `Lost in Transit` published `_SHIP_2026-08-17` with `Not Arrived` = **7** at the top of the tab and
