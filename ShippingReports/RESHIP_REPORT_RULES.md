@@ -2777,6 +2777,21 @@ only the keys the test happens to touch is not evidence.
    `base` fixture, now annotated `dict[str, Any]` at the source rather than cast away at a call
    site — a cast there would hide a real mismatch later. **Check the blob, and re-run the checker
    yourself before acting on someone else's diagnostic.**
+
+   🔴 **It happened a THIRD time, and the line numbers are always the tell.** A reviewer reported
+   `"Any" is not defined` at lines **621 and 637** of the pushed commit. `from typing import Any`
+   is at line 41 of `94baf44` and the four `Any` uses are at 579/608/624/633/649 — 621 and 637 are
+   not among them. Reconstructing the window between the edit that first *used* `Any` (the render
+   self-test case) and the edit that *imported* it — i.e. the file minus the import (1 line), the
+   `base:` rationale comment (6) and the docstring warning (5), 12 lines total — puts the two
+   `Any` uses that existed in that window at **exactly 621 and 637**, and `ruff --select F821`
+   on the reconstruction returns exactly those two. The linter read a ~90-second mid-edit state.
+   **The procedure: if a reported line number does not contain the reported construct in the
+   commit, you are looking at a stale buffer — diff the tree against the blob
+   (`git diff <sha> -- <path>`, empty = identical) before changing anything.**
+   For the record it was never a runtime `NameError` either: all four uses are LOCAL variable
+   annotations, which Python never evaluates, and the module carries
+   `from __future__ import annotations` besides. Verified by execution, not by reasoning.
 2. **`inv` was genuinely unused in `verify_gate` — REMOVED.** Not a dropped assignment feeding a cost
    cell: the gate passes `{}` on purpose so it reads the TAG basis. 🔴 But an unused invoice index
    sitting in that signature was a live trap — a future reader "fixing" it would wire live invoices
