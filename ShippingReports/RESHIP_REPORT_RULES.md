@@ -2207,6 +2207,17 @@ fixed −4 offset instead of a tz database. Derived properly, from the 08-20 pop
 | 2026-08-18 | `Orders moved to _HOLD status  (proxy: …)` | 3 | **2** |
 | 2026-08-18 | `   Legacy _HOLD, origin not recorded` | 2 | **1** |
 
+> **Row RENAMED 2026-08-26 (Kurt):** `Orders moved to _HOLD status  (proxy: created that date, hold
+> tag present now)` → **`Holds opened (all types, by order-created date)`**. The old name was wrong
+> twice after the purge — the row counts ALL hold types (the Flow/CS/legacy breakdown sits beneath
+> it), and legacy `_HOLD` is retired. The table above and the `HOLD_ET_BACKFILL` record now describe
+> the RENAMED row; values, dates and semantics are untouched. Because the writer resolves rows by
+> label (`HOLD_ASSERT_ROW_SHAPE`), the rename is **code-first**: `HOLD_LABEL_ALIASES` in `Code.gs`
+> accepts the old cell text transiently, the code deploys, THEN the sheet cell is rewritten
+> (service-account one-shot `_outputs/scripts/hold_label_rename_20260826.py`); the alias entry is
+> removed once the cell is confirmed renamed. Renaming the cell before the deploy would
+> `HOLD_ASSERT_ROW_SHAPE`-kill every hourly refresh in between — never that order.
+
 **Every one of those four cells is ONE order moving.** `#174489`, created `2026-08-18T03:10:32Z` =
 **2026-08-17 23:10 EDT**, on `_HOLD` unfulfilled. It leaves 08-18 and joins 08-17; both rows move on
 both days because a `_HOLD` order with no `_CSHOLD`/`_FLOWHOLD` counts once in the total and once in

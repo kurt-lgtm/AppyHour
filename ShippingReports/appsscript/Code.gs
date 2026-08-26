@@ -1843,7 +1843,11 @@ var HOLD_ROWS = [
   ['SNAP', "Orders on _FLOWHOLD"],
   ['SNAP', "Orders on _UNRESOLVED  (terminal, not an active hold)"],
   ['SNAP', "Total on active hold  (_HOLD + _CSHOLD + _FLOWHOLD, union)"],
-  ['DAILY', "Orders moved to _HOLD status  (proxy: created that date, hold tag present now)"],
+  // Renamed 2026-08-26 (Kurt): was "Orders moved to _HOLD status  (proxy: created that date, hold
+  // tag present now)" — wrong twice since the purge: it counts ALL hold types (the Flow/CS/legacy
+  // breakdown sits beneath it), and legacy `_HOLD` is retired. HOLD_LABEL_ALIASES below accepts
+  // the old sheet label transiently, so the code deploys FIRST and cell A10 is renamed after.
+  ['DAILY', "Holds opened (all types, by order-created date)"],
   ['DAILY', "   By Flow  (_FLOWHOLD)"],
   ['DAILY', "   By Customer Support  (_CSHOLD)"],
   ['DAILY', "   Legacy _HOLD, origin not recorded"],
@@ -2116,8 +2120,7 @@ function holdMetrics_(pop, todayIso) {
     var names = {};
     dayH.concat(dayCs).concat(dayFh).forEach(function (x) { names[x.name] = true; });
     var row = {};
-    row["Orders moved to _HOLD status  (proxy: created that date, hold tag present now)"] =
-      Object.keys(names).length;
+    row["Holds opened (all types, by order-created date)"] = Object.keys(names).length;
     row["   By Flow  (_FLOWHOLD)"] = dayFh.length;
     row["   By Customer Support  (_CSHOLD)"] = dayCs.length;
     row["   Legacy _HOLD, origin not recorded"] = legacyOnly.length;
@@ -2161,6 +2164,26 @@ function holdGates_(S) {
 
 // ---------- sheet ----------
 
+// 🔴 TRANSIENT rename aliases: old sheet label -> the label the code now uses. Both writer and
+// sheet resolve by label (HOLD_ASSERT_ROW_SHAPE kills the refresh on a mismatch), so a rename must
+// be code-first: this map lets the deployed code accept the OLD cell text until the cell itself is
+// rewritten (service-account one-shot, after deploy). Remove an entry once its cell is renamed.
+var HOLD_LABEL_ALIASES = {
+  'Orders moved to _HOLD status  (proxy: created that date, hold tag present now)':
+    'Holds opened (all types, by order-created date)',
+};
+
+/** Canonical form of a column-A label: exact/trimmed alias match maps old -> new, else as-is. */
+function holdCanonLabel_(lab) {
+  var s = String(lab === null || lab === undefined ? '' : lab);
+  if (HOLD_LABEL_ALIASES[s] !== undefined) return HOLD_LABEL_ALIASES[s];
+  var t = s.trim();
+  for (var k in HOLD_LABEL_ALIASES) {
+    if (k.trim() === t) return HOLD_LABEL_ALIASES[k];
+  }
+  return s;
+}
+
 /** label -> 1-based row, resolved against column A. Throws rather than fall back to a position. */
 function holdRowMap_(grid) {
   var want = {}, i;
@@ -2169,7 +2192,7 @@ function holdRowMap_(grid) {
   var exact = {}, trimmed = {}, dupes = [];
   for (var r = 2; r <= grid.length; r++) {
     var cell = grid[r - 1] && grid[r - 1].length ? grid[r - 1][0] : '';
-    var lab = String(cell === null || cell === undefined ? '' : cell);
+    var lab = holdCanonLabel_(String(cell === null || cell === undefined ? '' : cell));
     if (!lab.replace(/\s/g, '')) continue;
     if (exact[lab] !== undefined) { if (want[lab]) dupes.push(lab); } else { exact[lab] = r; }
     var t = lab.trim();
@@ -2548,10 +2571,14 @@ function holdArmIsSet_() {
 }
 
 // The complete, closed set. A cell not in this table is not touchable by this function.
+// (Labels updated with the 2026-08-26 row rename — this one-shot is DONE and disarmed; the D33
+// record's four-cell table now describes the RENAMED row. holdRowMap_ resolves canonically either
+// way, and the all-or-nothing precondition refuses re-application regardless: cells already read
+// `to`.)
 var HOLD_ET_BACKFILL = [
-  { date: '2026-08-17', label: "Orders moved to _HOLD status  (proxy: created that date, hold tag present now)", from: 5, to: 6 },
+  { date: '2026-08-17', label: "Holds opened (all types, by order-created date)", from: 5, to: 6 },
   { date: '2026-08-17', label: "   Legacy _HOLD, origin not recorded", from: 5, to: 6 },
-  { date: '2026-08-18', label: "Orders moved to _HOLD status  (proxy: created that date, hold tag present now)", from: 3, to: 2 },
+  { date: '2026-08-18', label: "Holds opened (all types, by order-created date)", from: 3, to: 2 },
   { date: '2026-08-18', label: "   Legacy _HOLD, origin not recorded", from: 2, to: 1 },
 ];
 
