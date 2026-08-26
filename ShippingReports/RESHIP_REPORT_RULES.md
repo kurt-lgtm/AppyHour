@@ -2230,8 +2230,14 @@ Script: `scratchpad/hold_et_backfill.py`, output `hold_et_backfill.json`.
 **🔴 THE CORRECTION IS AN ARMED ONE-SHOT. NOTHING AUTO-CORRECTS. STATUS: NOT APPLIED.**
 `holdFixEtBasis(dry)` in `Code.gs` is the **only** thing in the file allowed past the write-once rule,
 and it is fenced on five sides:
-1. **Disarmed by default** — a wet run throws `HOLD_ASSERT_BACKFILL_DISARMED` unless Script Property
-   `HOLD_ARM_ET_BACKFILL=1`. Same shape as `HOLD_ALLOW_ALL_ZERO`.
+1. **Disarmed by default** — a wet run throws `HOLD_ASSERT_BACKFILL_DISARMED` unless the arm is set.
+   **2026-08-26: the arm moved from Script Property `HOLD_ARM_ET_BACKFILL` to a sheet cell** — tab
+   `_hold_arm` on the pivot sheet, A1 = `HOLD_ARM_ET_BACKFILL` (exact label, checked), B1 = `1` —
+   because the Script Property was settable only in the GAS UI (a human click) and **headless is the
+   north star of this report system**: no step may require a human click; DB writes go through
+   real-context scheduled tasks; sheet ops through the service account, which has editor and can
+   write this cell. (Not the `_state` tab: `saveState_()` clearContents()-wipes that whole tab every
+   hourly `build_()` run before the hold path executes, so an arm there would be erased unread.)
 2. **Dry by default** — `dry` must be **explicitly** `false` to write (the `ntBackfillFrozen` shape).
    That default is also the trigger guard: an event object is not `=== false`, so a stray binding
    previews instead of writing.
@@ -2241,12 +2247,14 @@ and it is fenced on five sides:
 5. 🔴 **All-or-nothing** — if any one cell fails its check the **whole set** is refused. The four
    cells are one fact; applying half leaves 08-17's total saying 6 while its Legacy row still says 5,
    and a self-inconsistent column is worse than an uncorrected one.
-On success it reads every cell back and **clears its own arm property** — a one-shot left armed is a
-standing exception to the write-once rule.
+On success it reads every cell back and **clears its own arm cell** (`_hold_arm`!B1) — a one-shot
+left armed is a standing exception to the write-once rule.
 
-**To apply (Kurt's call, after reading the table above):** set `HOLD_ARM_ET_BACKFILL=1` in Script
-Properties, run `holdFixEtBasis` once for the dry plan, then `holdFixEtBasis(false)`. **If it is never
-armed, those four cells stay on the UTC basis and this section is the record of why.**
+**To apply (Kurt's call, after reading the table above):** write `1` into `_hold_arm`!B1 (service
+account, headless). The next hourly `refresh` applies it: `build_()` calls `holdEtBackfillIfArmed_()`
+in a non-fatal try/catch beside `holdRefresh_()`, which runs `holdFixEtBasis(false)` iff the arm cell
+is set — no human click anywhere in the loop. **If it is never armed, those four cells stay on the
+UTC basis and this section is the record of why.**
 
 **Two determinism fixes vs the one-shot** (the port is not a transcription of a bug):
 - The active-hold union was built by iterating a Python **set**, so `Oldest unfulfilled hold` and the

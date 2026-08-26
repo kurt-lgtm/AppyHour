@@ -202,6 +202,10 @@ function build_() {
   // is stamped every later invocation returns after ONE Sheets read and zero Shopify calls.
   try { holdRefresh_(); }
   catch (e) { Logger.log('hold tab failed (non-fatal): ' + e); }
+  // Headless arm bridge (D33): applies the ET backfill one-shot iff the `_hold_arm` cell is set.
+  // Non-fatal like the Hold call above; on 24-of-24 hourly runs with no arm set this is ONE read.
+  try { holdEtBackfillIfArmed_(); }
+  catch (e) { Logger.log('hold ET backfill failed (non-fatal): ' + e); }
 }
 
 function orderNum_(key) { var n = parseInt(String(key).replace(/[^0-9]/g, ''), 10); return isNaN(n) ? 0 : n; }
@@ -2445,7 +2449,8 @@ function menuPreviewHold() {
 //
 // 🔴 THIS IS THE ONLY THING IN THIS FILE ALLOWED TO OVERWRITE A CELL THAT ALREADY HAS A VALUE.
 // It is DISARMED by default, DRY by default, and can touch nothing but the four cells named
-// below. Kurt reads the diff in D33 and arms it, or does not. Nothing auto-corrects — the
+// below. The arm is the `_hold_arm` cell (headless — see HOLD_ARM_TAB below); it gets set only
+// after the diff in D33 is read and approved. Nothing auto-corrects — the
 // write-once rule (D33 rule 1) is what makes this tab trustworthy and a self-healing exception
 // would quietly repeal it.
 //
@@ -2465,7 +2470,28 @@ function menuPreviewHold() {
 // Script: scratchpad/hold_et_backfill.py.
 // -------------------------------------------------------------------------------------
 
-var HOLD_PROP_ARM_ET_BACKFILL = 'HOLD_ARM_ET_BACKFILL';
+// 🔴 HEADLESS ARM (Kurt 2026-08-26 — headless is the north star of this report system; no step
+// may require a human click). The arm moved OFF Script Property HOLD_ARM_ET_BACKFILL (settable
+// only in the GAS UI) and onto a CELL the service account can write: tab `_hold_arm` on the pivot
+// sheet, A1 = the literal label 'HOLD_ARM_ET_BACKFILL', B1 = '1' to arm. Deliberately NOT the
+// `_state` tab — saveState_() clearContents()-wipes that whole tab on every hourly build_() run
+// BEFORE the hold path executes, so an arm written there would be erased before it was ever read.
+// This tab is touched by nothing else in the project.
+var HOLD_ARM_TAB = '_hold_arm';
+var HOLD_ARM_LABEL = 'HOLD_ARM_ET_BACKFILL';
+
+function holdArmSheet_() {
+  return SpreadsheetApp.openById(PIVOT_SHEET_ID).getSheetByName(HOLD_ARM_TAB);
+}
+
+/** Armed only when the tab exists, A1 carries the EXACT label, and B1 reads 1. The label check
+ *  means a drifted/renamed tab fails closed (disarmed), never open. */
+function holdArmIsSet_() {
+  var sh = holdArmSheet_();
+  if (!sh) return false;
+  var v = sh.getRange(1, 1, 1, 2).getValues()[0];
+  return String(v[0]).trim() === HOLD_ARM_LABEL && String(v[1]).trim() === '1';
+}
 
 // The complete, closed set. A cell not in this table is not touchable by this function.
 var HOLD_ET_BACKFILL = [
@@ -2487,12 +2513,12 @@ var HOLD_ET_BACKFILL = [
  */
 function holdFixEtBasis(dry) {
   var wet = (dry === false);
-  var props = PropertiesService.getScriptProperties();
   Logger.log('=== holdFixEtBasis — ' + (wet ? 'WRITING' : 'DRY (pass false to write)') + ' ===');
 
-  if (wet && props.getProperty(HOLD_PROP_ARM_ET_BACKFILL) !== '1') {
-    throw new Error('HOLD_ASSERT_BACKFILL_DISARMED: set Script Property ' +
-                    HOLD_PROP_ARM_ET_BACKFILL + '=1 to overwrite a written column. This is the ' +
+  if (wet && !holdArmIsSet_()) {
+    throw new Error('HOLD_ASSERT_BACKFILL_DISARMED: to overwrite a written column, write ' +
+                    HOLD_ARM_LABEL + ' in A1 and 1 in B1 of tab "' + HOLD_ARM_TAB + '" on the ' +
+                    'pivot sheet (service-account writable — the headless arm). This is the ' +
                     'only writer allowed past the write-once rule and it stays off until Kurt ' +
                     'reads the diff in RESHIP_REPORT_RULES D33.');
   }
@@ -2551,9 +2577,25 @@ function holdFixEtBasis(dry) {
   if (failed.length) throw new Error('HOLD_ASSERT_READBACK: ' + failed.join(' | '));
 
   // 🔴 Disarm immediately. This is a one-shot; leaving it armed turns the single exception to the
-  // write-once rule into a standing one.
-  props.deleteProperty(HOLD_PROP_ARM_ET_BACKFILL);
+  // write-once rule into a standing one. The arm is a CELL now, so the disarm clears B1.
+  var armSh = holdArmSheet_();
+  if (armSh) armSh.getRange(1, 2).setValue('');
+  SpreadsheetApp.flush();
   Logger.log('holdFixEtBasis: ' + plan.length + ' cell(s) corrected and read back clean. ' +
-             HOLD_PROP_ARM_ET_BACKFILL + ' cleared.');
+             HOLD_ARM_LABEL + ' arm cell cleared.');
   return { dry: false, written: plan.length, plan: plan };
+}
+
+/**
+ * Hourly bridge (headless). If the `_hold_arm` cell is set, the NEXT hourly refresh applies the
+ * one-shot — no human click anywhere. Called from build_() in a non-fatal try/catch, exactly like
+ * holdRefresh_. Takes no arguments, so the trigger-arg hazard cannot reach holdFixEtBasis's dry
+ * flag: the explicit `false` below is written here, after the arm-cell read, never derived from
+ * an event object. Every other fence (closed table, per-cell pre-state, all-or-nothing, readback,
+ * self-disarm) lives in holdFixEtBasis and is unchanged.
+ */
+function holdEtBackfillIfArmed_() {
+  if (!holdArmIsSet_()) return;
+  Logger.log('holdEtBackfillIfArmed_: arm cell is set — applying the ET backfill one-shot.');
+  holdFixEtBasis(false);
 }
