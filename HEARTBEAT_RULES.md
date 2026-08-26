@@ -35,9 +35,38 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
 7. **Checker self-beat:** `automation_health.py` writes its own beat last. If the checker itself dies,
    the NEXT run (or a human reading the ledger) sees it. Accepting the honest ceiling: a fully dead
    machine alerts nothing locally — that's what rule 6's external ping is for.
-8. **Don't wire `beat()` into files another agent has mid-flight** — coordinate first (2026-07-02:
+8. **A partial run must NEVER stamp `ok`.** A multi-leg task (e.g. `sync_all_carriers` = FedEx +
+   OnTrac + Veho) finishes every leg, then **raises** with the collected failures so its caller
+   stamps `fail:`. 🔴 2026-07-27: it swallowed all three legs' `FileNotFoundError` and returned
+   normally — `carriers: ok` on a run where zero invoices were pulled. Per-leg resilience (one
+   carrier's hiccup can't block the others) is NOT permission to report success.
+9. **Prod-tree parity is a monitored invariant — an undeployed fix is not a fix.** Scheduled tasks
+   run from `C:\AppyHourProd\AppyHour`, a separate copy of the dev tree; `check_prod_parity()`
+   alarms when a DB-relevant dev file is newer than its prod counterpart. 🔴 Four split-brain
+   incidents in a row (07-13, 07-22, 07-24, 07-27) were "already fixed" in dev while prod ran the
+   old file — 07-27's root cause was prod holding the 07-08 file-keyed `paths.db_path()` under a
+   deployed 07-22 guard, so the guard called a stale resolver and wrote legacy silently. **Deploy a
+   guard and its resolver together, or neither.** NEGATIVE: the check reports dev-NEWER only and
+   never suggests a sweep — some prod files are legitimately newer (local hotfixes), and blanket
+   dev→prod copying clobbers them.
+10. **Don't wire `beat()` into files another agent has mid-flight** — coordinate first (2026-07-02:
    daily_shipping_sync deferred while the writelock migration owns those files; checker covers it via
    `sync_heartbeat.json` age instead).
+11. **A cloud-replica table gets a DAILY data-age probe here, never only the weekly sweep's whole-table
+   gate.** 🔴 2026-08-26: local `shopify_orders` (replica of the cloud MySQL primary) sat **9 days
+   stale** behind the sweep's 14d gate after the single weekly Monday pull died ONCE on a transient
+   DO MySQL 2003 connect timeout (8/24) — no retry until the next Monday, 1,513 of
+   `_SHIP_2026-08-24`'s orders missing locally, carrier-mix Pending denominator at 40.2%. The cloud
+   primary was current the whole time; only the local leg was dead. `check_replica_freshness()` now
+   probes two INDEPENDENT signals daily: table DATA age (`shopify_orders` >4d, `weather_history`
+   >9d) and the ingest STAMP `C:\AppyHourData\replica_pull_stamp.json` (>4d; written by
+   `daily_shipping_sync.run_cloud_replica_pull`, which also retries 3× in-run). NEGATIVE: never
+   collapse the two — a pull that runs but moves nothing passes the stamp and trips the data age; a
+   dead pull behind a fresh-looking table trips the stamp. The stamp is ingest METADATA, distinct
+   from the order-placed `created_at` DATA column (an ingest timestamp is not an event date). The
+   stamp lives beside the canonical DB, NOT `%APPDATA%` — MSIX virtualization can mask a
+   real-profile write there from this checker's sandboxed run. A MISSING stamp is a loud finding by
+   design (deploy nag until the prod copy carries the pull stage).
 
 ## Wired beats (update when adding/removing)
 
@@ -51,4 +80,6 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
 | `freshness-sweep` | `_outputs/scripts/freshness_sweep.py` (weekly data-freshness monitor — Mon 12:33 Claude scheduled task; beats on run, flags or not) | 8 days |
 
 Checker also probes (no beat needed): `sync_heartbeat.json` age (>48h), `schtasks` AppyHour* Last
-Result ≠ 0, shipping.db `PRAGMA quick_check` (read-only immutable).
+Result ≠ 0, shipping.db `PRAGMA quick_check` (read-only immutable), **dev↔prod tree parity on
+DB-relevant `*.py` (rule 9)**, **cloud-replica freshness — `shopify_orders`/`weather_history` data
+age + `C:\AppyHourData\replica_pull_stamp.json` ingest stamp (rule 11)**.
