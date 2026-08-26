@@ -2130,7 +2130,8 @@ the whole time, because a blank cell and a not-yet-measured cell are the same pi
    past date column — and a `0` there is a real observation (the sweep covered every hold-tagged
    order and none was created that day), not a gap.
 4. **Rows resolve by LABEL against column A, columns by the row-1 DATE. Never by index.**
-   `HOLD_ASSERT_ROW_SHAPE` throws if any of the 40 labels is missing, `HOLD_ASSERT_DUP_LABEL` if one
+   `HOLD_ASSERT_ROW_SHAPE` throws if any owned label is missing (40 at launch; 36 since the
+   2026-08-26 unfulfilled-only addendum below retired four), `HOLD_ASSERT_DUP_LABEL` if one
    repeats. Three labels are deliberately INDENTED (`"   By Flow  (_FLOWHOLD)"`) and the leading
    spaces are part of the key; a trimmed match is accepted but logged.
 5. **Every partition must close before a single cell is planned** (`HOLD_ASSERT_PARTITION`, refuses
@@ -2313,6 +2314,87 @@ the four deployed files: NONE). The tab is named **`Hold`**, not `_HOLD` — `_H
 **Open, NOT built (recommendation only).** A `Last refreshed (UTC)` row on the tab would make
 staleness visible to a human reading the sheet rather than only to the ops DM. It changes the row
 list, so it waits for Dan/Kurt.
+
+#### D33 addendum — UNFULFILLED-ONLY SEMANTICS CUTOVER (Kurt, 2026-08-26)
+
+> Kurt, verbatim: **"I don't need row 12 for hold."** → **"we only care about open unfulfilled
+> holds"** → **"all types. if it was shipped on hold, then it was fulfilled, so not on hold"**.
+
+**The new definition.** An order counts as ON HOLD only while its fulfillment status is
+`UNFULFILLED` — for **every** hold tag (`_HOLD`, `_CSHOLD`, `_FLOWHOLD` alike). A fulfilled order
+still carrying a hold tag is tag noise, not a hold. Every open-holds row on the tab is now
+unfulfilled-only; the fulfilled/unfulfilled split rows are retired because the split is gone —
+**unfulfilled IS the number**. Readers use `Orders on _HOLD  (LEGACY - migration backlog,
+target 0)` (physical row 3) as the actionable `_HOLD` number.
+
+**🔴 THE MIXED-BASIS RECORD (this is the paragraph that has to survive).** Columns stamped **on or
+before 2026-08-26** hold **snapshot-basis** values: all uncancelled orders per tag, fulfilled
+included (08-20's published 94 `_HOLD` contained 43 fulfilled noise; unfulfilled was 51). Columns
+stamped **after** the new writer deploys are **unfulfilled-only** (the same 08-20 row would have
+read 51). Write-once (rule 1) means the old columns are never rewritten — the trend line crosses a
+definition seam at the deploy date and must be read on two bases, exactly like the UTC→Eastern seam
+above. The 2026-08-26 column was stamped by the OLD writer before this deployed; the first
+unfulfilled-only column is the first one stamped after deploy (expected 2026-08-27 — verify against
+the deploy time and correct this sentence if the 08-26 column was still blank at deploy).
+**A gated backfill of old columns to the new basis is NOT derivable**: per-tag membership on those
+dates was never persisted except 08-20 (which published its id lists, pre-split 51/43 — so 08-20's
+`_HOLD` row alone IS derivable at 51), and even the 08-20 lists carry no fulfillment status for
+`_FLOWHOLD`/`_UNRESOLVED`, and "fulfilled as of that date" is not reconstructible from today's
+statuses. No backfill is planned; this record is the mitigation. Until the physical retired rows
+are deleted, the old split (rows 11/12/13) remains readable in the historical columns.
+
+**Per-row verdicts (the full 40-row disposition):**
+- **RETIRED (4 rows — writer neither writes nor asserts them; physical rows deletable):**
+  `_HOLD unfulfilled  (actionable backlog)` (physical row 11 — redundant: row 3 now IS this
+  number), `_HOLD fulfilled  (shipped, tag never cleared - noise)` (row 12 — noise by definition),
+  `_HOLD other fulfillment status` (row 13), `List of Order IDs - _HOLD fulfilled (clear the tag)`
+  (row 53 — 🔴 this was the tag-cleanup work-list; fulfilled-with-tag orders are now invisible on
+  the tab, accepted per "we only care about open unfulfilled holds").
+- **REDEFINED to unfulfilled-only (11 rows):** `Orders on _HOLD` · `Orders on _CSHOLD` ·
+  `Orders on _FLOWHOLD` · `Total on active hold (union)` · `Legacy share of active holds` ·
+  `_HOLD created on/after 2026-08-15` · `_HOLD also carrying _UNRESOLVED` · the three
+  `Customers with N Orders on _HOLD` rows · `_FLOWHOLD with no reason tag`; plus the two id lists
+  `List of Order IDs - _CSHOLD` / `- _FLOWHOLD`.
+- **UNCHANGED — already unfulfilled-only (verified in code, not assumed):** the three
+  `$ held` rows (DOLLARS AT REST), the AGING section (denominator, three buckets, oldest
+  order/days), both `_SHIP_` cohort rows and their id lists, `List of Order IDs HELD`,
+  `List of Order IDs - _UNRESOLVED (unfulfilled)`.
+- **UNCHANGED — deliberately all-fulfillment (2 exceptions, flagged):**
+  1. `Orders on _UNRESOLVED  (terminal, not an active hold)`: `_UNRESOLVED` is terminal, never an
+     "open hold" (D33 definitions), so Kurt's rule does not reach it — the row tracks the terminal
+     bucket's size. The code does not entangle it with the open-holds rows.
+  2. The four **HOLDS OPENED** daily rows: they measure hold *openings* by `createdAt`, not open
+     holds; rebasing them would put a **third** basis inside partially-written rows and would
+     invalidate `HOLD_ET_BACKFILL`'s recorded `from`/`to` values. They keep the full population.
+- **Section headers** (`-- OPEN HOLDS BY TAG - snapshot, uncancelled --` etc.) are sheet text the
+  writer does not own; the "snapshot, uncancelled" wording is now stale and may be edited by hand.
+
+**Machinery notes.**
+- The fulfilled/other populations are still **computed** — as `INTERNAL` keys in `holdMetrics_`
+  that never reach the sheet (the write plan iterates `HOLD_ROWS` only) — because the fulfilment
+  partition gate needs them: published `_HOLD` (unfulfilled) + fulfilled + other must equal the
+  sweep total, with `other` now counted **directly** rather than by subtraction (the old
+  subtraction made that gate an identity that could never fire). `HOLD_ASSERT_ALL_ZERO` is
+  untouched: it fires on the raw sweeps, before any fulfillment filter.
+- `HOLD_ROWS` is now a **subset** of the physical tab. Retired labels are ignored by
+  `holdRowMap_`, so **the physical rows 11/12/13/53 can be deleted at any time after this
+  deploys** — the row map re-derives every position by label each run, and `holdFixEtBasis`
+  addresses its four cells by label+date through the same map (verified: nothing in the project
+  addresses the Hold tab by absolute row number). Deleting them BEFORE deploy kills the refresh
+  (`HOLD_ASSERT_ROW_SHAPE`), which is why the code landed first. Renaming a surviving label still
+  requires sheet + `HOLD_ROWS` to move in the same moment.
+- Until the pre-cutover columns' cells disagree-check ages out (i.e., for the rest of deploy day),
+  every redefined row logs a `Hold DISAGREEMENT` against the already-stamped 08-26 column on each
+  hourly run — expected, write-once keeps the sheet's value, and it stops with the next day's
+  column.
+- **Verification (2026-08-26):** new Python reference `scratchpad/hold_ref_unf0826.py`
+  (`hold_ref.py` kept untouched so the pre-cutover 36/36 + 73-assert record stays re-derivable);
+  differential vs `holdMetrics_` over the frozen 08-25 capture: **35/35** snapshot metrics and
+  **140/140** daily cells identical; behavioural suite extended to **79 assertions**, all passing —
+  including: no retired row is planned, no `INTERNAL` key leaks into the plan, retired physical
+  rows stay blank after a wet run, the mangled-fulfilment partition still closes (now a real
+  check), and the entire `holdFixEtBasis` section unchanged (its four-cell table still resolves by
+  label+date). `scratchpad/hold_port_test.js`.
 
 ### D34 — THE `By-State` BLOCK SUMMED **186** AGAINST A HEADLINE OF **7**, AND NOTHING CAUGHT IT (2026-08-25)
 
@@ -2730,11 +2812,12 @@ the count-freeze backstop **never execute**. A green run over those weeks says n
 that only runs when something is wrong, which is the code that matters. That is the same shape as
 D34: the one block a reader spot-checks was the one block structurally incapable of showing the bug.
 
-`--self-test` exercises **20 cases**, every one a branch a normal run does not take: all eleven
+`--self-test` exercises **21 cases**, every one a branch a normal run does not take: all eleven
 `classify` outcomes (including `UPS 2Day`, `Overnight` and `Veho`, none of which exist in live data
 today), the LaserShip→OnTrac fold, **all three arms** of `unresolved_orders`, all four named
-refusals, the force-freeze backstop, the "unknown denominator must block the freeze" case, and
-rendering a cohort set that contains an unlabelled column.
+refusals, the force-freeze backstop, the "unknown denominator must block the freeze" case,
+rendering a cohort set that contains an unlabelled column, and the sheet repaint's foreign-tab
+refusal (`_foreign_tab`, D35c — pure precisely so its refusal arm is exercisable without a network).
 
 🔴 **THE BRANCH SWEEP FOUND A LIVE CRASH — `KeyError: 'counts'` IN `_cell_count`.** A week with no
 labels yet is deliberately never written to the ledger (`total == 0` → `reconcile_ledger` is
@@ -2832,7 +2915,50 @@ unknown, never 0, and this column CANNOT freeze`. Empty prints `CM_NO_LABELS_YET
 not written. Note `_SHIP_2026-08-17` at **100.1%** — the replica can legitimately exceed the label
 count, which is why this is a completeness RATIO against labels and never a subtraction.
 
-**Gate for this file: `ruff` clean, `pyright` 0 errors / 0 warnings, `--self-test` 20/20,
+**Gate for this file: `ruff` clean, `pyright` 0 errors / 0 warnings, `--self-test` 21/21,
 `--verify-gate` PASS (OnTrac 1763 / FedEx Ground-HD 648 / FedEx 2Day 69 / UPS 20 / Total 2500,
 exact) — run all four before committing a change here, and run them from a cwd OUTSIDE the repo so
 the import path is exercised the way the scheduled owner will exercise it.**
+
+#### D35c — `--write-sheet`: THE TAB IS A VIEW, THE LEDGER IS THE MEMORY (Kurt-authorized 2026-08-26)
+
+Kurt, looking at the terminal pivot: *"push it to a new tab."* Authorized as a **new tab named
+`Carrier Mix`** on the Running Reship sheet (`1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU`),
+painted by `carrier_mix_pivot.py --write-sheet` via the `shipping-perfomance-review` service
+account (editor on the sheet; key gitignored at `AppyHour/shipping-perfomance-review-*.json`).
+This does not change the "not a `.gs` tab" decision above — the Python writer IS the honest home
+that section named; the bound Apps Script project still never touches this tab.
+
+1. 🔴 **ONE COMPUTE PATH, TWO RENDERERS.** `grid()` is the single place ledger state becomes cell
+   text; the markdown `render()` and the sheet repaint both consume it verbatim and add only
+   presentation. A second computation path for the sheet is how the terminal and the tab drift
+   into showing two different tables while both look right.
+2. 🔴 **WRITE-ONCE SEMANTICS LIVE IN THE LEDGER, AND ONLY THERE.** The tab is cleared and
+   repainted WHOLE every run — that is correct *because* the ledger is the memory and already
+   refuses to restate a frozen cell (`CM_ASSERT_FROZEN_COUNTS`). **Do not "fix" the repaint into
+   per-cell write-once on the sheet** — that duplicates the ledger's job in a second store and
+   the two will disagree. Corollary: `--write-sheet` refuses to combine with `--no-ledger`
+   (`CM_SHEET_NEEDS_LEDGER`) — the view must never get ahead of the memory.
+3. 🔴 **BLANK/`—` ≠ $0, IN THE SHEET TOO.** Every value goes up `valueInputOption=RAW`, so every
+   cell lands as literal text and Sheets coerces nothing — a `—` stays a text `—`, never a
+   numeric 0 in an un-invoiced cost cell (failure #7 above). No cell in this tab is meant to be
+   summed by a formula; the ledger is the queryable store.
+4. 🔴 **A HALF-PAINTED TAB MUST BE LOUD.** Write order: clear → main batch (A1 marker title, the
+   grid, the D35 note row, the run notes) → **read back the header row** → stamp row
+   (`Last refreshed: … ET — paint complete`) written **LAST** in its own call. A missing stamp
+   row = the paint died partway; the note row says exactly that and says to rerun. The stamp is
+   ET per the standing report-times rule.
+5. 🔴 **NEVER OVERWRITE A TAB THIS TOOL DID NOT PAINT.** Repaint is allowed only when the tab is
+   absent (create it), completely empty, or carries the A1 marker
+   (`Carrier Mix — ship weeks as columns (D35)`). Anything else → `CM_SHEET_FOREIGN_TAB`, a
+   refusal, never a clear. The gate is the pure `_foreign_tab()` so `--self-test` exercises the
+   refusal arm offline.
+6. **Run notes travel with the table.** `Other / Unmapped` is never a bare number (failure #6 /
+   `CM_UNMAPPED`), so the itemizing run notes are painted below the note row — the sheet reader
+   gets the same itemization the terminal reader gets.
+7. **Scope of the write:** a metadata `spreadsheets.get` first (identity echo + tab roster), then
+   values calls against `'Carrier Mix'` ranges ONLY. No other tab is ever named in a write. The
+   DB side stays `connect_ro`, absolutely.
+8. ⚠️ **Still UNOWNED** — `--write-sheet` is idempotent precisely so a future scheduled owner can
+   call it as-is, but the writer-ownership gate above remains NOT MET and no scheduled task was
+   created (Kurt has not picked the owner). Until then this is a manually-run repaint.

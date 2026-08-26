@@ -1747,6 +1747,22 @@ function writeTabTo_(sheetId, name, rows, userEntered) {
 //
 // 🔴 SHOPIFY TAG COUNTS ONLY — ZERO ParcelPanel calls. PP has no weekly budget to spend here and
 // is in a failure state; nothing on this tab needs a tracking event.
+//
+// 🔴 UNFULFILLED-ONLY SEMANTICS (Kurt 2026-08-26: "we only care about open unfulfilled holds" /
+// "all types. if it was shipped on hold, then it was fulfilled, so not on hold"). An order counts
+// as ON HOLD only while its fulfillment status is UNFULFILLED — for EVERY hold tag (_HOLD,
+// _CSHOLD, _FLOWHOLD alike). A fulfilled order still carrying a hold tag is tag noise, not a hold,
+// and is excluded from every open-holds row. The fulfilled/other populations are still COMPUTED
+// (INTERNAL keys below) so the partition gate can prove the sweep was complete; they are just no
+// longer published as rows. Two deliberate exceptions, both documented in D33:
+//   - `Orders on _UNRESOLVED` stays ALL-fulfillment: _UNRESOLVED is terminal, never an open hold,
+//     and the row tracks the size of the terminal bucket, not a hold backlog.
+//   - The four HOLDS-OPENED daily rows stay ALL-fulfillment: they measure hold OPENINGS by created
+//     date, not open holds — and rebasing them would invalidate HOLD_ET_BACKFILL's recorded
+//     from/to values and put a third basis inside already-written rows.
+// 🔴 MIXED-BASIS RECORD: columns stamped on or before 2026-08-26 hold SNAPSHOT-basis values (all
+// uncancelled, fulfilled included); later columns are unfulfilled-only. Write-once means the old
+// columns are never rewritten — D33 records the cutover so the trend is read on two bases.
 // =====================================================================================
 
 var HOLD_TAB = 'Hold';
@@ -1770,6 +1786,13 @@ var HOLD_PROP_ALLOW_ALL_ZERO = 'HOLD_ALLOW_ALL_ZERO';
 // (kind, label). Rows are resolved by LABEL against column A — NEVER by index. The label strings
 // are byte-copies of the live tab (generated, not transcribed); three of them are deliberately
 // INDENTED and those leading spaces are part of the key.
+// 🔴 This is the OWNED set, a SUBSET of the physical tab: four rows were retired 2026-08-26 under
+// the unfulfilled-only semantics (`_HOLD unfulfilled`, `_HOLD fulfilled`, `_HOLD other fulfillment
+// status`, `List of Order IDs - _HOLD fulfilled`) — the fulfilled/unfulfilled split is gone,
+// unfulfilled IS the number. The writer neither writes nor asserts a retired label, so the
+// physical rows can be deleted from the sheet at any time after this deploys (the row map
+// re-derives positions by label each run). A label listed here must stay byte-identical on the
+// sheet; renaming one requires sheet + this table to move in the same moment.
 var HOLD_ROWS = [
   ['SNAP', "Orders on _HOLD  (LEGACY - migration backlog, target 0)"],
   ['SNAP', "Orders on _CSHOLD"],
@@ -1777,9 +1800,6 @@ var HOLD_ROWS = [
   ['SNAP', "Orders on _UNRESOLVED  (terminal, not an active hold)"],
   ['SNAP', "Total on active hold  (_HOLD + _CSHOLD + _FLOWHOLD, union)"],
   ['SNAP', "Legacy share of active holds"],
-  ['SNAP', "_HOLD unfulfilled  (actionable backlog)"],
-  ['SNAP', "_HOLD fulfilled  (shipped, tag never cleared - noise)"],
-  ['SNAP', "_HOLD other fulfillment status"],
   ['SNAP', "_HOLD created on/after 2026-08-15  (new holds still on the legacy tag)"],
   ['SNAP', "_HOLD also carrying _UNRESOLVED  (double-tagged, should be 0)"],
   ['SNAP', "Customers with 1 Orders on _HOLD"],
@@ -1807,7 +1827,6 @@ var HOLD_ROWS = [
   ['SNAP', "List of Order IDs - held in a live cohort"],
   ['SNAP', "List of Order IDs - _UNRESOLVED in a live cohort"],
   ['SNAP', "List of Order IDs HELD  (_HOLD, unfulfilled)"],
-  ['SNAP', "List of Order IDs - _HOLD fulfilled (clear the tag)"],
   ['SNAP', "List of Order IDs - _CSHOLD"],
   ['SNAP', "List of Order IDs - _FLOWHOLD"],
   ['SNAP', "List of Order IDs - _UNRESOLVED (unfulfilled)"],
@@ -1967,8 +1986,13 @@ function holdMetrics_(pop, todayIso) {
   }
   var activeUnf = holdUnf_(activeRows);
 
+  // 🔴 UNFULFILLED-ONLY (Kurt 2026-08-26): a fulfilled order is not on hold, for every tag.
+  // Every open-holds row below counts these filtered populations. The full sweeps (H, CS, FH)
+  // survive only for the DAILY origin rows, the INTERNAL partition check, and _UNRESOLVED.
+  var Hu = holdUnf_(H), CSu = holdUnf_(CS), FHu = holdUnf_(FH);
+
   var custN = {};
-  H.forEach(function (x) { if (x.cust) custN[x.cust] = (custN[x.cust] || 0) + 1; });
+  Hu.forEach(function (x) { if (x.cust) custN[x.cust] = (custN[x.cust] || 0) + 1; });
   function custWith(pred) {
     var n = 0;
     for (var k in custN) if (custN.hasOwnProperty(k) && pred(custN[k])) n++;
@@ -1978,7 +2002,7 @@ function holdMetrics_(pop, todayIso) {
   function age(x) { return holdDayNum_(todayIso) - holdDayNum_(x.created); }
 
   var shipHeld = activeUnf.filter(function (x) { return holdShipTags_(x).length > 0; });
-  var flowNoReason = FH.filter(function (x) {
+  var flowNoReason = FHu.filter(function (x) {
     for (var j = 0; j < HOLD_REASON_TAGS.length; j++) {
       if (x.tags.indexOf(HOLD_REASON_TAGS[j]) >= 0) return false;
     }
@@ -1994,21 +2018,30 @@ function holdMetrics_(pop, todayIso) {
   });
 
   var V = {};
-  V["Orders on _HOLD  (LEGACY - migration backlog, target 0)"] = H.length;
-  V["Orders on _CSHOLD"] = CS.length;
-  V["Orders on _FLOWHOLD"] = FH.length;
+  // Open-holds rows: UNFULFILLED ONLY (2026-08-26 semantics — see the block comment above).
+  V["Orders on _HOLD  (LEGACY - migration backlog, target 0)"] = Hu.length;
+  V["Orders on _CSHOLD"] = CSu.length;
+  V["Orders on _FLOWHOLD"] = FHu.length;
+  // _UNRESOLVED is TERMINAL, never an open hold — this row tracks the terminal bucket's size, so
+  // it deliberately stays all-fulfillment (D33).
   V["Orders on _UNRESOLVED  (terminal, not an active hold)"] = UN.length;
-  V["Total on active hold  (_HOLD + _CSHOLD + _FLOWHOLD, union)"] = activeRows.length;
-  V["Legacy share of active holds"] = activeRows.length
-    ? (100 * H.length / activeRows.length).toFixed(2) + '%' : '0.00%';
+  V["Total on active hold  (_HOLD + _CSHOLD + _FLOWHOLD, union)"] = activeUnf.length;
+  V["Legacy share of active holds"] = activeUnf.length
+    ? (100 * Hu.length / activeUnf.length).toFixed(2) + '%' : '0.00%';
 
-  V["_HOLD unfulfilled  (actionable backlog)"] = holdUnf_(H).length;
-  V["_HOLD fulfilled  (shipped, tag never cleared - noise)"] = holdFul_(H).length;
-  V["_HOLD other fulfillment status"] = H.length - holdUnf_(H).length - holdFul_(H).length;
+  // 🔴 INTERNAL keys — computed for the partition gate (holdGates_), NEVER written to the sheet
+  // (the write plan iterates HOLD_ROWS, and these labels are not in it). The fulfilled/other
+  // populations must stay computed: without them a partial sweep that dropped every fulfilled
+  // order would be invisible.
+  V["INTERNAL _HOLD total (uncancelled, any fulfillment)"] = H.length;
+  V["INTERNAL _HOLD fulfilled"] = holdFul_(H).length;
+  V["INTERNAL _HOLD other fulfillment status"] =
+    H.filter(function (x) { return x.ff !== 'UNFULFILLED' && x.ff !== 'FULFILLED'; }).length;
+
   V["_HOLD created on/after 2026-08-15  (new holds still on the legacy tag)"] =
-    H.filter(function (x) { return x.created >= HOLD_CUTOVER; }).length;
+    Hu.filter(function (x) { return x.created >= HOLD_CUTOVER; }).length;
   V["_HOLD also carrying _UNRESOLVED  (double-tagged, should be 0)"] =
-    H.filter(function (x) { return x.tags.indexOf('_UNRESOLVED') >= 0; }).length;
+    Hu.filter(function (x) { return x.tags.indexOf('_UNRESOLVED') >= 0; }).length;
   V["Customers with 1 Orders on _HOLD"] = custWith(function (n) { return n === 1; });
   V["Customers with 2 Orders on _HOLD"] = custWith(function (n) { return n === 2; });
   V["Customers with 2+ Orders on _HOLD"] = custWith(function (n) { return n >= 2; });
@@ -2042,13 +2075,15 @@ function holdMetrics_(pop, todayIso) {
   V["List of Order IDs - held in a live cohort"] = holdCohortIds_(shipHeld);
   V["List of Order IDs - _UNRESOLVED in a live cohort"] = holdCohortIds_(unShip);
 
-  V["List of Order IDs HELD  (_HOLD, unfulfilled)"] = holdIds_(holdUnf_(H));
-  V["List of Order IDs - _HOLD fulfilled (clear the tag)"] = holdIds_(holdFul_(H));
-  V["List of Order IDs - _CSHOLD"] = holdIds_(CS);
-  V["List of Order IDs - _FLOWHOLD"] = holdIds_(FH);
+  V["List of Order IDs HELD  (_HOLD, unfulfilled)"] = holdIds_(Hu);
+  V["List of Order IDs - _CSHOLD"] = holdIds_(CSu);
+  V["List of Order IDs - _FLOWHOLD"] = holdIds_(FHu);
   V["List of Order IDs - _UNRESOLVED (unfulfilled)"] = holdIds_(holdUnf_(UN));
 
-  // per-day origin rows — backfillable, because they key on createdAt, which is historical
+  // per-day origin rows — backfillable, because they key on createdAt, which is historical.
+  // 🔴 Deliberately ALL-fulfillment (not Hu/CSu/FHu): these measure hold OPENINGS, not open
+  // holds, and rebasing them would invalidate HOLD_ET_BACKFILL's recorded from/to values and
+  // put a third basis inside rows that are already partly written (D33).
   var daily = {}, dates = {};
   activeRows.forEach(function (x) { dates[x.created] = true; });
   Object.keys(dates).sort().forEach(function (d) {
@@ -2079,11 +2114,15 @@ function holdMetrics_(pop, todayIso) {
  */
 function holdGates_(S) {
   var bad = [];
+  // The published _HOLD row is UNFULFILLED-only (2026-08-26); the partition closes against the
+  // INTERNAL sweep total. `other` is counted directly (not by subtraction), so this is a real
+  // three-way partition of the sweep, not an identity.
   var h = S["Orders on _HOLD  (LEGACY - migration backlog, target 0)"];
-  var parts = S["_HOLD unfulfilled  (actionable backlog)"] +
-              S["_HOLD fulfilled  (shipped, tag never cleared - noise)"] +
-              S["_HOLD other fulfillment status"];
-  if (parts !== h) bad.push('_HOLD fulfilment partition ' + parts + ' != total ' + h);
+  var parts = h +
+              S["INTERNAL _HOLD fulfilled"] +
+              S["INTERNAL _HOLD other fulfillment status"];
+  var hTot = S["INTERNAL _HOLD total (uncancelled, any fulfillment)"];
+  if (parts !== hTot) bad.push('_HOLD fulfilment partition ' + parts + ' != sweep total ' + hTot);
 
   var den = S["Active holds unfulfilled  (aging denominator)"];
   var ag = S["Aged 0-7 days (since order created)"] + S["Aged 8-30 days"] + S["Aged 31+ days"];
@@ -2098,9 +2137,8 @@ function holdGates_(S) {
 
   var lst = S["List of Order IDs HELD  (_HOLD, unfulfilled)"];
   var nIds = lst === '(none)' ? 0 : lst.split(',').filter(function (x) { return x.trim(); }).length;
-  if (nIds !== S["_HOLD unfulfilled  (actionable backlog)"]) {
-    bad.push('ID list has ' + nIds + ' orders, count row says ' +
-             S["_HOLD unfulfilled  (actionable backlog)"]);
+  if (nIds !== h) {
+    bad.push('ID list has ' + nIds + ' orders, count row says ' + h);
   }
   return bad;
 }
