@@ -9,6 +9,7 @@ Analytics pipeline for subscription box shipping. Ingests carrier invoices (OnTr
 > per date**, a hold snapshot cannot be back-filled; rules in RESHIP_REPORT_RULES **D33**); a **Reship Report**
 > custom menu drives manual refreshes. Carrier = Parcel Panel (Script Property
 > `PARCELPANEL_API_KEY`). Local mirror = `scratchpad/rebuild_mix_triage.py`.
+> 📖 **Per-tab NORTH STAR + gotchas (read before quoting any tab):** [`TAB_NORTH_STARS.md`](TAB_NORTH_STARS.md).
 >
 > 🔴 **Carrier Mix pivot** = `carrier_mix_pivot.py` (read-only, `connect_ro`) — ship weeks as columns,
 > one count row + one cost row per carrier·service lane. Rules SSOT = [`RESHIP_REPORT_RULES.md`](RESHIP_REPORT_RULES.md)

@@ -5,6 +5,8 @@
 
 > **STATUS: APPROVED by Kurt 2026-07-09** (North Star confirmed; denominator = live Shopify tag count excl. cancelled).
 
+> 📖 **Per-tab reader's guide:** [`TAB_NORTH_STARS.md`](TAB_NORTH_STARS.md) — one NORTH STAR + gotchas section per visible tab of the Running Reship sheet (cites the rules here; update it when a cited rule changes).
+
 ## 🧭 NORTH STAR (draft — Kurt to confirm wording; Kurt-only to edit after)
 
 Dan (or anyone) can answer **"for boxes that shipped this week, are we doing better on reships than last week?"** by opening one sheet — without asking anyone, without eyeballing Shopify, and without a number panic. Every figure is self-explaining: its source, its denominator, and how mature it is. (From Dan, Slack C0A6185SY0Z 2026-07-09: "How can I check on this without asking" / "How often is it refreshed".)
@@ -2515,8 +2517,10 @@ would put 648 boxes into a coin-flip.
   is **printed every run**: a signal that is silently always-absent is indistinguishable from one
   that is silently always-wrong. Today the routing tag is the sole ship-time service source.
 - **Volume-normalize:** pct of the week total; denominator = the **full cohort** (the `Total` row).
-- 🔴 **Read-only, absolutely.** `appyhour_lib.db.connect_ro`, never `sqlite3.connect`, never a
-  writer (WAL corruption 6/27 + 7/01). There is deliberately **no sheet-write path in this file**.
+- 🔴 **DB read-only, absolutely.** `appyhour_lib.db.connect_ro`, never `sqlite3.connect`, never a
+  writer (WAL corruption 6/27 + 7/01). The ONLY write anywhere in the tool is the Sheets API
+  repaint of the `Carrier Mix` tab behind `--write-sheet` (D35c, Kurt-authorized 2026-08-26) —
+  it touches no other tab and never touches `shipping.db`.
 - 🔴 **The ship-week window is derived from the CALENDAR, anchored on Monday** — never from the
   newest tag in the data and never from a sheet header. Reading the data pins the window to what
   already shipped, so a new cohort can never be discovered and the table silently stops walking
