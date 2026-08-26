@@ -5,7 +5,7 @@
 from __future__ import annotations
 import argparse, csv, collections, os, sys
 from .rules import load_rule_set
-from .checks import evaluate, duplicate_check, in_scope, live, sku, tags
+from .checks import evaluate, duplicate_check, cracker_check, in_scope, live, sku, tags
 from .peer import peer_outliers
 from . import sheet as sheetmod
 
@@ -46,7 +46,7 @@ def main(argv=None):
           f"{' (sheet)' if sheet else ''}\n")
 
     peers = peer_outliers(orders)
-    verdicts, rows, dups = collections.Counter(), [], []
+    verdicts, rows, dups, crackers = collections.Counter(), [], [], []
     for o in orders:
         ok, why = in_scope(o)
         if not ok:
@@ -54,6 +54,13 @@ def main(argv=None):
             continue
         r = evaluate(o, rs)
         verdicts[r["verdict"]] += 1
+        cr = cracker_check(o)
+        if cr:
+            c0 = o.get("customer") or {}
+            crackers.append({"order": o["name"], "verdict": cr, "box": r.get("box", ""),
+                             "ships": r.get("actual", ""), "expected": r.get("expected", ""),
+                             "customer": f"{c0.get('first_name','')} {c0.get('last_name','')}".strip(),
+                             "email": o.get("email", "")})
         p = peers.get(o["name"])
         rule_hit = r["verdict"] in ("SHORT", "OVER", "UNBUILT", "NO_BOX")
         if rule_hit or p:
@@ -89,8 +96,10 @@ def main(argv=None):
 
     print("CHECK 1  " + " · ".join(f"{k} {v}" for k, v in verdicts.most_common()))
     print(f"CHECK 8  duplicate + typed parent: {len(dups)}")
+    print(f"CRACKER  CEX-CR slot not delivering a cracker: {len(crackers)}")
     dump(f"check1_{a.tag}.csv", rows)
     dump(f"check8_{a.tag}.csv", dups)
+    dump(f"cracker_{a.tag}.csv", crackers)
 
     if sheet:
         diff = sheetmod.compare(sheet, shop)

@@ -82,6 +82,17 @@ Runs AFTER child SKUs are applied. An order with zero children is UNBUILT, not s
 - **Any add resolves to the $0.00 variant.** `AC-TOK` has both $0.00 (in-box) and $5.50 (paid).
   Use the `gid_zero()` resolver in the `shopify-api` skill; ABORT if no $0 variant exists.
 
+## CRACKER SLOT
+
+`CEX-CR` must deliver an actual CRACKER, not merely any `AC-`. A count check cannot see
+this: #176361 (9/9) and #176392 (11/11) are full and still wrong.
+
+Eligible: `AC-FCROSE AC-FCEVOO AC-ACRISP AC-TCRISP AC-EFLAT AC-FCWALN AC-PFLAT AC-TOK`.
+
+🔴 `AC-TOK` (Toketti) is Kurt's 2026-08-25 addition and is NOT in Dan's `CRACK` set, so his
+run reports every Toketti fill as "CEX-CR slot filled with a non-cracker". Keep the two sets
+in sync or the same seven orders get re-reported every week.
+
 ## PEER CHECK
 
 Second opinion with no rule-set dependency: group by box SKU, compare each order's child count to

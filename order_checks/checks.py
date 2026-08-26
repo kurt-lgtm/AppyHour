@@ -1,8 +1,8 @@
 """Count checks against RULE SET. 🔴 Read ORDER_CHECKS_RULES.md before changing anything."""
 from __future__ import annotations
 import collections
-from .rules import (CHILD, SLOT_TYPE, PARTY, BOARD, net, resolve_box, box_expect,
-                    paid_pack_items)
+from .rules import (CHILD, SLOT_TYPE, PARTY, BOARD, CRACKERS, net, resolve_box,
+                    box_expect, paid_pack_items)
 
 EXCLUDED_TAGS = ("gift redemption", "pr box")
 
@@ -35,6 +35,14 @@ def child_counts(o):
 
 def evaluate(o, rs):
     """-> dict(verdict=OK|SHORT|OVER|UNBUILT|NO_BOX|DEFERRED, ...)."""
+    # 🔴 AHB-X / BL- scope test runs on ALL lines, NOT just live ones. Simple Bundles
+    # zeroes a paid board's parent and explodes it into components, so the board sits at
+    # currentQuantity 0 while its children inflate the count. #176565 read as a +4
+    # exception on exactly BL-4USA's four components; five identical AHB-LCUST-SS +
+    # BL-4USA + PR-CJAM-SS orders all ship the same 15 and are correctly out of scope.
+    # Gate on the line EXISTING, not on it being live. (Dan, RUN_2026-08-25.)
+    if any(sku(x).startswith(("AHB-X", "BL-")) for x in o["line_items"]):
+        return {"verdict": "DEFERRED", "box": "AHB-X/BL- present"}
     li = live(o)
     boxes = [b for b in (resolve_box(x) for x in li) if b]
     if not boxes:
@@ -112,6 +120,21 @@ def evaluate(o, rs):
         return {"verdict": "OVER", "expected": any_tot,
                 "detail": f"+{d} vs allowance {allowance}", **base}
     return {"verdict": "OK"}
+
+
+def cracker_check(o):
+    """A CEX-CR slot must deliver a real cracker. '' when fine.
+
+    Invisible to a count check: #176361 (9/9) and #176392 (11/11) are full but their
+    cracker slot holds something else. Ported from Dan's build_cracker_check.py.
+    """
+    liveset = {sku(x) for x in live(o)}
+    if "CEX-CR" not in liveset or (liveset & CRACKERS):
+        return ""
+    zeroed = [sku(x) for x in o["line_items"]
+              if x["quantity"] > 0 and x["current_quantity"] == 0 and sku(x) in CRACKERS]
+    return ("cracker slot unfilled; cracker zeroed by an edit: " + ",".join(zeroed)
+            if zeroed else "CEX-CR slot filled with a non-cracker")
 
 
 def duplicate_check(o):

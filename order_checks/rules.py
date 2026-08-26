@@ -10,6 +10,17 @@ PACK_ITEMS = {"curator's choice - extra meat, cheese & accompaniment": 3}
 BOARD = {"BL-USA":  ("AC-KETT", "CH-FAG", "AC-BLUCAR", "MT-PARM"),
          "BL-4USA": ("AC-KETT", "CH-FAG", "AC-BLUCAR", "MT-PARM")}
 CHILD = ("AC-", "MT-", "CH-", "TR-")
+
+# A CEX-CR slot must deliver an actual CRACKER, not merely any AC-. Dan's set,
+# RUN_2026-08-25. Catches what a count check cannot see: #176361 (9/9) and #176392
+# (11/11) are full but their cracker slot holds something else.
+# AC-TOK (Mitica Toketti Onion) added by Kurt 2026-08-25: it is what the CEX-CR slot is
+# actually being filled with. #176361 and #176392 already shipped it before anyone
+# touched them, and it was the approved fill for the five orders whose AC-FCROSE re-add
+# Matrixify bounced. Absent from Dan's set, so his run reports all seven as non-cracker
+# fills - tell him when this changes.
+CRACKERS = {"AC-FCROSE", "AC-FCEVOO", "AC-ACRISP", "AC-TCRISP",
+            "AC-EFLAT", "AC-FCWALN", "AC-PFLAT", "AC-TOK"}
 # CEX-/EX- parents -> the child type each contributes.
 SLOT_TYPE = {"EX-EM": "MT-", "EX-EC": "CH-", "EX-EA": "AC-",
              "CEX-EM": "MT-", "CEX-EC": "CH-", "CEX-EA": "AC-", "CEX-CR": "AC-"}
