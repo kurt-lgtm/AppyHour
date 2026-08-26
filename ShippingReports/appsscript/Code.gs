@@ -253,11 +253,21 @@ function refreshPivotSheet_(state, mondays) {
 
   var rows = [['Order', 'Requested', 'Created', 'Issue', 'Incoming week', 'Outgoing week', 'Status',
     'Original', 'Original Box Type']].concat(existing);
-  sh.clearContents();
+  // 🔴 D38 — ATOMIC SWAP (see writeTabTo_). Raw Data is the substrate of every reship COUNTIFS on
+  // Product Mix (D/I/N and therefore Potential/Actual); the clearContents() that used to sit here
+  // is exactly the window in which those formulas read 0 and Kurt saw the Reship pair torn
+  // (`Potential 1 / Actual 0`). One covering setValues replaces old content, new content, and the
+  // blanked tail in a single mutation — a reader sees the old ledger or the new one, never neither.
   var width = 9;
-  sh.getRange(1, 1, rows.length, width).setValues(rows.map(function (r) {
-    return r.slice(0, width).concat(new Array(Math.max(0, width - r.length)).fill(''));
-  }));
+  var rdOldR = sh.getLastRow(), rdOldC = sh.getLastColumn();
+  var rdW = Math.max(width, rdOldC), rdH = Math.max(rows.length, rdOldR);
+  var rdGrid = rows.map(function (r) {
+    return r.slice(0, width)
+            .concat(new Array(Math.max(0, width - r.length)).fill(''))
+            .concat(new Array(rdW - width).fill(''));
+  });
+  while (rdGrid.length < rdH) rdGrid.push(new Array(rdW).fill(''));
+  sh.getRange(1, 1, rdH, rdW).setValues(rdGrid);
   sh.getRange('B:C').setNumberFormat('@');
   props.setProperty('PIVOT_WATERMARK', String(maxNum));
 }
@@ -716,10 +726,17 @@ function saveState_(state) {
       return rec[c] != null ? rec[c] : '';
     })));
   });
-  sh.clearContents();
-  sh.getRange(1, 1, rows.length, STATE_COLS.length)
+  // D38 — write-first covering swap (see writeTabTo_). The clearContents() that used to run first
+  // left a window where a crash or the 6-minute kill wiped the whole `_state` tab; the covering
+  // write replaces old rows, new rows, and the blanked tail in one mutation, so state can no
+  // longer be destroyed by dying between two calls. Same doctrine as excSaveState_.
+  var stOldR = sh.getLastRow(), stOldC = sh.getLastColumn();
+  var stW = Math.max(STATE_COLS.length, stOldC), stH = Math.max(rows.length, stOldR);
+  var stGrid = rows.map(function (r) { return r.concat(new Array(stW - r.length).fill('')); });
+  while (stGrid.length < stH) stGrid.push(new Array(stW).fill(''));
+  sh.getRange(1, 1, stH, stW)
     .setNumberFormat('@') // plain text — stop Sheets from re-typing dates
-    .setValues(rows);
+    .setValues(stGrid);
 }
 
 // ---------- sheet writes ----------
@@ -1709,10 +1726,23 @@ function writeTabTo_(sheetId, name, rows, userEntered) {
       } catch (e) { Logger.log('format carry failed ' + name + ' col ' + c + ': ' + e); }
     }
   }
-  sh.clearContents();
-  var padded = rows.map(function (r) { return r.concat(new Array(w - r.length).fill('')); });
-  var rng = sh.getRange(1, 1, padded.length, w);
-  if (userEntered) rng.setValues(padded); else rng.setValues(padded);
+  // 🔴 D38 — ATOMIC SWAP, NEVER CLEAR-THEN-SET (Kurt 2026-08-26). clearContents() + setValues()
+  // is TWO document mutations; between them this tab is momentarily EMPTY, and every cross-tab
+  // COUNTIFS over it collapses to 0 while formulas over OTHER tabs keep their values. Kurt caught
+  // the torn pair live: Reship read `Potential 1 / Actual 0` mid-refresh — Raw Data was mid-swap,
+  // so the D+I+N reship COUNTIFS on Product Mix read 0 while the Triage-side F+K+P still read 1,
+  // and the pair a human sees was written by no run at all. ONE setValues over a rectangle
+  // covering BOTH the new rows and the old extent overwrites and blanks the tail in a single
+  // mutation, so no reader (human, live formula, or the Reship transpose's getDisplayValues) can
+  // catch the swap half-applied. Same doctrine as excSaveState_'s "write FIRST, then trim"
+  // (Exceptions.gs) — here the covering write IS the trim. The format-carry above stays BEFORE
+  // the write and the header assert stays AFTER it (the D13 ordering).
+  var oldRows = sh.getLastRow(), oldCols = sh.getLastColumn();
+  var wAll = Math.max(w, oldCols);
+  var hAll = Math.max(rows.length, oldRows);
+  var padded = rows.map(function (r) { return r.concat(new Array(wAll - r.length).fill('')); });
+  while (padded.length < hAll) padded.push(new Array(wAll).fill(''));
+  sh.getRange(1, 1, hAll, wAll).setValues(padded);
   // assert: every data column carries a row-1 header (col 1 is the label column).
   if (!colsAreCohorts) return;
   var hdr = sh.getRange(1, 1, 1, w).getValues()[0];
@@ -1723,7 +1753,9 @@ function writeTabTo_(sheetId, name, rows, userEntered) {
       throw new Error('PA_ASSERT_DUPLICATE_SHIP_TAG: ' + name + ' has two columns for ' + h + '.');
     }
     seenTag[h] = true;
-    if (String(hdr[i]).trim() === '' && padded.length > 1) {
+    // rows.length, not padded.length: blank FILLER rows that only cover the old extent must not
+    // arm the headerless assert on a deliberate 1-row write.
+    if (String(hdr[i]).trim() === '' && rows.length > 1) {
       throw new Error('PA_ASSERT_HEADERLESS_COLUMN: ' + name + ' column ' + (i + 1) +
                       ' has no row-1 header after write.');
     }
@@ -2352,7 +2384,29 @@ function holdRefresh_(dateIso, dry) {
     return out;
   }
 
-  plan.forEach(function (p) { sh.getRange(p.row, p.ci + 1).setValue(p.value); });
+  // 🔴 D38 — coupled cells land in as few mutations as possible. Today's snapshot column is a
+  // PARTITION (holdGates_ asserts it before planning); painting it one setValue at a time gives a
+  // reader a column that satisfies no gate. Planned cells are grouped per column and each
+  // CONTIGUOUS run lands as one setValues. Only planned (blank) cells are ever covered — the
+  // write-once rule above already excluded filled cells from the plan, and batching contiguous
+  // runs cannot touch a cell between two runs (a gap splits the run). Read-back below unchanged.
+  var holdByCol = {};
+  plan.forEach(function (p) { (holdByCol[p.ci] = holdByCol[p.ci] || []).push(p); });
+  Object.keys(holdByCol).forEach(function (ciKey) {
+    var cells = holdByCol[ciKey].sort(function (a, b) { return a.row - b.row; });
+    var run = [];
+    function holdFlushRun_() {
+      if (!run.length) return;
+      sh.getRange(run[0].row, Number(ciKey) + 1, run.length, 1)
+        .setValues(run.map(function (p) { return [p.value]; }));
+      run = [];
+    }
+    cells.forEach(function (p) {
+      if (run.length && p.row !== run[run.length - 1].row + 1) holdFlushRun_();
+      run.push(p);
+    });
+    holdFlushRun_();
+  });
   SpreadsheetApp.flush();
 
   var after = sh.getRange(1, 1, Math.max(sh.getLastRow(), nRows),

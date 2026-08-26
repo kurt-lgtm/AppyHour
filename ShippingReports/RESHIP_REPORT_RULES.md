@@ -3166,3 +3166,51 @@ The daily trigger for 2026-08-26 has already fired (08:31 CST, the refusal above
 requires a **manual `refreshCurrentColumn` run after the deploy, before end of day ET** — after
 that, wk0817's dimension blocks are frozen wrong permanently, like wk0810's. No freeze constant is
 touched, no per-cohort exception is added: the freeze discipline stands.
+
+### D38 — A TAB SWAP IS ONE MUTATION: NEVER CLEAR-THEN-SET, NEVER PAINT COUPLED CELLS ONE AT A TIME (Kurt 2026-08-26)
+
+> Kurt, reading the Reship tab mid-refresh: **`Potential 1 / Actual 0`** — a pair no run ever
+> computed. `Potential = D+I+N (Raw Data reships) + F+K+P (Triage unresolved)`, `Actual = D+I+N`;
+> the only state that renders 1/0 with a real reship on the ledger is *Raw Data momentarily empty
+> while Triage still stands* — exactly the window `refreshPivotSheet_` opened every hour.
+
+**The failure, negatives first.**
+
+1. 🔴 **`clearContents()` followed by `setValues()` is TWO document mutations, and every reader
+   between them sees a tab that no run wrote.** Sheets applies each Range call to the live document
+   immediately — there is no transaction. During the gap, every cross-tab `COUNTIFS` over the
+   cleared tab collapses to 0 while formulas over other tabs keep their values, so the torn state is
+   not "stale", it is *fabricated*: a mixture of two runs that partition-checks on the READER side
+   can never reconcile. The Reship transpose (`writeProductMixT_`) snapshots Product Mix
+   `getDisplayValues` — a snapshot taken while any substrate tab is mid-swap freezes the torn pair
+   as literals for a full hour.
+2. 🔴 **The writers this bit:** `refreshPivotSheet_` (Raw Data — the substrate of every reship
+   COUNTIFS), `writeTabTo_` (Product Mix, Reship, Triage, `_triage_decisions`, Daily), `saveState_`
+   (`_state` — no formula reads it, but a crash or the 6-minute kill between clear and set wiped
+   the state outright; the long-standing comment on the `_state` wipe risk described this exact
+   hole). `excSaveState_` (Exceptions.gs) had already solved it — "write FIRST, then trim" — and
+   the fix generalizes its doctrine.
+3. **The rule.** Build the full padded grid, extend it to cover **both** the new rows and the old
+   extent (`max` of rows/cols), and land it with **ONE `setValues`** — the covering write IS the
+   clear. A reader sees the old tab or the new tab, never neither, never a mixture. Formats/widths
+   (the D13 format-carry) stay BEFORE the write; asserts that read the sheet back stay AFTER it —
+   the format→header+values→assert ordering is unchanged, the header+values step just stopped being
+   two steps.
+4. **Coupled cells outside full-tab writers batch by contiguous run.** `holdRefresh_` painted the
+   day's snapshot column one `setValue` per cell — a column that is partition-gated
+   (`holdGates_`) before writing tore for any reader mid-paint. Planned cells now group per column
+   and each contiguous run lands as one `setValues`. The write-once rule is untouched: only
+   planned (blank) cells are covered, a gap between planned cells splits the run, and the
+   post-flush read-back assert is unchanged.
+5. 🔴 **What NOT to do:** do not "fix" this by reordering tab writes (any order still leaves a
+   torn window inside each tab); do not suppress the reader-side partition asserts (they were
+   correct — the sheet genuinely did not partition); do not re-introduce `clearContents()` on any
+   tab a formula or a human reads — grep for it before adding a writer. The dead legacy writers
+   (`writeTab_`/`writeRawData_`/`buildTabs_`, no callers) keep the old pattern and must be treated
+   as retired, not as templates.
+
+**Verification (2026-08-26):** `node --check` clean per file and over the 4-file concatenation;
+collision sweep no duplicate top-level names; write-shape replay under node (writeTabTo_ covering
+grid vs old extents: new-shorter-than-old blanks the tail, new-wider extends, 1-row write does not
+arm the headerless assert; holdRefresh_ run-batching emits identical cells to the per-cell loop on
+seeded plans, including gap splits).
