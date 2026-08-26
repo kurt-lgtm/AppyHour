@@ -4,6 +4,15 @@
 Apps Script project "Running Reship". One section per visible tab: what the tab is FOR and what a
 reader must NOT do with it.
 
+> 🧭 **NORTH STAR OF THE WHOLE DOC (Kurt 2026-08-26: "this whole thing has to be headless —
+> that's the north star of the whole doc"):** every tab on this sheet fills, matures, freezes,
+> and self-corrects **with zero human steps**. No manual refresh, no hand-typed cell, no
+> UI-only arm switch, no "Kurt runs this in his terminal." DB writes go through real-context
+> scheduled tasks; sheet operations go through the service account; corrections ship as gated
+> self-applying one-shots. A change that adds a manual step moves AWAY from this doc's north
+> star — flag it, don't ship it. A tab with no scheduled owner (writer-ownership gate) is a
+> violation of this north star, not a footnote.
+
 > 🔴 **This is a READER'S companion, not a rules SSOT.** The rules live in
 > [`RESHIP_REPORT_RULES.md`](RESHIP_REPORT_RULES.md) (R1–R17, D1–D35) and
 > [`EXCEPTIONS_ALERT_RULES.md`](EXCEPTIONS_ALERT_RULES.md) (P1–P14). Change rules THERE first;
