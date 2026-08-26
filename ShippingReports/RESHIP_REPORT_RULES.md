@@ -1028,6 +1028,13 @@ TNT distribution: 0→42, 1→1,260, 2→914, 3→40.
 > matured. we shouldn't refresh this."* … *"matured on the carrier end. Shopify had the wrong tags so
 > the data is wrong."*
 
+> 🔴 **AMENDED BY [D36](#d36--routing-match-a-fence-is-not-a-prediction--fenced-boxes-leave-both-sides-of-the-rate-kurt-2026-08-26) (2026-08-26): fences are EXCLUDED from the Carrier match from
+> `_SHIP_2026-08-24` forward** (bare `!ANY - <Hub>` was being scored as a permanent mismatch — a
+> category error). The wk0824 cell was re-measured under the new basis as the ONE Kurt-directed
+> exception to the freeze, with the old reading (69.40%) reproduced and recorded in D36 first.
+> Columns ≤ 08-17 keep their old-basis readings frozen; a `Carrier n (committed / fenced)` row now
+> carries the denominator. Everything else in D23 stands unchanged.
+
 **The failure this prevents (negatives first).** `Routing Match` measures **routing TAG vs EXECUTED
 CARRIER**. The executed carrier is settled at ship time — but the TAG is **mutable after ship**:
 corrective retagging runs after the cohort goes out (`_SHIP_2026-08-10` alone logged **376 tag writes**
@@ -2970,3 +2977,71 @@ that section named; the bound Apps Script project still never touches this tab.
 8. ⚠️ **Still UNOWNED** — `--write-sheet` is idempotent precisely so a future scheduled owner can
    call it as-is, but the writer-ownership gate above remains NOT MET and no scheduled task was
    created (Kurt has not picked the owner). Until then this is a manually-run repaint.
+
+### D36 — `Routing Match`: A FENCE IS NOT A PREDICTION — FENCED BOXES LEAVE BOTH SIDES OF THE RATE (Kurt 2026-08-26)
+
+> Kurt, on the Routing Match tab: *"for routing match, if its a bunch of fences, then they should
+> be excluded."*
+
+**The failure this corrects.** `paRoutingValues_` scored every order with a single assignment-shaped
+tag, and `paCarrier_('ANY')` returns the raw string `'ANY'` — which never equals any executed
+carrier. So every **bare `!ANY - <Hub>_AHB!`** box (the all-carrier fence, D35 failure #5) was
+counted as a PERMANENT MISMATCH. On `_SHIP_2026-08-24` that was **739 boxes** — the engine
+deliberately declined to pick a carrier, RMFG picked at the dock (all 739 went **OnTrac**), and the
+tab read **69.40%** as though the engine had been wrong 739 times. Scoring a fence is a category
+error: the engine explicitly declined to predict, so the dock's pick can neither confirm nor refute
+it. Fenced boxes leave **BOTH numerator and denominator**; the rate now reads *"of the boxes where
+the engine COMMITTED to a specific carrier, how often did reality match."*
+
+**Fence taxonomy — per MATCH DIMENSION, decided per row, whole-token only (never substring; four
+partial-label bugs in this project, D35 failure #3):**
+
+| tag class | Carrier match | Hub match (when it matures) |
+|---|---|---|
+| `!<Carrier> <Service> - <Hub>_AHB!` (explicit assignment) | **scored** | **scored** |
+| `!ANY <Carrier> - <Hub>_AHB!` (carrier pin, e.g. `!ANY FedEx`) | **scored** — it COMMITS the carrier; only Ground-vs-HD/service is delegated (`FENCE_FEDEX_HD`, ROUTING_RULES §10) | **scored** — hub is committed |
+| bare `!ANY - <Hub>_AHB!` (all-carrier fence) | **fenced — excluded** (carrier delegated to RMFG) | **scored** — the hub IS committed even though the carrier is not |
+| fence-only `!NO …` stack (no assignment) | **fenced — excluded** (was already excluded per D11 as uncomparable; D36 makes it visible on the n row) | per D17: exactly-1-open-hub → that hub is effectively committed; ≥2 open → uncomparable |
+| no `_AHB!` tag at all | **fenced — excluded** (already excluded per D11) | uncomparable |
+| assignment token resolving to no canonical carrier | **`MISSING — needs Kurt`** — logged loudly (`unrecognized assignment token`), excluded, NEVER guessed into a bucket (never-fabricate). Measured count on wk0824: **0**. | same |
+
+- 🔴 **The carrier test is `paCarrier_` (the file's canonical token fold) + a whole-set membership
+  check (`PA_ROUTING_CANON`), and the bare-ANY test is `/^ANY$/i` on the trimmed pre-hub token** —
+  never `indexOf('ANY')`, which would also swallow `!ANY FedEx` (a real commitment) and any future
+  token containing the letters. This mirrors `carrier_mix_pivot.py`'s D35 token treatment; the two
+  stay in agreement on what a fence is.
+- 🔴 **The Hub row's semantics are documented here but NOT implemented** — `Routing Matched - Hub`
+  stays `n/a (immature)` (D11: actual hub needs carrier invoices, ~1wk lag). When it is built, the
+  hub column of the table above governs.
+
+**The denominator is ON the sheet (row 4, `Carrier n (committed / fenced)`).** A percentage whose
+denominator silently shrank is the misread this sheet keeps generating, and Kurt directed the
+exclusion — the count row is what keeps the number falsifiable. Cell text `"<scored> / <fenced>"`
+(e.g. `1679 / 824`), written by the same first-measurement run as the rate and FROZEN with it
+(`paRoutingIsMeasured_` recognizes the `N / M` shape). Historical columns stay **blank** on this
+row — a ship-time fence count for a matured cohort is not reconstructible (D23: tags mutate), and
+blank ≠ zero.
+
+**Effect on `_SHIP_2026-08-24` (measured 2026-08-26, cohort age 2d, 2,503 orders excl
+cancelled/Reship; old basis reproduced the frozen 69.40% cell EXACTLY before the new basis was
+trusted — reproduce-gate):**
+
+| | old basis | new basis (D36) |
+|---|---:|---:|
+| scored (committed & observed) | 2,418 | **1,679** |
+| matched | 1,679 | 1,679 |
+| **rate** | **69.4%** | **100.0%** |
+
+Itemized exclusion (sums to the 824 fenced): **739** bare `!ANY - <Hub>` (all → OnTrac at the
+dock), **43** fence-only `!NO` stacks, **42** with no `_AHB` tag. The 1,679 scored = 1,080 explicit
+assignments + 599 `!ANY FedEx`-class carrier pins; zero committed-but-unobserved, zero unrecognized
+tokens. That 100.0% is consistent with the 08-10/08-17 frozen readings (100.00% both) — wk0824's
+69.40% was never a routing regression, it was 739 fences scored as misses.
+
+**Cutover / mixed basis (same pattern as D32's window change).** The new basis applies from
+`_SHIP_2026-08-24` FORWARD. The wk0824 Carrier cell is the ONE deliberate D23 exception: Kurt
+directed the re-measure, the column is still inside its D15 script-owned window (age 2d), and the
+old reading was reproduced and recorded here first — the overwrite loses nothing that is not in
+this table. Frozen columns **≤ `_SHIP_2026-08-17` keep their old-basis readings untouched**
+(89.3% · 91.6% · 90.4% · 98.00% · 100.00% · 100.00%); their n-row cells stay blank. Do not
+"restate" them — D23 stands.

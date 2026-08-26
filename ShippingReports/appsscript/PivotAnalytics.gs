@@ -228,6 +228,11 @@ function paBox_(skus) {
  */
 var PA_AHB = /^!([^!]*?)\s*-\s*([A-Za-z]+)_AHB!$/;
 var PA_RESIDUAL_HUB = 'RMFG choice (2+ hubs open)';
+/** 🔴 D36 — the Routing Match denominator row. Label lives here, never inline. */
+var PA_ROUTING_N_LABEL = 'Carrier n (committed / fenced)';
+/** 🔴 D36 — the canonical carrier set `paCarrier_` can resolve to. An assignment token that folds
+ * to none of these is MISSING (logged, excluded), never guessed into a bucket (never-fabricate). */
+var PA_ROUTING_CANON = { FedEx: 1, UPS: 1, OnTrac: 1, Veho: 1 };
 
 function paAssigned_(tags) {
   var picks = [];
@@ -235,8 +240,15 @@ function paAssigned_(tags) {
     var m = String(t).trim().match(PA_AHB);
     if (m && String(m[1]).trim().toUpperCase().indexOf('NO ') !== 0) picks.push(m);
   });
-  if (picks.length !== 1) return { carrier: '', hub: PA_NO_TAG };
-  return { carrier: paCarrier_(picks[0][1]), hub: String(picks[0][2]).trim() };
+  if (picks.length !== 1) return { carrier: '', hub: PA_NO_TAG, anyFence: false };
+  var pre = String(picks[0][1]).trim();
+  // 🔴 D36 — WHOLE-TOKEN test, never substring (this file has burned four times on partial-label
+  // matching). A bare `!ANY - <Hub>_AHB!` commits a HUB but delegates the CARRIER to RMFG at the
+  // dock: it is a hub assignment and a carrier FENCE at once. `!ANY FedEx - <Hub>` is NOT this —
+  // its ANY spans FedEx services only (Ground vs HD), so it IS a carrier commitment and
+  // `paCarrier_` resolves it to FedEx exactly as before.
+  var anyFence = /^ANY$/i.test(pre);
+  return { carrier: paCarrier_(pre), hub: String(picks[0][2]).trim(), anyFence: anyFence };
 }
 
 /**
@@ -716,12 +728,46 @@ function paRoutingValues_(recs) {
   // Hub compares assigned vs ACTUAL, and actual comes from carrier invoices (~1wk lag). Filling it
   // from the tag would compare the tag to itself and always read 100%.
   m[paKey_('', 'Routing Matched - Hub')] = PA_IMMATURE;
-  var elig = 0, ok = 0;
+  // 🔴 D36 (Kurt 2026-08-26: "for routing match, if its a bunch of fences, then they should be
+  // excluded"). A FENCE IS NOT A PREDICTION: where the engine deliberately left the carrier choice
+  // to RMFG at the dock, the dock's pick can neither confirm nor refute it — scoring it as a
+  // mismatch is a category error. Fenced boxes leave BOTH numerator and denominator, so the rate
+  // reads "of the boxes where the engine COMMITTED to a carrier, how often did reality match".
+  // Per-row taxonomy at CARRIER granularity (token-based, never substring — D35.3):
+  //   scored  — exactly one assignment tag whose token resolves to a canonical carrier. This
+  //             INCLUDES `!ANY FedEx - <Hub>` pins: the ANY there spans FedEx services only, so it
+  //             is a carrier commitment with the service delegated. (The HUB question differs: a
+  //             bare `!ANY - <Hub>` DOES commit a hub — that taxonomy applies when the Hub row
+  //             matures, per D36 in the rules doc.)
+  //   fenced  — bare `!ANY - <Hub>` (all-carrier fence; the OLD code scored these as permanent
+  //             mismatches — 739 of them dragged wk0824's cell to a false 69.4%), plus fence-only
+  //             `!NO` stacks and untagged orders (no commitment; excluded before AND after D36 —
+  //             D36 only makes them visible on the denominator row).
+  //   MISSING — an assignment token resolving to no canonical carrier: logged loudly and excluded,
+  //             never guessed into a bucket (never-fabricate). Expected count zero.
+  var elig = 0, ok = 0, fenced = 0, unobs = 0, unrec = {};
   recs.forEach(function (r) {
-    if (!r.assigned.carrier || r.carrier === 'Unknown') return;   // uncomparable, not "matched"
+    if (r.assigned.anyFence) { fenced++; return; }     // bare !ANY — carrier delegated to RMFG
+    if (!r.assigned.carrier) { fenced++; return; }     // !NO stack / no tag — no commitment (D11)
+    if (PA_ROUTING_CANON[r.assigned.carrier] !== 1) {  // whole canonical token, never substring
+      unrec[r.assigned.carrier] = (unrec[r.assigned.carrier] || 0) + 1;
+      return;
+    }
+    if (r.carrier === 'Unknown') { unobs++; return; }  // committed but actual unobserved — uncomparable
     elig++; if (r.assigned.carrier === r.carrier) ok++;
   });
+  var un = Object.keys(unrec);
+  if (un.length) {
+    paLog_('  🔴 Routing Match: ' + un.length + ' unrecognized assignment token class(es) excluded ' +
+           '— MISSING, needs Kurt: ' + un.map(function (k) { return k + ' ×' + unrec[k]; }).join(', '));
+  }
+  paLog_('  Routing Match carrier: scored ' + elig + ' (ok ' + ok + ') · fenced ' + fenced +
+         ' · committed-but-unobserved ' + unobs);
   m[paKey_('', 'Routing Matched - Carrier')] = elig ? (Math.round(ok / elig * 1000) / 10).toFixed(1) + '%' : 'n/a';
+  // 🔴 D36 — the denominator sits ON the sheet: a % whose denominator silently shrank is the
+  // misread this sheet keeps generating. Text cell `"<scored> / <fenced>"`; freezes with the rate
+  // (paRoutingIsMeasured_ recognizes the shape), so it is written once per cohort like the rate.
+  m[paKey_('', PA_ROUTING_N_LABEL)] = elig + ' / ' + fenced;
   return m;
 }
 
@@ -755,6 +801,7 @@ function paRoutingIsMeasured_(v) {
   if (!s) return false;                                    // never measured
   if (s === PA_IMMATURE) return false;                     // deliberate placeholder
   if (s.toLowerCase() === 'n/a') return false;             // "nothing eligible" placeholder
+  if (/^\d+\s*\/\s*\d+$/.test(s)) return true;             // D36 n row: "<scored> / <fenced>"
   return /^-?\d+(\.\d+)?\s*%?$/.test(s);                   // a measurement, and nothing else is
 }
 

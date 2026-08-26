@@ -195,6 +195,11 @@ snapshot per cohort.
   itself and always reads 100% (D11).
 - **Orders with no assignment tag are uncomparable, not "matched"** — counting them matched once
   inflated the rate to a false 96.6% (D11).
+- 🔴 **A FENCE IS NOT A PREDICTION (D36, from `_SHIP_2026-08-24` forward).** Bare `!ANY - <Hub>`
+  delegates the carrier to RMFG — it leaves BOTH numerator and denominator (739 of them scored as
+  misses once dragged wk0824 to a false 69.4%; true committed-only rate 100.0%). `!ANY FedEx - <Hub>`
+  IS a carrier commitment and stays scored. The `Carrier n (committed / fenced)` row carries the
+  denominator so the shrink is visible; columns ≤ 08-17 keep their old-basis frozen readings.
 - **There is no measured-at stamp yet** (recommended, not built, D23) — a reader cannot see WHEN
   a column was snapshotted; treat cross-week comparisons accordingly.
 
