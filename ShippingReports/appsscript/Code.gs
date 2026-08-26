@@ -1810,7 +1810,9 @@ var HOLD_TAB = 'Hold';
 var HOLD_TZ = 'America/New_York';
 var HOLD_TAGS = ['_HOLD', '_CSHOLD', '_FLOWHOLD', '_UNRESOLVED'];
 var HOLD_ACTIVE_TAGS = ['_HOLD', '_CSHOLD', '_FLOWHOLD'];   // _UNRESOLVED is TERMINAL, not active
-var HOLD_REASON_TAGS = ['_DUP_SFO_10MINS', '_DUP_SRO_1DAY', '_POBOX'];
+var HOLD_REASON_TAGS = ['_DUP_SFO_10MINS', '_DUP_SRO_1DAY', '_POBOX',
+                        '_PRODUCT_ERROR',   // add-ons arrived without a box (no AHB-* parent) — Kurt 2026-08-26
+                        '_ELEVATE_FOODS'];  // staff-email sweep (@elevatefoods.co orders) — Kurt 2026-08-26
 var HOLD_PAGE = 250;
 var HOLD_MAX_SWEEP = 6000;              // a sweep this big means the query broke — refuse, don't truncate
 var HOLD_GAP_ALERT_DAYS = 2;            // columns missed before the job tells on itself

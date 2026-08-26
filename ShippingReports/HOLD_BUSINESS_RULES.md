@@ -33,6 +33,12 @@ Sheet-side mechanics (write-once, unfulfilled-only counting, row map) live in
    - `_DUP_SRO_1DAY` marker on **BOTH** orders.
 3. **PO Box Order**:
    - Auto-ping CS inbox; `_FLOWHOLD` + `_POBOX` on the order.
+4. **Product error** — add-ons came in WITHOUT a box (no `AHB-*` parent line item; e.g. an
+   EX-/AC- add-on order with nothing to ship it in). Kurt 2026-08-26.
+   - `_FLOWHOLD` + `_PRODUCT_ERROR` on the order.
+5. **Staff order sweep** — order placed with an `@elevatefoods.co` email (internal orders held
+   from the normal pipeline).
+   - `_FLOWHOLD` + `_ELEVATE_FOODS` on the order.
 
 🔴 The Hold tab's `_FLOWHOLD with no reason tag` row exists because of this rule — it should be
 **0**. (It read 5 on 2026-08-25; open item.)
