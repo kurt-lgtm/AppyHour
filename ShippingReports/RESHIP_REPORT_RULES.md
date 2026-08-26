@@ -2716,3 +2716,104 @@ log) and `_outputs/reports/carrier-mix-pivot.md` (the rendered table). Both are 
 `shipping.db` *except* the frozen ship-time count reading, which is not — that is the one value
 here with no second source, and it is the reason the ledger is written atomically and never
 rewritten in place for a frozen key.
+
+#### D35b — `--self-test`, BECAUSE A GREEN HAPPY-PATH RUN PROVES NOTHING ABOUT THE FAILURE BRANCHES (review 2026-08-26)
+
+**The failure this closes.** `--verify-gate` and a routine `--weeks 5` run are a **happy path**. On a
+normal week the cohort replica is complete, no column is empty, no assert refuses and no frozen cell
+is challenged — so the entire below-threshold arm of `unresolved_orders`, every named refusal, and
+the count-freeze backstop **never execute**. A green run over those weeks says nothing about the code
+that only runs when something is wrong, which is the code that matters. That is the same shape as
+D34: the one block a reader spot-checks was the one block structurally incapable of showing the bug.
+
+`--self-test` exercises **20 cases**, every one a branch a normal run does not take: all eleven
+`classify` outcomes (including `UPS 2Day`, `Overnight` and `Veho`, none of which exist in live data
+today), the LaserShip→OnTrac fold, **all three arms** of `unresolved_orders`, all four named
+refusals, the force-freeze backstop, the "unknown denominator must block the freeze" case, and
+rendering a cohort set that contains an unlabelled column.
+
+🔴 **THE BRANCH SWEEP FOUND A LIVE CRASH — `KeyError: 'counts'` IN `_cell_count`.** A week with no
+labels yet is deliberately never written to the ledger (`total == 0` → `reconcile_ledger` is
+skipped) but it **is** still rendered as a column, so `render` handed `_cell_count` the `{}` from
+`ledger["columns"].get(tag, {})` and the subscript `e["counts"]` blew up. `_cell_cost`, three lines
+below, already used `.get`; this one had lost it.
+
+**It is an unattended-run killer, not a cosmetic bug.** `ship_mondays` always includes the CURRENT
+week's Monday, so every run between Monday 00:00 and the moment RMFG cuts that week's labels hits
+it — precisely the window a scheduled owner runs in. It never fired in any hand-run because every
+one of those happened mid-week with the column already populated. Reproduced 2026-08-26 by
+rendering `_SHIP_2026-08-31` (0 labels) alongside the live weeks; fixed to `e.get("counts")`, which
+renders `—`, the same blank-≠-zero reading an un-invoiced cost cell gets, never a fabricated `0`.
+The regression case asserts `"$0" not in table`, and it is **falsifiable** — restoring the pre-fix
+body at runtime flips it to `[FAIL] KeyError: 'counts'`, 19/20.
+
+🔴 **The lesson, stated in the form that would have caught it:** the branch-coverage argument was
+made about `unresolved_orders` and the asserts, and it stopped there. `render` consumes the SAME
+"column that has no ledger entry" state, and nothing walked the consumers of that state. When a
+branch is identified as untested, sweep every consumer of the value that branch produces — not
+just the function that produces it.
+
+🔴 **The fixture is PRODUCTION-SHAPED and asserts that it is.** The self-test's `base` column is
+checked against `build_column`'s real key set on every run
+(`assert not (set(_live) | {"_keys"}) - set(base)`). It earned that on its first execution: the
+hand-built fixture was missing `coverage`/`spend`/`invoiced` and three cases failed with `KeyError`
+— a guard that would have KeyError'd on the real object while looking green against an injected
+shape. That is the exact fail-open class this repo has shipped repeatedly; a fixture that carries
+only the keys the test happens to touch is not evidence.
+
+**Review findings, resolved:**
+
+1. **`REPLICA_MIN_COMPLETENESS` / `_expected_cohort_size` reported as NameErrors — NOT PRESENT.**
+   Verified independently against the committed blob (`git show c4a391a:…`), not the working tree:
+   `REPLICA_MIN_COMPLETENESS` is defined at line 74 and used at 226; `_expected_cohort_size` does
+   not occur anywhere in the file (it was replaced by `unresolved_orders`). ruff `F821` reports zero
+   undefined names and pyright reports zero errors/zero warnings under this repo's own config.
+   🔴 **The lesson is the one worth keeping: a static read of a file MID-EDIT is not a review of the
+   commit, and the line numbers are the tell.** The same thing happened on the second review pass —
+   a reported "Expected 2 positional arguments" is exactly the transient state where
+   `verify_gate`'s signature had already been narrowed to `(con, dss)` but its call site in `main`
+   still passed `(con, inv, dss)`; both ends are consistent on disk and in the commit. The reported
+   `str | dict[...]` union is likewise an inference artifact of the self-test's heterogeneous
+   `base` fixture, now annotated `dict[str, Any]` at the source rather than cast away at a call
+   site — a cast there would hide a real mismatch later. **Check the blob, and re-run the checker
+   yourself before acting on someone else's diagnostic.**
+2. **`inv` was genuinely unused in `verify_gate` — REMOVED.** Not a dropped assignment feeding a cost
+   cell: the gate passes `{}` on purpose so it reads the TAG basis. 🔴 But an unused invoice index
+   sitting in that signature was a live trap — a future reader "fixing" it would wire live invoices
+   into the gate, letting the 5–9 dock-upgraded air boxes/week move the air row so the gate fails
+   against a reference that is still correct (or passes for the wrong reason once two errors
+   cancel). The parameter is gone, so there is nothing to wire in by accident, and the docstring now
+   says so in the imperative. The review also reported "three unused `inv` bindings" in the
+   **rendering** block (~411–443): there is no `inv` binding in that range at all — the only match
+   is the literal `inv` inside `_cell_cost`'s partial-coverage f-string (`"…% inv · $…/bx"`). But
+   the instinct that an unused-looking name in invoice-coverage code deserves a second look was
+   right: that block is where the `_cell_count` `KeyError` above was hiding, three lines from the
+   flagged line. ruff's `F841` covers genuinely unused locals and is clean.
+3. **`from lib import canon` resolves at RUNTIME and is cwd-independent.** Both `sys.path` inserts
+   derive from `Path(__file__).resolve()`, never from the cwd. Verified by running `--verify-gate`
+   and `--self-test` from `C:\` and `C:\Windows` — identical output, exit 0. This matters because
+   the scheduled owner runs unattended with whatever cwd the task scheduler hands it. `ShipRouting`
+   is inserted LAST so it wins position 0 for the very generic name `lib`; AppyHour has no competing
+   `lib` package. pyright's `reportMissingImports` on that line is a static-analysis false positive
+   (a checker cannot see a `sys.path` mutation) and is suppressed narrowly, with the reason stated.
+
+**Both arms of the Pending/denominator branch, measured 2026-08-26 (this is what "proved" means
+here — not a `--verify-gate` PASS, which resolves before the branch is ever reached):**
+
+| tag | labels | replica | complete | arm | pending |
+|---|---:|---:|---:|---|---:|
+| `_SHIP_2026-07-20` | 2082 | 2075 | 99.7% | **above** | 0 |
+| `_SHIP_2026-08-17` | 2366 | 2369 | 100.1% | above | 13 |
+| `_SHIP_2026-08-24` | 2500 | 1005 | **40.2%** | **below** | unknown |
+| `_SHIP_2026-08-31` | 0 | 0 | 0.0% | **empty** | unknown |
+
+Above-threshold returns a real set difference (`CM_FENCES_OPEN` when non-zero). Below-threshold
+returns `None` and prints `CM_PENDING_UNKNOWN: … replica is 40% complete … pending reported as
+unknown, never 0, and this column CANNOT freeze`. Empty prints `CM_NO_LABELS_YET` and the column is
+not written. Note `_SHIP_2026-08-17` at **100.1%** — the replica can legitimately exceed the label
+count, which is why this is a completeness RATIO against labels and never a subtraction.
+
+**Gate for this file: `ruff` clean, `pyright` 0 errors / 0 warnings, `--self-test` 20/20,
+`--verify-gate` PASS (OnTrac 1763 / FedEx Ground-HD 648 / FedEx 2Day 69 / UPS 20 / Total 2500,
+exact) — run all four before committing a change here, and run them from a cwd OUTSIDE the repo so
+the import path is exercised the way the scheduled owner will exercise it.**

@@ -22,7 +22,12 @@ Run::
     python carrier_mix_pivot.py                 # last 5 ship weeks, render + update ledger
     python carrier_mix_pivot.py --weeks 8
     python carrier_mix_pivot.py --verify-gate   # reproduce the 2026-08-24 reference numbers
+    python carrier_mix_pivot.py --self-test     # exercise the branches a normal week never hits
     python carrier_mix_pivot.py --no-ledger     # render only, touch nothing
+
+🔴 `--verify-gate` is a HAPPY PATH and is NOT evidence on its own: it resolves before the
+Pending/denominator branch is ever reached. Run `--self-test` too, or a change lands green
+against code that never executed.
 """
 from __future__ import annotations
 
@@ -33,15 +38,23 @@ import os
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
+# 🔴 Both inserts are derived from THIS FILE's own location (`__file__`), never from the cwd, so
+# the module imports identically however it is invoked. That matters because the scheduled owner
+# runs it unattended, where the cwd is whatever the task scheduler hands it — verified running
+# from `C:\` and `C:\Windows`. `ShipRouting` is inserted LAST so it wins position 0 for the very
+# generic package name `lib`; AppyHour has no competing `lib` package (checked).
 _HERE = Path(__file__).resolve()
-sys.path.insert(0, str(_HERE.parents[1]))                       # AppyHour/
-sys.path.insert(0, str(_HERE.parents[2] / "ShipRouting"))       # ShipRouting/ (canon)
+sys.path.insert(0, str(_HERE.parents[1]))                       # AppyHour/    → appyhour_lib
+sys.path.insert(0, str(_HERE.parents[2] / "ShipRouting"))       # ShipRouting/ → lib.canon
 
+# `lib` resolves at RUNTIME via the insert above; a static checker cannot see a sys.path mutation,
+# so pyright's reportMissingImports here is a false positive, not a broken import.
 from appyhour_lib.db import connect_ro  # noqa: E402  isort:skip
-from lib import canon  # noqa: E402  isort:skip
+from lib import canon  # type: ignore[reportMissingImports]  # noqa: E402  isort:skip
 
 # ── Row model ────────────────────────────────────────────────────────────────
 # 🔴 EXACTLY these lanes, in this order (Kurt 2026-08-25). FedEx Ground and FedEx Home
@@ -405,7 +418,19 @@ def reconcile_ledger(led, col):
 
 # ── Rendering ────────────────────────────────────────────────────────────────
 def _cell_count(e, lane, total):
-    c = (e["counts"] or {}).get(lane)
+    """🔴 `e` is `ledger["columns"].get(tag, {})` and IS `{}` for a week that has no ledger entry
+    yet — a cohort whose labels have not been cut (`total == 0`) is deliberately never written to
+    the ledger, but it IS still rendered as a column. `e["counts"]` therefore raised
+    `KeyError: 'counts'` and took the whole run down. Measured 2026-08-26: rendering
+    `_SHIP_2026-08-31` alongside the live weeks crashed here.
+    🔴 That is an UNATTENDED-RUN KILLER, not a cosmetic bug: `ship_mondays` always includes the
+    CURRENT week's Monday, so every run between Monday 00:00 and the moment RMFG cuts that
+    week's labels hits it — precisely the window a scheduled owner runs in. It never fired in
+    testing because every hand-run happened mid-week with the column already populated.
+    `_cell_cost` below already used `.get`; this one had lost it. Missing ledger → `—`, which is
+    the same blank-≠-zero reading an un-invoiced cost cell gets, and never a fabricated 0.
+    """
+    c = (e.get("counts") or {}).get(lane)
     if c is None:
         return "—"
     pct = f"{100.0 * c / total:.0f}%" if total else "n/a"
@@ -423,7 +448,7 @@ def _cell_cost(e, lane):
     v = (e.get("cost") or {}).get(lane)
     if not v:
         return "—"
-    if e["cost_frozen"].get(lane):
+    if e.get("cost_frozen", {}).get(lane):     # same missing-ledger-entry guard as _cell_count
         return f"${v['spend']:,.0f} · ${v['per_box']:.2f}/bx"
     return f"{v['coverage']:.0%} inv · ${v['per_box']:.2f}/bx · ${v['spend']:,.0f} so far"
 
@@ -459,20 +484,184 @@ def render(cols, ledger):
 
 
 # ── Reproduce gate ───────────────────────────────────────────────────────────
-def verify_gate(con, inv, dss):
+def verify_gate(con, dss):
     """🔴 Reproduce the numbers the system already produced BEFORE trusting any extension.
 
     Reference computed 2026-08-25 for `_SHIP_2026-08-24`: OnTrac 1763 · FedEx Ground 648 ·
     FedEx 2Day 69 · UPS 20 · Total 2500. If this does not match, the query is wrong — not the
-    reference. Note the reference is the SHIP-TIME (tag-basis) reading: that cohort had zero
-    invoices when it was taken, so a later invoice-basis run legitimately moves the air row and
-    is compared here against the tag basis only.
+    reference.
+
+    🔴 THE EMPTY INVOICE INDEX BELOW IS DELIBERATE — DO NOT "FIX" IT BY PASSING `inv`.
+    The reference is the SHIP-TIME (tag-basis) reading: `_SHIP_2026-08-24` had zero invoices
+    when it was taken. Feeding the live invoice index in would let a later-arriving invoice move
+    the air row (5-9 boxes/week of dock-upgraded air — see D35's air reconciliation) and the gate
+    would start failing against a reference that is still correct, or worse, pass for the wrong
+    reason once the two errors cancelled. This function takes NO invoice argument precisely so
+    there is nothing to wire in by accident.
     """
-    col = build_column(con, "_SHIP_2026-08-24", {}, dss)   # {} = no invoices → tag basis
+    col = build_column(con, "_SHIP_2026-08-24", {}, dss)   # {} = tag basis, on purpose — see above
     got = dict(col["counts"])
     got[TOTAL] = col["total"]
     bad = {k: (v, got.get(k)) for k, v in REFERENCE_0824.items() if got.get(k) != v}
     return (not bad), got, bad
+
+
+# ── Self-test ────────────────────────────────────────────────────────────────
+def self_test(con):
+    """Exercise EVERY branch, including the ones a normal week never reaches.
+
+    🔴 Why this exists: `--verify-gate` and a routine 5-week run are a HAPPY PATH. On a normal
+    week the cohort replica is complete, so the below-threshold arm of `unresolved_orders` never
+    executes, no column is empty, no assert refuses and no frozen cell is challenged. A green
+    run over those weeks says nothing about the code that only runs when something is wrong —
+    which is the code that matters. Every case below is a branch a normal run does not take.
+    """
+    results = []
+
+    def check(name, fn):
+        try:
+            results.append((name, "PASS", fn()))
+        except Exception as exc:                      # noqa: BLE001 — reporting harness
+            results.append((name, "FAIL", f"{type(exc).__name__}: {exc}"))
+
+    # classify(): every row outcome, including the ones with no live data today.
+    for label, carrier, sig, want in [
+        ("FedEx tag 2Day → air", "FedEx", {"tag": canon.TWO_DAY}, FEDEX_AIR),
+        ("FedEx invoice 2Day → air", "FedEx", {"invoice": canon.TWO_DAY}, FEDEX_AIR),
+        ("FedEx Home Delivery → gnd", "FedEx", {"tag": canon.HOME_DELIVERY}, FEDEX_GND),
+        ("FedEx no signal → gnd", "FedEx", {}, FEDEX_GND),
+        ("OnTrac → ontrac", "OnTrac", {"tag": canon.GROUND}, ONTRAC),
+        ("UPS ground → ups", "UPS", {"tag": canon.GROUND}, UPS_GND),
+        ("UPS 2Day → other", "UPS", {"invoice": canon.TWO_DAY}, OTHER),
+        ("FedEx Overnight → other", "FedEx", {"invoice": canon.OVERNIGHT}, OTHER),
+        ("Veho → other", "Veho", {"tag": canon.GROUND}, OTHER),
+        ("unknown carrier → other", None, {}, OTHER),
+        ("air+ground conflict → other", "FedEx",
+         {"tag": canon.TWO_DAY, "invoice": canon.GROUND}, OTHER),
+    ]:
+        def _c(carrier=carrier, sig=sig, want=want):
+            got = classify(carrier, sig)[0]
+            assert got == want, f"got {got!r} want {want!r}"
+            return want
+        check(f"classify: {label}", _c)
+
+    # LaserShip must fold to OnTrac — the share-halving failure.
+    check("canon: LaserShip folds to OnTrac",
+          lambda: (_ for _ in ()).throw(AssertionError("alias drift"))
+          if canon.normalize_carrier("LaserShip") != "OnTrac" else "OnTrac")
+
+    # unresolved_orders: all three arms, against the live DB.
+    def _arms():
+        seen = set()
+        for tag in ship_mondays(6) + [ship_mondays(1, date.today() + timedelta(days=7))[0]]:
+            lab = {r[0] for r in _cohort_rows(con, tag)}
+            pend, comp = unresolved_orders(con, tag, lab)
+            if not lab:
+                seen.add("empty")
+            elif comp is not None and comp < REPLICA_MIN_COMPLETENESS:
+                seen.add("below")
+            elif pend is not None:
+                seen.add("above")
+        assert seen >= {"above", "below", "empty"}, f"arms exercised: {sorted(seen)}"
+        return sorted(seen)
+    check("unresolved_orders: all 3 arms reached", _arms)
+
+    # Each named refusal must actually refuse.
+    # 🔴 PRODUCTION-SHAPE fixture: built from `build_column`'s real key set, not hand-picked.
+    # A fixture that carries only the keys the test happens to touch green-lights a guard that
+    # would KeyError on the real object — this project has shipped fail-opens in guards written
+    # to close the last fail-open, every one green against an injected shape.
+    # 🔴 Annotated `dict[str, Any]` on purpose. A column IS a heterogeneous record; inferred from
+    # the literal its value type is `str | dict[...] | int | list[...] | set[...] | float`, so a
+    # checker reads `col["counts"].values()` as a possible `str.values()` and reports a phantom
+    # error on every consumer. Declaring the real shape kills the union at its source — never
+    # cast it away at a call site, which would hide a genuine mismatch here later.
+    base: dict[str, Any] = {
+            "tag": "_T", "counts": dict.fromkeys(LANES, 1), "total": 5, "conflicts": [],
+            "pending": 0, "reasons": {}, "source_max_updated_at": "",
+            "replica_completeness": 1.0, "_keys": {"1"}, "age_days": 1,
+            "spend": dict.fromkeys(LANES, 0.0), "invoiced": dict.fromkeys(LANES, 0),
+            "coverage": dict.fromkeys(LANES, None), "basis_used": {}}
+    _live = build_column(con, ship_mondays(1)[0], {}, {})
+    _missing = (set(_live) | {"_keys"}) - set(base)
+    assert not _missing, f"self-test fixture is not production-shaped, missing {sorted(_missing)}"
+
+    def _refuses(name, mutate):
+        col = dict(base)
+        mutate(col)
+        try:
+            assert_column(col, known_key=col.pop("known", None))
+        except CarrierMixError as exc:
+            assert name in str(exc), f"wrong refusal: {exc}"
+            return name
+        raise AssertionError(f"{name} did not fire")
+
+    check("CM_ASSERT_ROWS_SUM_TO_COHORT refuses",
+          lambda: _refuses("CM_ASSERT_ROWS_SUM_TO_COHORT", lambda c: c.update(total=99)))
+    check("CM_ASSERT_AIR_GROUND_EXCLUSIVE refuses",
+          lambda: _refuses("CM_ASSERT_AIR_GROUND_EXCLUSIVE",
+                           lambda c: c.update(conflicts=[("#1", "air=['tag'] ground=['invoice']")])))
+    check("CM_ASSERT_KNOWN_KEY_PASSES refuses",
+          lambda: _refuses("CM_ASSERT_KNOWN_KEY_PASSES", lambda c: c.update(known="999")))
+
+    def _frozen():
+        led: dict[str, Any] = {"columns": {}}
+        col = dict(base, tag="_F", counts=dict.fromkeys(LANES, 1))
+        reconcile_ledger(led, col)                              # freezes (pending=0)
+        assert led["columns"]["_F"]["counts_frozen"], "did not freeze on pending=0"
+        moved = dict.fromkeys(LANES, 1)
+        moved[FEDEX_AIR] = 99                      # pretend the air row moved after the freeze
+        col2 = dict(col, counts=moved)
+        try:
+            reconcile_ledger(led, col2)
+        except CarrierMixError as exc:
+            assert "CM_ASSERT_FROZEN_COUNTS" in str(exc)
+            return "refused restatement"
+        raise AssertionError("frozen counts were silently restated")
+    check("CM_ASSERT_FROZEN_COUNTS refuses", _frozen)
+
+    def _backstop():
+        led: dict[str, Any] = {"columns": {}}
+        reconcile_ledger(led, dict(base, tag="_B", pending=3,
+                                   age_days=COUNT_FREEZE_MAX_AGE_DAYS + 1))
+        e = led["columns"]["_B"]
+        assert e["counts_frozen"] and e.get("residual_pending") == 3, e
+        return "force-frozen, residual recorded"
+    check("count-freeze backstop records residual", _backstop)
+
+    def _no_freeze_when_unknown():
+        led: dict[str, Any] = {"columns": {}}
+        reconcile_ledger(led, dict(base, tag="_U", pending=None, age_days=2))
+        assert not led["columns"]["_U"]["counts_frozen"], "froze on an unknown denominator"
+        return "stayed provisional"
+    check("unknown denominator blocks the freeze", _no_freeze_when_unknown)
+
+    # 🔴 RENDER a cohort set that includes a week with NO labels yet. This is the branch that
+    # took the run down (KeyError: 'counts') and the one every Monday-morning scheduled run hits,
+    # because `ship_mondays` always includes the current week's Monday. Built from the LIVE
+    # weeks + the next, unlabelled Monday — not a fixture, so it exercises the real shapes.
+    def _render_with_empty_column():
+        tags = [ship_mondays(1)[0], ship_mondays(1, date.today() + timedelta(days=7))[0]]
+        cols = [build_column(con, t, {}, {}) for t in tags]
+        assert any(c["total"] == 0 for c in cols), (
+            f"no unlabelled column available to exercise the branch: "
+            f"{[(c['tag'], c['total']) for c in cols]}")
+        led: dict[str, Any] = {"columns": {}}
+        for c in cols:
+            if c["total"]:
+                reconcile_ledger(led, c)
+        table = render(cols, led)
+        empty = next(c["tag"] for c in cols if c["total"] == 0)
+        assert "$0" not in table, f"an empty column rendered a fabricated zero:\n{table}"
+        assert table.count("\n") >= len(LANES), "table lost rows"
+        return f"rendered {len(cols)} columns incl. unlabelled {empty}, no fabricated zeros"
+    check("render survives a column with no labels yet", _render_with_empty_column)
+
+    for name, status, detail in results:
+        print(f"  [{status}] {name}: {detail}")
+    failed = [r for r in results if r[1] == "FAIL"]
+    print(f"\nCM_SELF_TEST: {len(results) - len(failed)}/{len(results)} passed")
+    return not failed
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -480,16 +669,20 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Carrier Mix pivot (read-only)")
     ap.add_argument("--weeks", type=int, default=5)
     ap.add_argument("--verify-gate", action="store_true")
+    ap.add_argument("--self-test", action="store_true",
+                    help="exercise every branch, including the ones a normal week never reaches")
     ap.add_argument("--no-ledger", action="store_true", help="render only; write nothing")
     a = ap.parse_args(argv)
 
     con = connect_ro()
     try:
+        if a.self_test:
+            return 0 if self_test(con) else 1
         inv, dss = _invoice_index(con), _delivery_service_index(con)
         print(f"delivery_status.service coverage: {len(dss)} rows populated "
               f"({'DEAD SIGNAL — tag is the sole service source' if not dss else 'live'})")
 
-        ok, got, bad = verify_gate(con, inv, dss)
+        ok, got, bad = verify_gate(con, dss)
         print(f"\nCM_REPRODUCE_GATE (_SHIP_2026-08-24, tag basis): "
               f"{'PASS' if ok else 'FAIL'}  {got}")
         if bad:
