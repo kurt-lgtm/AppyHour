@@ -2556,6 +2556,11 @@ against a headline of 1) and the assert fires; the NEW writer passes the same re
   with the zero-fill in place and the post-write assert confirms it. 🔴 **It freezes at age 10 =
   2026-08-27.** Deployed and run before then, it repairs itself; after then it is frozen wrong like
   the others. That deadline is the only time-critical part of this change.
+  > 🔴 **AMENDED BY [D37](#d37--a-bucket-that-drains-to-zero-boxes-leaves-the-universe-and-the-repair-refuses-itself-2026-08-26) (2026-08-26): this repair claim was INCOMPLETE.** The zero-fill
+  > cannot reach a bucket that drained to zero boxes in the ENTIRE cohort (`RMFG choice (2+ hubs
+  > open)` on wk0817), so the first repair run wrote TnT2 and then the post-write assert correctly
+  > refused it — the repair self-refused the day before the freeze. D37 adds the reclaim that
+  > closes the gap. Everything else in D34 stands unchanged.
 - **`_SHIP_2026-08-10` (col F, both tabs) and `_SHIP_2026-08-03` (col E, `Lost` state block) — NOT
   re-derivable, per cell, and deliberately left alone.** The frozen headline is the reading taken
   inside D32's measurement window; **the dimension split of that reading was never persisted
@@ -3092,3 +3097,72 @@ old reading was reproduced and recorded here first — the overwrite loses nothi
 this table. Frozen columns **≤ `_SHIP_2026-08-17` keep their old-basis readings untouched**
 (89.3% · 91.6% · 90.4% · 98.00% · 100.00% · 100.00%); their n-row cells stay blank. Do not
 "restate" them — D23 stands.
+
+### D37 — A BUCKET THAT DRAINS TO ZERO BOXES LEAVES THE UNIVERSE, AND THE REPAIR REFUSES ITSELF (2026-08-26)
+
+> 2026-08-26 08:31 CST, the first armed daily run carrying the D34 fix: the wk0824 current leg
+> passed both tabs, then the `_SHIP_2026-08-17` reconcile leg wrote TnT2 and
+> `PA_ASSERT_SECTION_SUM` refused it — `hub · 2 Day` block **2,266** against a headline of
+> **2,265**, the entire excess the stale `RMFG choice (2+ hubs open) · 2 Day = 1`. The throw
+> aborted the tab loop, so `Lost in Transit` (stale `RMFG choice · Not Arrived = 79`,
+> `· Arrived = 1`, `ME · Not Arrived = 19`, `NC = 42`, …) was never reached at all. One day before
+> the age-10 freeze, the run that existed to repair the column refused itself — and would have
+> refused forever.
+
+**The failure, negatives first.**
+
+1. 🔴 **D34's zero-fill universe is "every bucket with ≥ 1 box in the cohort THIS run" — and a
+   bucket whose membership is MUTABLE can drain to exactly zero.** Hub attribution is computed from
+   LIVE tags on every run (D17): once corrective retagging resolved the last fence-stack order of
+   wk0817, `RMFG choice (2+ hubs open)` held zero boxes in every grain, emitted no key, and its
+   high-water cells became unreachable by the very writer that was supposed to repair them. D34
+   §"The already-written cells" claimed col G "rewrites every dimension cell" on the first armed
+   run — incomplete: every dimension cell **whose bucket still has boxes**. The D34 doc's own
+   wording ("a residual bucket that DRAINS to ~0") contained the gap: `~0` is repairable, `0` is
+   not.
+2. 🔴 **The assert did its job — this was never a reason to weaken it.** Post-write is still the
+   correct place (D34 rule 4): the sheet genuinely did not partition. The fix is to make the write
+   complete, not to make the check forgiving.
+3. 🔴 **The current leg was fine, the previous leg carried the defect** — because only an OLD
+   column has had time for its residual bucket to drain. wk0824 (age 2) passed cleanly on both
+   tabs; the D20 previous-leg catch swallowed the throw (by design, non-fatal), DM'd Kurt, and the
+   current column was unaffected.
+4. 🔴 **NOT the D36 push.** Live `9c682e71dcb0` vs the D34-verified `e00f7770f15c` diffs ONLY in
+   `paRoutingValues_` / `paAssigned_` / `paRoutingIsMeasured_` / two D36 constants — nothing on the
+   delivery-tab write path. Confirmed by byte diff, not assumed.
+5. 🔴 **NOT a data problem.** The freshly computed buckets partition their headlines exactly (the
+   five live hubs summed 2,265 = `2 Day Shipments` to the box). Every failing delta was a stale
+   cell of a drained bucket. Nothing "genuinely doesn't reconcile."
+
+**🔴 The rule: RECLAIM.** `paReclaimDrained_` runs between `paValues_` and `paWriteOwned_` on both
+delivery tabs, in armed and dry runs alike. For every DIMENSION row of the column that (a) currently
+holds a **NUMBER**, (b) parses as `{bucket} · {grain}` (or `· TNT1`) on the whole token after the
+LAST ` · `, and (c) has **no key** in this run's value map — the bucket shipped once (a number is a
+past claim of membership) and holds zero boxes now, so the honest value is **0**, added to the value
+map so the ordinary writer, the dry-run simulation, and the missing-row report all see it. What it
+must NEVER do:
+
+- **touch a blank cell** — blank still means "did not exist in this cohort" (A5/D19/D34 rule 2);
+  Indianapolis and never-ordered states stay blank;
+- **touch a non-numeric cell** — the stray hand-typed `'o'` in `TnT2!Indianapolis · 2 Day` (wk0817)
+  survives; a hand edit is Kurt's to clear, and the assert already ignores text;
+- **touch the headline block, a rate row (blank label), or anything outside the four dimension
+  blocks**, or run outside a script-owned column (`paCurrentCol_`'s age gate is upstream).
+
+A bucket still in the universe is untouched by construction — the zero-fill already gave every
+universe bucket a key in every grain, so (c) can only hold for drained buckets.
+
+**Verification (2026-08-26):** local re-computation of the assert over the live grid reproduced the
+08:31 refusal exactly (TnT2 wk0817 `hub · 2 Day` 2,266 vs 2,265; Lost wk0817 hub 88/carrier 10/
+state 186 vs 7 — unchanged from D34's table because the leg aborted before Lost); vm replay of the
+deployed bytes (`d37_test.js`): without reclaim the seeded wk0817 shape throws, with reclaim both
+tabs pass, blanks/text/headline/in-universe cells untouched; collision sweep 424 top-level names no
+duplicate; `node --check` clean per file and over the 4-file concatenation.
+
+**Freeze-deadline math (why this deployed same-day):** `paCohortAgeDays_` is an ET calendar-day
+diff from the ship Monday. wk0817 is age **9** on 2026-08-26 (script-owned, repairable) and age
+**10** on 2026-08-27 — both `paCurrentCol_` and the reconcile-leg gate refuse it from tomorrow.
+The daily trigger for 2026-08-26 has already fired (08:31 CST, the refusal above), so the repair
+requires a **manual `refreshCurrentColumn` run after the deploy, before end of day ET** — after
+that, wk0817's dimension blocks are frozen wrong permanently, like wk0810's. No freeze constant is
+touched, no per-cohort exception is added: the freeze discipline stands.

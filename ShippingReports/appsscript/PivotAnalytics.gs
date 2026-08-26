@@ -1095,6 +1095,57 @@ function paWriteOwned_(sheet, col, valuesByLabel, dry) {
   return { wrote: wrote, missing: missing };
 }
 
+/**
+ * 🔴 D37 (2026-08-26) — A BUCKET THAT DRAINS TO ZERO BOXES LEAVES THE UNIVERSE, AND ITS STALE CELLS
+ * BECOME UNREACHABLE BY THE D34 ZERO-FILL. The zero-fill covers every bucket with >= 1 box in the
+ * cohort THIS run. But hub attribution is computed from LIVE tags (D17), so when corrective
+ * retagging resolves the last fence-stack order, `RMFG choice (2+ hubs open)` holds ZERO boxes,
+ * emits no key in any grain, and its high-water cells can never be rewritten by the writer that is
+ * supposed to repair them. Observed 2026-08-26 08:31 CST, the day before wk0817's age-10 freeze:
+ * the reconcile leg wrote TnT2, then PA_ASSERT_SECTION_SUM correctly refused `hub · 2 Day`
+ * (block 2,266 vs headline 2,265 — the whole excess was the stale `RMFG choice · 2 Day = 1`),
+ * which aborted the tab loop so Lost in Transit (stale `RMFG choice · Not Arrived = 79`) was never
+ * even reached. The assert refused the run that exists to repair the column — forever, because the
+ * drained bucket can never re-enter the universe.
+ *
+ * THE RECLAIM: an owned DIMENSION cell that currently holds a NUMBER is a past claim of cohort
+ * membership ("this bucket had boxes"); if this run's value map carries NO key for it, the bucket
+ * holds zero boxes now and the honest value is 0 — exactly the D34 zero-fill semantics, extended to
+ * buckets whose membership was mutable and drained. What it must NEVER do:
+ *   - touch a BLANK cell (blank = "did not exist in this cohort" — A5/D19; stamping 0 into
+ *     Indianapolis or a state nobody ordered from is the error D34 rule 2 forbids);
+ *   - touch a non-numeric cell (a stray hand-typed string is Kurt's to clear, not ours to zero —
+ *     `TnT2!Indianapolis · 2 Day` held 'o' on wk0817 and must survive this);
+ *   - touch the headline block ('' dim), a rate row (blank label), or any row outside the four
+ *     dimension blocks;
+ *   - run outside a script-owned column (the caller already passed `paCurrentCol_`'s age gate).
+ * Nested `· TNT1` rows ARE reclaimed (a drained hub's TNT1 count is as stale as its 2 Day), by the
+ * same whole-token last-` · ` test as everything else — never a substring (four burns).
+ * Keys are added to `valuesByLabel` BEFORE `paWriteOwned_`, so the armed write, the dry-run
+ * simulation, and the ⚠️-missing-row report all see them through the one writer path.
+ */
+function paReclaimDrained_(sheet, col, valuesByLabel, tabName) {
+  var cur = paColumnByKey_(sheet, col);
+  var grains = paGrains_(tabName), reclaimed = [];
+  Object.keys(cur).forEach(function (key) {
+    var p = key.indexOf('||');
+    var dim = key.slice(0, p), lab = key.slice(p + 2);
+    if (PA_DIMS.indexOf(dim) < 0) return;                  // headline block — never reclaimed
+    if (typeof cur[key] !== 'number') return;              // blank stays blank; text stays text
+    if (Object.prototype.hasOwnProperty.call(valuesByLabel, key)) return;  // writer owns it this run
+    var i = lab.lastIndexOf(' · ');
+    if (i < 0) return;
+    var suffix = lab.slice(i + 3);                         // whole token after the LAST ' · '
+    if (grains.indexOf(suffix) < 0 && suffix !== PA_TNT1_LABEL) return;
+    valuesByLabel[key] = 0;
+    reclaimed.push(dim + ' → ' + lab + ' (was ' + cur[key] + ')');
+  });
+  if (reclaimed.length) {
+    paLog_('  D37 reclaim: ' + reclaimed.length + ' stale cell(s) of drained bucket(s) -> 0: ' +
+           reclaimed.join(', '));
+  }
+}
+
 // ---------------------------------------------------------------- entry point
 
 /**
@@ -1262,6 +1313,7 @@ function paRefreshOne_(shipWeek, dry, budget, allowAppend) {
     if (!col) { paLog_('  ⚠️ ' + name + ': no column for ' + shipWeek + ' — skipped (never appended left)'); return; }
     paLog_('  ' + name + ' col ' + col);
     var vals = paValues_(recs, name);
+    paReclaimDrained_(sh, col, vals, name);             // D37 — a bucket that drained OUT of the universe
     paWriteOwned_(sh, col, vals, dry);
     if (!dry) {
       SpreadsheetApp.flush();
