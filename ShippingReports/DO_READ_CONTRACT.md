@@ -52,9 +52,9 @@ looks at its schema.
 
 | table | cloud writer + cadence | (1) no duplicate calls | (2) most up-to-date | **verdict** |
 |---|---|---|---|---|
-| `delivery_status` | `sync_delivery_status.run()`, ingest-worker timer `delivery_status_sync`, **1h**, `DELIVERY_SYNC=1` **LIVE** | ✅ cloud is the single PP/Shopify-events caller — but see §5 blocker B3, the webhook is a *second* live path with no consumer | ✅ cloud hourly beats local (local organic `synced_at` max **2026-08-25 21:41 UTC**, ~2 days old at time of writing) | **IN SCOPE — migrate first** |
-| `shopify_orders` | `sync_shopify_orders.run()`, timer `shopify_orders_sync`, **4h**; cloud is already the declared PRIMARY (DATA_CANON matrix) | ✅ already single-writer cloud-owned; local sqlite is a *replica*, not a source | ✅ cloud primary is by definition ≥ the weekly `pull_cloud_replicas.py` copy (local tolerance 14d) | **IN SCOPE — already cloud-primary; we just stop reading the weekly replica** |
-| `fulfillments` | 🔴 **NONE.** No `fulfillments` timer exists in `server/ingest_worker.py` `REGISTRY`. Owner is still the Windows/Kori writer per the DATA_CANON matrix | ✅ would satisfy (1) | ❌ **VIOLATES (2)** — cloud copy reported dead since **2026-08-12**; local `updated_at` max is **2026-08-27 16:17** (today) | 🔴 **OUT OF SCOPE.** Keep reading local. Re-scope only when a cloud writer exists AND parity is proven. This is exactly the (1)-vs-(2) conflict the north star names |
+| `delivery_status` | `sync_delivery_status.run()`, ingest-worker timer `delivery_status_sync`, **1h**, `DELIVERY_SYNC=1` **LIVE** | ✅ cloud is the single PP/Shopify-events caller — but see §5 blocker B3, the webhook is a *second* live path with no consumer | ✅ **cloud is a STRICT SUPERSET, measured.** Local-only rows = **0** in all three of `_SHIP_2026-08-10/-17/-24`; cloud-only = +32/+16/+178; "in NEITHER" = 0. Cloud `synced_at` max **2026-08-27 17:59 ET** vs local **2026-08-25 21:41**. Every one of 2,213 status disagreements runs local-behind; not one runs the other way | **IN SCOPE — migrate first.** 🔴 But see B5: the table is HALF-FLIPPED — cloud owns it and **nothing writes local**. Retiring the local pull without a read path is a silent freeze, not a cutover |
+| `shopify_orders` | `sync_shopify_orders.run()`, timer `shopify_orders_sync`, **4h**; cloud is already the declared PRIMARY (DATA_CANON matrix) | ✅ already single-writer cloud-owned; local sqlite is a *replica*, not a source | ✅ cloud 60,084 vs local 60,072, both current to today | **IN SCOPE — already cloud-primary; we just stop reading the weekly replica** |
+| `fulfillments` | 🔴 **NONE.** No `fulfillments` timer exists in `server/ingest_worker.py` `REGISTRY`. Owner is still the Windows/Kori writer per the DATA_CANON matrix | ✅ would satisfy (1) | ❌ **VIOLATES (2), measured.** Cloud `MAX(updated_at)` **2026-08-12 05:12** vs local **2026-08-27 16:17**. 🔴 **LOCAL is the strict superset: 4,911 local-only orders, ZERO cloud-only.** Cloud is missing ship weeks `2026-08-17` and `2026-08-24` **entirely** | 🔴 **OUT OF SCOPE.** Keep reading local. This is exactly the (1)-vs-(2) conflict the north star names, and it is the clearest case in the system: migrating here would *lose two ship weeks* |
 | `shipments` | `sync_invoices.run()` + `imap_invoices.fetch()`, timer `invoice_ingest`, **12h**, `INVOICE_SYNC=1` + `INVOICE_IMAP=1` **LIVE** | ✅ cloud does its own IMAP acquisition — but ⚠️ this DUPLICATES the local `sync_all_carriers.py` IMAP pull against the same mailbox (B4), and 🔴 three OnTrac invoices are double-ingested with **$21,319 of duplicate cost** (B2b) | ⚠️ **NOT STALE — CORRUPT.** Cloud max ISO `ship_date` is **2026-08-19**, same as local. The "stale to March" reading was a **two-format lexical-sort artifact** (B2), now measured and confirmed: 8,940 rows in `YYYYMMDD`, 109,377 in `YYYY-MM-DD` | 🔴 **BLOCKED on B2 + B2b.** Freshness was never the problem; the column cannot be range-filtered or `MAX()`-ed until it is one format. Do not migrate a cost number onto it |
 | `weather_history` | `sync_weather.run()`, timer `weather_fetch`, **24h**; cloud-owned PRIMARY | ✅ | ✅ | **IN SCOPE** (low priority — reporting barely reads it; ice sizing does) |
 | `feedback` | 🔴 **NONE.** Windows Gorgias tee, no cloud timer | ✅ would satisfy (1) | ❌ no cloud writer at all | 🔴 **OUT OF SCOPE** |
@@ -64,6 +64,45 @@ looks at its schema.
 **The one-line summary for Routing Coordinator:** we want `delivery_status` and `shopify_orders`
 now; `weather_history` whenever; `shipments` after B2; `fulfillments` and `feedback` **not until
 they have a cloud writer** — and we would rather keep a local read than take a dead cloud one.
+
+## 1.1 🔴 The number that makes criterion (2) concrete
+
+For the **live cohort** `_SHIP_2026-08-24`, measured 2026-08-27:
+
+| | delivered | of roster | rate |
+|---|---:|---:|---:|
+| **LOCAL** (what every report reads today) | 160 | 2,409 | **6.6%** |
+| **CLOUD** (what DO already has) | 2,301 | 2,577 | **89.3%** |
+
+**Any on-time or late-rate number pulled right now for this week's cohort is wrong by ~83
+percentage points.** DO already holds the right answer and nothing reads it. Settled cohorts
+(08-10, 08-17) agree to within a handful of rows — **the divergence is entirely in the
+still-moving week, which is precisely the week anyone asks about.**
+
+🔴 That is the whole case for this migration, and it is worth doing on its own merits **this week,
+independent of any retire.**
+
+## 1.2 🔴 What the migration does NOT fix — say it before someone assumes otherwise
+
+**Ship routing's ParcelPanel input is one month stale, in BOTH stores, and moving to DO changes
+nothing about it.**
+
+The engine's PP-fed historical-TNT correction (`build.py` → `lib/hist_risk.py`) is gated on
+`delivery_status.origin_hub IS NOT NULL`. That column is populated only by
+`ShipRouting/phase0_origin_backfill.py`, which is **fenced off by default**.
+
+| measurement | LOCAL | CLOUD |
+|---|---|---|
+| rows with `origin_hub NOT NULL` | 79,266 | **79,266** |
+| `MAX(pickup_date)` among them | 2026-07-27 | **2026-07-27** |
+| `hist_risk`-eligible rows after the full join | 53,969 | **53,969** |
+
+Byte-identical. `origin_hub` is a **frozen historical backfill, not a live feed**, and 8,766–9,608
+rows since 2026-08-01 carry no `origin_hub` at all, so they are invisible to `hist_risk`.
+
+🔴 **The freshness lever for routing is the `origin_hub` backfill and its missing scheduled owner —
+not this migration.** Do not let "we moved to DO" be recorded as having fixed routing freshness. It
+did not. (Reports are the half DO genuinely fixes — §1.1.)
 
 ---
 
@@ -106,6 +145,33 @@ they have a cloud writer** — and we would rather keep a local read than take a
 — Shopify exchange/split orders). ZERO of them match through the standard strip, so they are
 invisible to every per-order delivery join. Stripping the letter would COLLIDE with the unsuffixed
 order of the same number. This is a declared, un-triaged blind spot, not a bug to patch in a report.
+
+🔴 **This is not a theoretical rule — the exact bug is LIVE in the engine right now.**
+`ShipRouting/lib/engine.py:338-345`, inside `derive_failed_carriers` (the `RESHIP_RECOVERY`
+fallback), joins:
+
+```sql
+JOIN shopify_orders o ON o.order_name = f.order_number
+```
+
+`shopify_orders.order_name` is `'#172607'`; `fulfillments.order_number` is `'172607'` (zero rows
+`#`-prefixed on either side). **The join returns 0 rows, always.** With `'#'||f.order_number` it
+returns **57,427**. Consequence: every reship lacking an explicit `_RESHIP_FAILED_<carrier>` tag
+silently falls through to FedEx 2Day **AIR** instead of a proven cheaper ground lane.
+
+Found by `ParityAudit` 2026-08-27. **Pre-existing, unrelated to this migration, and not ours to fix
+here** — flagged because it is the canonical instance of the rule above, and because a migration
+must not be recorded as having introduced or fixed it. Needs its own fix plus a replay-diff.
+
+🔴 **Two more grain traps that silently drop rows on an exact-match tracking join:**
+- **Comma-joined multi-package rows.** Both stores collapse a multi-package order into ONE row with
+  a comma-joined tracking value (`'1LSDBVC00171ABW,1LSDBVC00171A8J'`) — cloud 361, local 348. Such a
+  value can never equal a `fulfillments.tracking_number`, so an exact-match tracking join drops them
+  on both sides. Another reason the key is **order_number**.
+- **Cloud carries 2,135 NULL-tracking rows; local carries 0.** All are `info_received` (1,813) or
+  `pending` (322) — orders PP knows about before a tracking number exists. This is genuine *extra*
+  early-visibility coverage, not duplication (0 of the 2,135 also have a real tracking row), but it
+  **inflates a naive `COUNT(*)` on the cloud table by 2,135.** Count orders, not rows.
 
 ## 2.2 Columns we consume, per table
 
@@ -160,6 +226,26 @@ values below were measured on 2026-08-27 at 18:09 America/New_York.
 | `*.fulfilled_at` | `2026-07-27T05:21:05-04:00` | **tz-aware ET**, explicit offset (`-04:00` EDT / `-05:00` EST — both observed) | ✅ verified |
 | `fulfillments.updated_at` | `2026-08-27 16:17:42` (naive) | ⚠️ **UNVERIFIED.** Schema default is `datetime('now')` (UTC) but the observed value is consistent with a naive LOCAL write by the Python writer. I could not distinguish 16:17 ET from 16:17 UTC from the data alone | ❌ **must be pinned by the cloud side** |
 | `delivery_date`, `pickup_date`, `ship_date`, `delivery_status` dates | `2026-08-25` | **date-only, no timezone.** Already a local business date | ✅ |
+
+### 🔴 `synced_at` holds TWO formats too — and it is the freshness column
+
+Measured by `ParityAudit` 2026-08-27:
+
+| store | space-naive (`2026-08-25 21:41:13`) | ISO-with-offset (`2026-08-27T17:59:43-04:00`) |
+|---|---:|---:|
+| LOCAL | 118,895 | 14 |
+| **CLOUD** | 113,762 | **7,414** |
+
+🔴 **Naive and `-04:00`-suffixed values do not sort together correctly, and they do not mean the
+same thing** — the naive ones are UTC (§2.3 above), the suffixed ones are ET. So a `MAX(synced_at)`
+or a `substr()` on this column mixes two timezones *and* two lexical orderings. **This is the same
+class as B2, in the column every freshness assert in §3 depends on.**
+
+**Requirement: `synced_at` is ONE format.** We ask for **ISO-8601 with an explicit offset**
+(`2026-08-27T17:59:43-04:00`) rather than naive-UTC, because an explicit offset cannot be
+misread — and the naive-UTC form has *already* been misread (see item 3 below). Normalize on write,
+backfill, and add the domain assert to `DATA_CANON_RULES.md`. As with B2: **the fix is in the
+ingest, never a reader-side `if 'T' in x`.**
 
 **The contract we require:**
 
@@ -270,6 +356,41 @@ What it already does, verified by reading the module:
 
 **The consumer-side change is therefore:** call `histdb.resolve(tables=[...], requirements=[...])`
 at start-up, and keep the SQL. Nothing else.
+
+**Independently confirmed by `ParityAudit` (2026-08-27):** `ShipRouting/lib/dbpath.py:31-34`
+already checks `histdb.resolve()` first; the routing switch is **one env var**
+(`ROUTING_HISTORY_DB=1`), replay-proven **0-diff** at commit `766c76a`. And because the mirror IS
+sqlite, **every `sqlite3.connect(mode=ro)` consumer stays byte-identical** — a once-per-TTL bulk
+pull, **not** per-query network. Their cheapest-global-mitigation finding matches this
+recommendation exactly: pointing `APPYHOUR_DB_PATH` at the mirror gives ~21 skill query files,
+`wednesday_ops_run.py`, `freshness_sweep.py` and the rest cloud-sourced data with **zero code
+changes**.
+
+### 🔴 Required mitigation before this shape ships: it hard-fails offline
+
+`histdb.materialize()` **raises** on any MySQL failure and `dbpath.py:33` has **no fall-through to
+the local file** when the flag is on. Consequences, both of which this contract requires fixed
+before step 4 of §6:
+
+1. 🔴 **An unreachable DO MySQL kills the Friday routing build outright.** Today the local pulls are
+   the informal backup that makes this tolerable; retiring them removes it.
+2. 🔴 **`freshness_sweep.py` would go BLIND exactly when the network it monitors is down** — and
+   would report **"stale"** rather than **"unreachable."** That is the wrong word in the worst
+   moment: it sends someone to debug an ingest that is fine. **Unreachable must be its own state,
+   never folded into stale.**
+
+**Required:** a fall-through to the last good mirror (it is already atomic and content-verified) or
+to the local file, with a **LOUD** degradation notice naming which store answered. Absent is safe;
+silently-substituted is not.
+
+### Consumers that need a real edit, not just the env var
+
+- `carrier_mix_pivot.py` — hardcodes `connect_ro()` with no table declaration; needs a real edit,
+  and naively rewritten it becomes a full-table transfer per run.
+- `postmortem_runner.py` — highest friction: hardcoded path literal at `:24`, bare
+  `sqlite3.connect` at `:441`, no resolver, and it exits on a missing DB with no network path.
+- ⚠️ Two skill query files are pinned to the **retired `%APPDATA%` path** and honor nothing:
+  `air_serviceability_critic_v2.py:23`, `aov_air_cutoff.py:35`.
 
 ### Honest costs of this shape
 
@@ -423,11 +544,37 @@ verified nothing.
 | NULL | 5,086 | — | — |
 | empty string | 6 | — | — |
 
-Corroborating local evidence: local sqlite has **zero** 8-char values (10-char: 94 760, NULL: 2 545,
-empty: 6), so the compact form is **not** mirrored up from local — it originates in the cloud
-ingest. Consistent with `sync_invoices.py`, where the FedEx path formats via `_dt()` → `%Y-%m-%d`
-but the UPS path at line 214 writes `str(s.ship_date)` verbatim with no `_dt()` — i.e. the loader
-normalizes inconsistently by branch, and `VARCHAR(32)` imposes no guard.
+Corroborating local evidence: local sqlite has **effectively zero** compact values (10-char: 94 760,
+NULL: 2 545, empty/blank: 6), so the compact form is **not** mirrored up from local — it originates
+in the **cloud** ingest path (`/tmp/invoices/AHB_*.XLSX`). Consistent with `sync_invoices.py`, where
+the FedEx path formats via `_dt()` → `%Y-%m-%d` but the UPS path at line 214 writes
+`str(s.ship_date)` verbatim with no `_dt()` — i.e. the loader normalizes inconsistently **by
+branch**, and `VARCHAR(32)` imposes no guard.
+
+🔴 **"Stale to March" is formally retired as a finding.** Restricted to ISO rows, `MAX(ship_date)`
+is **2026-08-19 on BOTH sides** — identical. The true cloud *lexical* max is `20260817`; the
+original `20260302` reading did not reproduce and came from some narrower slice. **The table was
+never stale. It is CORRUPT, which is worse, because staleness announces itself and this does not.**
+
+### The other half of the damage: duplicate rows
+
+| | LOCAL | CLOUD |
+|---|---|---|
+| rows / distinct `tracking` | 97,311 / 97,311 — **clean** | 123,409 / 97,614 → 🔴 **25,795 duplicate rows** |
+| duplicate groups | 0 | many; top offenders appear **3×** |
+| **August cost, `WHERE ship_date LIKE '2026-08%'`** | **$58,176.23** over 5,171 rows | **$48,999.08** over 4,790 rows |
+
+🔴 **The two defects push a cost number in OPPOSITE directions, which is why neither is obvious.**
+The standard ISO date filter **misses 381 August shipments and $9,177 — 15.8% of August spend** —
+while the duplicate rows simultaneously **over-count** anything not filtered by date, and would
+inflate lane observation counts by roughly 26%. Tracking *coverage* is fine (cloud-only 304,
+local-only 1): it is the row grain and the date encoding that are broken.
+
+⚠️ **Two duplicate figures are in circulation — they are different slices, do not merge them.**
+The `$21,319` in B2b is the duplicate cost on the **three specific double-ingested OnTrac
+invoices**; the `25,795 duplicate tracking rows` above is the **whole-table** duplicate count. The
+three invoices are a subset. Whoever does the dedupe should reconcile both against the same query
+rather than assuming either is the total.
 
 ### The requirement
 
@@ -498,6 +645,56 @@ one costs.
 raise it because it is the clearest (1)-violation in the system and it sits on the path that feeds
 our most-consumed table.
 
+## B5 — 🔴 `delivery_status` is HALF-FLIPPED: cloud owns it, and NOTHING writes local
+
+**This is the blocker that turns a cutover into a silent freeze, and it is the cheapest of them all
+to prevent.** Measured by `ParityAudit` 2026-08-27:
+
+- `ShipRouting/server/etl_history.py:577-586` — `cloud_owned = {"shopify_orders",
+  "weather_history", "delivery_status"}`, commented *"`delivery_status` JOINED this set 2026-08-20,
+  the moment `DELIVERY_SYNC=1` went live."* **Local→cloud publication is already excluded.**
+- `_outputs/scripts/pull_cloud_replicas.py:51-57` — `PULLS` carries **only** `shopify_orders` and
+  `weather_history`. 🔴 **There is no MySQL→sqlite leg for `delivery_status`.**
+- Net: the local copy is kept alive **only** by the local ParcelPanel pulls. Retire them with no
+  replacement read path and ~30 consumers freeze at 2026-08-25 **and keep returning answers** —
+  the *stale-replica-is-worse-than-absent* class this system already names.
+
+**Evidence that clears it:** either `delivery_status` added to `PULLS`, **or**
+`ROUTING_HISTORY_DB=1` / `APPYHOUR_DB_PATH`→histdb mirror live and proven. 🟢 **Ours to fix, not
+the cloud side's** — and worth doing this week regardless of any retire, because it is what puts
+reports on the fresh data they are currently missing (§1.1).
+
+🔴 **Doc/code contradiction to reconcile in the same pass:** `DATA_CANON_RULES.md:25` still says
+`delivery_status` is *"⚠️ FLIP PENDING … sqlite primary"*; the code says the flip happened
+2026-08-20. The constraints-doc gate requires the doc to move in the same commit as the code; it did
+not. **Cloud side owns that reconciliation** — this contract's §1 verdicts are written against the
+CODE, which is the current state.
+
+## B6 — "retire the local PP pulls" ≠ "retire `sync_logon.py`". Be surgical.
+
+🔴 Conflating these deletes writers nothing replaces.
+
+| script | trigger | tables WRITTEN |
+|---|---|---|
+| `GelPackCalculator/daily_shipping_sync.py` → `run_pp_sync` | `appyhour_daily_{tue,wed,thu,fri}` 12:00 | **`delivery_status` only** |
+| `GelPackCalculator/sync_logon.py` → `backfill_sync` | `appyhour_sync_daily_noon` 12:05 | `fulfillments`, `delivery_status` — **and via `sync_all_carriers`, `invoices` + `shipments`** (FedEx IMAP) |
+
+`sync_logon` carries the **FedEx-IMAP invoice leg**, which writes two tables DATA_CANON still lists
+as sqlite-primary **with no cloud writer**, and which is flagged as *the one writer with a genuine
+local-file dependency* — it cannot move to App Platform as-is.
+
+**The retire, when it happens, is scoped to exactly `run_pp_sync` and
+`backfill_sync.sync_parcel_panel`. Nothing else.**
+
+⚠️ **And it may already be partly moot — needs a deliberate diagnostic, not an assumption.**
+`delivery_status.synced_at` shows **no rows at all for 8/26 or 8/27** locally (last landing day
+2026-08-25, 11,123 rows), yet `appyhour_daily_wed` and `appyhour_daily_thu` both report as having
+fired and the same wrapper's `run_cloud_replica_pull` stage stamped success at
+`2026-08-27T16:00:18Z`. **The wrapper ran and the PP leg left no trace.** `ParityAudit` did not run
+`run_pp_sync` to find out why — it writes to `shipping.db` and that audit was read-only. 🔴 **Do not
+conclude the local pull is dead, and do not conclude it is alive.** It needs one deliberate
+diagnostic run by someone allowed to write.
+
 ## B4 — two IMAP readers on one mailbox (a duplicate-work item we are surfacing, not solving)
 
 `INVOICE_IMAP=1` on the cloud worker means DO now pulls carrier invoice attachments from
@@ -518,16 +715,31 @@ stays authoritative until the cloud is proven on a real cohort.
 | step | what lands | what proves it | rollback |
 |---|---|---|---|
 | **0** | This document reviewed by Routing Coordinator; B1/B2/B3 acknowledged as gates | written agreement on the table verdicts in §1 | n/a — doc only |
-| **1** | Kurt creates `DATABASE_URL` in the **real** user context (a real terminal, not Claude/MSIX — the sandbox shadow is invisible to scheduled tasks) | `histdb.enabled()` true and one successful `materialize()` from a real terminal | delete the file; every path falls back to local, byte-identical |
+| **1** | 🔴 **B5 first — give `delivery_status` a local read path** (`ROUTING_HISTORY_DB=1` / `APPYHOUR_DB_PATH`→histdb mirror, or add it to `pull_cloud_replicas.PULLS`). `DATABASE_URL` must exist in the **real** user context — a real terminal, not Claude/MSIX, whose `%APPDATA%` writes land in a shadow the scheduled task cannot see | `histdb.enabled()` true; one successful `materialize()` from a real terminal; `_SHIP_2026-08-24` delivered-rate reads ~89%, not ~7% | delete the file / unset the flag; every path falls back to local, byte-identical |
+| **1b** | The offline mitigation in §4.1 — fall-through + a LOUD notice naming which store answered, and **"unreachable" as a distinct state from "stale"** in `freshness_sweep.py` | kill the network, run the sweep: it must say *unreachable*, not *stale*, and the Friday build must not die | revert one commit |
 | **2** | **ONE read-only consumer** moved to `histdb.resolve()` — propose the **carrier-mix pivot** (C4): read-only, no live decision depends on it, and it already prints its own row counts | 🔴 **run it BOTH ways on the same ship weeks and diff the output.** Identical counts and costs, or it does not proceed. A row-count match is not a diff | unset `ROUTING_HISTORY_DB`; the script reads local sqlite unchanged |
 | **3** | Fix the naive-vs-UTC comparison in `freshness_sweep.py` (§2.3 item 3) and re-point the C3 current-week assert at whichever store C3 reads | the 48h gate grades the same age a human computes by hand from `synced_at` | revert one commit |
 | **4** | `delivery_status` + `shopify_orders` consumers migrated behind `ROUTING_HISTORY_DB` | one full ship-week run where cloud-read and local-read produce identical cohort numbers | the flag |
 | **5** | **B2 + B2b resolved** → `shipments` consumers migrated | the `LENGTH(ship_date)` query returns exactly one non-NULL bucket (`10`); the three double-ingested OnTrac invoices deduped and the $21,319 gone; a cost report matching local to the cent | the flag |
 | **5b** | *(separate from the migration, sequenced after B2b)* backfill the 4,582 recoverable NULL-`ship_date` rows from `delivery_status` by tracking | ~2,500 winter TNT observations computing a real transit where they compute none today | the rows are additive; revert = re-null them |
-| **6** | 🔴 **LAST — retire the local reads that DO now owns** | 🔴 **parity proven over ≥2 consecutive ship weeks**, plus every §3.2 assert green in `freshness_sweep` across that span | 🔴 **do not delete anything.** Local writers get DISABLED and their code kept; `pull_cloud_replicas.py` stays as the documented rollback path |
+| **6** | 🔴 **LAST — retire the local PP pulls, scoped to `run_pp_sync` + `backfill_sync.sync_parcel_panel` ONLY** (B6) | 🔴 **parity proven over ≥2 consecutive ship weeks**, plus every §3.2 assert green in `freshness_sweep` across that span, plus the B6 diagnostic answered (is the local pull even alive?) | 🔴 **do not delete anything.** Local writers get DISABLED and their code kept; `pull_cloud_replicas.py` stays as the documented rollback path |
 
 **Never in scope for retirement, at any step:** the FedEx-113/UPS invoice download (N5), the Apps
-Script exceptions sweep (N3), `fulfillments` and `feedback` local reads (B1 / §1).
+Script exceptions sweep (N3), `fulfillments` and `feedback` local reads (B1 / §1), and 🔴 **the rest
+of `sync_logon.py`** — its FedEx-IMAP leg writes `shipments` + `invoices`, which have no cloud
+writer (B6).
+
+## 6.1 Not in this migration, but do not let it get lost
+
+Three items surfaced en route that this contract does **not** own and must not be recorded as
+handled by it:
+
+1. 🔴 **The `origin_hub` backfill** (§1.2) — the real routing-freshness lever, fenced off, no
+   scheduled owner. Routing keeps optimizing against month-old transit history no matter which
+   database it reads.
+2. 🔴 **`engine.py:338-345` `derive_failed_carriers` returns 0 rows, always** (§2.1) — reships
+   silently fall through to FedEx 2Day AIR. Needs its own fix plus a replay-diff.
+3. **The `DATA_CANON_RULES.md:25` doc/code contradiction** (B5).
 
 🔴 **Rollback doctrine.** Every step above is a flag flip, not a deletion. The one irreversible
 thing in this migration is deleting a local writer, and step 6 explicitly does not do it — it
@@ -563,28 +775,37 @@ DATA_CANON grain, business-key and known-defect declarations; the 3h / 24h / 48h
 the 2026-08-17 `feedback` completeness outage (34/55 blank `order_number`); the PP 120 req/min limit
 and the non-existent weekly budget; `sync_invoices.py`'s 2026-08-20 local-vs-cloud measurement.
 
-**Measured on cloud MySQL by the coordinator's read-only probe (relayed 2026-08-27), not by this
-session:** the `shipments.ship_date` length distribution in B2; the 2,545-distinct-tracking /
-three-double-ingested-OnTrac-invoice / $21,319 duplicate-cost finding; the 4,582-of-5,086
-recoverable-by-tracking count. These supersede the hypothesis this document originally carried and
-are the basis for B2's status as a confirmed requirement rather than an open question.
+**Measured on cloud MySQL by `ParityAudit`** (`_outputs/reports/2026-08-27-cloud-local-parity-audit.md`,
+read-only, `pymysql` direct, credentials via `pull_cloud_replicas.database_url()`; join validated
+against five known-present `_SHIP_2026-08-17` orders *before* any zero was trusted). Folded into
+this document: the per-cohort coverage table and the 0-local-only result; the `_SHIP_2026-08-24`
+6.6%-vs-89.3% delivered split; the `fulfillments` 4,911-local-only / 0-cloud-only inversion; the
+`shipments` 25,795 duplicate rows and $9,177 August undercount; the `origin_hub` 2026-07-27 freeze
+identical on both sides; the mixed `synced_at` format counts; the `etl_history.py:577-586` /
+`pull_cloud_replicas.py:51-57` half-flip; the `engine.py:338-345` join bug; the consumer inventory
+in §3.2 and §4.1.
 
-🔴 **NOT verified by this session — do not treat as fact:**
-- **This session issued no query against cloud MySQL.** I had no `DATABASE_URL`. Cloud-side numbers
-  here are either the coordinator's relayed probe (above), a quote from a code comment, or marked
-  as unverified. **The `ParityAudit` per-cohort cloud-vs-local coverage numbers are a required
-  input to §1 and B1 and are not yet folded in** — when that report lands
-  (`_outputs/reports/2026-08-27-cloud-local-parity-audit.md`), reconcile §1's verdict column and B1
-  against it, and this note comes out.
-- **B1's "`fulfillments` dead in DO since 2026-08-12"** — relayed, not measured here. What I did
-  verify is the *cause*: no `fulfillments` timer exists in `ingest_worker.REGISTRY`.
+**Measured on cloud MySQL by the coordinator's read-only probe (relayed 2026-08-27):** the
+`shipments.ship_date` length distribution in B2; the three-double-ingested-OnTrac-invoice /
+$21,319 duplicate-cost finding; the 4,582-of-5,086 recoverable-by-tracking count. Together with
+`ParityAudit` these supersede the hypothesis this document originally carried, which is why B2 is
+now a confirmed requirement rather than an open question.
+
+🔴 **NOT verified — do not treat as fact:**
+- **This session issued no query against cloud MySQL.** I had no `DATABASE_URL`. Every cloud-side
+  number above is `ParityAudit`'s or the coordinator's, attributed inline.
 - `fulfillments.updated_at`'s timezone (§2.3).
+- 🔴 **Whether the local ParcelPanel pull is currently alive at all** (B6) — no `synced_at` rows for
+  8/26 or 8/27 while the wrapper reports firing. Needs a deliberate write-capable diagnostic; both
+  read-only audits correctly declined to run it.
+- The `20260302` value from the original brief **did not reproduce**; cloud lexical
+  `MAX(shipments.ship_date)` is `20260817`, and which slice produced March is undetermined.
 - Whether the cloud and local IMAP invoice pulls collide (B4).
-- The consumer inventory in §3.2 is grounded in my own grep of `AppyHour/ShippingReports`,
-  `_outputs/scripts` and `ShipRouting`; it should be reconciled against `ConsumerSweep`'s
-  inventory before anyone treats it as exhaustive.
 - First-`materialize()` wall time over a real link — unmeasured; measure before wiring an
   interactive consumer.
+- The consumer list in §3.2 is grounded in my own grep plus `ParityAudit`'s full reader inventory
+  (~30 consumers across ShipRouting, AppyHour, `_outputs/scripts` and the skills). It should still
+  be reconciled against `ConsumerSweep`'s inventory before anyone treats it as exhaustive.
 
 ---
 
@@ -599,3 +820,5 @@ are the basis for B2's status as a confirmed requirement rather than an open que
 - `ShipRouting/lib/histdb.py` — the recommended read path
 - `_outputs/scripts/freshness_sweep.py` — the standing weekly assert host
 - `_outputs/scripts/pull_cloud_replicas.py` — the existing replica path (kept as rollback)
+- `_outputs/reports/2026-08-27-cloud-local-parity-audit.md` — 🔴 **the measurement this contract's
+  verdicts rest on.** Read it alongside §1 and §5
