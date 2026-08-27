@@ -20,7 +20,11 @@ import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-sys.path.insert(0, r"C:\Users\Work\Claude Projects\AppyHour")
+# 🔴 Anchor on THIS file, never an absolute dev path. The scheduled `PostmortemRunner` task runs
+# the PROD copy at C:\AppyHourProd\AppyHour\ShippingReports\; a hardcoded
+# "C:\Users\Work\Claude Projects\AppyHour" would make prod import the DEV tree's appyhour_lib the
+# moment this file is synced to prod — two trees, one silently borrowing the other's modules.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # AppyHour/ → appyhour_lib
 from appyhour_lib.cloud_reads import connect_reporting  # noqa: E402  isort:skip
 
 # ── Config ────────────────────────────────────────────────────────────────
