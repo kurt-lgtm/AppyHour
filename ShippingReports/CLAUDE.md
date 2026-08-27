@@ -2,6 +2,18 @@
 
 Analytics pipeline for subscription box shipping. Ingests carrier invoices (OnTrac, UPS, FedEx, Veho), Gorgias issues, Parcel Panel tracking → routing recommendations, cost analysis, performance reports.
 
+> 🔴 **Reading shipment data out of DigitalOcean? Read [`DO_READ_CONTRACT.md`](DO_READ_CONTRACT.md)
+> FIRST** — the consumer-side SSOT (SPEC, 2026-08-27) for the move off local ParcelPanel pulls onto
+> DO as the single ingest. It owns: which tables are IN scope vs blocked (🔴 `fulfillments` and
+> `feedback` have **no cloud writer** — keep reading local; cloud `shipments.ship_date` holds **two
+> date formats**, so `MAX()`/`BETWEEN` on it are wrong until the ingest normalizes), the
+> **order_number** join key (BARE digits, never tracking — FedEx reuses them), the timezone contract
+> (`synced_at` is **UTC**; all date math → America/New_York before `.date()`), the per-consumer
+> freshness tolerances **with the assert that proves each**, and the non-goals — 🔴 the Apps Script
+> exceptions sweep **cannot reach either database** and keeps calling PP directly (out of scope),
+> and the FedEx-113/UPS invoice **download** is permanently manual. Recommended read path =
+> `ShipRouting/lib/histdb.py`.
+
 > 🔴 **Reship report** (HEADLESS, live): any change to it reads [`RESHIP_REPORT_RULES.md`](RESHIP_REPORT_RULES.md)
 > FIRST (constraints SSOT, APPROVED). Canonical = PIVOT sheet `1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU`,
 > bound Apps Script `appsscript/Code.gs` (hourly). Tabs: Raw Data · Triage · Product Mix · Reship (ex-`Product Mix (T)`)
