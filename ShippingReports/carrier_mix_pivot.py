@@ -14,9 +14,9 @@ invisible in a weekly total. Two ways of drawing this table destroy the signal o
 * **OnTrac and LaserShip counted as two carriers** halves the share we are trying to watch.
   ``canon.normalize_carrier`` already folds the alias; this module never re-implements it.
 
-DB READ-ONLY BY CONSTRUCTION. ``connect_ro`` only — Claude never write-connects ``shipping.db``
-(MSIX/WAL corruption, 6/27 + 7/01). The ONLY write anywhere is the Sheets API call behind
-``--write-sheet`` (Kurt-authorized 2026-08-26), which repaints the ``Carrier Mix`` tab of the
+DB READ-ONLY BY CONSTRUCTION. ``connect_reporting`` (mode=ro on BOTH stores) only — Claude never
+write-connects ``shipping.db`` (MSIX/WAL corruption, 6/27 + 7/01). The ONLY write anywhere is the
+Sheets API call behind ``--write-sheet`` (Kurt-authorized 2026-08-26), which repaints the ``Carrier Mix`` tab of the
 Running Reship sheet as a VIEW of the ledger — see D35c. It never touches any other tab.
 
 Run::
@@ -31,6 +31,19 @@ Run::
 🔴 `--verify-gate` is a HAPPY PATH and is NOT evidence on its own: it resolves before the
 Pending/denominator branch is ever reached. Run `--self-test` too, or a change lands green
 against code that never executed.
+
+Data source (DO_READ_CONTRACT §1, C4)::
+
+    REPORTING_CLOUD_DB=1   delivery_status <- DO cloud mirror; everything else LOCAL
+    (unset / =0)           every table LOCAL, byte-identical to the pre-migration path
+
+🔴 ``shipments`` — the COST and invoice basis for every row in this pivot — stays LOCAL and is
+NOT negotiable yet: cloud ``shipments`` holds two ``ship_date`` formats (so ``MAX``/``BETWEEN``
+are wrong) and 25,795 duplicate rows worth $21,319 of double-counted cost. Blocked on B2/B2b.
+Measured 2026-08-27: flipping ``delivery_status`` moves NOTHING in this report, because
+``delivery_status.service`` is populated on **0 of 121,185 cloud rows** (and 0 of 118,909
+local) — the service basis is the routing TAG, not the carrier feed. That makes this the safe
+first consumer to flip; it does not make it the one that benefits.
 """
 from __future__ import annotations
 
@@ -56,7 +69,7 @@ sys.path.insert(0, str(_HERE.parents[2] / "ShipRouting"))       # ShipRouting/ �
 
 # `lib` resolves at RUNTIME via the insert above; a static checker cannot see a sys.path mutation,
 # so pyright's reportMissingImports here is a false positive, not a broken import.
-from appyhour_lib.db import connect_ro  # noqa: E402  isort:skip
+from appyhour_lib.cloud_reads import connect_reporting  # noqa: E402  isort:skip
 from lib import canon  # type: ignore[reportMissingImports]  # noqa: E402  isort:skip
 
 # ── Row model ────────────────────────────────────────────────────────────────
@@ -816,10 +829,18 @@ def main(argv=None):
         # puts the view ahead of the memory. Refuse the combination rather than pick a side.
         raise CarrierMixError("CM_SHEET_NEEDS_LEDGER: --write-sheet cannot combine with --no-ledger")
 
-    con = connect_ro()
+    # 🔴 delivery_status reads DO when REPORTING_CLOUD_DB=1; `shipments` (the COST and invoice
+    # basis) and `shopify_orders` stay LOCAL — cloud `shipments` is blocked on DO_READ_CONTRACT
+    # B2/B2b (two ship_date formats, 25,795 duplicate rows), so a cost number must never come
+    # from it. The banner names which store answered; an unreachable DO degrades to local LOUDLY
+    # rather than killing the report.
+    con, cloud_status = connect_reporting()
     try:
         if a.self_test:
             return 0 if self_test(con) else 1
+        # C4 assert: the age of the data prints BESIDE the number, so a reader can never see a
+        # count without seeing how old its source is.
+        print(cloud_status.banner())
         inv, dss = _invoice_index(con), _delivery_service_index(con)
         print(f"delivery_status.service coverage: {len(dss)} rows populated "
               f"({'DEAD SIGNAL — tag is the sole service source' if not dss else 'live'})")

@@ -1,14 +1,18 @@
-# DO_READ_CONTRACT.md — the reporting side's read contract against DigitalOcean
+﻿# DO_READ_CONTRACT.md — the reporting side's read contract against DigitalOcean
 
 🔴 **PRE-CHANGE GATE.** This is the **consumer-side SSOT** for how the reporting / tracking surface
 reads shipment data out of DigitalOcean. Read it before changing any reporting consumer's data
 source, before adding a freshness assert, and before retiring a local ingest. Change the rule HERE
 first, in the same commit as the code.
 
-**Status: SPEC — authored 2026-08-27, not implemented.** Routing Coordinator owns the cloud-side
-implementation. This document is the contract the reporting side needs honored; it is written so
-the cloud side can build against it without asking us questions. Nothing in it is a claim about
-work already done.
+**Status: PARTIALLY IMPLEMENTED — `delivery_status` reads are LIVE behind a flag (2026-08-27).**
+Steps 1, 1b and 2 of §6 have landed on the reporting side; see **§4.3** for exactly what shipped
+and what it measured. Everything else in this document remains SPEC, and every cloud-side blocker
+in §5 is still open — Routing Coordinator owns those. Nothing outside §4.3 is a claim about work
+already done.
+
+🔴 **`fulfillments` and `shipments` were NOT moved and must not be**, for the reasons in §1. The
+implementation enforces that in code, not by convention (§4.3).
 
 **Scope boundary.** This doc does NOT own: which store is truth
 (`ShipRouting/server/DATA_CANON_RULES.md`), how a status reaches us
@@ -270,6 +274,14 @@ ingest, never a reader-side `if 'T' in x`.**
    `delivery_status.synced_at` (UTC). Ages therefore read **~4 hours YOUNGER than reality**, so a
    table 50h stale grades as 46h and passes a 48h gate. This is ours to fix, not the cloud side's —
    logged here so the migration does not inherit it. Fix = compare UTC-to-UTC, or convert on read.
+   ✅ **CONFIRMED LIVE, and a patch is written, 2026-08-27.** Measured at 19:44 ET on the D3
+   current-week check: the sweep computed **46.1h and PASSED** the 48h gate against a true age of
+   **50.1h** — it was masking a real breach at the moment of measurement, not merely rounding.
+   🔴 A blanket "assume UTC" is **also wrong**, because this column carries both conventions (see
+   the table above): the patch decides **per value** — an explicit offset is authoritative, a
+   10-char value is a local date, a naive datetime is UTC. Patch:
+   `_outputs/reports/2026-08-27-freshness-sweep-utc-fix-PROPOSED.diff`. 🔴 **Not applied by us** —
+   `freshness_sweep.py` is claimed by `p7-epic-do-droplet`; its owner applies it.
 4. **Report every timestamp to a human in ET.** Raw UTC in code only.
 
 ## 2.4 Types — what the mirror must NOT silently change
@@ -376,6 +388,11 @@ recommendation exactly: pointing `APPYHOUR_DB_PATH` at the mirror gives ~21 skil
 changes**.
 
 ### 🔴 Required mitigation before this shape ships: it hard-fails offline
+> ✅ **IMPLEMENTED for the reporting side 2026-08-27 — see §4.3.** Both consequences below are
+> mitigated in `appyhour_lib/cloud_reads.py`: a fall-through to local with a named, loud degrade,
+> and `unreachable` as a state distinct from `stale`. 🔴 **The ROUTING side is NOT mitigated** —
+> `dbpath.py:33` still has no fall-through, so an unreachable DO still kills the Friday build.
+> That file belongs to Routing Coordinator.
 
 `histdb.materialize()` **raises** on any MySQL failure and `dbpath.py:33` has **no fall-through to
 the local file** when the flag is on. Consequences, both of which this contract requires fixed
@@ -497,6 +514,82 @@ cadence**, and the assert must alarm on *"no new invoice data in N days"* so a m
 
 ---
 
+## 4.3 ✅ WHAT SHIPPED — `appyhour_lib/cloud_reads.py` (2026-08-27)
+
+Implements §4.1 narrowed to the one table §1 clears. **Flag: `REPORTING_CLOUD_DB=1`** (unset falls
+back to `ROUTING_HISTORY_DB`, so reporting follows the routing flip by default; explicit `0`
+disables). Unset+unset = every existing local path, byte-identical.
+
+### The mechanism, and the two traps it exists to avoid
+
+**Trap 1 — `resolve()` would have stranded every other consumer.** `histdb.resolve()` sets
+`APPYHOUR_DB_PATH` to the mirror it just built, and the mirror contains ONLY the requested tables.
+`resolve(tables=["delivery_status"])` therefore repoints the canonical DB path at a file with **no
+`fulfillments`, no `shipments`, no `shopify_orders`**. We call **`histdb.materialize()` directly and
+never `resolve()`**, and never write `APPYHOUR_DB_PATH`.
+
+**Trap 2 — requesting the default table set would have dragged `fulfillments`.** `histdb.TABLES`
+carries six tables and `materialize(tables=None)` pulls all six. Measured: `materialize(["delivery_status"])`
+produces a mirror containing exactly `delivery_status` + `_histdb_meta` — **`fulfillments` is not
+touched**. `_CLOUD_OK` in `cloud_reads.py` is a hard allowlist; requesting anything else **raises**
+with the B1/B2 reasons quoted. Widening it requires updating §1 in the same commit.
+
+**The swap itself rewrites no SQL.** Open local `shipping.db` `mode=ro` → `ATTACH` the mirror
+`mode=ro` as `cloud` → `CREATE TEMP VIEW delivery_status AS SELECT * FROM cloud.delivery_status`.
+SQLite resolves unqualified names against `temp` first, so every existing `FROM delivery_status`
+reads cloud while `fulfillments` / `shipments` / `shopify_orders` still resolve to `main`.
+`main.delivery_status` stays reachable for parity diffs. Both handles are `mode=ro` — this path
+cannot write either store.
+
+### Offline degrade — the §4.1 required mitigation, implemented
+
+`materialize()` raises with no fall-through, so `connect_reporting()` catches, **drops any
+half-applied ATTACH/VIEW**, and returns a clean LOCAL read-only connection with a `CloudReadStatus`
+carrying a **named reason**: `unreachable` · `thin` · `error` · `disabled`. 🔴 **`unreachable` is a
+distinct state from stale** and never collapses into it — proven by pointing `DATABASE_URL` at a
+dead host: the report still produced its answer and printed
+`🔴 [cloud-read] DEGRADED TO LOCAL — cloud delivery_status is UNREACHABLE: OperationalError (2003)…`.
+Flag-off is **not** a degrade (`status.degraded` is False), so an intentional local run never cries wolf.
+
+### Measured on the flipped path (2026-08-27, roster held constant to isolate the change)
+
+| | roster | delivered | rate | newest `synced_at` |
+|---|---:|---:|---:|---|
+| LOCAL | 2,578 | 160 | **6.2%** | `2026-08-25 21:41:13` (UTC) |
+| **CLOUD via mirror** | 2,578 | 2,354 | **91.3%** | `2026-08-27T19:37:16-04:00` |
+
+Local wk0824 status split is `in_transit 1,082 / info_received 710 / out_for_delivery 448 /
+delivered 160`; cloud is `delivered 2,354 / in_transit 157`. **First `materialize()` measured:
+121,185 rows, 19.0 MB, 19.3s cold / 6.5s warm** — the §4.1 "unmeasured" note is now measured.
+
+### Consumers wired
+
+| consumer | change | verified |
+|---|---|---|
+| `carrier_mix_pivot.py` | `connect_ro()` → `connect_reporting()`; status banner printed in the report header (C4) | reproduce-gate + `--self-test` produce **byte-identical results flag-on vs flag-off** |
+| `postmortem_runner.py` | `sqlite3.connect(...)` → `connect_reporting(local_path=DB_PATH)` | runs clean both ways, exit 0 |
+| `appyhour-shipping-data/query.py` | `_attach_cloud()` on every connection; banner on stderr every run (C8) | wk0824 delivered `160` → `2,354` across the same query |
+
+🔴 **`postmortem_runner.py` was opening `shipping.db` READ/WRITE** (`sqlite3.connect(str(DB_PATH))`)
+for a report that only SELECTs — a surplus write-capable handle on the DB that has corrupted three
+times. Now `mode=ro`. Pre-existing, unrelated to the migration, fixed in passing.
+
+### 🔴 What this did NOT fix — measured, not assumed
+
+**Flipping `delivery_status` moves NOTHING in the carrier-mix pivot.** `delivery_status.service` is
+populated on **0 of 121,185 cloud rows** and 0 of 118,909 local — the service basis is the routing
+TAG. C4 was the correct *safe* first consumer precisely because it cannot move; it is not where the
+gain is. The gain is in anything reading `status` — late rate, on-time, cohort scorecard.
+
+**Two pre-existing failures are RED and are not ours:** `carrier_mix_pivot --verify-gate` FAILS
+identically flag-on, flag-off, and on unmodified `HEAD` (reference `Total: 2500` frozen 2026-08-25,
+cohort is now `2545` — OnTrac 1763→1770, FedEx Ground-HD 648→680, 2Day 69→70, UPS 20→25). The gate
+raises `CM_REPRODUCE_GATE failed — refusing to extend to other weeks`, so **the pivot cannot render a
+multi-week table at all right now.** `--self-test` is 20/21 with the same arm unreached on HEAD. Both
+need the reference restated by whoever owns D35 — a stale frozen constant, not a data defect.
+
+---
+
 # 5. Blockers we are handing back, not solving
 
 🔴 Each is a **gate on the cloud side**. "Everything reads DO" is not true until each is resolved or
@@ -526,6 +619,118 @@ the writer keys on Shopify REST's numeric `order_number`, so a split/exchange pa
 `#164878`) both serialize to `164878` — one physical shipment per pair is never ingested and the
 survivor is attributed to the base order. Declared in DATA_CANON as `known_defect`. **A migration
 must not silently inherit this as "fixed."**
+
+### B1-R — the REPAIR that fills the hole (spec, 2026-08-27; nothing executed)
+
+🔴 **A restarted writer and this repair are DIFFERENT FIXES and BOTH are required.** A restarted
+`fulfillments` timer fixes the table **forward**; it cannot backfill 4,911 rows it never saw.
+This repair fills the **hole**. Closing B1 needs both, and the ORDERING below is load-bearing.
+
+**Driver:** `AppyHour/scripts/repair_cloud_fulfillments.py` — dry by default, writes only with
+BOTH `--apply` and `--yes-write-production`. 🔴 It **performs no write itself**: the write is
+delegated to the canonical loader `ShipRouting/server/etl_history.py`
+(`--snapshot-from-canonical`, then `--load --tables fulfillments`), which `fulfillments` is
+already in the DEFAULT `--load` set of. The driver supplies the dry-run, the gate, the rollback
+manifest and the verification that `etl_history.py` does not have — **it has no dry-run flag and
+no confirmation gate; `--load` IS the write.** Do not hand-roll an upsert: that would replace an
+atomic `RENAME TABLE` with a partial-failure mode and bypass the loader's own gates.
+
+**Key + survivor rule.** `etl_history` publishes by FULL REFRESH → staging → atomic
+`RENAME TABLE`, so there is no per-row upsert key and no per-row contest: **local wins
+wholesale.** Measured justification, all 113,993 shared rows — `id` identical on 113,993 of
+113,993 (the cloud copy is a verbatim mirror, ids included); cloud NEWER on **zero** rows; only
+two columns differ at all — `updated_at` (10,498) and `tags` (49). All 49 tag diffs are
+post-08-12 business events: local **gained** 22 refund tags, **dropped** 38 `_HOLD` (holds
+released). There is no row on which cloud should win.
+
+🔴 **The one gate that carries the whole safety argument: `--apply` REFUSES unless cloud-only ==
+0, RE-MEASURED at write time.** A full refresh DELETES every cloud row absent from local. Today
+cloud-only is 0, so nothing is lost — but that is a measurement with a shelf life, not a
+property. **If the cloud writer is restarted BEFORE this repair runs, cloud will hold rows local
+has never seen and the full refresh will destroy them.** This is the `shipments` lesson applied
+(there, keying on tracking alone would have deleted 6,801 sole-copy rows and 25,788 hub values,
+because the two copies were NOT identical). Never trust the zero from a prior run.
+
+**ORDERING, therefore: repair FIRST, restart the writer SECOND.** The reverse order is the one
+sequence that loses data.
+
+**Local is clean enough to be the source** — checked for the exact defect classes that block
+`shipments` (B2/B2b) and clean on every one: 0 duplicate `(order_number, tracking_number)`
+groups (118,904 rows / 118,904 distinct tracking, UNIQUE-enforced; cloud also 0); ONE date
+format per column (`updated_at` len 19 ×118,904; `fulfilled_at` len 25 ISO+offset ×118,904;
+`ship_date` len 10 ×118,827 + 77 NULL) — **the B2 two-format defect is absent**; 0 NULL/blank
+keys; bare-digit keys both sides with 0 `'#'`-carrying rows. The 4,911 themselves carry 0
+NULL/blank in any column, `tracking_company` ∈ {OnTrac 3,278; FedEx 1,571; UPS 62}, all
+`dest_state` 2-char, all `dest_zip` well-formed, `fulfilled_at` 2026-08-17..08-25.
+⚠️ The DATA_CANON `known_defect` (numeric-`order_number` split/exchange collision) is copied
+forward **deliberately** — the ETL mirrors, it does not clean. This repair must not be recorded
+as having fixed it.
+
+**The 4,911 are genuinely ABSENT, not key-mismatched.** Probed against cloud by tracking (exact
+and prefix), bare `order_number`, `'#'`-prefixed, suffix-LIKE, and `order_id`: **0 hits on all
+4,911 for every real key.** A `customer_name + dest_zip` probe returns hits, but those resolve to
+the same subscriber's PRIOR boxes (different order numbers, earlier ship weeks) — it is not a
+key, since a subscriber ships repeatedly. Join validated first with a positive control (5/5
+known-present pre-August trackings found) and a negative control (`'#'`-prefixed → 0), so the
+zeros are earned.
+
+**Verification proves the repair, not the run.** Three independent checks plus spot-checks:
+cloud-only-missing → 0; cloud-only still 0 (nothing destroyed); **per-ship-week parity across all
+67 weeks**; and named wk0817/wk0824 orders read back from DO with matching tracking and carrier.
+🔴 A row count cannot do this job: `histdb.FLOORS['fulfillments']` is 75,000 and cloud holds
+113,993, so **the existing floor passes a table missing two entire ship weeks.**
+
+**Rollback.** Written BEFORE the write to `_outputs/reports/repair_cloud_fulfillments_<ts>.json`:
+the pre-write cloud fingerprint (rows, distinct keys, maxima, per-week counts) and the full
+local-only order list. `etl_history` renames the prior live table to
+`etl_rollback_fulfillments_<token>` in the same atomic RENAME; undo is
+`--rollback-token <token> --tables fulfillments`. ⚠️ There is **no retention or prune** for
+`etl_rollback_*` — the old copy persists until dropped by hand. That is the guarantee; do not
+tidy it away before the exit condition is met.
+
+🔴 **`--require-cohort` is UNUSABLE here** — `_validate_cohorts` demands `delivery_status` AND
+`fulfillments` in the SAME publication, and `delivery_status` is cloud-owned and excluded from
+`--load`. Do not pass it and assume a cohort was proven; the per-week parity check above is the
+cohort proof instead.
+
+**Gates pre-flighted 2026-08-27, all PASS:** regression (live 113,993 !> stage 118,904);
+`_live_is_newer` on `fulfilled_at` (live `2026-08-11T17:02:17-04:00` !> stage
+`2026-08-25T17:01:02-04:00`); column contract (16 columns, identical names both sides); natural-key
+metrics invariant (`NATURAL_KEYS` = `(order_number, tracking_number)`, 0 dup groups / 0 missing
+both sides).
+
+### B1-X — the exit condition for flipping `fulfillments` onto the DO read path
+
+B1's original clearing evidence covers the writer but not the hole or the reader. Sharpened —
+**all five, not any:**
+
+1. **Hole filled:** cloud-only-missing = 0 **and per-ship-week parity**, by
+   `repair_cloud_fulfillments.py --verify`. Row count alone is insufficient (the 75,000 floor is
+   blind to two missing weeks).
+2. **A registered `fulfillments` timer** in `server/ingest_worker.REGISTRY` with a declared
+   interval — absent, not flag-off, is the current state.
+3. 🔴 **A freshness assert on the CLOUD copy that fires WHILE FLAG-OFF.** This is the gap nobody
+   has named: `freshness_sweep.TABLE_CHECKS` already carries a `fulfillments` row
+   (`fulfilled_at`, 3d) but it reads **LOCAL sqlite** — it proves the `sync_logon.py` ingest is
+   alive and says **nothing** about DO. That is precisely how the cloud writer died 2026-08-12
+   and went unnoticed for 15 days. An assert gated on the same flag as its writer is not a guard
+   (§3.1).
+4. **One week green** across a real ship week, both stores agreeing per-week.
+5. **Then, and only then,** widen `_CLOUD_OK` in `AppyHour/appyhour_lib/cloud_reads.py` to
+   include `fulfillments` — and update the §1 verdict row in this document **in the same commit**,
+   as `cloud_reads.py`'s own error message requires.
+
+**`DATA_CANON_RULES.md` implications — Routing Coordinator's file, not ours to edit.** The repair
+alone changes nothing there: it is a `sqlite → MySQL via etl_history --load` publication, exactly
+what the matrix already declares. Ownership and cadence change only at step 2 above, and at that
+point the `fulfillments` row must move to the cloud pattern (owner = ingest-worker, primary =
+MySQL, flow MySQL → sqlite) — which additionally requires a **`fulfillments` leg in
+`pull_cloud_replicas.PULLS`**, or the flip repeats B5's half-flip: cloud owns it and nothing
+feeds local. Two other DATA_CANON items surfaced and are theirs: `fulfillments.updated_at`'s
+timezone is still **UNVERIFIED** (§2.3) and should be pinned in the declaration; and the cloud
+`fulfillments` index on `tracking_number` is **non-unique** while local's is **UNIQUE**, so the
+`key_enforced: true` declaration holds locally but is unenforced in MySQL (0 dups observed today
+— unenforced, not violated).
 
 ## B2 — 🔴 `shipments.ship_date` holds TWO date formats. **It has to be one.**
 
@@ -731,11 +936,16 @@ stays authoritative until the cloud is proven on a real cohort.
 
 | step | what lands | what proves it | rollback |
 |---|---|---|---|
+🔴 **Status as of 2026-08-27: steps 1, 1b and 2 are DONE on the reporting side** (§4.3) — behind
+`REPORTING_CLOUD_DB`, read-only, with `fulfillments`/`shipments` explicitly excluded in code. Step 3
+is a proposed patch handed to the owner (below). Steps 4–6 are untouched, and **step 6 must not
+begin**: every cloud-side blocker in §5 is still open.
+
 | **0** | This document reviewed by Routing Coordinator; B1/B2/B3 acknowledged as gates | written agreement on the table verdicts in §1 | n/a — doc only |
 | **1** | 🔴 **B5 first — give `delivery_status` a local read path** (`ROUTING_HISTORY_DB=1` / `APPYHOUR_DB_PATH`→histdb mirror, or add it to `pull_cloud_replicas.PULLS`). `DATABASE_URL` must exist in the **real** user context — a real terminal, not Claude/MSIX, whose `%APPDATA%` writes land in a shadow the scheduled task cannot see | `histdb.enabled()` true; one successful `materialize()` from a real terminal; `_SHIP_2026-08-24` delivered-rate reads ~89%, not ~7% | delete the file / unset the flag; every path falls back to local, byte-identical |
 | **1b** | The offline mitigation in §4.1 — fall-through + a LOUD notice naming which store answered, and **"unreachable" as a distinct state from "stale"** in `freshness_sweep.py` | kill the network, run the sweep: it must say *unreachable*, not *stale*, and the Friday build must not die | revert one commit |
 | **2** | **ONE read-only consumer** moved to `histdb.resolve()` — propose the **carrier-mix pivot** (C4): read-only, no live decision depends on it, and it already prints its own row counts | 🔴 **run it BOTH ways on the same ship weeks and diff the output.** Identical counts and costs, or it does not proceed. A row-count match is not a diff | unset `ROUTING_HISTORY_DB`; the script reads local sqlite unchanged |
-| **3** | Fix the naive-vs-UTC comparison in `freshness_sweep.py` (§2.3 item 3) and re-point the C3 current-week assert at whichever store C3 reads | the 48h gate grades the same age a human computes by hand from `synced_at` | revert one commit |
+| **3** | Fix the naive-vs-UTC comparison in `freshness_sweep.py` (§2.3 item 3) and re-point the C3 current-week assert at whichever store C3 reads. 🔴 **PATCH PROPOSED, NOT APPLIED** — the file is claimed by `p7-epic-do-droplet`; diff at `_outputs/reports/2026-08-27-freshness-sweep-utc-fix-PROPOSED.diff`, owner applies | the 48h gate grades the same age a human computes by hand from `synced_at`. **Measured 2026-08-27 19:44 ET: the gate computed 46.1h and PASSED where the true age was 50.1h — it was masking a live breach at the moment of measurement** | revert one commit |
 | **4** | `delivery_status` + `shopify_orders` consumers migrated behind `ROUTING_HISTORY_DB` | one full ship-week run where cloud-read and local-read produce identical cohort numbers | the flag |
 | **5** | **B2 + B2b resolved** → `shipments` consumers migrated | the `LENGTH(ship_date)` query returns exactly one non-NULL bucket (`10`); the three double-ingested OnTrac invoices deduped and the $21,319 gone; a cost report matching local to the cent | the flag |
 | **5b** | *(separate from the migration, sequenced after B2b)* backfill the 4,582 recoverable NULL-`ship_date` rows from `delivery_status` by tracking | ~2,500 winter TNT observations computing a real transit where they compute none today | the rows are additive; revert = re-null them |

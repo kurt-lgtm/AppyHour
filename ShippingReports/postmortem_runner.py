@@ -20,6 +20,9 @@ import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+sys.path.insert(0, r"C:\Users\Work\Claude Projects\AppyHour")
+from appyhour_lib.cloud_reads import connect_reporting  # noqa: E402  isort:skip
+
 # ── Config ────────────────────────────────────────────────────────────────
 DB_PATH = Path(r"C:\AppyHourData\shipping.db") if Path(r"C:\AppyHourData\shipping.db").exists() else Path.home() / "AppData/Roaming/AppyHour/shipping.db"
 OUT_DIR = Path(r"C:\Users\Work\Claude Projects\_outputs\postmortems")
@@ -438,7 +441,15 @@ def main() -> int:
         log.error(f"shipping.db missing: {DB_PATH}")
         return 1
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(str(DB_PATH), timeout=30)
+    # 🔴 Was `sqlite3.connect(str(DB_PATH))` — a READ/WRITE handle on shipping.db for a report
+    # that only ever SELECTs. Three WAL corruptions came from surplus write-capable connections;
+    # a postmortem must be structurally unable to take a write lock or trigger a checkpoint.
+    # connect_reporting() is mode=ro on BOTH stores and serves delivery_status from DO when
+    # REPORTING_CLOUD_DB=1, while fulfillments (dead cloud writer, DO_READ_CONTRACT B1) and
+    # weather stay LOCAL. Degrades to local LOUDLY if DO is unreachable — a postmortem for a
+    # matured cohort must not die because the network is down.
+    db, cloud_status = connect_reporting(local_path=DB_PATH)
+    log.info(cloud_status.banner())
     db.row_factory = sqlite3.Row
     try:
         pending = find_eligible_ship_weeks(db)
