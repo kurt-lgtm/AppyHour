@@ -104,6 +104,15 @@ rows since 2026-08-01 carry no `origin_hub` at all, so they are invisible to `hi
 not this migration.** Do not let "we moved to DO" be recorded as having fixed routing freshness. It
 did not. (Reports are the half DO genuinely fixes — §1.1.)
 
+⚠️ **Adjacent work landed the same day — related, but NOT the same thing.** `AppyHour` commit
+`ebaa2eb` adds `pp_origin_hub` (`appyhour_lib/pp_origin.py`, `ShippingReports/build_pp_origin_hub.py`,
+SSOT `AppyHour/PP_ORIGIN_HUB_RULES.md`): a **separate derived table** giving which hub a box actually
+left from, derived from `pp_webhook_events` with **zero ParcelPanel API calls** and read-only on
+cloud MySQL. It does **not** write or backfill `delivery_status.origin_hub`, so it does **not** by
+itself unfreeze `hist_risk` — that still needs the `phase0_origin_backfill` decision above. Whether
+`hist_risk` should read `pp_origin_hub` instead is a real question and an open one; **do not assume
+either way**, and do not treat B-item 1 of §6.1 as closed by that commit.
+
 ---
 
 # 2. The read contract
@@ -443,9 +452,17 @@ POINTS at and never restates. 🔴 Note for anyone about to "optimize" it: **the
 budget** — "2,500/week" was Kurt's average weekly ORDER count, never an API quota. The real limit is
 **120 requests per minute per key**, and a 429 must never be dropped.
 
-**N4. We do not read `pp_webhook_events`.** It is the ingest's raw evidence layer — its whole
-purpose is that a dropped payload stays distinguishable from a box that never moved. A reporting
-consumer reading it would become a second deriver of state that `delivery_status` already owns.
+**N4. Reporting does not read `pp_webhook_events` for STATUS.** It is the ingest's raw evidence
+layer — its whole purpose is that a dropped payload stays distinguishable from a box that never
+moved. A reporting consumer deriving *status* from it would become a second deriver of a fact
+`delivery_status` already owns.
+
+⚠️ **Narrow, deliberate exception, landed 2026-08-27 (`ebaa2eb`):** `pp_origin_hub` derives **origin
+hub** — not status — from the same raw layer, read-only, with zero PP API calls, under its own SSOT
+(`AppyHour/PP_ORIGIN_HUB_RULES.md`). That is a different fact from a different angle, and it does not
+make the raw layer a general reporting source. **N4 still forbids a second status deriver.** Anything
+new reading `pp_webhook_events` states which fact it derives and why `delivery_status` cannot supply
+it.
 
 **N5. 🔴 PERMANENT CARVE-OUT — the FedEx-113 and UPS invoice DOWNLOAD stays manual, forever.**
 Kurt, 2026-08-27: *"the only thing we can't do is retire the 113 fedex and ups manual invoices
