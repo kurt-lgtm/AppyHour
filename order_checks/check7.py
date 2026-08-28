@@ -69,7 +69,7 @@ NO_SUBSTITUTE = {"AC-RMC", "MT-IBRES"}
 RESERVE_FLOOR = 20
 # Declared HAVE inventory -- the cut order's own corrected_inventory_path, NOT MCP
 # get_calculated_inventory (which is wrong and must never be quoted as HAVE).
-HAVE_XLSX = r"C:\Users\Work\Downloads\Corrected_Inventory_08-25.xlsx"
+HAVE_FILE = r"C:\Users\Work\Downloads\Orders RMFG_20260831 - Sheet154.csv"
 PREV_N = 2                      # docx: "their previous two orders"
 HIST_N = 4                      # swap candidates check the FULL history; 4 is the fallback
 AUDIT_LOG = r"C:\Users\Work\Claude Projects\_outputs\logs\swap_audit.jsonl"
@@ -122,31 +122,50 @@ def sku_first_seen(con):
            WHERE i.qty > 0 GROUP BY i.sku""")}
 
 
+# Corrections applied ON TOP of the declared HAVE file, when Kurt states a number that
+# the export does not carry. Each is his, never inferred.
+HAVE_OVERRIDE = {
+    "AC-KETT": 21,       # Kurt 2026-08-28; the RMFG_20260831 export says 19
+}
+
+
 def load_have(path=None):
-    """SKU -> on-hand qty from the declared HAVE workbook.
+    """SKU -> on-hand qty from the declared HAVE file (.csv or .xlsx).
 
     RED FLAG: this is the cut order's corrected_inventory_path. NEVER substitute MCP
     get_calculated_inventory -- it is wrong and must not be quoted as HAVE. The file is
     a point-in-time count, so a swap proposed against it is only as fresh as the count:
     state the file date in any output built from it.
     """
-    import openpyxl
-    path = path or HAVE_XLSX
+    path = path or HAVE_FILE
     if not os.path.exists(path):
         return {}
-    ws = openpyxl.load_workbook(path, data_only=True).worksheets[0]
-    rows = list(ws.iter_rows(values_only=True))
+    if path.lower().endswith(".csv"):
+        with open(path, encoding="utf-8-sig", newline="") as fh:
+            rows = [tuple(r) for r in csv.reader(fh)]
+    else:
+        import openpyxl
+        ws = openpyxl.load_workbook(path, data_only=True).worksheets[0]
+        rows = list(ws.iter_rows(values_only=True))
     hdr = [str(x or "").strip().lower() for x in rows[0]]
-    try:
-        i_sku = hdr.index("sku")
-        i_qty = hdr.index("qty")
-    except ValueError:
+    i_sku = next((i for i, h in enumerate(hdr) if h == "sku"), None)
+    # the column is "Qty" in the corrected-inventory workbook and "RMFG Have <date>"
+    # in the cut-order CSV -- accept either rather than pinning one label
+    i_qty = next((i for i, h in enumerate(hdr) if h == "qty" or "have" in h), None)
+    if i_sku is None or i_qty is None:
         return {}
     have = {}
     for r in rows[1:]:
+        if len(r) <= max(i_sku, i_qty):
+            continue
         s = str(r[i_sku] or "").strip()
-        if s and isinstance(r[i_qty], (int, float)):
-            have[s] = int(r[i_qty])
+        try:
+            q = int(float(r[i_qty]))
+        except (TypeError, ValueError):
+            continue
+        if s:
+            have[s] = q
+    have.update(HAVE_OVERRIDE)
     return have
 
 
