@@ -88,6 +88,14 @@ def run(orders, sheet, rules, rmfg_tag, ship_tag):
             R["reship_excluded"].append({"order": oid, "tags": sorted(set(tags))})
             continue
 
+        # 🔴 Gift Redemption stays IN checks 1 and 2. It is excluded from check 3 ONLY
+        # (docx: a gift "doesn't need to be on the Shopify order" for the brochure).
+        # Do NOT widen it: on RMFG_20260828 the ten gift orders in c1_unresolved have
+        # FULL item lists on the sheet -- #175930 sheet 9 items vs 1 child + 6 unfilled
+        # CEX slots in Shopify. The pick list knows what ships and the order never got
+        # it; excluding gifts hid a real gap and silenced c2 to zero. (Kurt 2026-08-28.)
+        is_gift = any("gift redemption" in t.lower() for t in tags)
+
         items_all = [e["node"] for e in o["lineItems"]["edges"]]
         # Scope test runs on ALL lines, not just live ones: Simple Bundles zeroes a paid
         # board's parent and explodes it into components, so the board sits at
@@ -236,7 +244,7 @@ def run(orders, sheet, rules, rmfg_tag, ship_tag):
 
         # ---------- Check 3 : exactly one PK- brochure ----------
         npk = sum(q for _, q in pk)
-        if npk != 1:
+        if npk != 1 and not is_gift:
             R["c3"].append({"order": oid, "pk": [f"{s} x{q}" for s, q in pk], "n": npk})
 
         srow = sheet.get(oid) or {}
@@ -249,14 +257,13 @@ def run(orders, sheet, rules, rmfg_tag, ship_tag):
             R["c5"].append({"order": oid, "tags": tags, "sheet_tags": sheet_tags})
 
         # ---------- Check 2 : sheet vs Shopify, PER SKU ----------
-        gift = any("gift redemption" in t.lower() for t in tags)
         sheet_child = collections.Counter(
             {k: v for k, v in (srow.get("columns_sku") or {}).items() if k.startswith(CHILD)})
         s_child = sum(sheet_child.values())
         diff = [(k, sheet_child.get(k, 0), child_sku.get(k, 0))
                 for k in set(sheet_child) | set(child_sku)
                 if sheet_child.get(k, 0) != child_sku.get(k, 0)]
-        if srow and (s_child != tot or diff) and not gift:
+        if srow and (s_child != tot or diff):
             R["c2"].append({"order": oid, "sheet_child_sum": s_child,
                             "shopify_children": tot, "item_diffs": sorted(diff)})
 
