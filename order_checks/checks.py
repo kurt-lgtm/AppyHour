@@ -142,7 +142,13 @@ def cracker_check(o):
             if zeroed else "CEX-CR slot filled with a non-cracker")
 
 
-# Orders that never get written. The two have DIFFERENT reasons and that matters:
+# Orders that never get written for a ROTATION reason -- repeats, rebalancing, caps.
+# 🔴 A REAL STOCKOUT is the one exception (Kurt 2026-08-28): "we don't fuck with reships
+# or pr boxes unless its a real stockout." If the SKU genuinely is not there, the box
+# cannot ship as written and a substitution is the only option -- pass
+# stockout=True to say so explicitly, never as a default.
+#
+# The blocks have DIFFERENT reasons and that matters:
 #   pr box           a RULE. Kurt 2026-08-28: "we never fuck with pr boxes." Internal
 #                    sample; blocked even under an explicit override.
 #   gift redemption  NOT a rule -- it is simply IMPOSSIBLE. Kurt 2026-08-28: "its not a
@@ -152,18 +158,32 @@ def cracker_check(o):
 #                    Matrixify instead. Skip them because a write cannot land, not
 #                    because policy forbids it -- an agent told "policy" will look for an
 #                    override that does not exist.
+#   reship           a RULE, same class as pr box: never touched to fix a repeat or to
+#                    rebalance stock. A reship exists to correct a failure; changing its
+#                    contents re-opens the failure.
 NEVER_WRITE_TAGS = ("pr box", "gift redemption")
+ROTATION_BLOCKED = ("pr box", "reship")     # overridable ONLY by a real stockout
 
 
-def write_blocked(o):
-    """Reason this order must not be edited, or '' when it may be. Assert this BEFORE
-    any write -- a shortage `sub` selects rows by SKU and knows nothing about tags, which
-    is how #175930 (a gift) reached an applied swap list on 2026-08-28.
+def write_blocked(o, stockout=False):
+    """Reason this order must not be edited, or '' when it may be.
+
+    Assert this BEFORE any write -- a shortage `sub` selects rows by SKU and knows
+    nothing about tags, which is how #175930 (a gift) reached an applied swap list on
+    2026-08-28.
+
+    stockout=True relaxes ONLY the rotation blocks (pr box, reship): a genuinely absent
+    SKU leaves no alternative. It never unlocks a gift, which is a locked order in
+    Shopify rather than a policy choice. Pass it explicitly, never by default.
     """
     ts = [t.strip().lower() for t in tags(o)]
-    for t in NEVER_WRITE_TAGS:
-        if t in ts:
-            return f"{t} order - never edited"
+    if "gift redemption" in ts:
+        return "gift redemption order - LOCKED in Shopify, the edit cannot land"
+    for t in ROTATION_BLOCKED:
+        if any(x == t or x.startswith(t) for x in ts):
+            if stockout:
+                continue
+            return f"{t} order - not touched except for a real stockout"
     return ""
 
 

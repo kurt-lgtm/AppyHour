@@ -158,3 +158,91 @@ removed originals (20); #174939 omitted `AC-KETT` ×2, a paid `BL-4USA` board co
 
 Severity by signal agreement: BOTH rule+peer = highest. Never emit a bare count — a flag without
 its children, parents, and paid allowance can't be triaged, and an untriageable list gets ignored.
+
+---
+
+# SWAP RULES (added 2026-08-28, from the wk0831 run)
+
+## 🔴 THE GUARDRAIL THAT FAILED — run BOTH halves, BEFORE the list
+
+A customer is protected from a rotation swap if they **logged in OR customized** — EITHER
+one. Only the "neither" bucket is swappable.
+
+**wk0831 burn:** the check-7 list was built with the CUSTOMIZE gate alone. A later login
+scan found **155 of 543** swapped orders had a customer login after their previous order.
+The vF had already gone to RMFG, so those boxes shipped swapped. `login_gate.protected()`
+must run BEFORE the list is built. Evidence lives in
+`_outputs/.../login_protected_SHIP_2026-08-31.csv`.
+
+🔴 The events export has a start date (2026-05-01 for the 08-28 pull). A login before it is
+invisible: an empty result is a LOWER BOUND, never clearance. An unmappable customer is
+UNKNOWN, not clear.
+
+## Orders that are never touched
+
+| tag | why | overridable |
+|---|---|---|
+| `PR box` | internal sample | **no** |
+| `Reship` | exists to correct a failure; changing it re-opens the failure | **only a real stockout** |
+| `Gift Redemption` | **not a rule** — the order is LOCKED in Shopify, the edit cannot land | no; contents are reconciled in Matrixify |
+
+Kurt 2026-08-28: *"we never fuck with pr boxes"*, *"we don't fuck with reships or pr boxes
+unless its a real stockout"*, and on gifts *"its not a rule because it just means its not
+possible."* The distinction matters — an agent told "policy" hunts for an override that
+does not exist.
+
+🔴 `checks.validate_swap_list()` runs on EVERY list before it is applied, including lists
+this package produced. A `vf_edit sub` picks rows by SKU with no tag awareness, which is how
+#175930 (a gift) entered the applied 08-31 set past every upstream check.
+
+## Substitute selection
+
+- **Same type, and CRACKERS ARE THEIR OWN TYPE.** `AC-FCFIGO` was proposed for `AC-MISS`
+  (figs) and `AC-QUIC` (nuts) — *"we can't do AC-FCFIGO, because those are crackers."*
+  Derived from product titles, plus `AC-TOK` which has no cracker word in its.
+- **Never received in ANY past box**, not merely the last four — the constraint sits on the
+  customer's history, so a high-volume SKU is a fine substitute (Daniel 2026-08-18).
+- **Rank by HEADROOM, then recency.** Newest-first buried `AC-BRJA` (2,284 on hand, 60
+  committed) behind newer SKUs and poured one new item across the whole run.
+- **`RESERVE_FLOOR = 20`** — never allocate a SKU below 20 left. *"don't zero out blucar …
+  get it to 20 have left."*
+- **Mini jams are barred as substitutes** — *"its not enough."* `AC-MFJ` is one by name and
+  was missing from Dan's set, which is why the first bar still let 107 rows through.
+- **Barred outright**, availability is not permission: `AC-RMC` (*"I have 600, but don't use
+  it"*), `MT-BSS`, `MT-IBRES`, `CH-MAFT` (*"we don't give them MAFT"*), `AC-RBOL`.
+- A SKU being **drawn down** can never be a substitute; a SKU under a **usage cap** can
+  (*"that's fine on the ch-sot"*).
+
+## Stock is counted against the SHEET
+
+Not the Shopify free-child count. *"did you check against the vf sheet though?"* — the pick
+list includes PAID children, which consume stock the same, plus gifts and reships. It read
+higher than Shopify on **64 SKUs**: `CH-BRZ` 229 vs 180, `MT-BSS` 35 vs 33 against 32 on hand.
+
+HAVE comes from the cut's own file (`Orders RMFG_<date>`), never MCP
+`get_calculated_inventory`. `HAVE_OVERRIDE` carries corrections the export lacks (`AC-KETT`
+= 21 against the export's 19).
+
+## Caps are targets, not permission
+
+`USAGE_CAP` states a number to aim at. It does NOT authorise swapping customers' items to
+hit it — Kurt asked for ~400 `CH-SOT`, was shown a 101-row swap list, and said *"if you mean
+to swap them to get to 400, no."*
+
+## Per-order limits stack across passes
+
+The 2-per-order cap applied only to the repeat pass. The BLUCAR reverts and shortage `sub`
+stacked on top, so #176908 ended with 3. Any cap must be enforced across the COMBINED list.
+
+## 🔴 The vf_edit ledger is TRUNCATED
+
+`_outputs/logs/vf_edit_<date>.jsonl` stores only a prefix of its `detail` list — it yielded
+659 of 818 edits and showed 7 on an order capped at 2. **Never reconstruct what was applied
+from the ledger.** Diff a pre-edit backup against the live sheet instead; that is ground
+truth and it reproduced 818/543 exactly.
+
+## Order of operations
+
+Sheet first, Shopify last. Once the vF is sent, the sheet is canon and Shopify must be made
+to match it — a vF/Shopify mismatch is an apply defect, fixed on the Shopify side, never by
+editing a sent sheet.
