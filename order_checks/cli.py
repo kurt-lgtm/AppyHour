@@ -7,6 +7,7 @@ import argparse, csv, collections, os, sys
 from .rules import load_rule_set
 from .checks import (evaluate, duplicate_check, cracker_check, bare_cex_check,
                      fixed_route_check, in_scope, live, sku, tags)
+from .rules import route_tags
 from .peer import peer_outliers
 from . import sheet as sheetmod
 
@@ -75,7 +76,7 @@ def main(argv=None):
             c2 = o.get("customer") or {}
             froute.append({"order": o["name"], "issue": fr,
                            "customer_tags": (c2.get("tags") or ""),
-                           "order_route": ",".join(__import__("re").findall(r"!.*?_AHB!", o.get("tags") or "")) or "(none)",
+                           "order_route": ",".join(route_tags(o.get("tags") or "")) or "(none)",
                            "fix": "set the sheet + order route to the CUSTOMER profile pin",
                            "customer": f"{c2.get('first_name','')} {c2.get('last_name','')}".strip(),
                            "email": o.get("email", "")})

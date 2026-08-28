@@ -12,7 +12,16 @@ BOARD = {"BL-USA":  ("AC-KETT", "CH-FAG", "AC-BLUCAR", "MT-PARM"),
 CHILD = ("AC-", "MT-", "CH-", "TR-")
 
 # A route pin looks like "!UPS Ground - Dallas_AHB!" / "!ANY FedEx - Chicago_AHB!".
-ROUTE_TAG = re.compile(r"!.*?_AHB!")
+# 🔴 Match a WHOLE tag, never a regex across the joined tag string: "!.*?_AHB!" spans
+# commas and swallows "!ExtraGel24oz!, !ExtraGel48oz!, !UPS Ground - Dallas_AHB!" as one
+# token, so a correctly pinned order reports as a mismatch. Split first, then match.
+ROUTE_TAG = re.compile(r"^!.*_AHB!$")
+
+
+def route_tags(tags) -> list:
+    """Route pins from a tag string or list. Whole-tag match only."""
+    items = tags if isinstance(tags, list) else str(tags or "").split(",")
+    return [t.strip() for t in items if ROUTE_TAG.match(t.strip())]
 FIXED_ROUTE_TAG = "fixed_route"
 MILITARY_TAG = "military"
 

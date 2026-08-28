@@ -1,7 +1,7 @@
 """Count checks against RULE SET. 🔴 Read ORDER_CHECKS_RULES.md before changing anything."""
 from __future__ import annotations
 import collections
-from .rules import (CHILD, SLOT_TYPE, PARTY, BOARD, CRACKERS, ROUTE_TAG,
+from .rules import (CHILD, SLOT_TYPE, PARTY, BOARD, CRACKERS, route_tags,
                     FIXED_ROUTE_TAG, MILITARY_TAG, net, resolve_box, box_expect,
                     paid_pack_items)
 
@@ -177,8 +177,8 @@ def fixed_route_check(o):
     cust = (o.get("customer") or {}).get("tags") or ""
     ot = o.get("tags") or ""
     pinned = FIXED_ROUTE_TAG in cust.lower()
-    cust_route = ROUTE_TAG.findall(cust)
-    order_route = ROUTE_TAG.findall(ot)
+    cust_route = route_tags(cust)
+    order_route = route_tags(ot)
 
     if MILITARY_TAG in cust.lower() and any("ontrac" in r.lower() for r in order_route):
         return f"MILITARY customer routed OnTrac: {','.join(order_route)}"
