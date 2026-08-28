@@ -10,7 +10,14 @@ EXCLUDED_TAGS = ("gift redemption", "pr box")
 
 def sku(x):     return (x.get("sku") or "").strip().upper()
 def live(o):    return [x for x in o["line_items"] if x["current_quantity"] > 0]
-def tags(o):    return [t.strip() for t in (o.get("tags") or "").split(",")]
+def tags(o):
+    """Order tags as a list, from EITHER shape.
+
+    REST gives a comma string, GraphQL gives a list. Assuming one raises
+    'list has no attribute split' the first time a GraphQL node reaches these checks.
+    """
+    t = o.get("tags") or []
+    return [x.strip() for x in (t.split(",") if isinstance(t, str) else t)]
 
 
 def in_scope(o):
