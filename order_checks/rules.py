@@ -11,6 +11,46 @@ BOARD = {"BL-USA":  ("AC-KETT", "CH-FAG", "AC-BLUCAR", "MT-PARM"),
          "BL-4USA": ("AC-KETT", "CH-FAG", "AC-BLUCAR", "MT-PARM")}
 CHILD = ("AC-", "MT-", "CH-", "TR-")
 
+# Blank-SKU StayAI / Simple Bundles wrapper lines, keyed by the bare PRODUCT TITLE
+# (GraphQL `title`; REST `name` appends the variant and the lookup silently never fires).
+# "Free Brie for a Year" contributes +1 CH- -- this is why AHB-MED measures CH3 against a
+# LIKELY row of CH2 on 46 of 82 orders.
+WRAPPER_ADD = {
+    "AppyHour Box + Free Brie for a Year": {"CH-": 1},
+    # the pairing ships as its own PR-CJAM- line, so the wrapper itself adds nothing
+    "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life": {},
+}
+
+# AHB-CUR-* "Monthly Curation" rides with AHB-MED/AHB-LGE and adds NO child of its own.
+ZERO_CONTRIB = ("AHB-CUR-",)
+
+# Sheet column title -> SKU, where the sheet's MFG name does not fuzzy-match any live
+# product title. Dan's list, RUN_2026-08-25; each was validated by matching the column's
+# week total against that SKU's Shopify total.
+ALIAS_OVERRIDE = {
+    "figlemonhoneyhoneypreserves": "AC-FLH",
+    "redwhitebluekettlecorn": "AC-KETT",
+    "allnaturalwasabipeas": "AC-WASP2",
+    "alpblossomfloralcheese": "CH-ALP",
+    "fontal": "CH-FONTAL",
+    "km39": "CH-KM39",
+    "bresaolaitaliana": "MT-IBRES",
+    "jambonhoneyherb": "MT-JAHH",
+    "tastingguidecustombox": "PK-TCUST",
+    "roastededamame": "AC-MAME",            # "Edamame, Roasted & Salted"
+    "miticatokettionion": "AC-TOK",         # "Toketti"
+    "tastingguidegourmetbites": "PK-BITESGUIDE",
+    "loscamerosderomero": "CH-LOSC",
+    "loubergier": "CH-LOU",
+    "honeyclovergoudapackagedslice": "CH-HCGU",
+}
+
+
+def clean_title(t):
+    """Sheet column header / product title -> comparable key."""
+    t = re.sub(r"^AHB \(S_REG\):\s*", "", str(t))
+    return re.sub(r"[^a-z0-9]", "", t.lower().replace("*", ""))
+
 # A route pin looks like "!UPS Ground - Dallas_AHB!" / "!ANY FedEx - Chicago_AHB!".
 # 🔴 Match a WHOLE tag, never a regex across the joined tag string: "!.*?_AHB!" spans
 # commas and swallows "!ExtraGel24oz!, !ExtraGel48oz!, !UPS Ground - Dallas_AHB!" as one

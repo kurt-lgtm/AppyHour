@@ -42,6 +42,42 @@ def load_sheet(path: str, tab: str | None = None):
     return out
 
 
+def resolve_columns(sheet: dict, orders: dict):
+    """Map each sheet MFG column name -> SKU, using the orders as the authority.
+
+    🔴 Column headers are MFG names, not SKUs. Comparing sheet columns to Shopify SKUs
+    without this returns a diff on virtually every row (807 of 808 before the port).
+    Alias source order: ALIAS_OVERRIDE, then exact title match against live line items,
+    then difflib at 0.72. Anything left over is reported, never silently dropped.
+    """
+    import difflib
+    from .rules import ALIAS_OVERRIDE, clean_title
+    alias = {}
+    for o in orders.values():
+        for e in o["lineItems"]["edges"]:
+            n = e["node"]
+            if n["sku"]:
+                alias.setdefault(clean_title(n["title"]), n["sku"])
+    names = {n for s in sheet.values() for n in (s.get("columns") or {})}
+    col_sku, unmatched = {}, []
+    for name in names:
+        k = clean_title(name)
+        if k in ALIAS_OVERRIDE:
+            col_sku[name] = ALIAS_OVERRIDE[k]
+        elif k in alias:
+            col_sku[name] = alias[k]
+        else:
+            c = difflib.get_close_matches(k, list(alias), n=1, cutoff=0.72)
+            if c:
+                col_sku[name] = alias[c[0]]
+            else:
+                unmatched.append(name)
+    for s in sheet.values():
+        s["columns_sku"] = {col_sku[n]: q for n, q in (s.get("columns") or {}).items()
+                            if n in col_sku}
+    return col_sku, sorted(unmatched)
+
+
 def compare(sheet: dict, shop: dict):
     """-> list of dicts for orders whose sheet total != live Shopify child count."""
     out = []
