@@ -129,6 +129,10 @@ def cracker_check(o):
     Invisible to a count check: #176361 (9/9) and #176392 (11/11) are full but their
     cracker slot holds something else. Ported from Dan's build_cracker_check.py.
     """
+    # A gift's contents live in the Matrixify import, not the Shopify order (Kurt
+    # 2026-08-28) - a bare slot here proves nothing.
+    if any(t.strip().lower() == "gift redemption" for t in tags(o)):
+        return ""
     liveset = {sku(x) for x in live(o)}
     if "CEX-CR" not in liveset or (liveset & CRACKERS):
         return ""

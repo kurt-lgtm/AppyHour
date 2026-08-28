@@ -24,7 +24,7 @@ from __future__ import annotations
 import collections
 import re
 
-from .rules import CHILD, WRAPPER_ADD, ZERO_CONTRIB, PARTY
+from .rules import CHILD, WRAPPER_ADD, ZERO_CONTRIB, PARTY, EXTRA_RULES
 
 AHBX_RE = re.compile(r"^AHB-X(\d+)")
 BCPC_TAG = "BOX_CUSTOMIZED_POST_CHECKOUT"
@@ -72,7 +72,10 @@ def load_rules(path):
         if code in ("discount code", "sku addition"):
             continue
         disc[code] = {hdr[i]: r[i] for i in range(1, len(hdr)) if hdr[i] and r[i] is not None}
-    return tab("RULE SET"), tab("LIKELY"), disc, (slots("RULE SET") or NON_ADDITIVE_DEFAULT)
+    rule = tab("RULE SET")
+    for k, v in EXTRA_RULES.items():          # parents absent from Dan's xlsx
+        rule.setdefault(k, dict(v))
+    return rule, tab("LIKELY"), disc, (slots("RULE SET") or NON_ADDITIVE_DEFAULT)
 
 
 def run(orders, sheet, rules, rmfg_tag, ship_tag):
@@ -93,12 +96,12 @@ def run(orders, sheet, rules, rmfg_tag, ship_tag):
             R["reship_excluded"].append({"order": oid, "tags": sorted(set(rs))})
             continue
 
-        # 🔴 Gift Redemption stays IN checks 1 and 2. It is excluded from check 3 ONLY
-        # (docx: a gift "doesn't need to be on the Shopify order" for the brochure).
-        # Do NOT widen it: on RMFG_20260828 the ten gift orders in c1_unresolved have
-        # FULL item lists on the sheet -- #175930 sheet 9 items vs 1 child + 6 unfilled
-        # CEX slots in Shopify. The pick list knows what ships and the order never got
-        # it; excluding gifts hid a real gap and silenced c2 to zero. (Kurt 2026-08-28.)
+        # 🔴 Gift Redemption: the SHOPIFY ORDER IS NOT THE AUTHORITY. Kurt 2026-08-28:
+        # "those are not worth looking at for unfilled cex slots on shopify. you have to
+        # check those on matrixify." A gift's contents live in the Matrixify import, so
+        # a bare CEX- slot or a sheet/Shopify disagreement on a gift means nothing --
+        # every one of the 10 c1_unresolved and all 19 c2 rows on RMFG_20260828 were
+        # gifts, and none was actionable. Out of checks 1, 2 and 3; verify via Matrixify.
         is_gift = any("gift redemption" in t.lower() for t in tags)
 
         items_all = [e["node"] for e in o["lineItems"]["edges"]]
@@ -211,8 +214,8 @@ def run(orders, sheet, rules, rmfg_tag, ship_tag):
         base = {"order": oid, "parents": [p[1] for p in parents], "child": dict(child),
                 "total": tot, "disc": dcodes or None}
 
-        if xbl:
-            pass                                          # out of Check 1 ONLY
+        if is_gift or xbl:
+            pass                    # gift -> verify on Matrixify; AHB-X/BL- added apart
         elif ahbx and not no_rule:
             n_off = sum(q for _, _, q in ahbx)
             R["c1_ahbx"].append({**base,
@@ -272,7 +275,7 @@ def run(orders, sheet, rules, rmfg_tag, ship_tag):
         diff = [(k, sheet_child.get(k, 0), child_sku.get(k, 0))
                 for k in set(sheet_child) | set(child_sku)
                 if sheet_child.get(k, 0) != child_sku.get(k, 0)]
-        if srow and (s_child != tot or diff):
+        if srow and (s_child != tot or diff) and not is_gift:
             R["c2"].append({"order": oid, "sheet_child_sum": s_child,
                             "shopify_children": tot, "item_diffs": sorted(diff)})
 

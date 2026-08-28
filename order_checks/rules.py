@@ -33,7 +33,20 @@ WRAPPER_ADD = {
 }
 
 # AHB-CUR-* "Monthly Curation" rides with AHB-MED/AHB-LGE and adds NO child of its own.
-ZERO_CONTRIB = ("AHB-CUR-",)
+# 🔴 PREPAY-*: a PAYMENT wrapper ("Your Prepaid AppyHour Boxes"), not a box parent. The
+# real AHB- box is on the order alongside it, so giving it a rule DOUBLE-COUNTS -- 24 of
+# 27 prepay orders failed the moment it was treated as AHB-MED/AHB-LGE. Contributes
+# nothing. (Its q is the number of prepaid months, not children in this box.)
+ZERO_CONTRIB = ("AHB-CUR-", "PREPAY-")
+
+# Parents that are NOT in Dan's RULE SET xlsx. Merged over it at load time so the order
+# gets a count check instead of landing in c1_norule, where nothing is checked at all.
+# 🔴 Every entry here is Kurt's stated contribution, never inferred from the SKU name.
+EXTRA_RULES = {
+    # "like medium, AHB-MED, but 2 cheese instead of 2 meat" (Kurt 2026-08-28).
+    # AHB-MED is MT2 CH2 AC3; the two meat slots become cheese. Still 7 total.
+    "AHB-CMED": {"MT-": 0, "CH-": 4, "AC-": 3},
+}
 
 # Sheet column title -> SKU, where the sheet's MFG name does not fuzzy-match any live
 # product title. Dan's list, RUN_2026-08-25; each was validated by matching the column's

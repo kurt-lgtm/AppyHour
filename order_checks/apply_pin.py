@@ -36,6 +36,12 @@ def main(argv):
         if not hits:
             print(f"#{n}  NOT FOUND"); continue
         o = hits[0]
+        # 🔴🔴 NEVER edit Shopify on a Gift Redemption order (Kurt 2026-08-28). Contents
+        # are driven from Matrixify; no order edit, tag write or line add belongs here.
+        if any(t.strip().lower() == "gift redemption"
+               for t in (o.get("tags") or "").split(",")):
+            print(f"#{n}  REFUSING - Gift Redemption, Shopify is not editable for gifts")
+            continue
         cust = o.get("customer") or {}
         ctags = cust.get("tags") or ""
         pins = ROUTE.findall(ctags)

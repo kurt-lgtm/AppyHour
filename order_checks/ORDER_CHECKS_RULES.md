@@ -65,12 +65,17 @@ Runs AFTER child SKUs are applied. An order with zero children is UNBUILT, not s
 ### Out of scope entirely
 
 - `Reship*`, `Gift Redemption`, `PR box` (internal sample, no `AHB-` parent, #175430), cancelled.
-  🔴 `Gift Redemption` is excluded from **check 3 ONLY** (docx: a gift "doesn't need to be
-  on the Shopify order" for the brochure). It stays IN checks 1 and 2, and in the cracker
-  check. Widening it hides a real gap: on `RMFG_20260828` the ten gift orders sitting in
-  `c1_unresolved` have FULL item lists on the sheet - #175930 shows 9 items on the sheet
-  against 1 child plus six unfilled CEX slots in Shopify. The pick list already knows what
-  ships; the order never got it. Excluding gifts also silenced c2 to zero (Kurt 2026-08-28).
+  🔴 `Gift Redemption` -- **the Shopify order is NOT the authority for a gift.** Kurt
+  2026-08-28: *"those are not worth looking at for unfilled cex slots on shopify. you have
+  to check those on matrixify."* A gift's contents live in the Matrixify import, so a bare
+  `CEX-` slot on the order, or a sheet-vs-Shopify disagreement, means nothing. On
+  `RMFG_20260828` all 10 `c1_unresolved` rows and all 19 `c2` rows were gifts and none was
+  actionable. Out of checks 1, 2, 3 and the cracker check -- verify a gift via Matrixify.
+
+  🔴🔴 **NEVER EDIT SHOPIFY ON A GIFT REDEMPTION ORDER** (Kurt 2026-08-28, caps his). Not
+  an order edit, not a tag write, not a line-item add. A gift's contents are driven from
+  Matrixify; editing the Shopify order is out of bounds regardless of what any check says.
+  If a gift looks wrong, the fix happens in Matrixify -- surface it, never write it.
 - `AHB-X*` / `BL-*` parents — the docx says these are added separately.
 - **BYO = COUNT ONLY, never per-type.** Customer picks any mix (#174819: 10 cheese / 0 meat is
   legal; #176749 `AC-4 CH-4 MT-1` = 9 = correct).
