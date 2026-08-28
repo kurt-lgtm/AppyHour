@@ -41,6 +41,13 @@ def zeroed(node):
                if (li.get("quantity") or 0) > 0 and (li.get("currentQuantity") or 0) == 0)
 
 
+def zeroed_children(node):
+    """Zeroed CHILD units only -- the ones that could explain a shortfall."""
+    return sum(li.get("quantity") or 0 for li in _lines(node)
+               if (li.get("quantity") or 0) > 0 and (li.get("currentQuantity") or 0) == 0
+               and (li["sku"] or "").startswith(CHILD))
+
+
 def _feats(node):
     """-> ((box parents, slot signature), free_children, paid_children)."""
     box, slots, free, paid = set(), collections.Counter(), 0, 0
@@ -79,6 +86,7 @@ def categorize(report, orders):
         exp = x.get("expected_total")
         delta = (x["total"] - exp) if exp else ""
         pc, z = paid_children(node), zeroed(node)
+        zc = zeroed_children(node)
         key, free, _ = F[oid]
         m = med.get(key)
         n_ctl = len(ctl.get(key, []))
@@ -86,7 +94,11 @@ def categorize(report, orders):
 
         if isinstance(delta, int) and delta > 0 and pc and delta == pc:
             cat = "A. paid a-la-carte add-ons"
-        elif isinstance(delta, int) and delta < 0 and z:
+        # 🔴 D must ACCOUNT for the shortfall, not merely coexist with it. Without the
+        # magnitude test a single zeroed line explained any size of short: #145433 is
+        # -2 with ONE zeroed line and is a genuine exception (Kurt 2026-08-28 - it is
+        # owed CH-SOT and AC-MFJ), but D swallowed it.
+        elif isinstance(delta, int) and delta < 0 and zc >= -delta:
             cat = "D. lines zeroed by an order edit"
         elif m is None:
             cat = "E. too few matched peers to call"
@@ -99,7 +111,7 @@ def categorize(report, orders):
                      "children": x["total"], "expected": exp,
                      "parents": ",".join(x["parents"]),
                      "child_mix": " ".join(f"{k}{v}" for k, v in sorted(x["child"].items())),
-                     "paid_children": pc, "zeroed_lines": z,
+                     "paid_children": pc, "zeroed_lines": z, "zeroed_children": zc,
                      "problem": "; ".join(x["problems"]),
                      "discount_codes": ",".join(x["disc"] or []),
                      "matched_peers": n_ctl,
