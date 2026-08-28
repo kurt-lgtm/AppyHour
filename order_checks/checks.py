@@ -142,6 +142,52 @@ def cracker_check(o):
             if zeroed else "CEX-CR slot filled with a non-cracker")
 
 
+# Orders that never get written. The two have DIFFERENT reasons and that matters:
+#   pr box           a RULE. Kurt 2026-08-28: "we never fuck with pr boxes." Internal
+#                    sample; blocked even under an explicit override.
+#   gift redemption  NOT a rule -- it is simply IMPOSSIBLE. Kurt 2026-08-28: "its not a
+#                    rule because it just means its not possible." Gift orders are LOCKED
+#                    in Shopify, so the edit fails; the shopify-api skill says the same
+#                    ("always locked - don't retry"). Their contents are reconciled in
+#                    Matrixify instead. Skip them because a write cannot land, not
+#                    because policy forbids it -- an agent told "policy" will look for an
+#                    override that does not exist.
+NEVER_WRITE_TAGS = ("pr box", "gift redemption")
+
+
+def write_blocked(o):
+    """Reason this order must not be edited, or '' when it may be. Assert this BEFORE
+    any write -- a shortage `sub` selects rows by SKU and knows nothing about tags, which
+    is how #175930 (a gift) reached an applied swap list on 2026-08-28.
+    """
+    ts = [t.strip().lower() for t in tags(o)]
+    for t in NEVER_WRITE_TAGS:
+        if t in ts:
+            return f"{t} order - never edited"
+    return ""
+
+
+def validate_swap_list(rows, orders, order_key="Order ID"):
+    """Flag rows targeting an order that must never be written. Returns the bad rows.
+
+    🔴 Run this on ANY list before applying it, including lists this package produced.
+    A shortage `vf_edit sub` picks rows by SKU with no tag awareness, so a gift can enter
+    a swap list that every upstream check excluded -- #175930 (Gift Redemption) reached
+    the applied 08-31 set exactly that way and had to be pulled before the Shopify pass,
+    where it would simply have failed as a locked order.
+    """
+    bad = []
+    for r in rows:
+        oid = str(r.get(order_key) or r.get("order") or "").strip().lstrip("#")
+        o = orders.get(oid)
+        if not o:
+            continue
+        why = write_blocked(o)
+        if why:
+            bad.append({**r, "blocked_reason": why})
+    return bad
+
+
 def bare_cex_check(o):
     """A bare CEX-EC with NO CEX-EC-<CURATION> counterpart = unresolved slot. '' when fine.
 

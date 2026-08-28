@@ -42,6 +42,7 @@ import re
 import sqlite3
 import sys
 
+from .checks import write_blocked
 from .customer_map import recharge_id
 from .fetch_gql import fetch_by_name
 from .history import DB, previous_orders
@@ -272,6 +273,10 @@ def run(orders, con, verbose=True, sheet=None):
             continue
         if any("reship" in t.lower() for t in tags):
             skipped["reship"] += 1
+            continue
+        blocked = write_blocked(o)      # PR box / Gift Redemption -> never written
+        if blocked:
+            skipped[blocked] += 1
             continue
         cust = (o.get("customer") or {}).get("id")
         if not cust:
