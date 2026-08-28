@@ -2689,7 +2689,12 @@ would put 648 boxes into a coin-flip.
 
 #### 🔴 Reproduce-gate — this ran BEFORE anything was extended to other weeks
 
-`_SHIP_2026-08-24`, tag basis, reference computed 2026-08-25:
+> 🔴 **SUPERSEDED BY D35d (2026-08-27) — DO NOT RESTORE THESE LITERALS.** The table below is the
+> **Monday-leg** reading of `_SHIP_2026-08-24` and is kept only as the historical record of the
+> first run. Pinning the gate to it made the gate break every Tuesday night when the Dallas leg
+> landed; the cohort is **2,545** once that leg is in. The live gate is structural — see **D35d**.
+
+`_SHIP_2026-08-24`, tag basis, reference computed 2026-08-25 (Monday leg only):
 
 | row | reference | computed |
 |---|---:|---:|
@@ -2843,7 +2848,13 @@ involved, and none of the five `.gs` files change.**
 
 | Name | Invariant |
 |---|---|
-| `CM_REPRODUCE_GATE` | the 08-24 reference reproduces before any other week is computed |
+| `CM_REPRODUCE_GATE` | the **structural** gate passes before any other week is computed — see **D35d**. 🔴 Superseded the frozen 08-24 literals, which broke every Tuesday |
+| `CM_GATE_CLASSIFIER_GOLDEN` | 12 frozen `(carrier, signals) → lane` cases, zero DB (D35d) |
+| `CM_GATE_ALIAS_FOLD` | `normalize_carrier("LaserShip") == "OnTrac"` (D35d) |
+| `CM_GATE_LANE_PARTITION` | lanes are disjoint sets whose union is exactly the cohort (D35d) |
+| `CM_GATE_AIR_SEPARATE` | tag-derived FedEx-2Day ⊆ the air lane, ∩ Ground-HD = ∅ (D35d) |
+| `CM_GATE_MATURED_ANCHOR` | a **closed** cohort reproduces exactly — never the current week (D35d) |
+| `CM_COHORT_GREW` | a cohort gaining boxes **prints the delta and keeps rendering** (D35d) |
 | `CM_ASSERT_ROWS_SUM_TO_COHORT` | every box lands in exactly one row; rows sum to the cohort |
 | `CM_ASSERT_AIR_GROUND_EXCLUSIVE` | no box satisfies both the air and the ground test |
 | `CM_ASSERT_KNOWN_KEY_PASSES` | a known-present `order_number` survives the filter — **a zero is a claim** |
@@ -3040,6 +3051,110 @@ that section named; the bound Apps Script project still never touches this tab.
 8. ⚠️ **Still UNOWNED** — `--write-sheet` is idempotent precisely so a future scheduled owner can
    call it as-is, but the writer-ownership gate above remains NOT MET and no scheduled task was
    created (Kurt has not picked the owner). Until then this is a manually-run repaint.
+
+#### D35d — A REFERENCE FROZEN ON MONDAY-ONLY COUNTS BREAKS WHEN THE TUESDAY DALLAS LEG LANDS — THIS REFUSED TO RENDER FOR TWO DAYS (Kurt 2026-08-27)
+
+> Kurt: *"that's because we shipped tuesday as usual."* · *"it always grows tuesday night."*
+
+**The failure.** The reproduce-gate above pinned five literals to `_SHIP_2026-08-24` as measured on
+2026-08-25 — OnTrac 1763 / FedEx Ground-HD 648 / FedEx 2Day 69 / UPS 20 / **Total 2500** — and
+`main()` raised `CM_REPRODUCE_GATE failed — refusing to extend to other weeks` when they moved.
+They moved. From 2026-08-25 the tool **could not render the multi-week table at all**, for two
+days, and the numbers it was refusing over were **correct**: OnTrac 1770 / 680 / 70 / 25 / 2545.
+
+**Nothing was wrong. The cohort had done what it does every week.** `fulfilled_at` on
+`_SHIP_2026-08-24` splits **2,500 rows dated 08-24 and 45 rows dated 08-25** — the **Tuesday Dallas
+leg**. Filtered to the Monday leg alone the cohort reproduces the old reference *exactly*
+(1763 / 648 / 69 / 20 / 2500), which is the proof that the reference was a **Monday-only snapshot**,
+not a wrong measurement. The 45 Tuesday boxes are OnTrac 7 · FedEx Ground-HD 32 · FedEx 2Day 1 ·
+UPS 5.
+
+🔴 **MULTI-LEG UNION DOCTRINE — THE PART THAT MUST NOT BE RE-LEARNED.** A ship week is **not one
+event**. The Monday leg lands first; the **Tuesday Dallas leg lands Tuesday night**, every week,
+as standard operation ([[multi-leg-shipweek-union-doctrine]]; Tuesday = Dallas-only hub). **A
+cohort is only final after Tuesday night, so ANY measurement taken before it is provisional by
+construction.** Restating the literals to the post-Tuesday values would have fixed that Wednesday
+and re-broken the following Tuesday — resetting a clock, not removing it.
+
+🔴 **The general caution, beyond this file:** anything in the reporting surface that **snapshots a
+cohort on Monday** and later compares against it carries this same latent bug. If you freeze a
+cohort number, record **which legs were in** when you froze it, or freeze only after Tuesday night.
+
+#### 🔴 The rule: A GATE THAT CATCHES A *LOGIC* REGRESSION MUST NOT BE KEYED TO A *VOLUME*
+
+The volume legitimately changes every week. The logic must not. Pinning the gate to counts
+conflated the two, so a routine business event fired an alarm built for a code defect — and the
+only available response was to silence the alarm. **The gate now asserts structure and a closed
+anchor; not one check moves when the cohort grows.** Cohort growth is **reported**
+(`CM_COHORT_GREW`), never fatal.
+
+| Check | Invariant | Why growth cannot move it |
+|---|---|---|
+| `CM_GATE_CLASSIFIER_GOLDEN` | 12 frozen `(carrier, signals) → lane` cases | **zero DB rows read** |
+| `CM_GATE_ALIAS_FOLD` | `normalize_carrier("LaserShip") == "OnTrac"` (D35 failure #2) | pure function |
+| `CM_GATE_LANE_PARTITION` | lanes are **pairwise disjoint sets whose union is exactly the cohort's own `order_number` keys** (D35 failure #6) | a ratio of the week to itself |
+| `CM_GATE_AIR_SEPARATE` | the FedEx-2Day set read **straight off the routing tag** ⊆ the `FedEx 2Day Air` lane, and ∩ `FedEx Ground-HD` = ∅ (D35 failure #1) | scales with the week |
+| `CM_GATE_MATURED_ANCHOR` | `_SHIP_2026-07-27` reproduces exactly, tag basis | **closed cohort — all legs landed 2026-07-28; it cannot grow** |
+| `CM_COHORT_GREW` | a column that gained boxes since the last run **prints the delta and keeps rendering** | this *is* the growth path |
+
+- 🔴 **`tag_air` is derived WITHOUT the classifier, and that is the whole point.** `lane_sets`
+  returns both the classifier's buckets and an independently tag-derived FedEx-2Day set. **A check
+  that asks the classifier whether the classifier is right cannot fail.** If a change folds 2Day
+  into Ground-HD, `tag_air` still names those boxes and the gate finds them in the ground lane.
+- 🔴 **SUBSET, not equality** — `tag_air ⊆ FedEx 2Day Air`. The direction is measured, not chosen:
+  the air reconciliation above found the tag is a **100%-precise but incomplete** air signal (5–9
+  boxes/week are billed 2Day with no 2Day tag). Equality would fail every time an invoice landed.
+- 🔴 **The anchor is the TAG basis, and the ledger's frozen entry for the same cohort is NOT.**
+  The frozen ledger reads `FedEx 2Day Air: 124` for `_SHIP_2026-07-27` because it was computed
+  *with* invoices; the tag basis reads **117**. The 7-box gap is this document's own air
+  reconciliation, not drift. Verified 2026-08-27 that the tag basis reproduces the published
+  air-reconciliation table on all three matured cohorts — 07-27 → **117**, 08-03 → **179**,
+  08-10 → **166**, exact. **Do not "fix" the gap by wiring `inv` in** (D35b review finding 2).
+- **Why `_SHIP_2026-07-27` is the anchor:** it is 31 days old *and* **all five lanes are non-zero**
+  on it — including `Other / Unmapped` = 372 Veho boxes. A cohort with an empty lane would let a
+  regression that drops that lane pass unnoticed.
+- 🔴 **NEVER RE-PIN THE ANCHOR TO THE CURRENT WEEK.** That is the bug this replaced.
+
+#### 🔴 Proven to still refuse — a gate that only ever passes is worse than none
+
+The point of moving off literals is surviving the weekly leg; that is only an improvement if the
+gate still goes red on a real defect. `--self-test` **seeds the faults and asserts the refusal**,
+so this is permanent evidence rather than a one-off demo (measured 2026-08-27):
+
+| seeded fault | result |
+|---|---|
+| **FedEx 2Day merged into Ground-HD** (D35 failure #1) | **REFUSES** — red on `CM_GATE_CLASSIFIER_GOLDEN` + `CM_GATE_AIR_SEPARATE` |
+| **fenced UPS boxes silently vanish** (D35 failure #6) | **REFUSES** — red on `CM_GATE_LANE_PARTITION` **alone**; **31** boxes lost from the anchor |
+| **matured anchor perturbed by one box** | **REFUSES** — red on `CM_GATE_MATURED_ANCHOR` |
+| **cohort grows 500 → 545** | **RENDERS**, logs `GREW … (+45) — a later leg landed` |
+
+🔴 **The vanishing-boxes fault is seeded SURGICALLY — it drops only UPS boxes carrying no service
+signal, the shape a fence leaves behind.** Every UPS case in the truth table carries a signal, so
+`CM_GATE_CLASSIFIER_GOLDEN` **stays green** and only the live structural check sees it. That
+asymmetry is the lesson: **a frozen truth table cannot cover states it does not enumerate**, which
+is exactly why the gate needs both halves and why neither alone would be sufficient.
+
+#### `--self-test` is 30/30 — and the arm that was unreachable is fixed here
+
+**It was 20/21 on `HEAD`, and the failing case was the same defect one level down.**
+`unresolved_orders: all 3 arms reached` asserted that **live data** reached the below-threshold
+arm. It did on 2026-08-26 (the `shopify_orders` replica sat at 40% for `_SHIP_2026-08-24`); the
+replica then **caught up**, and a healthy replica read as a **test failure**. 🔴 **A test keyed to a
+transient DATA state is not a test of the code it claims to cover.** The four arms
+(above / below / empty / replica-absent) are now proven against an **in-memory `sqlite3` fixture**
+— deterministic, always reached — and the live sweep only **reports** which arms today's data
+happens to hit. (The fixture DB is ephemeral and is **not** `shipping.db`; the `connect_ro`
+read-only doctrine is untouched and no writer is ever opened against the live store.)
+
+**Gate for this file (supersedes D35b's):** `ruff` clean, `pyright` 0 errors / 0 warnings,
+`--self-test` **30/30**, `--verify-gate` PASS — run all four **from a cwd outside the repo** so the
+import path is exercised the way a scheduled owner will exercise it.
+
+**Not touched by this change:** `shipments.hub` (which stopped populating — wk0810 is 1,521/1,719
+NULL, wk0817 all 1,449 NULL) is **never read** by this module, nor is `shipments.ship_date`; the
+hub truncation and the two-format `ship_date`/duplicate-tracking issues cannot surface here as a
+logic failure. `delivery_status.service` remains NULL on all rows and the tag remains the sole
+service basis — the gate does not reach for that column to "fix" the service split.
 
 ### D36 — `Routing Match`: A FENCE IS NOT A PREDICTION — FENCED BOXES LEAVE BOTH SIDES OF THE RATE (Kurt 2026-08-26)
 

@@ -23,10 +23,17 @@ Run::
 
     python carrier_mix_pivot.py                 # last 5 ship weeks, render + update ledger
     python carrier_mix_pivot.py --weeks 8
-    python carrier_mix_pivot.py --verify-gate   # reproduce the 2026-08-24 reference numbers
+    python carrier_mix_pivot.py --verify-gate   # the structural reproduce-gate (D35d)
     python carrier_mix_pivot.py --self-test     # exercise the branches a normal week never hits
     python carrier_mix_pivot.py --no-ledger     # render only, touch nothing
     python carrier_mix_pivot.py --write-sheet   # …and repaint the `Carrier Mix` sheet tab (D35c)
+
+🔴 THE GATE IS KEYED TO LOGIC, NEVER TO A VOLUME (D35d). It used to pin five literals to the
+CURRENT week's counts, so the Tuesday Dallas leg — which lands EVERY week — broke it and the
+pivot refused to render for two days over a cohort that had done nothing but grow 2500 → 2545.
+Ship weeks are multi-leg and are not final until Tuesday night. Cohort growth is REPORTED, never
+fatal; what refuses is a classifier regression, a lane that stops partitioning the cohort, air
+sitting in the ground row, or the MATURED (closed, cannot-grow) anchor cohort moving.
 
 🔴 `--verify-gate` is a HAPPY PATH and is NOT evidence on its own: it resolves before the
 Pending/denominator branch is ever reached. Run `--self-test` too, or a change lands green
@@ -51,6 +58,7 @@ import argparse
 import io
 import json
 import os
+import sqlite3
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -129,7 +137,58 @@ SHEET_TITLE = "Carrier Mix — ship weeks as columns (D35)"
 # mirrors `_outputs/scripts/freshness_sweep.py`'s own 3-day rule for the same table.
 STALE_AFTER_DAYS = 3
 
-REFERENCE_0824 = {ONTRAC: 1763, FEDEX_GND: 648, FEDEX_AIR: 69, UPS_GND: 20, TOTAL: 2500}
+# ── Reproduce-gate anchors ───────────────────────────────────────────────────
+# 🔴 THE GATE IS KEYED TO LOGIC, NEVER TO A VOLUME. See D35d.
+#
+# The first version of this gate pinned five literals to `_SHIP_2026-08-24` as measured on
+# 2026-08-25 (OnTrac 1763 / FedEx Ground-HD 648 / FedEx 2Day 69 / UPS 20 / Total 2500) and
+# refused to render anything when they moved. They moved on 2026-08-25 and the pivot could not
+# render for two days. Nothing was wrong: `fulfilled_at` on that cohort is 2,500 rows dated
+# 08-24 and 45 rows dated 08-25 — the Tuesday Dallas leg, which lands EVERY week. The reference
+# was a Monday-only snapshot of a cohort that is not final until Tuesday night, so it was
+# guaranteed to break weekly; restating the literals would only have reset that clock.
+#
+# What a reproduce-gate is FOR is catching a LOGIC regression — 2Day folded into Ground-HD, a
+# bucket silently dropped, LaserShip counted apart from OnTrac. None of those care whether the
+# cohort is 2,500 or 2,545. So the anchors below are (a) a frozen classifier truth table with no
+# data in it at all and (b) a MATURED cohort whose legs are all in and which therefore cannot
+# grow. Cohort growth is REPORTED by `reconcile_ledger`, never fatal.
+
+# (a) Frozen classifier truth table — zero DB, zero volume. This is the real anchor: it
+# reproduces the DECISION, which is the only thing the old literals were ever evidence for.
+# 🔴 The first two rows are the whole point of D35 failure #1 — if a change ever folds FedEx
+# 2Day into Ground-HD, these fail before a single row is read.
+CLASSIFIER_GOLDEN = (
+    ("FedEx 2Day by tag",      "FedEx",  {"tag": canon.TWO_DAY},                  FEDEX_AIR),
+    ("FedEx 2Day by invoice",  "FedEx",  {"invoice": canon.TWO_DAY},              FEDEX_AIR),
+    ("FedEx Home Delivery",    "FedEx",  {"tag": canon.HOME_DELIVERY},            FEDEX_GND),
+    ("FedEx Ground",           "FedEx",  {"tag": canon.GROUND},                   FEDEX_GND),
+    ("FedEx no signal",        "FedEx",  {},                                      FEDEX_GND),
+    ("OnTrac ground",          "OnTrac", {"tag": canon.GROUND},                   ONTRAC),
+    ("UPS ground",             "UPS",    {"tag": canon.GROUND},                   UPS_GND),
+    ("UPS 2Day (no lane)",     "UPS",    {"invoice": canon.TWO_DAY},              OTHER),
+    ("FedEx Overnight",        "FedEx",  {"invoice": canon.OVERNIGHT},            OTHER),
+    ("Veho (dead carrier)",    "Veho",   {"tag": canon.GROUND},                   OTHER),
+    ("unrecognized carrier",   None,     {},                                      OTHER),
+    ("air+ground conflict",    "FedEx",  {"tag": canon.TWO_DAY,
+                                          "invoice": canon.GROUND},               OTHER),
+)
+
+# (b) MATURED-cohort numeric anchor, TAG BASIS. `_SHIP_2026-07-27` is 31 days old: every leg
+# landed weeks ago, so unlike the current week it CANNOT grow underneath the gate.
+# 🔴 Chosen because all five lanes are non-zero on it — including `Other / Unmapped` = 372 Veho
+# boxes (Veho is dead as a carrier but still inside older windows). A cohort with an empty lane
+# would let a regression that drops that lane pass unnoticed.
+# 🔴 TAG BASIS (`{}` for the invoice index), and that is not a detail: the frozen LEDGER entry
+# for this cohort reads `FedEx 2Day Air: 124` because it was computed WITH invoices, while the
+# tag basis reads 117. The 7-box gap is D35's own measured air reconciliation (tag 117 / invoice
+# 124), not drift. Verified 2026-08-27 the tag basis reproduces the air-reconciliation table
+# published in D35 on all three matured cohorts — 07-27: 117, 08-03: 179, 08-10: 166, exact.
+# 🔴 Do NOT re-pin this to the current week. That is the bug this replaced.
+ANCHOR_TAG = "_SHIP_2026-07-27"
+ANCHOR_AS_OF = "2026-08-27"      # all legs in; cohort closed since 2026-07-28
+ANCHOR_COUNTS = {ONTRAC: 1133, FEDEX_GND: 359, FEDEX_AIR: 117, UPS_GND: 244, OTHER: 372,
+                 TOTAL: 2225}
 
 
 class CarrierMixError(RuntimeError):
@@ -397,6 +456,18 @@ def reconcile_ledger(led, col):
                 f"{e['counts']} — refusing. The ship-time reading is unrecoverable once overwritten.")
         events.append("counts: frozen, unchanged")
     else:
+        # 🔴 A COHORT GROWING IS INFORMATION, NOT A FAILURE. Ship weeks are MULTI-LEG: the Monday
+        # leg lands first and the Tuesday Dallas leg lands Tuesday night, every week. A column
+        # measured before Tuesday night is provisional BY CONSTRUCTION. Name the delta so a
+        # reader sees "the Tuesday leg landed" instead of wondering which number is wrong — and
+        # so nobody is tempted to turn a weekly-expected change back into a refusal (D35d).
+        prev = e.get("counts")
+        if prev and prev != col["counts"]:
+            moved = {ln: col["counts"][ln] - prev.get(ln, 0)
+                     for ln in LANES if col["counts"][ln] != prev.get(ln, 0)}
+            events.append(f"counts: GREW {sum(prev.values())} → {col['total']} "
+                          f"(+{col['total'] - sum(prev.values())}) — a later leg landed; "
+                          f"by lane {moved}")
         e["counts"] = col["counts"]
         age = col["age_days"]
         if col["total"] == 0:
@@ -624,26 +695,114 @@ def write_sheet(cols, ledger, notes):
 
 
 # ── Reproduce gate ───────────────────────────────────────────────────────────
-def verify_gate(con, dss):
-    """🔴 Reproduce the numbers the system already produced BEFORE trusting any extension.
+def lane_sets(rows, dss, classifier=classify):
+    """Raw `fulfillments` rows → ``(lane → set of order_number, tag_air set)``.
 
-    Reference computed 2026-08-25 for `_SHIP_2026-08-24`: OnTrac 1763 · FedEx Ground 648 ·
-    FedEx 2Day 69 · UPS 20 · Total 2500. If this does not match, the query is wrong — not the
-    reference.
+    Two derivations, on purpose:
 
-    🔴 THE EMPTY INVOICE INDEX BELOW IS DELIBERATE — DO NOT "FIX" IT BY PASSING `inv`.
-    The reference is the SHIP-TIME (tag-basis) reading: `_SHIP_2026-08-24` had zero invoices
-    when it was taken. Feeding the live invoice index in would let a later-arriving invoice move
-    the air row (5-9 boxes/week of dock-upgraded air — see D35's air reconciliation) and the gate
-    would start failing against a reference that is still correct, or worse, pass for the wrong
-    reason once the two errors cancelled. This function takes NO invoice argument precisely so
-    there is nothing to wire in by accident.
+    * ``lanes`` is whatever ``classifier`` decided, as SETS rather than the counters
+      ``build_column`` keeps — so a bucket that is dropped or double-counted shows up as a
+      partition failure rather than as a plausible number.
+    * ``tag_air`` is the FedEx-2Day set read STRAIGHT OFF THE ROUTING TAG, never through the
+      classifier. 🔴 That is the entire point: a check that asks the classifier whether the
+      classifier is right cannot fail. If a change folds 2Day into Ground-HD, ``tag_air`` still
+      names those boxes and the gate catches them sitting in the ground lane.
+
+    ``classifier`` is injectable ONLY so ``--self-test`` can prove the gate refuses a seeded
+    fault. Nothing in the live path ever passes anything but ``classify``.
     """
-    col = build_column(con, "_SHIP_2026-08-24", {}, dss)   # {} = tag basis, on purpose — see above
-    got = dict(col["counts"])
-    got[TOTAL] = col["total"]
-    bad = {k: (v, got.get(k)) for k, v in REFERENCE_0824.items() if got.get(k) != v}
-    return (not bad), got, bad
+    lanes = {lane: set() for lane in LANES}
+    tag_air = set()
+    for onum, tags, _trk, tc, _upd in rows:
+        carrier = canon.normalize_carrier(tc)
+        sig = service_signals(tags, carrier, dss.get(onum), None)   # tag basis — see gate docstring
+        row = classifier(carrier, sig)[0]
+        # 🔴 An unrecognized row label is a LOST BOX, never a crash. Swallowing it here is
+        # deliberate: the partition check below compares the union against the cohort's own keys
+        # and reports exactly how many went missing. A KeyError would turn the hub-literal
+        # undercount class into a stack trace instead of a measured finding.
+        if row in lanes:
+            lanes[row].add(onum)
+        p = canon.parse_routing_tag(tags or "")
+        if (p and not p.get("is_any") and p.get("carrier") == "FedEx" and carrier == "FedEx"
+                and p.get("service_level") == canon.TWO_DAY):
+            tag_air.add(onum)
+    return lanes, tag_air
+
+
+def reproduce_gate(con, dss, classifier=classify):
+    """🔴 Prove the LOGIC still decides what it decided, BEFORE extending to other weeks.
+
+    Returns ``(ok, checks)`` where ``checks`` is ``[(name, ok, detail), …]``.
+
+    🔴 NOT KEYED TO A VOLUME. The predecessor pinned five literals to the CURRENT week and was
+    therefore guaranteed to break every Tuesday night when the Dallas leg landed — it refused to
+    render for two days over a cohort that had grown 2500 → 2545 exactly as it does every week.
+    A weekly-expected change must never be able to stop the table rendering. Every check below
+    holds whether the cohort is 2,500 or 2,545; cohort growth is reported by `reconcile_ledger`
+    as information, never as a failure.
+
+    🔴 THE EMPTY INVOICE INDEX IS DELIBERATE — DO NOT "FIX" IT BY PASSING `inv`.
+    Every check reads the SHIP-TIME (tag-basis) signal. Feeding the live invoice index in would
+    let a later-arriving invoice move the air row (5-9 boxes/week of dock-upgraded air — D35's
+    air reconciliation) and the anchor would start failing against a reference that is still
+    correct, or pass for the wrong reason once two errors cancelled. Neither this function nor
+    `lane_sets` takes an invoice argument, precisely so there is nothing to wire in by accident.
+    """
+    checks = []
+
+    # 1. CM_GATE_CLASSIFIER_GOLDEN — the frozen truth table. Zero DB, zero volume. This is what
+    #    actually catches "2Day merged into Ground-HD" and it cannot be moved by a Tuesday leg.
+    bad = [f"{lbl}: got {classifier(c, s)[0]!r} want {want!r}"
+           for lbl, c, s, want in CLASSIFIER_GOLDEN if classifier(c, s)[0] != want]
+    checks.append(("CM_GATE_CLASSIFIER_GOLDEN", not bad,
+                   f"{len(CLASSIFIER_GOLDEN)} cases" if not bad else "; ".join(bad)))
+
+    # 2. CM_GATE_ALIAS_FOLD — OnTrac and LaserShip are ONE carrier (D35 failure #2). Counting
+    #    them apart halves the share this whole table exists to watch.
+    fold = canon.normalize_carrier("LaserShip")
+    checks.append(("CM_GATE_ALIAS_FOLD", fold == "OnTrac", f"LaserShip → {fold!r}"))
+
+    # 3+4. Structure of the CURRENT week, on whatever volume it happens to be.
+    tag = ship_mondays(1)[0]
+    rows = _cohort_rows(con, tag)
+    if not rows:                       # pre-label Monday window — nothing to assert, and that
+        tag = ship_mondays(2)[0]       # is not a failure. Fall back to the week that shipped.
+        rows = _cohort_rows(con, tag)
+    lanes, tag_air = lane_sets(rows, dss, classifier)
+    keys = {r[0] for r in rows}
+    sizes = sum(len(v) for v in lanes.values())
+    union = set().union(*lanes.values()) if lanes else set()
+    overlaps = [(a, b) for i, a in enumerate(LANES) for b in LANES[i + 1:] if lanes[a] & lanes[b]]
+    part_ok = not overlaps and union == keys and sizes == len(keys)
+    checks.append(("CM_GATE_LANE_PARTITION", part_ok,
+                   f"{tag}: {len(keys)} boxes → {sizes} across {len(LANES)} disjoint lanes"
+                   if part_ok else
+                   f"{tag}: overlaps={overlaps} sizes={sizes} keys={len(keys)} "
+                   f"lost={len(keys - union)} extra={len(union - keys)}"))
+
+    # 🔴 SUBSET, not equality, and that direction is measured: D35's air reconciliation found the
+    # tag is a 100%-PRECISE but INCOMPLETE air signal (5-9 boxes/week are billed 2Day with no
+    # 2Day tag — the fence resolved to air at the dock). So every tag-air box must be in the air
+    # lane, but the air lane may legitimately hold more once invoices land.
+    air_ok = tag_air <= lanes[FEDEX_AIR] and not (tag_air & lanes[FEDEX_GND])
+    checks.append(("CM_GATE_AIR_SEPARATE", air_ok,
+                   f"{tag}: {len(tag_air)} tag-air boxes, all in {FEDEX_AIR}, none in {FEDEX_GND}"
+                   if air_ok else
+                   f"{tag}: {len(tag_air - lanes[FEDEX_AIR])} tag-air box(es) missing from "
+                   f"{FEDEX_AIR}, {len(tag_air & lanes[FEDEX_GND])} sitting in {FEDEX_GND}"))
+
+    # 5. CM_GATE_MATURED_ANCHOR — the one numeric anchor, on a CLOSED cohort. All legs landed
+    #    weeks ago, so it cannot grow; a mismatch here is a real finding, not the calendar.
+    acol = build_column(con, ANCHOR_TAG, {}, dss)          # {} = tag basis, on purpose
+    got = dict(acol["counts"])
+    got[TOTAL] = acol["total"]
+    diff = {k: (v, got.get(k)) for k, v in ANCHOR_COUNTS.items() if got.get(k) != v}
+    checks.append(("CM_GATE_MATURED_ANCHOR", not diff,
+                   f"{ANCHOR_TAG} (as of {ANCHOR_AS_OF}) reproduces exactly: {got}"
+                   if not diff else f"{ANCHOR_TAG} (expected, got): {diff}"))
+
+    return all(ok for _, ok, _ in checks), checks
 
 
 # ── Self-test ────────────────────────────────────────────────────────────────
@@ -699,8 +858,52 @@ def self_test(con):
         return "empty/marker repaint · foreign refuses"
     check("sheet: foreign-tab gate refuses (D35c)", _ownership)
 
-    # unresolved_orders: all three arms, against the live DB.
-    def _arms():
+    # unresolved_orders: every arm, DETERMINISTICALLY.
+    # 🔴 This used to assert that LIVE data reached all three arms, and it went red the moment
+    # the `shopify_orders` replica caught up — 20/21 on HEAD, with the below-threshold arm
+    # unreachable. That is the same defect as the old reproduce-gate one level down: a test
+    # keyed to a transient DATA state rather than to the code it claims to cover. A replica
+    # being healthy must not read as a test failure. The arms are now proven against an
+    # in-memory fixture (deterministic, always reaches all four) and the LIVE sweep below only
+    # REPORTS which arms today's data happens to hit.
+    # 🔴 `sqlite3.connect(":memory:")` is an ephemeral fixture DB, NOT `shipping.db`. The
+    # read-only doctrine (connect_ro, WAL corruption 6/27 + 7/01) is about the live store; no
+    # writer is opened against it here and none ever may be.
+    def _fixture(n_orders, tag="_X", table=True):
+        mem = sqlite3.connect(":memory:")
+        if table:
+            mem.execute("CREATE TABLE shopify_orders "
+                        "(order_name TEXT, ship_tag TEXT, cancelled_at TEXT)")
+            mem.executemany("INSERT INTO shopify_orders VALUES (?,?,NULL)",
+                            [(f"#{i}", tag) for i in range(n_orders)])
+        return mem
+
+    def _arm_below():
+        pend, comp = unresolved_orders(_fixture(40), "_X", {str(i) for i in range(100)})
+        assert pend is None, f"below-threshold must return None, got {pend}"
+        assert comp is not None and comp < REPLICA_MIN_COMPLETENESS, comp
+        return f"replica {comp:.0%} → pending unknown, never 0"
+    check("unresolved_orders: BELOW-threshold arm", _arm_below)
+
+    def _arm_above():
+        pend, comp = unresolved_orders(_fixture(100), "_X", {str(i) for i in range(90)})
+        assert comp is not None and comp >= REPLICA_MIN_COMPLETENESS, comp
+        assert pend == 10, f"set difference should be 10, got {pend}"
+        return f"replica {comp:.0%} → pending {pend} (set difference)"
+    check("unresolved_orders: ABOVE-threshold arm", _arm_above)
+
+    def _arm_empty():
+        assert unresolved_orders(_fixture(0), "_X", set()) == (None, 0.0)
+        return "no labels → (None, 0.0)"
+    check("unresolved_orders: EMPTY arm", _arm_empty)
+
+    def _arm_absent():
+        # No `shopify_orders` table at all — the replica-missing arm.
+        assert unresolved_orders(_fixture(0, table=False), "_X", {"1"}) == (None, None)
+        return "replica absent → (None, None)"
+    check("unresolved_orders: replica-ABSENT arm", _arm_absent)
+
+    def _arms_live():
         seen = set()
         for tag in ship_mondays(6) + [ship_mondays(1, date.today() + timedelta(days=7))[0]]:
             lab = {r[0] for r in _cohort_rows(con, tag)}
@@ -711,9 +914,70 @@ def self_test(con):
                 seen.add("below")
             elif pend is not None:
                 seen.add("above")
-        assert seen >= {"above", "below", "empty"}, f"arms exercised: {sorted(seen)}"
-        return sorted(seen)
-    check("unresolved_orders: all 3 arms reached", _arms)
+        return f"live data reached {sorted(seen)} (informational — arms proven above)"
+    check("unresolved_orders: live arms reached (report only)", _arms_live)
+
+    # ── The gate must FAIL on a seeded fault (D35d) ───────────────────────────
+    # 🔴 A GATE THAT ONLY EVER PASSES IS WORSE THAN NONE. The structural gate is keyed to logic
+    # rather than to a volume precisely so it survives the weekly Tuesday leg — which is only an
+    # improvement if it still refuses a real regression. These seed the two regressions D35 was
+    # written to prevent and assert the gate goes red.
+    def _gate_green():
+        ok, checks_ = reproduce_gate(con, {})
+        assert ok, [c for c in checks_ if not c[1]]
+        return f"{len(checks_)} checks green on live data"
+    check("gate: PASSES on today's data", _gate_green)
+
+    def _fault_air_merged():
+        """D35 failure #1: FedEx 2Day folded into Ground-HD. Still sums to the cohort."""
+        def merged(carrier, signals):
+            row, why = classify(carrier, signals)
+            return (FEDEX_GND, why) if row == FEDEX_AIR else (row, why)
+        ok, checks_ = reproduce_gate(con, {}, classifier=merged)
+        assert not ok, "gate passed with FedEx 2Day merged into Ground-HD"
+        red = {n for n, cok, _ in checks_ if not cok}
+        assert "CM_GATE_CLASSIFIER_GOLDEN" in red, red
+        assert "CM_GATE_AIR_SEPARATE" in red, red
+        return f"refused, red: {sorted(red)}"
+    check("gate: FAILS when FedEx 2Day merges into Ground-HD", _fault_air_merged)
+
+    def _fault_bucket_dropped():
+        """D35 failure #6: boxes that match no row silently vanish, and the table still adds up.
+
+        🔴 The fault is seeded SURGICALLY — it drops only UPS boxes carrying NO service signal,
+        which is the shape a fence leaves behind. Every UPS case in `CLASSIFIER_GOLDEN` carries a
+        signal, so the truth table stays GREEN and only the live structural check can see this.
+        That asymmetry is the point: a frozen truth table cannot cover states it does not
+        enumerate, and the partition check is what covers the rest.
+        """
+        def dropper(carrier, signals):
+            row, why = classify(carrier, signals)
+            return (None, why) if (row == UPS_GND and not signals) else (row, why)
+        ok, checks_ = reproduce_gate(con, {}, classifier=dropper)
+        assert not ok, "gate passed with fenced UPS boxes dropped"
+        red = {n for n, cok, _ in checks_ if not cok}
+        assert red == {"CM_GATE_LANE_PARTITION"}, f"expected partition alone to catch it, got {red}"
+        lanes, _ = lane_sets(_cohort_rows(con, ANCHOR_TAG), {}, classifier=dropper)
+        base_lanes, _ = lane_sets(_cohort_rows(con, ANCHOR_TAG), {})
+        lost = len(base_lanes[UPS_GND]) - len(lanes[UPS_GND])
+        assert lost > 0, "fault seeded but no box actually went missing"
+        return (f"refused on CM_GATE_LANE_PARTITION alone (truth table stayed green); "
+                f"{lost} fenced UPS boxes vanished from {ANCHOR_TAG}")
+    check("gate: FAILS when boxes silently vanish", _fault_bucket_dropped)
+
+    def _fault_anchor_moved():
+        """The matured anchor must still be a real equality check, not decoration."""
+        saved = dict(ANCHOR_COUNTS)
+        try:
+            ANCHOR_COUNTS[FEDEX_AIR] = saved[FEDEX_AIR] + 1
+            ok, checks_ = reproduce_gate(con, {})
+            assert not ok, "gate passed against a wrong matured anchor"
+            assert "CM_GATE_MATURED_ANCHOR" in {n for n, cok, _ in checks_ if not cok}
+        finally:
+            ANCHOR_COUNTS.clear()
+            ANCHOR_COUNTS.update(saved)
+        return "refused a one-box anchor perturbation"
+    check("gate: FAILS when the matured anchor moves", _fault_anchor_moved)
 
     # Each named refusal must actually refuse.
     # 🔴 PRODUCTION-SHAPE fixture: built from `build_column`'s real key set, not hand-picked.
@@ -777,6 +1041,25 @@ def self_test(con):
         assert e["counts_frozen"] and e.get("residual_pending") == 3, e
         return "force-frozen, residual recorded"
     check("count-freeze backstop records residual", _backstop)
+
+    def _growth_is_not_fatal():
+        """🔴 THE REGRESSION THAT MOTIVATED D35d: a cohort that GROWS must keep rendering.
+
+        Ship weeks are multi-leg — the Tuesday Dallas leg lands Tuesday night, every week — so a
+        column that gained boxes since the last run is the normal cycle, not a fault. It is
+        reported by name and the column stays provisional.
+        """
+        led: dict[str, Any] = {"columns": {}}
+        small = dict(base, tag="_G", counts=dict.fromkeys(LANES, 100), total=500, pending=None,
+                     age_days=1)
+        reconcile_ledger(led, small)
+        grown = dict(small, counts=dict(dict.fromkeys(LANES, 100), **{ONTRAC: 145}), total=545)
+        e = reconcile_ledger(led, grown)          # must NOT raise
+        ev = " ".join(e["log"][-1]["events"])
+        assert "GREW 500 → 545" in ev and "+45" in ev, ev
+        assert not e["counts_frozen"], "a growing column must stay provisional"
+        return "reported '+45, a later leg landed' and kept rendering"
+    check("cohort growth is reported, never fatal", _growth_is_not_fatal)
 
     def _no_freeze_when_unknown():
         led: dict[str, Any] = {"columns": {}}
@@ -845,15 +1128,16 @@ def main(argv=None):
         print(f"delivery_status.service coverage: {len(dss)} rows populated "
               f"({'DEAD SIGNAL — tag is the sole service source' if not dss else 'live'})")
 
-        ok, got, bad = verify_gate(con, dss)
-        print(f"\nCM_REPRODUCE_GATE (_SHIP_2026-08-24, tag basis): "
-              f"{'PASS' if ok else 'FAIL'}  {got}")
-        if bad:
-            print(f"  mismatches (expected, got): {bad}")
+        ok, checks = reproduce_gate(con, dss)
+        print(f"\nCM_REPRODUCE_GATE (structural, tag basis): {'PASS' if ok else 'FAIL'}")
+        for name, cok, detail in checks:
+            print(f"  [{'PASS' if cok else 'FAIL'}] {name}: {detail}")
         if a.verify_gate:
             return 0 if ok else 1
         if not ok:
-            raise CarrierMixError("CM_REPRODUCE_GATE failed — refusing to extend to other weeks")
+            raise CarrierMixError(
+                "CM_REPRODUCE_GATE failed — refusing to extend to other weeks. Failing: "
+                + ", ".join(n for n, cok, _ in checks if not cok))
 
         cols, notes = [], []
         for tag in ship_mondays(a.weeks):
@@ -867,7 +1151,14 @@ def main(argv=None):
         led = _load_ledger()
         for col in cols:
             if col["total"]:
-                reconcile_ledger(led, col)
+                e = reconcile_ledger(led, col)
+                # 🔴 CM_COHORT_GREW must be VISIBLE, not buried in the ledger's event log. A
+                # cohort gaining boxes between runs is the multi-leg cycle (Tuesday Dallas lands
+                # Tuesday night), and the reader needs to see "+45, a later leg landed" rather
+                # than silently comparing two different totals across two days — or, as before
+                # D35d, being handed a refusal instead of a table.
+                notes += [f"CM_COHORT_GREW: {col['tag']} {ev.split('counts: GREW ', 1)[1]}"
+                          for ev in e["log"][-1]["events"] if ev.startswith("counts: GREW ")]
         table = render(cols, led)
         print("\n" + table + "\n")
         for n in notes:
