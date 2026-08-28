@@ -93,6 +93,22 @@ Eligible: `AC-FCROSE AC-FCEVOO AC-ACRISP AC-TCRISP AC-EFLAT AC-FCWALN AC-PFLAT A
 run reports every Toketti fill as "CEX-CR slot filled with a non-cracker". Keep the two sets
 in sync or the same seven orders get re-reported every week.
 
+## BARE CEX-EC (rule 11)
+
+`CEX-EC` (bare) + `CEX-EC-{CURATION}` on the same order is **EXPECTED**, not a duplicate: the
+bare line is the placeholder written first, the suffixed line is its curation-specific
+resolution. Never flag the pair.
+
+A **bare `CEX-EC` with no `CEX-EC-*` counterpart** is the defect - the resolution never ran.
+Check open unfulfilled orders; Gift Redemption is out of scope.
+
+🔴 The fix is to add the **`CEX-EC-<CURATION>`** line qty 1 - NOT the `CH-` SKU. Adding the
+cheese directly fills the count while leaving the slot unresolved, which is the same class of
+wrong as filling `CEX-CR` with a non-cracker.
+
+Found on `_SHIP_2026-08-31`: #178549 (Marilu Madariaga, `AHB-MCUST-SS`, bare `CEX-EC` qty 1,
+zero `CEX-EC-*` lines incl. removed/fq=0) -> fixed with `CEX-EC-SS`. Trays carrying `CEX-EC`: 0.
+
 ## PEER CHECK
 
 Second opinion with no rule-set dependency: group by box SKU, compare each order's child count to

@@ -137,6 +137,28 @@ def cracker_check(o):
             if zeroed else "CEX-CR slot filled with a non-cracker")
 
 
+def bare_cex_check(o):
+    """A bare CEX-EC with NO CEX-EC-<CURATION> counterpart = unresolved slot. '' when fine.
+
+    CEX-EC (bare) + CEX-EC-{CURATION} coexisting is EXPECTED - the bare line is the
+    placeholder written first, the suffixed one is its curation-specific resolution
+    (SKU Quirks). Bare-only means the resolution never ran.
+
+    🔴 Fix is to add the CEX-EC-<CURATION> line qty 1, NOT the CH- SKU (rule 11).
+    Gift Redemption orders are out of scope. Found #178549 on _SHIP_2026-08-31.
+    """
+    if any(t.strip().lower() == "gift redemption" for t in tags(o)):
+        return ""
+    live_skus = {sku(x) for x in live(o)}
+    if "CEX-EC" not in live_skus:
+        return ""
+    # count removed/zeroed suffix lines too - a zeroed counterpart is still not shipping
+    all_skus = {sku(x) for x in o["line_items"]}
+    if any(s.startswith("CEX-EC-") for s in all_skus):
+        return ""
+    return "bare CEX-EC with no CEX-EC-<CURATION> counterpart"
+
+
 def duplicate_check(o):
     """Check 8 — same child SKU twice with a TYPE-MATCHED CEX-/EX- parent.
 
