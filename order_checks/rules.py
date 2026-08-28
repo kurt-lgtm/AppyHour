@@ -19,6 +19,17 @@ WRAPPER_ADD = {
     "AppyHour Box + Free Brie for a Year": {"CH-": 1},
     # the pairing ships as its own PR-CJAM- line, so the wrapper itself adds nothing
     "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life": {},
+    "AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life": {},
+    # --- priced blank-SKU add-on packs. Contribution is the DESCRIPTION, per Kurt
+    # 2026-08-28: "those are prosciutto packs, just follow the description." Without
+    # these the pack lands in c1_norule and the order gets no count check at all
+    # (38 orders on RMFG_20260828).
+    "Prosciutto Variety Pack (3-Pack)": {"MT-": 3},
+    "Prosciutto (5-Pack)": {"MT-": 5},
+    "Curator's Choice - Extra Meat, Cheese & Accompaniment": {"MT-": 1, "CH-": 1, "AC-": 1},
+    # mix read off the product DESCRIPTION: Prairie Breeze (cheese), Prosciutto (meat),
+    # Sweet & Smoky Almonds + Bacon Marmalade (accompaniments). Kurt 2026-08-28.
+    "Ultimate Add-on Package: Summer Cookout": {"CH-": 1, "MT-": 1, "AC-": 2},
 }
 
 # AHB-CUR-* "Monthly Curation" rides with AHB-MED/AHB-LGE and adds NO child of its own.

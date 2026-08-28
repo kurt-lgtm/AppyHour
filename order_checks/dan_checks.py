@@ -24,7 +24,7 @@ from __future__ import annotations
 import collections
 import re
 
-from .rules import CHILD, WRAPPER_ADD, ZERO_CONTRIB
+from .rules import CHILD, WRAPPER_ADD, ZERO_CONTRIB, PARTY
 
 AHBX_RE = re.compile(r"^AHB-X(\d+)")
 BCPC_TAG = "BOX_CUSTOMIZED_POST_CHECKOUT"
@@ -84,8 +84,13 @@ def run(orders, sheet, rules, rmfg_tag, ship_tag):
 
     for oid, o in sorted(orders.items()):
         tags = o.get("tags") or []
-        if any(re.search(r"reship", t, re.I) for t in tags):
-            R["reship_excluded"].append({"order": oid, "tags": sorted(set(tags))})
+        srow = sheet.get(oid) or {}
+        sheet_tags = [t.strip() for t in str(srow.get("tags") or "").split(",") if t.strip()]
+        # 🔴 Reship is checked on the ORDER tags AND the SHEET tags. They agreed on all
+        # 39 in RMFG_20260828, but a sheet-only reship would otherwise slip into scope.
+        rs = [t for t in (tags + sheet_tags) if re.search(r"reship", t, re.I)]
+        if rs:
+            R["reship_excluded"].append({"order": oid, "tags": sorted(set(rs))})
             continue
 
         # 🔴 Gift Redemption stays IN checks 1 and 2. It is excluded from check 3 ONLY
@@ -127,12 +132,16 @@ def run(orders, sheet, rules, rmfg_tag, ship_tag):
                 w = WRAPPER_ADD.get(it["title"])
                 if w is not None:
                     for k, v in w.items():
-                        wrap_add[k] += v * q
+                        wrap_add[k] += v * q          # "ANY" routed to exp_any below
                     continue
                 no_rule.append((f"(blank SKU) {it['title']}", q))
                 continue
             if sku.startswith(ZERO_CONTRIB):
                 continue                      # curation marker, contributes nothing
+            if sku == "EX-PS":                    # Party Size Upgrade: 2 MT / 2 CH / 2 AC
+                for k, v in PARTY.items():
+                    wrap_add[k] += v * q
+                continue
             mx = AHBX_RE.match(sku)
             if mx:
                 ahbx.append((sku, int(mx.group(1)), q))
@@ -153,7 +162,10 @@ def run(orders, sheet, rules, rmfg_tag, ship_tag):
         exp, must_have = collections.Counter(), collections.Counter()
         exp_any = 0
         for k, v in wrap_add.items():
-            exp[k] += v
+            if k == "ANY":                        # unspecified mix -> absorbs any type
+                exp_any += v
+            else:
+                exp[k] += v
         for _, nx, q in ahbx:
             exp_any += nx * q
         for m, s, q, src in parents:
@@ -246,9 +258,6 @@ def run(orders, sheet, rules, rmfg_tag, ship_tag):
         npk = sum(q for _, q in pk)
         if npk != 1 and not is_gift:
             R["c3"].append({"order": oid, "pk": [f"{s} x{q}" for s, q in pk], "n": npk})
-
-        srow = sheet.get(oid) or {}
-        sheet_tags = [t.strip() for t in str(srow.get("tags") or "").split(",") if t.strip()]
 
         # ---------- Check 5 : gel pack tag ----------
         gel = [t for t in (tags + sheet_tags) if "gel" in t.lower()]
