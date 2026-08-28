@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse, csv, collections, os, sys
 from .rules import load_rule_set
 from .checks import (evaluate, duplicate_check, cracker_check, bare_cex_check,
-                     in_scope, live, sku, tags)
+                     fixed_route_check, in_scope, live, sku, tags)
 from .peer import peer_outliers
 from . import sheet as sheetmod
 
@@ -47,7 +47,8 @@ def main(argv=None):
           f"{' (sheet)' if sheet else ''}\n")
 
     peers = peer_outliers(orders)
-    verdicts, rows, dups, crackers, barecex = collections.Counter(), [], [], [], []
+    verdicts, rows, dups, crackers, barecex, froute = (collections.Counter(),
+                                                       [], [], [], [], [])
     for o in orders:
         ok, why = in_scope(o)
         if not ok:
@@ -69,6 +70,15 @@ def main(argv=None):
                             "fix": "add CEX-EC-<CURATION> qty 1 (NOT the CH- SKU)",
                             "customer": f"{c1.get('first_name','')} {c1.get('last_name','')}".strip(),
                             "email": o.get("email", "")})
+        fr = fixed_route_check(o)
+        if fr:
+            c2 = o.get("customer") or {}
+            froute.append({"order": o["name"], "issue": fr,
+                           "customer_tags": (c2.get("tags") or ""),
+                           "order_route": ",".join(__import__("re").findall(r"!.*?_AHB!", o.get("tags") or "")) or "(none)",
+                           "fix": "set the sheet + order route to the CUSTOMER profile pin",
+                           "customer": f"{c2.get('first_name','')} {c2.get('last_name','')}".strip(),
+                           "email": o.get("email", "")})
         p = peers.get(o["name"])
         rule_hit = r["verdict"] in ("SHORT", "OVER", "UNBUILT", "NO_BOX")
         if rule_hit or p:
@@ -106,10 +116,12 @@ def main(argv=None):
     print(f"CHECK 8  duplicate + typed parent: {len(dups)}")
     print(f"CRACKER  CEX-CR slot not delivering a cracker: {len(crackers)}")
     print(f"BARE-CEX CEX-EC with no CEX-EC-<CURATION> counterpart: {len(barecex)}")
+    print(f"FIXEDRTE Fixed_Route pin not matching the order: {len(froute)}")
     dump(f"check1_{a.tag}.csv", rows)
     dump(f"check8_{a.tag}.csv", dups)
     dump(f"cracker_{a.tag}.csv", crackers)
     dump(f"bare_cex_{a.tag}.csv", barecex)
+    dump(f"fixed_route_{a.tag}.csv", froute)
 
     if sheet:
         diff = sheetmod.compare(sheet, shop)

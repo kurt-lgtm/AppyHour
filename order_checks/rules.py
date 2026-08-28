@@ -11,6 +11,11 @@ BOARD = {"BL-USA":  ("AC-KETT", "CH-FAG", "AC-BLUCAR", "MT-PARM"),
          "BL-4USA": ("AC-KETT", "CH-FAG", "AC-BLUCAR", "MT-PARM")}
 CHILD = ("AC-", "MT-", "CH-", "TR-")
 
+# A route pin looks like "!UPS Ground - Dallas_AHB!" / "!ANY FedEx - Chicago_AHB!".
+ROUTE_TAG = re.compile(r"!.*?_AHB!")
+FIXED_ROUTE_TAG = "fixed_route"
+MILITARY_TAG = "military"
+
 # A CEX-CR slot must deliver an actual CRACKER, not merely any AC-. Dan's set,
 # RUN_2026-08-25. Catches what a count check cannot see: #176361 (9/9) and #176392
 # (11/11) are full but their cracker slot holds something else.

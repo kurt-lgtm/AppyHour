@@ -1,8 +1,9 @@
 """Count checks against RULE SET. 🔴 Read ORDER_CHECKS_RULES.md before changing anything."""
 from __future__ import annotations
 import collections
-from .rules import (CHILD, SLOT_TYPE, PARTY, BOARD, CRACKERS, net, resolve_box,
-                    box_expect, paid_pack_items)
+from .rules import (CHILD, SLOT_TYPE, PARTY, BOARD, CRACKERS, ROUTE_TAG,
+                    FIXED_ROUTE_TAG, MILITARY_TAG, net, resolve_box, box_expect,
+                    paid_pack_items)
 
 EXCLUDED_TAGS = ("gift redemption", "pr box")
 
@@ -157,6 +158,39 @@ def bare_cex_check(o):
     if any(s.startswith("CEX-EC-") for s in all_skus):
         return ""
     return "bare CEX-EC with no CEX-EC-<CURATION> counterpart"
+
+
+def fixed_route_check(o):
+    """Fixed_Route pin on the customer profile must also be on the live order. '' when fine.
+
+    🔴 The "Customer Specific Routing" Shopify Flow only fires on order_created. An order
+    that ALREADY existed when the pin was set never re-triggers it, so the profile says
+    pinned while the live order routes on the default carrier. Found 3 of 4 pinned
+    customers in _SHIP_2026-08-31 this way (#178090, #177442, #176917 - all
+    "!UPS Ground - Dallas_AHB!" on the profile, no route tag at all on the order).
+
+    Military profiles must never land on OnTrac (Kurt 2026-08-13).
+
+    Fix: the ORDER (and the sheet row) takes the CUSTOMER's pin - the profile is
+    authoritative. Append, never overwrite.
+    """
+    cust = (o.get("customer") or {}).get("tags") or ""
+    ot = o.get("tags") or ""
+    pinned = FIXED_ROUTE_TAG in cust.lower()
+    cust_route = ROUTE_TAG.findall(cust)
+    order_route = ROUTE_TAG.findall(ot)
+
+    if MILITARY_TAG in cust.lower() and any("ontrac" in r.lower() for r in order_route):
+        return f"MILITARY customer routed OnTrac: {','.join(order_route)}"
+    if not pinned:
+        return ""
+    if not cust_route:
+        return "Fixed_Route on profile but no route tag to pin to"
+    if not order_route:
+        return f"pin {cust_route[0]} on profile, NO route tag on the order"
+    if set(cust_route) != set(order_route):
+        return f"pin {','.join(cust_route)} on profile, order routed {','.join(order_route)}"
+    return ""
 
 
 def duplicate_check(o):

@@ -109,6 +109,25 @@ wrong as filling `CEX-CR` with a non-cracker.
 Found on `_SHIP_2026-08-31`: #178549 (Marilu Madariaga, `AHB-MCUST-SS`, bare `CEX-EC` qty 1,
 zero `CEX-EC-*` lines incl. removed/fq=0) -> fixed with `CEX-EC-SS`. Trays carrying `CEX-EC`: 0.
 
+## FIXED_ROUTE PIN vs CUSTOMER PROFILE
+
+An order whose CUSTOMER profile carries `Fixed_Route` must carry the same `!..._AHB!` route
+tag on the order itself. The profile is authoritative; the sheet row and the order follow it.
+
+🔴 **The Shopify Flow only fires on `order_created`.** An order that already existed when the
+pin was set never re-triggers it, so the profile reads "pinned" while the live order routes on
+the default carrier and ships on exactly the lane the customer complained about.
+
+`_SHIP_2026-08-31`: **3 of 4** pinned customers had an unpinned order - #178090 Kameron
+Lewellen, #177442 Victoria Tooker, #176917 Daniel Ramirez, all `!UPS Ground - Dallas_AHB!` on
+the profile with NO route tag on the order. Only #177243 Candice Angotti matched.
+
+Also checked: a `Military` profile must never be routed OnTrac (Kurt 2026-08-13).
+
+Fix = append the customer's pin to the order and correct the sheet row. Never overwrite the
+order's other tags. Before changing a pin itself, read the customer's Gorgias ticket - ~90% of
+pins exist to AVOID a carrier, usually OnTrac. See [[fixed-route-read-the-ticket]].
+
 ## PEER CHECK
 
 Second opinion with no rule-set dependency: group by box SKU, compare each order's child count to
