@@ -62,11 +62,21 @@ REPEAT_EXEMPT = MINI_JAMS | CURATION_FIXED
 # Never PROPOSE these as a substitute (Kurt 2026-08-28). Newest-SKU-first ranking put
 # AC-RMC into 190 rows and MT-IBRES into 164 -- "newest" is not "wanted", and a ranking
 # with no declared pool pours whatever is new across the entire run.
-NO_SUBSTITUTE = {"AC-RMC", "MT-IBRES"}
+# Barred as SUBSTITUTES regardless of how well they rank or how deep the stock is --
+# availability is not permission. Kurt 2026-08-28, each stated directly:
+#   AC-RMC    "I have 600, but don't use it"
+#   MT-IBRES  newest-first had put it in 164 rows
+#   MT-BSS    "don't use MT-BSS anymore"
+NO_SUBSTITUTE = {"AC-RMC", "MT-IBRES", "MT-BSS"}
 # Never allocate a substitute below this many units remaining. Kurt 2026-08-28:
 # "don't zero out blucar ... get it to 20 have left" -- a swap plan that drains a SKU
 # to nothing leaves nothing for next week's cut or a short.
 RESERVE_FLOOR = 20
+# SKUs that must be DRAWN DOWN to the floor rather than merely capped -- the run
+# already commits more than HAVE, so units have to come OUT of boxes. Kurt 2026-08-28:
+# "KEEP BLUCAR TO 20 HAVE" -- AC-BLUCAR is 67 have against 68 committed, so 21 units
+# must be swapped out to leave 20 on the shelf.
+DRAW_DOWN = {"AC-BLUCAR": 20}
 # Declared HAVE inventory -- the cut order's own corrected_inventory_path, NOT MCP
 # get_calculated_inventory (which is wrong and must never be quoted as HAVE).
 HAVE_FILE = r"C:\Users\Work\Downloads\Orders RMFG_20260831 - Sheet154.csv"
@@ -208,15 +218,33 @@ def swapped_today(audit_path=None, day=None):
     return orders_hit, sku_hit
 
 
-def run(orders, con, verbose=True):
+def sheet_demand(sheet):
+    """SKU -> units the SHEET commits. The pick list is the right denominator for
+    inventory, not the Shopify free-child count: it includes PAID children, which
+    consume stock just the same, plus gifts and reships. It reads higher than Shopify
+    on 64 SKUs in RMFG_20260828 -- CH-BRZ 229 vs 180, CH-MAFT 322 vs 278, MT-BSS 35 vs
+    33 against 32 on hand. (Kurt 2026-08-28: "did you check against the vf sheet
+    though?")
+    """
+    tot = collections.Counter()
+    for row in sheet.values():
+        for k, v in (row.get("columns_sku") or {}).items():
+            tot[k] += v
+    return tot
+
+
+def run(orders, con, verbose=True, sheet=None):
     """-> (repeats, saturation, per_sku, swaps)."""
     first_seen = sku_first_seen(con)
-    in_run = collections.Counter()          # free child SKUs circulating in THIS run
+    # candidate pool = free child SKUs circulating in this run
+    in_run = collections.Counter()
     for o in orders.values():
         for li in _live(o):
             s = (li["sku"] or "").strip()
             if s.startswith(CHILD) and not _paid(li):
                 in_run[s] += li["currentQuantity"]
+    # but STOCK is drawn against the sheet's demand, which is the larger number
+    committed = sheet_demand(sheet) if sheet else in_run
 
     repeats, skipped = [], collections.Counter()
     for oid, o in sorted(orders.items()):
@@ -275,7 +303,7 @@ def run(orders, con, verbose=True):
 
     swaps = build_swaps(repeats, orders, con, in_run, first_seen,
                         *swapped_today(), have=load_have(),
-                        crackers=build_cracker_set(orders))
+                        crackers=build_cracker_set(orders), committed=committed)
     if verbose:
         print(f"  eligible orders: {n_scope}   flagged: {len(repeats)}")
         for k, v in skipped.most_common():
@@ -285,7 +313,7 @@ def run(orders, con, verbose=True):
 
 def build_swaps(repeats, orders, con, in_run, first_seen,
                 done_orders=frozenset(), done_skus=None, have=None,
-                crackers=frozenset()):
+                crackers=frozenset(), committed=None):
     """One row per repeated SKU: Order ID, SKU to Swap, Proposed Swap."""
     have = have or {}
     done_skus = done_skus or {}
@@ -304,14 +332,16 @@ def build_swaps(repeats, orders, con, in_run, first_seen,
     # purely because those are newer, and poured one new SKU across the whole run.
     # Headroom-first spreads load the way the declared list does and keeps a
     # nearly-exhausted SKU (AC-BLUCAR: 67 have, 68 committed) out of the pool entirely.
-    pool_rank = {s: (have.get(s, 0) - in_run.get(s, 0), first_seen.get(s, ""))
+    committed = committed if committed is not None else in_run
+    pool_rank = {s: (have.get(s, 0) - committed.get(s, 0), first_seen.get(s, ""))
                  for t in pool for s in pool[t]}
     for t in pool:
         pool[t].sort(key=lambda s: pool_rank[s], reverse=True)
 
     # Remaining stock = declared HAVE minus what this run already ships. A substitute
     # with no headroom is not a substitute, however well it ranks.
-    remaining = {s: have.get(s, 0) - in_run.get(s, 0) for s in set(have) | set(in_run)}
+    remaining = {s: have.get(s, 0) - committed.get(s, 0)
+                 for s in set(have) | set(committed)}
     rows = []
     for r in repeats:
         cust = r["customer"]
@@ -337,7 +367,7 @@ def build_swaps(repeats, orders, con, in_run, first_seen,
                 elif remaining.get(cd, 0) <= RESERVE_FLOOR:
                     tried.append(f"{cd}:at the {RESERVE_FLOOR}-unit floor"
                                  f" ({have.get(cd, 0)} have,"
-                                 f" {in_run.get(cd, 0)} committed)")
+                                 f" {committed.get(cd, 0)} committed)")
                 else:
                     cand = cd
                     break
@@ -373,8 +403,9 @@ def main(argv=None):
 
     sheet = sheetmod.load_sheet(a.sheet)
     orders = fetch_by_name(list(sheet), cache=a.cache)
+    sheetmod.resolve_columns(sheet, orders)
     con = sqlite3.connect(DB)
-    repeats, sat, per_sku, clears, swaps, _ = run(orders, con)
+    repeats, sat, per_sku, clears, swaps, _ = run(orders, con, sheet=sheet)
 
     tier3 = [r for r in repeats if r["n_repeats"] >= 3]
     tierh = [r for r in repeats if r["box_size"] and r["n_repeats"] / r["box_size"] >= 0.5]
