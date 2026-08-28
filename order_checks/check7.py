@@ -82,9 +82,19 @@ DRAW_DOWN = {"AC-BLUCAR": 20}
 # Cap total USAGE of a SKU this run; the excess is swapped out. Kurt 2026-08-28:
 # "i only want to use up about 400 sot today" -- CH-SOT is 501 on the sheet, so 101
 # units come out. Distinct from DRAW_DOWN, which targets units LEFT rather than used.
-USAGE_CAP = {"CH-SOT": 400}
+# EMPTY on purpose. A usage cap is NOT permission to swap the excess out: Kurt
+# 2026-08-28 asked for ~400 CH-SOT, then on being shown the 101-row swap list said
+# "if you mean to swap them to get to 400, no." A cap is a planning target; swapping
+# customers' items to hit it is a different and unwanted action.
+USAGE_CAP = {}
 # Forced one-for-one replacements, regardless of ranking. "change the RBOL TO FCEVOO".
 FORCED_SWAP = {"AC-RBOL": "AC-FCEVOO"}
+# 🔴 A SKU being DRAWN DOWN can never be a substitute -- the repeat pass would add back
+# exactly what the draw-down removes. AC-BLUCAR is the case: 67 have, 0 left.
+# USAGE_CAP is deliberately NOT included: a cap is a target for the draw-down pass, not
+# a ban, and Kurt 2026-08-28 accepted the repeat pass pushing CH-SOT past it ("that's
+# fine on the ch-sot") -- the draw-down pass reconciles it afterwards.
+NO_SUBSTITUTE |= set(DRAW_DOWN) | set(FORCED_SWAP)
 # Declared HAVE inventory -- the cut order's own corrected_inventory_path, NOT MCP
 # get_calculated_inventory (which is wrong and must never be quoted as HAVE).
 HAVE_FILE = r"C:\Users\Work\Downloads\Orders RMFG_20260831 - Sheet154.csv"
