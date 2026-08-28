@@ -10,6 +10,7 @@ import csv
 import logging
 import os
 import time
+import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict
@@ -89,12 +90,20 @@ def _lookup_variant_gids(base: str, headers: dict[str, str], skus: set[str]) -> 
 
 
 def _paid_skus_on_order(base: str, headers: dict[str, str], order_gid: str, skus: set[str]) -> dict[str, list[float]]:
-    """Map sku -> list of actual-paid amounts (>0 only) for the given SKUs on the order."""
+    """Map sku -> list of paid signals (>0 only) for the given SKUs on the order.
+
+    A line counts as PAID if actual-paid > 0 OR its variant's catalog price > 0.
+    🔴 The catalog check is load-bearing (Kurt 2026-07-21, #163709): a Recharge ONETIME
+    add-on collects the money on the Recharge charge and pushes the Shopify line at $0 —
+    actual-paid alone reads $0 and a $9 paid salami got swapped. The line still carries
+    the PRICED variant, so catalog price is the reliable signal.
+    """
     data = shopify_graphql(base, headers, """
         query($id: ID!) {
             order(id: $id) {
                 lineItems(first: 100) {
-                    nodes { sku discountedUnitPriceAfterAllDiscountsSet { shopMoney { amount } } }
+                    nodes { sku discountedUnitPriceAfterAllDiscountsSet { shopMoney { amount } }
+                            variant { price } }
                 }
             }
         }
@@ -104,9 +113,14 @@ def _paid_skus_on_order(base: str, headers: dict[str, str], order_gid: str, skus
         sku = (li.get("sku") or "").strip()
         if sku in skus:
             paid = float(li["discountedUnitPriceAfterAllDiscountsSet"]["shopMoney"]["amount"])
-            if paid > 0:
-                hits.setdefault(sku, []).append(paid)
+            catalog = float((li.get("variant") or {}).get("price") or 0)
+            if paid > 0 or catalog > 0:
+                hits.setdefault(sku, []).append(paid if paid > 0 else catalog)
     return hits
+
+
+# 🔴 Order tags that forbid swapping outright. SSOT: AppyHour/swap_provenance.py.
+NEVER_SWAP_TAGS = {"pr box"}
 
 
 def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: dict[str, str], variant_gids: dict[str, str], rc_bundle_only: bool = True, allow_paid: bool = False) -> list[str]:
@@ -123,6 +137,20 @@ def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: 
     allow_paid=True. We try not to mess with paid items at all; if one is ever
     reverted, restore the EXACT variant id from the audit row.
     """
+    # 🔴 "PR box" is NEVER swappable (Kurt 2026-08-25) — a press/sample box is defined by
+    # its exact contents, so a substitution silently defeats it. A short on one of these is
+    # escalated to Kurt, never filled. Applies on the MCP path too: this function bypasses
+    # shopify_swap.execute_swap, so it cannot inherit that module's gate.
+    _tags = shopify_graphql(base, headers,
+                            "query($id: ID!) { order(id: $id) { tags } }",
+                            {"id": order_gid})["order"]["tags"]
+    if {str(t).strip().lower() for t in _tags} & NEVER_SWAP_TAGS:
+        _audit({"order_gid": order_gid, "swaps": [f"{o}->{n}" for o, n in swaps.items()],
+                "result": "REFUSED:never-swap-tag"})
+        raise ValueError(
+            f"refusing to swap {order_gid}: order carries a never-swap tag "
+            f"({sorted(NEVER_SWAP_TAGS)}). Report it to Kurt as a real short.")
+
     paid_hits = {} if allow_paid else _paid_skus_on_order(base, headers, order_gid, set(swaps))
     data = shopify_graphql(base, headers, """
         mutation orderEditBegin($id: ID!) {
@@ -587,13 +615,29 @@ def register(mcp: object) -> None:
 
             # Build target order list
             if params.order_names:
-                wanted = {n.strip().lstrip("#") for n in params.order_names}
-                all_orders = shopify_paginate(
-                    f"{base}/orders.json", headers,
-                    params={"status": "any", "limit": 250,
-                            "fields": "id,name,tags,line_items"},
-                )
-                targets = [o for o in all_orders if (o.get("name", "").lstrip("#")) in wanted]
+                # 🔴 NEVER PAGINATE THE STORE TO FIND ORDERS YOU CAN NAME (2026-08-28). This used to
+                # pull EVERY order (`status: any`, tens of thousands, 250/page) and then filter in
+                # memory — to add one line item to ten known orders. Measured: the call sat 1800s and
+                # timed out.
+                #
+                # The damage is not just latency. An MCP server is ONE process: a single blocking
+                # call starves EVERY other appyhour tool for its whole duration, so the server reads
+                # as dead/disconnected and the session gives up on all ~40 tools. That is what it
+                # looked like from the outside — "something is wrong with that server" — when the
+                # server was healthy and this loop was holding it.
+                #
+                # `orders.json?name=` resolves one order server-side in ~200ms. Ten named orders is
+                # ten cheap calls. The `name` filter is fuzzy (it matches #177247 for "17724"), so
+                # the exact-name re-check below is REQUIRED, not defensive.
+                targets = []
+                for _n in {n.strip().lstrip("#") for n in params.order_names}:
+                    _r = requests.get(
+                        f"{base}/orders.json", headers=headers,
+                        params={"name": _n, "status": "any", "limit": 5,
+                                "fields": "id,name,tags,line_items"}, timeout=60)
+                    _r.raise_for_status()
+                    targets += [o for o in _r.json().get("orders", [])
+                                if str(o.get("name", "")).lstrip("#") == _n]
             else:
                 all_orders = shopify_paginate(
                     f"{base}/orders.json", headers,
