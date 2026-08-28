@@ -67,7 +67,9 @@ REPEAT_EXEMPT = MINI_JAMS | CURATION_FIXED
 #   AC-RMC    "I have 600, but don't use it"
 #   MT-IBRES  newest-first had put it in 164 rows
 #   MT-BSS    "don't use MT-BSS anymore"
-NO_SUBSTITUTE = {"AC-RMC", "MT-IBRES", "MT-BSS"}
+#   CH-MAFT   "we don't give them MAFT" -- also ASSIGNMENT_EXCLUDE in AppyHour/CLAUDE.md
+#   AC-RBOL   "that's also something we can't give"
+NO_SUBSTITUTE = {"AC-RMC", "MT-IBRES", "MT-BSS", "CH-MAFT", "AC-RBOL"}
 # Never allocate a substitute below this many units remaining. Kurt 2026-08-28:
 # "don't zero out blucar ... get it to 20 have left" -- a swap plan that drains a SKU
 # to nothing leaves nothing for next week's cut or a short.
@@ -77,6 +79,12 @@ RESERVE_FLOOR = 20
 # "KEEP BLUCAR TO 20 HAVE" -- AC-BLUCAR is 67 have against 68 committed, so 21 units
 # must be swapped out to leave 20 on the shelf.
 DRAW_DOWN = {"AC-BLUCAR": 20}
+# Cap total USAGE of a SKU this run; the excess is swapped out. Kurt 2026-08-28:
+# "i only want to use up about 400 sot today" -- CH-SOT is 501 on the sheet, so 101
+# units come out. Distinct from DRAW_DOWN, which targets units LEFT rather than used.
+USAGE_CAP = {"CH-SOT": 400}
+# Forced one-for-one replacements, regardless of ranking. "change the RBOL TO FCEVOO".
+FORCED_SWAP = {"AC-RBOL": "AC-FCEVOO"}
 # Declared HAVE inventory -- the cut order's own corrected_inventory_path, NOT MCP
 # get_calculated_inventory (which is wrong and must never be quoted as HAVE).
 HAVE_FILE = r"C:\Users\Work\Downloads\Orders RMFG_20260831 - Sheet154.csv"

@@ -67,6 +67,8 @@ ALIAS_OVERRIDE = {
     "loscamerosderomero": "CH-LOSC",
     "loubergier": "CH-LOU",
     "honeyclovergoudapackagedslice": "CH-HCGU",
+    # 2026-08-28 vF: new column, no live product title matched it
+    "rusticbakeryorganicoliveoilselgrisflatbreadbites": "AC-RBOL",
 }
 
 
