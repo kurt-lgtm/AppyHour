@@ -36,7 +36,9 @@ from __future__ import annotations
 import argparse
 import collections
 import csv
+import json
 import os
+import re
 import sqlite3
 import sys
 
@@ -48,20 +50,57 @@ from . import sheet as sheetmod
 
 CHILD = ("AC-", "MT-", "CH-", "TR-")
 TYPES = ("AC-", "MT-", "CH-")
-MINI_JAMS = {"AC-GBEF", "AC-SCJ", "AC-SRHUB"}
+# AC-MFJ "Mini Fig Jam" is a mini jam by name but is NOT in Dan's set; without it the
+# substitute bar missed 107 rows (Kurt 2026-08-28).
+MINI_JAMS = {"AC-GBEF", "AC-SCJ", "AC-SRHUB", "AC-MFJ"}
 # 🔴 Brie is part of the curation, not a rotation miss (Kurt 2026-08-28). The
 # "AppyHour Box + Free Brie for a Year" wrapper contributes a brie EVERY box, so a brie
 # repeating is by design -- exactly like a mini jam. It was #4 by repeat count (63) and
 # #4 by clears-alone (40), so leaving it in inflates both the headline and the swap list.
-CURATION_FIXED = {"CH-BRIE"}
+CURATION_FIXED = {"CH-BRIE", "CH-EBRIE", "CH-PBRIE"}   # every brie (Kurt 2026-08-28)
 REPEAT_EXEMPT = MINI_JAMS | CURATION_FIXED
+# Never PROPOSE these as a substitute (Kurt 2026-08-28). Newest-SKU-first ranking put
+# AC-RMC into 190 rows and MT-IBRES into 164 -- "newest" is not "wanted", and a ranking
+# with no declared pool pours whatever is new across the entire run.
+NO_SUBSTITUTE = {"AC-RMC", "MT-IBRES"}
+# Never allocate a substitute below this many units remaining. Kurt 2026-08-28:
+# "don't zero out blucar ... get it to 20 have left" -- a swap plan that drains a SKU
+# to nothing leaves nothing for next week's cut or a short.
+RESERVE_FLOOR = 20
+# Declared HAVE inventory -- the cut order's own corrected_inventory_path, NOT MCP
+# get_calculated_inventory (which is wrong and must never be quoted as HAVE).
+HAVE_XLSX = r"C:\Users\Work\Downloads\Corrected_Inventory_08-25.xlsx"
 PREV_N = 2                      # docx: "their previous two orders"
 HIST_N = 4                      # swap candidates check the FULL history; 4 is the fallback
+AUDIT_LOG = r"C:\Users\Work\Claude Projects\_outputs\logs\swap_audit.jsonl"
 RECUR_TAG = "Subscription Recurring Order"
 BCPC_TAG = "BOX_CUSTOMIZED_POST_CHECKOUT"
 
 
-def typ(s):
+# A CRACKER is its own type, not an interchangeable AC-. Kurt 2026-08-28: AC-FCFIGO was
+# being proposed for AC-MISS (figs) and AC-QUIC (nuts) -- "we can't do AC-FCFIGO, because
+# those are crackers." Derived from product titles rather than hardcoded, plus AC-TOK
+# (Toketti) which Kurt declared a cracker and whose title carries no cracker word.
+CRACKER_TITLE = re.compile(r"cracker|crisp|flatbread|pretzel|blini|toast", re.I)
+CRACKER_EXTRA = {"AC-TOK"}
+
+
+def build_cracker_set(orders):
+    """-> set of AC- SKUs that are crackers, read off the run's own product titles."""
+    out = set(CRACKER_EXTRA)
+    for o in orders.values():
+        for e in o["lineItems"]["edges"]:
+            n = e["node"]
+            s = (n["sku"] or "").strip()
+            if s.startswith("AC-") and CRACKER_TITLE.search(n.get("title") or ""):
+                out.add(s)
+    return out
+
+
+def typ(s, crackers=frozenset()):
+    """Swap type. A cracker only ever swaps for another cracker."""
+    if s in crackers:
+        return "CRACKER"
     for t in TYPES:
         if s.startswith(t):
             return t
@@ -81,6 +120,73 @@ def sku_first_seen(con):
     return {s: d for s, d in con.execute(
         """SELECT i.sku, MIN(o.created_at) FROM items i JOIN orders o ON o.order_gid = i.order_gid
            WHERE i.qty > 0 GROUP BY i.sku""")}
+
+
+def load_have(path=None):
+    """SKU -> on-hand qty from the declared HAVE workbook.
+
+    RED FLAG: this is the cut order's corrected_inventory_path. NEVER substitute MCP
+    get_calculated_inventory -- it is wrong and must not be quoted as HAVE. The file is
+    a point-in-time count, so a swap proposed against it is only as fresh as the count:
+    state the file date in any output built from it.
+    """
+    import openpyxl
+    path = path or HAVE_XLSX
+    if not os.path.exists(path):
+        return {}
+    ws = openpyxl.load_workbook(path, data_only=True).worksheets[0]
+    rows = list(ws.iter_rows(values_only=True))
+    hdr = [str(x or "").strip().lower() for x in rows[0]]
+    try:
+        i_sku = hdr.index("sku")
+        i_qty = hdr.index("qty")
+    except ValueError:
+        return {}
+    have = {}
+    for r in rows[1:]:
+        s = str(r[i_sku] or "").strip()
+        if s and isinstance(r[i_qty], (int, float)):
+            have[s] = int(r[i_qty])
+    return have
+
+
+def swapped_today(audit_path=None, day=None):
+    """Orders + SKUs already swapped, so we never propose a second swap on them.
+
+    Kurt 2026-08-28: "we did a bunch of swaps today right? let's avoid those."
+
+    RED FLAG: the audit log is INCOMPLETE and appyhour_swap_order_skus returns
+    success:False WITHOUT raising, so this is a FLOOR, never the authority -- confirm
+    with whoever ran them. Rows whose result is "intent" were logged BEFORE the write
+    and may not have landed. Swaps done via Matrixify, a manual Shopify edit, or
+    Recharge never appear here at all.
+    """
+    import datetime
+    audit_path = audit_path or AUDIT_LOG
+    day = day or datetime.date.today().isoformat()
+    orders_hit, sku_hit = set(), collections.defaultdict(set)
+    if not os.path.exists(audit_path):
+        return orders_hit, sku_hit
+    for line in open(audit_path, encoding="utf8"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            r = json.loads(line)
+        except Exception:
+            continue
+        if not str(r.get("ts", "")).startswith(day):
+            continue
+        gid = r.get("order_gid") or ""
+        num = gid.rsplit("/", 1)[-1] if gid else ""
+        name = (r.get("order_name") or "").lstrip("#")
+        skus = [s.split("(")[0].split("->")[0] for s in (r.get("swaps") or [])]
+        if r.get("old_sku"):
+            skus.append(r["old_sku"])
+        for key in filter(None, (num, name)):
+            orders_hit.add(key)
+            sku_hit[key].update(skus)
+    return orders_hit, sku_hit
 
 
 def run(orders, con, verbose=True):
@@ -148,7 +254,9 @@ def run(orders, con, verbose=True):
             if len(r["repeats"]) == 1:      # swapping THIS sku alone clears the order
                 clears[s] += 1
 
-    swaps = build_swaps(repeats, orders, con, in_run, first_seen)
+    swaps = build_swaps(repeats, orders, con, in_run, first_seen,
+                        *swapped_today(), have=load_have(),
+                        crackers=build_cracker_set(orders))
     if verbose:
         print(f"  eligible orders: {n_scope}   flagged: {len(repeats)}")
         for k, v in skipped.most_common():
@@ -156,33 +264,72 @@ def run(orders, con, verbose=True):
     return repeats, saturation, per_sku, clears, swaps, skipped
 
 
-def build_swaps(repeats, orders, con, in_run, first_seen):
+def build_swaps(repeats, orders, con, in_run, first_seen,
+                done_orders=frozenset(), done_skus=None, have=None,
+                crackers=frozenset()):
     """One row per repeated SKU: Order ID, SKU to Swap, Proposed Swap."""
+    have = have or {}
+    done_skus = done_skus or {}
     pool = collections.defaultdict(list)
     for s, vol in in_run.items():
-        t = typ(s)
-        if t and s not in REPEAT_EXEMPT:
+        t = typ(s, crackers)
+        # 🔴 A mini jam is exempt from repeat DETECTION (customers may receive them
+        # repeatedly) but is also barred as a SUBSTITUTE -- "its not enough" (Kurt
+        # 2026-08-28): a mini jam does not replace a full accompaniment. AC-MFJ was
+        # being proposed 107 times before this.
+        if t and s not in REPEAT_EXEMPT and s not in NO_SUBSTITUTE and s not in MINI_JAMS:
             pool[t].append(s)
-    for t in pool:                          # newest first, then greatest volume
-        pool[t].sort(key=lambda s: (first_seen.get(s, ""), in_run[s]), reverse=True)
+    # Rank by REMAINING HEADROOM (have - committed), then by how new the SKU is.
+    # 🔴 Newest-first alone is wrong: it buried AC-BRJA (2,284 on hand, 60 committed --
+    # the substitute Kurt's own declared list uses 175 times) behind AC-CARM and AC-MFJ
+    # purely because those are newer, and poured one new SKU across the whole run.
+    # Headroom-first spreads load the way the declared list does and keeps a
+    # nearly-exhausted SKU (AC-BLUCAR: 67 have, 68 committed) out of the pool entirely.
+    pool_rank = {s: (have.get(s, 0) - in_run.get(s, 0), first_seen.get(s, ""))
+                 for t in pool for s in pool[t]}
+    for t in pool:
+        pool[t].sort(key=lambda s: pool_rank[s], reverse=True)
 
+    # Remaining stock = declared HAVE minus what this run already ships. A substitute
+    # with no headroom is not a substitute, however well it ranks.
+    remaining = {s: have.get(s, 0) - in_run.get(s, 0) for s in set(have) | set(in_run)}
     rows = []
     for r in repeats:
-        o = orders[r["order"]]
         cust = r["customer"]
         allsk = [s for t in pool for s in pool[t]]
         ever = _ever_received(con, cust, allsk)
         used = set(r["box"])
+        already = done_skus.get(r["order"], set())
         for s in r["repeats"]:
-            t = typ(s)
-            cand = next((c for c in pool.get(t, [])
-                         if c not in ever and c not in used), None)
+            t = typ(s, crackers)
+            if r["order"] in done_orders and s in already:
+                rows.append({"order": r["order"], "sku_to_swap": s, "proposed_swap": "",
+                             "type": t, "flag": "SKIP - already swapped today",
+                             "note": "audit log is a floor, not the authority"})
+                continue
+            # walk candidates in rank order and RECORD why each was rejected, so an
+            # UNFILLABLE row says what was tried instead of just failing silently
+            tried, cand = [], None
+            for cd in pool.get(t, []):
+                if cd in ever:
+                    tried.append(f"{cd}:customer had it")
+                elif cd in used:
+                    tried.append(f"{cd}:already in this box")
+                elif remaining.get(cd, 0) <= RESERVE_FLOOR:
+                    tried.append(f"{cd}:at the {RESERVE_FLOOR}-unit floor"
+                                 f" ({have.get(cd, 0)} have,"
+                                 f" {in_run.get(cd, 0)} committed)")
+                else:
+                    cand = cd
+                    break
             if cand:
                 used.add(cand)
+                remaining[cand] = remaining.get(cand, 0) - 1
             rows.append({"order": r["order"], "sku_to_swap": s,
-                         "proposed_swap": cand or "UNFILLED",
-                         "type": t, "note": "" if cand else
-                         "no same-type SKU in this run the customer has never received"})
+                         "proposed_swap": cand or "",
+                         "type": t,
+                         "flag": "" if cand else "UNFILLABLE - " + "; ".join(tried[:6]),
+                         "note": ""})
     return rows
 
 
