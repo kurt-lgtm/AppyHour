@@ -7,6 +7,8 @@ Shared Python library — pure utilities used by both MCP servers and desktop ap
 ```
 appyhour_lib/
 ├── __init__.py
+├── bootstrap.py      # init()/require_env() — MANDATORY first call in scheduled/CLI mains
+│                     #   (UTF-8 stdio + canonical .env; reuses notify's loader)
 ├── credentials.py    # get_shopify_auth() — single source of truth
 ├── paths.py          # db_path() — canonical shipping.db location
 ├── db.py             # connect()/connect_ro() — MANDATORY shipping.db opener
