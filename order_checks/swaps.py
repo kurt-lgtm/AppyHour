@@ -47,15 +47,19 @@ def candidate_pool(demand, have, crackers, first_seen, want_type, exclude=()):
     return pool
 
 
-def build(orders, sheet, targets, con=None, respect_customized=True, verbose=True):
+def build(orders, sheet, targets, con=None, respect_customized=True, verbose=True,
+          have_path=None):
     """targets: {sku_out: (why, units_to_remove)} -> list of swap rows.
+
+    have_path: this week's declared HAVE export -- REQUIRED (load_have fails loud
+    without it; there is no baked-in dated fallback).
 
     respect_customized: never pull an item out of a box the CUSTOMER built. Kurt
     2026-08-28: "we don't want to remove them if people had them in their order already."
     """
     close = con is None
     con = con or sqlite3.connect(DB)
-    have, demand = load_have(), sheet_demand(sheet)
+    have, demand = load_have(have_path), sheet_demand(sheet)
     crackers = build_cracker_set(orders)
     first_seen = sku_first_seen(con)
     remaining = {s: have.get(s, 0) - demand.get(s, 0) for s in set(have) | set(demand)}
@@ -109,9 +113,9 @@ def build(orders, sheet, targets, con=None, respect_customized=True, verbose=Tru
     return rows
 
 
-def draw_down_targets(sheet, floors):
+def draw_down_targets(sheet, floors, have_path=None):
     """{sku: units_left_wanted} -> targets for build(). Units come OUT of boxes."""
-    have, demand = load_have(), sheet_demand(sheet)
+    have, demand = load_have(have_path), sheet_demand(sheet)
     return {s: (f"draw down to {n} left", demand.get(s, 0) - (have.get(s, 0) - n))
             for s, n in floors.items()}
 

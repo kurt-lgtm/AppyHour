@@ -5,6 +5,7 @@ Solve for per-SKU delta x[sku]. SKUs with large |x| -> stale/missing in lookup.
 """
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import sys
@@ -16,12 +17,33 @@ import numpy as np
 sys.path.insert(0, r"C:\Users\Work\Claude Projects\AppyHour")
 from box_simulation import build_lookup, resolve_distvol, PHYSICAL_PREFIXES  # noqa: E402
 
-CSV_PATH = Path(r"C:\Users\Work\Downloads\AHB_BoxAssignment_4-27-26.xlsx - SAT.csv")
-CACHE = Path(r"C:\Users\Work\box_sim_cache__SHIP_2026-04-27.json")
-OUT = Path(r"C:\Users\Work\Claude Projects\_outputs\reports\distvol_drift_audit.tsv")
+# 🔴 The inputs are WEEKLY/COHORT ingest artifacts, passed per run -- no baked-in dated
+# paths (silent-stale class). --csv is a box-assignment export carrying OrderID +
+# TotalVolume columns (e.g. "AHB_BoxAssignment_<date>.xlsx - SAT.csv"); --cache is the
+# box_simulation order cache for the SAME cohort (box_sim_cache_<SHIP_TAG>.json).
+DEFAULT_OUT = Path(r"C:\Users\Work\Claude Projects\_outputs\reports\distvol_drift_audit.tsv")
 
 
-def main():
+def main(argv=None):
+    ap = argparse.ArgumentParser(
+        prog="audit_distvol_drift",
+        description="Least-squares per-SKU DistVol delta: box-assignment CSV vs our lookup.")
+    ap.add_argument("--csv", required=True, metavar="PATH", dest="csv_path",
+                    help="box-assignment export with OrderID + TotalVolume columns "
+                         "(AHB_BoxAssignment_<date> csv)")
+    ap.add_argument("--cache", required=True, metavar="PATH",
+                    help="box_simulation order cache json for the SAME cohort "
+                         "(box_sim_cache_<SHIP_TAG>.json)")
+    ap.add_argument("--out", default=str(DEFAULT_OUT), metavar="PATH",
+                    help=f"tsv report path (default: {DEFAULT_OUT})")
+    a = ap.parse_args(argv)
+    CSV_PATH, CACHE, OUT = Path(a.csv_path), Path(a.cache), Path(a.out)
+    if not CSV_PATH.exists():
+        sys.exit(f"audit_distvol_drift: --csv file not found: {CSV_PATH}")
+    if not CACHE.exists():
+        sys.exit(f"audit_distvol_drift: --cache file not found: {CACHE} "
+                 "(run box_simulation.py <SHIP_TAG> first to build it)")
+
     lookup = build_lookup()
     orders = json.loads(CACHE.read_text(encoding="utf-8"))
     by_name = {o["name"].lstrip("#"): o for o in orders}

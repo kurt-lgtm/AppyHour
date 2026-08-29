@@ -1,6 +1,7 @@
 """Check 7: repeat items vs the customer's previous orders, and the swap list.
 
-  python -m order_checks.check7 --tag RMFG_20260828 --ship _SHIP_2026-08-31 --sheet x.xlsx
+  python -m order_checks.check7 --tag RMFG_20260828 --ship _SHIP_2026-08-31 \
+      --sheet x.xlsx --have "...\\Orders RMFG_<date>.csv"
 
 Port of Dan's check78.py + check7_swaps.py onto the indexed history.
 
@@ -98,7 +99,11 @@ FORCED_SWAP = {"AC-RBOL": "AC-FCEVOO"}
 NO_SUBSTITUTE |= set(DRAW_DOWN) | set(FORCED_SWAP)
 # Declared HAVE inventory -- the cut order's own corrected_inventory_path, NOT MCP
 # get_calculated_inventory (which is wrong and must never be quoted as HAVE).
-HAVE_FILE = r"C:\Users\Work\Downloads\Orders RMFG_20260831 - Sheet154.csv"
+# 🔴 NO baked-in path. The HAVE file is a WEEKLY ingest artifact (wk0831's was
+# "Orders RMFG_20260831 - Sheet154.csv": a SKU column + a "RMFG Have <date>" qty
+# column); a dated literal here silently caps the NEXT week's swaps against LAST
+# week's count. Pass it per run via --have; a missing path fails loud, never falls
+# back (silent-stale class -- the 6/23 cut-order burn).
 PREV_N = 2                      # docx: "their previous two orders"
 HIST_N = 4                      # swap candidates check the FULL history; 4 is the fallback
 AUDIT_LOG = r"C:\Users\Work\Claude Projects\_outputs\logs\swap_audit.jsonl"
@@ -166,9 +171,18 @@ def load_have(path=None):
     a point-in-time count, so a swap proposed against it is only as fresh as the count:
     state the file date in any output built from it.
     """
-    path = path or HAVE_FILE
+    if not path:
+        sys.exit("check7: no HAVE file given -- pass --have PATH (this week's declared "
+                 "HAVE export, .csv or .xlsx). There is no fallback: a baked-in dated "
+                 "path silently caps swaps against LAST week's inventory.")
     if not os.path.exists(path):
-        return {}
+        sys.exit(f"check7: HAVE file not found: {path} -- --have must point at this "
+                 "week's declared HAVE export (refusing to run with an empty HAVE: "
+                 "every substitute would read 0 on hand).")
+    import datetime
+    mt = datetime.datetime.fromtimestamp(os.path.getmtime(path))
+    print(f"  HAVE: {path} (modified {mt:%Y-%m-%d %H:%M})"
+          + (f"   overrides: {sorted(HAVE_OVERRIDE)}" if HAVE_OVERRIDE else ""))
     if path.lower().endswith(".csv"):
         with open(path, encoding="utf-8-sig", newline="") as fh:
             rows = [tuple(r) for r in csv.reader(fh)]
@@ -252,7 +266,7 @@ def sheet_demand(sheet):
     return tot
 
 
-def run(orders, con, verbose=True, sheet=None):
+def run(orders, con, verbose=True, sheet=None, have_path=None):
     """-> (repeats, saturation, per_sku, swaps)."""
     first_seen = sku_first_seen(con)
     # candidate pool = free child SKUs circulating in this run
@@ -325,7 +339,7 @@ def run(orders, con, verbose=True, sheet=None):
                 clears[s] += 1
 
     swaps = build_swaps(repeats, orders, con, in_run, first_seen,
-                        *swapped_today(), have=load_have(),
+                        *swapped_today(), have=load_have(have_path),
                         crackers=build_cracker_set(orders), committed=committed)
     if verbose:
         print(f"  eligible orders: {n_scope}   flagged: {len(repeats)}")
@@ -420,6 +434,8 @@ def main(argv=None):
     ap.add_argument("--tag", required=True)
     ap.add_argument("--ship")
     ap.add_argument("--sheet", required=True)
+    ap.add_argument("--have", required=True, metavar="PATH",
+                    help="this week's declared HAVE export (.csv/.xlsx) -- no fallback")
     ap.add_argument("--cache")
     ap.add_argument("--out", default=".")
     a = ap.parse_args(argv)
@@ -428,7 +444,8 @@ def main(argv=None):
     orders = fetch_by_name(list(sheet), cache=a.cache)
     sheetmod.resolve_columns(sheet, orders)
     con = sqlite3.connect(DB)
-    repeats, sat, per_sku, clears, swaps, _ = run(orders, con, sheet=sheet)
+    repeats, sat, per_sku, clears, swaps, _ = run(orders, con, sheet=sheet,
+                                                  have_path=a.have)
 
     tier3 = [r for r in repeats if r["n_repeats"] >= 3]
     tierh = [r for r in repeats if r["box_size"] and r["n_repeats"] / r["box_size"] >= 0.5]

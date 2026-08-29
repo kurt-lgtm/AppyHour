@@ -1,7 +1,8 @@
 """ONE command for a production run: every check, then the swap list, gated.
 
   python -m order_checks.run_all --tag RMFG_20260828 --ship _SHIP_2026-08-31 \
-      --sheet "...\\AHB_WeeklyProductionQuery_08-31-26_vF.xlsx" --out <dir>
+      --sheet "...\\AHB_WeeklyProductionQuery_08-31-26_vF.xlsx" \
+      --have "...\\Orders RMFG_<date>.csv" --out <dir>
 
 Order is deliberate and is the lesson of the wk0831 run:
 
@@ -71,6 +72,10 @@ def main(argv=None):
     ap.add_argument("--tag", required=True, help="production tag, e.g. RMFG_20260828 or 8_24")
     ap.add_argument("--ship", required=True)
     ap.add_argument("--sheet", required=True)
+    ap.add_argument("--have", required=True, metavar="PATH",
+                    help="this week's declared HAVE export (.csv/.xlsx) for check 7's "
+                         "swap caps -- REQUIRED, no baked-in fallback (a dated literal "
+                         "silently capped swaps against LAST week's count)")
     ap.add_argument("--ruleset", default=DEFAULT_RULESET)
     ap.add_argument("--cache")
     ap.add_argument("--out", default=".")
@@ -113,7 +118,8 @@ def main(argv=None):
          [{"Order ID": k, "email": v[0], "login_at": v[1]} for k, v in prot.items()])
 
     print("\n-- check 7 repeats --")
-    repeats, sat, per_sku, clears, swap_rows, _ = check7_run(orders, con, sheet=sheet)
+    repeats, sat, per_sku, clears, swap_rows, _ = check7_run(orders, con, sheet=sheet,
+                                                             have_path=a.have)
     print(f"    flagged {len(repeats)}   swap candidates {len(swap_rows)}")
 
     kept, per = [], collections.Counter()

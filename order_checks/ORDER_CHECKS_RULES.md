@@ -221,7 +221,24 @@ higher than Shopify on **64 SKUs**: `CH-BRZ` 229 vs 180, `MT-BSS` 35 vs 33 again
 
 HAVE comes from the cut's own file (`Orders RMFG_<date>`), never MCP
 `get_calculated_inventory`. `HAVE_OVERRIDE` carries corrections the export lacks (`AC-KETT`
-= 21 against the export's 19).
+= 21 against the export's 19). 🔴 Overrides are WEEK-SCOPED corrections — review them when
+the week's HAVE file changes, or last week's correction silently lands on this week's count
+(they are printed with the resolved HAVE path on every run so they can't apply invisibly).
+
+## 🔴 The HAVE file is passed per run — no baked-in path (2026-08-29)
+
+`--have PATH` is REQUIRED on `run_all` and `check7`, and `swaps.build`/`draw_down_targets`
+take `have_path`. `load_have()` refuses to run without a path and refuses a path that does
+not exist. Never re-add a default:
+
+- The dated literal it replaced (`Orders RMFG_20260831 - Sheet154.csv`) would have silently
+  capped the NEXT week's swaps against LAST week's count — the same silent-stale class as
+  the 6/23 cut-order burn (stale `corrected_inventory_path` clobbering fresh HAVE).
+- The old missing-file behavior (return `{}`) was just as bad: every substitute read 0 on
+  hand, the whole pool collapsed to UNFILLABLE, and nothing said why.
+
+Both now exit nonzero with a message naming `--have`. The resolved path + its mtime are
+printed on every run so a stale export is visible in the log.
 
 ## Caps are targets, not permission
 

@@ -37,7 +37,12 @@ from utils import active_line_items  # noqa: E402
 # -- Paths --
 BASE = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PATH = os.path.join(BASE, "dist", "inventory_reorder_settings.json")
-INV_CSV = r"C:\Users\Work\Claude Projects\AppyHour\InventoryReorder\Product Inventory_2026-06-23_HAVE.csv"
+# Base inventory snapshot (pre-depletion). 🔴 The dated literal is a DEFAULT only —
+# override per run with the AH_INV_CSV env var. The RESOLVED path is printed loudly
+# wherever it is read (silent-stale class: the 6/23 stale-Downloads HAVE burn), and the
+# weekly corrected_inventory_path HAVE remains AUTHORITATIVE on top of this base.
+INV_CSV = os.environ.get("AH_INV_CSV") or \
+    r"C:\Users\Work\Claude Projects\AppyHour\InventoryReorder\Product Inventory_2026-06-23_HAVE.csv"
 SHIPMENTS = os.path.join(BASE, "Shipments")
 SAT_DEPLETION = ""  # HAVE inventory CSV is current (Kurt 6/22) — post-depletion
 TUE_DEPLETION = ""
@@ -987,8 +992,8 @@ def main():
     pr_cjam = settings.get("pr_cjam", {})
     cex_ec = settings.get("cex_ec", {})
 
-    # 1. Load inventory
-    print("Loading inventory from 3/14 snapshot...")
+    # 1. Load inventory — say WHICH file, loudly (stale-snapshot visibility)
+    print(f"Loading inventory snapshot: {INV_CSV}")
     inventory = load_inventory_csv(INV_CSV)
     print(f"  {len(inventory)} SKUs loaded.")
 

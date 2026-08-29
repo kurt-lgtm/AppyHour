@@ -1,10 +1,11 @@
 """Box Simulation — compute DistVol per Shopify order and assign to box size.
 
-Usage: python box_simulation.py [SHIP_TAG]
+Usage: python box_simulation.py [SHIP_TAG] [--refresh] [--distvol PATH]
 Default SHIP_TAG: _SHIP_2026-04-27
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -457,13 +458,30 @@ def write_xlsx(results: list[dict], out_path: Path) -> None:
     wb.save(out_path)
 
 
-def main() -> None:
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    tag = args[0] if args else "_SHIP_2026-04-27"
-    force_refresh = "--refresh" in sys.argv
+def main(argv=None) -> None:
+    # Arg parsing lives HERE, never at module level -- box_simulation is imported by
+    # kori/routing_v2, audit_distvol_drift and the scripts/audits tools, and import must
+    # stay side-effect free.
+    ap = argparse.ArgumentParser(
+        prog="box_simulation",
+        description="Compute DistVol per Shopify order and assign box sizes for a cohort.")
+    ap.add_argument("ship_tag", nargs="?", default="_SHIP_2026-04-27")
+    ap.add_argument("--refresh", action="store_true",
+                    help="refetch orders from Shopify, ignoring the cohort cache")
+    ap.add_argument("--distvol", metavar="PATH",
+                    help="DistVol xlsx for THIS run (precedence: --distvol > DISTVOL_XLSX "
+                         "env > Desktop default)")
+    a = ap.parse_args(argv)
+    tag = a.ship_tag
+    force_refresh = a.refresh
+    if a.distvol and not os.path.exists(a.distvol):
+        sys.exit(f"box_simulation: --distvol file not found: {a.distvol}")
     cache_path = Path(rf"C:\Users\Work\box_sim_cache_{tag}.json")
-    lookup = build_lookup()
-    print(f"Loaded {len(lookup)} SKUs from lookup.")
+    # Explicit --distvol bypasses the db-replica branch on purpose (same semantics as
+    # build_lookup's xlsx_path contract); None keeps today's env/Desktop resolution.
+    lookup = build_lookup(a.distvol)
+    print(f"Loaded {len(lookup)} SKUs from lookup"
+          + (f" ({a.distvol})" if a.distvol else "") + ".")
     if cache_path.exists() and not force_refresh:
         orders = json.loads(cache_path.read_text(encoding="utf-8"))
         print(f"Loaded {len(orders)} orders from cache ({cache_path.name}).")

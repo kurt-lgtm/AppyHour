@@ -195,8 +195,8 @@ def _fetch_all_data(settings: dict) -> dict:
     recharge_token = settings.get("recharge_api_token", "")
     inv_settings = settings.get("inventory", {})
 
-    # -- Load inventory --
-    print("Loading inventory...")
+    # -- Load inventory -- say WHICH base snapshot, loudly (stale-snapshot visibility)
+    print(f"Loading inventory (base snapshot: {INV_CSV})...")
     try:
         inventory = load_inventory_csv(INV_CSV)
     except (KeyError, ValueError):
@@ -1710,8 +1710,24 @@ def _write_bundles_on_cut_order(ws: Worksheet, data: dict, settings: dict, start
 # ── Main ─────────────────────────────────────────────────────────────
 
 
-def main() -> str:
+def main(have_path: str = "") -> str:
     settings = load_settings()
+    if have_path:
+        if not os.path.exists(have_path):
+            sys.exit(f"--have file not found: {have_path} -- refusing to build against "
+                     "a HAVE that does not exist")
+        # New dict, never mutate the loaded settings (and never written back).
+        settings = {**settings, "corrected_inventory_path": have_path}
+    # Echo the RESOLVED HAVE + its mtime so a stale file is VISIBLE before the build
+    # (6/23 burn: a stale Downloads corrected_inventory_path silently clobbered the
+    # fresh count).
+    _have = settings.get("corrected_inventory_path", "")
+    if _have and os.path.exists(_have):
+        _mt = datetime.fromtimestamp(os.path.getmtime(_have))
+        print(f"HAVE inventory: {_have} (modified {_mt:%Y-%m-%d %H:%M})")
+    else:
+        print("HAVE inventory: " + (f"MISSING FILE - {_have}" if _have else "none set")
+              + " (corrected_inventory_path) - base INV_CSV only")
     data = _fetch_all_data(settings)
 
     wb = openpyxl.Workbook()
@@ -2080,13 +2096,17 @@ if __name__ == "__main__":
     parser.add_argument("--local", action="store_true", help="Generate locally, don't upload")
     parser.add_argument("--ingest", metavar="XLSX",
                         help="Snapshot Tommy's filled F/M/N + T/Y from a cut order xlsx into settings")
+    parser.add_argument("--have", metavar="PATH",
+                        help="HAVE inventory workbook for THIS run -- overrides "
+                             "settings['corrected_inventory_path'] (which goes stale "
+                             "silently; the resolved path + mtime are echoed either way)")
     args = parser.parse_args()
 
     if args.ingest:
         _ingest_tommy_inputs(args.ingest)
         sys.exit(0)
 
-    out_path = main()
+    out_path = main(args.have or "")
     if not args.local:
         try:
             upload_to_drive(out_path)
