@@ -5,7 +5,7 @@ Alarms on ABSENCE (missing/stale heartbeats) — the signal the Slack-on-complet
 structurally can't produce. Also probes: sync_heartbeat.json age, AppyHour schtasks Last Result,
 shipping.db integrity (READ-ONLY immutable — never a writer, rule 3).
 
-Run:  PYTHONIOENCODING=utf-8 python scripts/automation_health.py [--verbose]
+Run:  python scripts/automation_health.py [--verbose]   (bootstrap.init handles UTF-8 stdio)
 Exit: 0 green, 1 findings, 2 checker-broken (treat as red).
 """
 from __future__ import annotations
@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from appyhour_lib.bootstrap import init  # noqa: E402
 from appyhour_lib.heartbeat import read_ledger, age_hours, beat  # noqa: E402
 from appyhour_lib.notify import notify  # noqa: E402
 
@@ -237,11 +238,75 @@ def check_prod_parity(findings: list[str]) -> None:
         more = f" (+{len(stale) - PARITY_MAX_LISTED} more)" if len(stale) > PARITY_MAX_LISTED else ""
         findings.append(
             f"prod tree STALE vs dev on {len(stale)} DB-relevant file(s): {shown}{more} "
-            "— C:\\AppyHourProd runs the scheduled tasks; an undeployed fix is not a fix"
+            "— C:\\AppyHourProd runs the scheduled tasks; an undeployed fix is not a fix. "
+            "Review: python scripts/deploy_prod.py (dry-run); deploy is Kurt's --apply call"
         )
 
 
+# --- findings -> dispatch loop (2026-08-29, HEARTBEAT_RULES rule 12) --------------------
+# Evidence (_outputs/reports/harness-efficiency-review-2026-08-29.md, "The one systemic
+# finding"): this checker re-reported identical findings daily for a month (ingest
+# heartbeat 7d->28d stale, prod tree 9->20 undeployed files) — alerts fired, nobody owned
+# the fix. A finding that repeats 3 consecutive runs now files a durable
+# _coordination/handoffs.jsonl row to "Kurt triage" (surfaced by the SessionStart inbox
+# hook), deduped while a prior row for the same key is open. ADDITIVE ONLY: findings,
+# Slack message, and exit codes are byte-identical with or without the dispatcher; a
+# broken dispatcher prints LOUDLY and never fails the checker (rule-2 family).
+_COORD_DIR = Path(r"C:\Users\Work\Claude Projects\_coordination")  # absolute on purpose:
+# the scheduled copy runs from C:\AppyHourProd, but _coordination lives only in Claude Projects
+_DISPATCH_REF = r"C:\Users\Work\Claude Projects\AppyHour\HEARTBEAT_RULES.md"
+
+
+def finding_key(text: str) -> str:
+    """Stable dispatch key for a finding line. Variable parts (ages, counts, error
+    detail) must NOT reach the key, or every run mints a "new" finding and the
+    consecutive counter never hits 3. Keyed per entity (per heartbeat name, per
+    replica table, per schtask) so distinct rots dispatch separately."""
+    import re
+    m = re.match(r"heartbeat (MISSING|STALE): (\S+)", text)
+    if m:
+        return f"heartbeat-{m.group(1).lower()}-{m.group(2)}"
+    if text.startswith("ingest sync heartbeat stale"):
+        return "ingest-heartbeat-stale"
+    if text.startswith("ingest legs not ok"):
+        return "ingest-legs-not-ok"
+    m = re.match(r"schtask (\S+):", text)
+    if m:
+        return "schtask-" + m.group(1)
+    if text.startswith("shipping.db"):
+        return "shipping-db"
+    if text.startswith("replica pull stamp"):
+        return "replica-pull-stamp"
+    m = re.match(r"replica (\S+) (stale|EMPTY)", text)
+    if m:
+        return "replica-" + m.group(1)
+    if text.startswith("prod tree STALE"):
+        return "prod-tree-drift"
+    # fallback: slug the leading words before any '(' — error-type detail varies per run
+    words = re.split(r"[^A-Za-z]+", text.split("(")[0])
+    return "-".join(w for w in words if w)[:60].lower().strip("-") or "unclassified-finding"
+
+
+def dispatch_findings(findings: list[str]) -> None:
+    """Additive repeat-finding dispatcher. Called every completed run — a green run
+    finalizes with no keys, resetting every streak (consecutive means consecutive)."""
+    try:
+        sys.path.insert(0, str(_COORD_DIR))
+        import finding_dispatch
+        finding_dispatch.SOURCE = "automation-health"
+        seen: list[str] = []
+        for text in findings:
+            key = finding_key(text)
+            seen.append(key)
+            print(f"dispatch[{key}]: {finding_dispatch.report(key, text, ref=_DISPATCH_REF)}")
+        finding_dispatch.finalize(seen)
+    except Exception as e:  # never fail the checker over its dispatcher — but never silently
+        print(f"finding-dispatch unavailable ({type(e).__name__}: {e}) — "
+              "repeat findings NOT tracked this run")
+
+
 def main(argv: list[str]) -> int:
+    init()  # UTF-8 stdio (the 🔴 findings line crashed cp1252 without PYTHONIOENCODING) + .env for notify
     verbose = "--verbose" in argv
     findings: list[str] = []
     try:
@@ -256,6 +321,7 @@ def main(argv: list[str]) -> int:
         notify("🔴 automation-health checker crashed: " + findings[-1], level="error")
         return 2
     beat("automation-health")  # self-beat LAST (rule 7)
+    dispatch_findings(findings)  # rule 12: repeat-findings -> handoff row; additive, isolated
     if findings:
         msg = "🔴 automation-health: " + str(len(findings)) + " finding(s)\n• " + "\n• ".join(findings)
         print(msg)

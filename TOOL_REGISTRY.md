@@ -111,6 +111,7 @@ Run via `C:\Users\Work\anaconda3\python.exe <path>`.
 | SKU lifecycle scan (discontinued/seasonal/onetime) | `InventoryReorder/Errors/sku_lifecycle_scan.py [months]` | ✅ | hardcode SKU lists |
 | **Refund EXECUTION (batch partial refunds)** | `scripts/refund_batch.py (--orders file.xlsx \| --ship-tag TAG --sku SKU) --note "..." [--commit]` — 🔴✍️ moves money. Constraints SSOT: `scripts/REFUND_BATCH_RULES.md` (read FIRST). Dry-run DEFAULT; amount = actual-paid (discounted + tax share, NEVER list); idempotent by note; per-run log + moved-xlsx; run `detect_double_refunds_v2.py` after every commit. Fallback reference: `InventoryReorder/Errors/_template_bulk_refund.py` (no longer copy-per-incident). | 🔒✍️ | copying the template into new dated `refund_*` one-shots |
 | Double-refund detection | `InventoryReorder/Errors/detect_double_refunds_v2.py` | ✅ | v1 `detect_double_refunds.py` |
+| **Dev→prod deploy of the scheduled-task tree** (`C:\AppyHourProd\AppyHour` — what appyhour_daily_*/carrier-sync/postmortem actually execute) | `scripts/deploy_prod.py` — dry-run DEFAULT prints the exact drift list (STALE / PROD-NEWER / DEV-ONLY, mtimes + sha); `--apply` copies dev-newer tracked `*.py` only (set = automation_health `check_prod_parity` enumeration), REFUSES entirely while any file is newer in prod (hand-edit — reconcile, never clobber; no force flag), logs each copy to `_outputs/logs/deploy_prod.jsonl` | 🔒✍️ | blind robocopy of the tree; copying `.env`/`*.db`/`__pycache__`/logs (hard guard raises); the pre-2026-08-29 git-pull version of this file (origin/main sat ~322 commits behind dev — a pull deploys STALE code); hand-copying one file of a multi-file fix (07-27 guard-without-resolver burn: half a fix is not a fix) |
 
 > `InventoryReorder/Errors/` (~120 files: `check_*`/`fix_*`/`swap_*`/`marc_*`) are overwhelmingly **one-shot dated remediations — NOT recurring tools.** Only `sku_lifecycle_scan.py` + `detect_double_refunds_v2.py` recur.
 
@@ -183,6 +184,7 @@ Registered via the scheduled-tasks MCP (NOT manually slash-invoked). Each: capab
 ## 6. Core lib canonicals (call THESE; never reimplement)
 | Capability | Canonical owner | Call via |
 |---|---|---|
+| Entry-point bootstrap (UTF-8 stdout/stderr + canonical `.env` → `os.environ` + fail-loud env require) | `appyhour_lib/bootstrap.py` → `init()` / `require_env(name)` | first lines of every scheduled/CLI `main()` — never a bare `os.environ` check before `.env` loads (4× Aug-2026 AH_SLACK_BOT_TOKEN burns), never a new ad-hoc `sys.stdout` UTF-8 wrap (8+ sessions re-derived it; apply-tools crashed MID-MUTATION) |
 | Shopify auth | `appyhour_lib/credentials.py` → `get_shopify_auth()` | import (MCP re-exports) — never hand-built `X-Shopify-Access-Token` |
 | Recharge client | `cut_order_server/app/recharge_client.py` | v2021-11 + cursor pagination — never ad-hoc requests |
 | Weather + NWS | `appyhour_lib/weather.py` | import — never new OWM/NWS callers |
@@ -191,7 +193,7 @@ Registered via the scheduled-tasks MCP (NOT manually slash-invoked). Each: capab
 | User uploads | `appyhour_lib/user_data.save_user_file()` | never write to `.claude/` |
 | Gel-pack lookup keys | `OPENWEATHER_API_KEY` (env) read by `appyhour_lib/credentials.get_openweather_key()` | — |
 
-`appyhour_lib/` (credentials, weather, paths, box_classify, internal_classify, user_data, notify) = pure-util single source. Every consumer imports from it; never copy a util into an app.
+`appyhour_lib/` (bootstrap, credentials, weather, paths, box_classify, internal_classify, user_data, notify) = pure-util single source. Every consumer imports from it; never copy a util into an app.
 
 ---
 

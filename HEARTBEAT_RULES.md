@@ -48,7 +48,10 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
    deployed 07-22 guard, so the guard called a stale resolver and wrote legacy silently. **Deploy a
    guard and its resolver together, or neither.** NEGATIVE: the check reports dev-NEWER only and
    never suggests a sweep — some prod files are legitimately newer (local hotfixes), and blanket
-   dev→prod copying clobbers them.
+   dev→prod copying clobbers them. The deploy step is `scripts/deploy_prod.py` (2026-08-29:
+   dry-run default, same tracked set as the check, REFUSES while any file is newer in prod —
+   `--apply` is Kurt's call; the old git-pull deploy in that file is dead, origin/main is
+   hundreds of commits behind dev).
 10. **Don't wire `beat()` into files another agent has mid-flight** — coordinate first (2026-07-02:
    daily_shipping_sync deferred while the writelock migration owns those files; checker covers it via
    `sync_heartbeat.json` age instead).
@@ -67,6 +70,24 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
    stamp lives beside the canonical DB, NOT `%APPDATA%` — MSIX virtualization can mask a
    real-profile write there from this checker's sandboxed run. A MISSING stamp is a loud finding by
    design (deploy nag until the prod copy carries the pull stage).
+
+12. **A finding that repeats 3 consecutive runs must become DISPATCHED WORK, not a re-sent alert.**
+   🔴 2026-08-29 (harness-efficiency-review, "The one systemic finding"): this checker re-reported
+   identical findings daily for a MONTH — ingest heartbeat staleness re-alarmed as it aged 7d→28d,
+   prod-tree drift at 9→12→20 undeployed files — alerts fired, nobody owned the fix. Detection
+   without dispatch is "naming an owner is not dispatching," violated by the machines.
+   `dispatch_findings()` now maps each finding to a stable per-entity key (`finding_key()` —
+   variable parts like ages/counts must never reach the key) and feeds
+   `Claude Projects\_coordination\finding_dispatch.py`: on the 3rd consecutive appearance it files
+   a durable `handoffs.jsonl` row to **"Kurt triage"** via `coord.py send` (SSOT:
+   `_config/COORDINATION_RECORDS_RULES.md`), surfaced by the SessionStart inbox hook. NEGATIVES:
+   dedupe is against handoffs.jsonl state (open OR acked blocks a re-file; only `resolve` frees
+   it — and a persisting finding re-files after a resolve, because a resolve that didn't clear the
+   finding is not a fix); a finding absent for one run resets its streak (`finalize()` runs on
+   green too); the dispatcher is ADDITIVE and ISOLATED — findings, Slack, and exit codes are
+   unchanged, and a broken dispatcher prints loudly but never fails the checker (rule-2 family).
+   The crash path (exit 2) skips dispatch entirely — a partial run must not reset streaks it
+   never got to check.
 
 ## Wired beats (update when adding/removing)
 
