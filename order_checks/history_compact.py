@@ -47,6 +47,10 @@ import time
 
 FAT = r"C:\Users\Work\Claude Projects\_outputs\cache\order_history.db"
 DB = r"C:\Users\Work\Claude Projects\_outputs\cache\order_history_compact.db"
+# A 2,500-customer slice of FAT, kept so `verify` survives the fat store being deleted.
+# 🔴 It carries ALL events for those customers, not just logins/touches -- the customize
+# gate's nearby-human lookup reads events that are neither.
+FIXTURE = r"C:\Users\Work\Claude Projects\_outputs\cache\order_history_fixture.db"
 
 STRIP = "replace(customer_id,'gid://shopify/Customer/','')"
 
@@ -318,9 +322,17 @@ def stats(db=DB):
     c.close()
 
 
-def verify(fat=FAT, db=DB, n=400):
-    """Parity against the fat store on the questions the checks actually ask."""
+def verify(fat=None, db=DB, n=400):
+    """Parity against the fat store on the questions the checks actually ask.
+
+    Falls back to FIXTURE when the fat store is gone. The fixture is a strict SUBSET, so
+    a pass proves the QUERIES agree -- not that the compact store is complete. Row counts
+    in `stats` are what prove completeness.
+    """
     import random
+    if fat is None:
+        fat = FAT if os.path.exists(FAT) else FIXTURE
+    print(f"  reference: {os.path.basename(fat)}")
 
     from . import history as fatmod
     from .customer_map import recharge_id as fat_rc
@@ -382,9 +394,13 @@ def verify(fat=FAT, db=DB, n=400):
     print(f"  previous_orders {len(samp) - bad_prev}/{len(samp)} identical")
     uni_a = {r[0] for r in o.execute("SELECT DISTINCT sku FROM items WHERE qty > 0")} - {"", None}
     uni_b = set(sku_first_seen(d))
-    print(f"  sku universe    {len(uni_b)} vs {len(uni_a)}"
-          + (f"   🔴 missing {sorted(uni_a - uni_b)[:5]}" if uni_a - uni_b else ""))
-    ok = not (bad_ever or bad_prev or bad_cust or bad_rc or bad_login) and uni_a == uni_b
+    # 🔴 Against the FIXTURE this is a SUBSET test, not equality -- the fixture holds
+    # 2,500 customers and so fewer SKUs. Requiring equality there fails a correct store.
+    missing = uni_a - uni_b
+    print(f"  sku universe    {len(uni_b)} in store, {len(uni_a)} in reference"
+          + (f"   🔴 missing {sorted(missing)[:5]}" if missing else "   (reference is a subset)"
+             if len(uni_a) < len(uni_b) else ""))
+    ok = not (bad_ever or bad_prev or bad_cust or bad_rc or bad_login) and not missing
     print("  PARITY OK" if ok else "  🔴 PARITY FAILED")
     return 0 if ok else 1
 
