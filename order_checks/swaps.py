@@ -15,16 +15,22 @@ applied. A draw-down picks rows by SKU with no tag awareness, which is exactly h
 (#175930) reached an applied list on 2026-08-28.
 """
 from __future__ import annotations
+
 import collections
 import sqlite3
 
-from .check7 import (MINI_JAMS, NO_SUBSTITUTE, REPEAT_EXEMPT, RESERVE_FLOOR,
-                     _ever_received, build_cracker_set, load_have, sheet_demand,
-                     sku_first_seen, typ)
+from .check7 import (
+    MINI_JAMS,
+    NO_SUBSTITUTE,
+    REPEAT_EXEMPT,
+    RESERVE_FLOOR,
+    build_cracker_set,
+    load_have,
+    sheet_demand,
+    typ,
+)
 from .checks import write_blocked
-from .customer_map import recharge_id
-from .history import DB, previous_orders
-from .recharge_gate import customized
+from .history_compact import DB, customized, ever_received, sku_first_seen
 
 
 def _live_skus(o):
@@ -86,12 +92,12 @@ def build(orders, sheet, targets, con=None, respect_customized=True, verbose=Tru
                 if "BOX_CUSTOMIZED_POST_CHECKOUT" in tags:
                     notes["customer-built box skipped"] += 1
                     continue
-                was, _ = customized(con, recharge_id(con, (o.get("customer") or {}).get("id")))
+                was, _ = customized(con, (o.get("customer") or {}).get("id"))
                 if was:
                     notes["customer-built box skipped"] += 1
                     continue
             gid = (o.get("customer") or {}).get("id")
-            ever = _ever_received(con, gid, pool) if gid else set()
+            ever = ever_received(con, gid, pool) if gid else set()
             cand = next((s for s in pool if s not in box and s not in ever
                          and remaining.get(s, 0) > RESERVE_FLOOR), None)
             if not cand:

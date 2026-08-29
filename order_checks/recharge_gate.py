@@ -27,6 +27,7 @@ Known floor: this export starts 2026-05-01, so a customization older than that i
 invisible and the order reads as un-customized.
 """
 from __future__ import annotations
+
 import csv
 import os
 import sqlite3
@@ -116,6 +117,19 @@ def stats(con=None):
         con.close()
 
 
+def norm_ts(iso):
+    """Recharge event timestamps -> the shape rc_events actually stores.
+
+    🔴 `rc_events.created_at` is `2026-05-01 00:00:17` (space, no zone). A Shopify order
+    `createdAt` is `2026-07-15T04:04:11Z`. Comparing them as TEXT is not a near-miss --
+    space is 0x20 and 'T' is 0x54, so every event on the SAME CALENDAR DAY as the
+    threshold sorts BELOW it and reads as absent. That silently blinded the login half of
+    the swap guardrail to same-day logins: 1,208 orders read as protected on
+    RMFG_20260828 where the true figure is 1,247. Normalise before any comparison.
+    """
+    return (iso or "").replace("T", " ").rstrip("Z").strip()
+
+
 def customized(con, recharge_customer_id, since_iso=None):
     """True when a HUMAN changed this customer's contents (optionally since a date).
 
@@ -128,7 +142,7 @@ def customized(con, recharge_customer_id, since_iso=None):
     extra = ""
     if since_iso:
         extra = " AND created_at >= ?"
-        args.append(since_iso)
+        args.append(norm_ts(since_iso))
     hits = con.execute(
         f"""SELECT created_at, verb, source, kind FROM rc_events
             WHERE customer_id = ? AND touches = 1{extra} ORDER BY created_at""", args).fetchall()

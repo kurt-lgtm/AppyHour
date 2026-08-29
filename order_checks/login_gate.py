@@ -17,28 +17,15 @@ that have 100+ events.
 a lower bound and NOT proof the customer stayed away. Absence of evidence is not clearance.
 """
 from __future__ import annotations
+
 import sqlite3
 
-from .customer_map import recharge_id
-from .history import DB, previous_orders
+from .history_compact import DB, ev_floor, known, logged_in_since, previous_orders
 
 
 def export_floor(con):
-    """Earliest event in the indexed export -- the date before which logins are invisible."""
-    row = con.execute("SELECT MIN(created_at) FROM rc_events").fetchone()
-    return row[0] if row else None
-
-
-def logged_in_since(con, shopify_customer_gid, since_iso):
-    """-> the login timestamp, or '' if none since `since_iso`."""
-    rid = recharge_id(con, shopify_customer_gid) if shopify_customer_gid else None
-    if not rid:
-        return ""
-    row = con.execute(
-        """SELECT created_at FROM rc_events
-           WHERE customer_id = ? AND verb = 'login' AND created_at >= ?
-           ORDER BY created_at LIMIT 1""", (str(rid), since_iso)).fetchone()
-    return row[0] if row else ""
+    """Earliest indexed event -- the date before which a login is INVISIBLE."""
+    return ev_floor(con)
 
 
 def protected(orders, con=None, verbose=True):
@@ -51,7 +38,7 @@ def protected(orders, con=None, verbose=True):
     out, unmapped = {}, 0
     for oid, o in orders.items():
         gid = (o.get("customer") or {}).get("id")
-        if not gid or not recharge_id(con, gid):
+        if not gid or not known(con, gid):
             unmapped += 1
             continue
         prev = previous_orders(con, gid, o["createdAt"], 1)
@@ -60,10 +47,10 @@ def protected(orders, con=None, verbose=True):
         if hit:
             out[oid] = ((o.get("customer") or {}).get("email", ""), hit)
     if verbose:
-        n = con.execute("SELECT COUNT(*) FROM rc_events WHERE verb='login'").fetchone()[0]
+        n = con.execute("SELECT COUNT(*) FROM ev WHERE login = 1").fetchone()[0]
         print(f"  login events indexed {n:,} since {floor}")
         print(f"  protected by login: {len(out)} of {len(orders)}"
-              f"   ({unmapped} unmappable to a Recharge id)")
+              f"   ({unmapped} not in the store)")
         if unmapped:
             print("  🔴 an unmappable customer is UNKNOWN, not clear")
     if close:

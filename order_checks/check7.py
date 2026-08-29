@@ -34,6 +34,7 @@ Ranking prefers the most recently introduced SKU (first-ever appearance in histo
 greatest volume, so new items work through the base instead of recycling evergreens.
 """
 from __future__ import annotations
+
 import argparse
 import collections
 import csv
@@ -43,12 +44,14 @@ import re
 import sqlite3
 import sys
 
-from .checks import write_blocked
-from .customer_map import recharge_id
-from .fetch_gql import fetch_by_name
-from .history import DB, previous_orders
-from .recharge_gate import customized
 from . import sheet as sheetmod
+from .checks import write_blocked
+from .fetch_gql import fetch_by_name
+
+# The compact store answers every history question these checks ask, at 1/8th the size,
+# and carries the customer map + the guardrail reads -- so recharge_id/customized no
+# longer come from two other modules keyed on two different ids.
+from .history_compact import DB, customized, ever_received, previous_orders, sku_first_seen
 
 CHILD = ("AC-", "MT-", "CH-", "TR-")
 TYPES = ("AC-", "MT-", "CH-")
@@ -149,11 +152,6 @@ def _paid(li):
     return float((li.get("discountedUnitPriceSet") or {}).get("shopMoney", {}).get("amount") or 0) > 0
 
 
-def sku_first_seen(con):
-    """SKU -> first-ever appearance date, for 'prefer the newest item' ranking."""
-    return {s: d for s, d in con.execute(
-        """SELECT i.sku, MIN(o.created_at) FROM items i JOIN orders o ON o.order_gid = i.order_gid
-           WHERE i.qty > 0 GROUP BY i.sku""")}
 
 
 # Corrections applied ON TOP of the declared HAVE file, when Kurt states a number that
@@ -303,8 +301,7 @@ def run(orders, con, verbose=True, sheet=None, have_path=None):
         if BCPC_TAG in tags:
             skipped["BOX_CUSTOMIZED_POST_CHECKOUT"] += 1
             continue
-        rid = recharge_id(con, cust)
-        was, why = customized(con, rid, since_iso=prev[0][1] if prev else None)
+        was, why = customized(con, cust, since_iso=prev[0][1] if prev else None)
         if was:
             skipped["human customized (recharge events)"] += 1
             continue
@@ -383,7 +380,7 @@ def build_swaps(repeats, orders, con, in_run, first_seen,
     for r in repeats:
         cust = r["customer"]
         allsk = [s for t in pool for s in pool[t]]
-        ever = _ever_received(con, cust, allsk)
+        ever = ever_received(con, cust, allsk)
         used = set(r["box"])
         already = done_skus.get(r["order"], set())
         for s in r["repeats"]:
@@ -419,16 +416,6 @@ def build_swaps(repeats, orders, con, in_run, first_seen,
     return rows
 
 
-def _ever_received(con, customer_gid, skus):
-    if not skus:
-        return set()
-    marks = ",".join("?" * len(skus))
-    return {r[0] for r in con.execute(
-        f"""SELECT DISTINCT i.sku FROM items i JOIN orders o ON o.order_gid = i.order_gid
-            WHERE o.customer_id = ? AND i.qty > 0 AND i.sku IN ({marks})""",
-        [customer_gid, *skus])}
-
-
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="check7")
     ap.add_argument("--tag", required=True)
@@ -454,7 +441,7 @@ def main(argv=None):
     print("\n  saturation (share of eligible orders carrying the SKU):")
     for s, pct in list(sat.items())[:10]:
         print(f"    {s:<12}{pct:>6}%")
-    print(f"\n  per-SKU: how many orders repeat it / how many clear if ONLY it is swapped")
+    print("\n  per-SKU: how many orders repeat it / how many clear if ONLY it is swapped")
     for s, n in per_sku.most_common(12):
         print(f"    {s:<12}{n:>5}{clears.get(s, 0):>7}")
 

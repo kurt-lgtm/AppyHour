@@ -32,7 +32,7 @@ from .check7 import run as check7_run
 from .checks import bare_cex_check, cracker_check, fixed_route_check, validate_swap_list
 from .dan_checks import load_rules, run as dan_run
 from .fetch_gql import fetch_by_name
-from .history import DB
+from .history_compact import DB
 from .login_gate import protected as login_protected
 
 DEFAULT_RULESET = os.path.expanduser(r"~\Downloads\ALLFULFILLMENTS_RuleSet_OrderMatching.xlsx")
