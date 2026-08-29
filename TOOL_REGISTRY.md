@@ -154,6 +154,7 @@ Canonical pipeline: `build.py` (I/O driver) → `lib/engine.compute_routing` (th
 | Automation health / dead-man-switch check (absent heartbeats, failed schtasks, stale ingest, db integrity — silent-green, Slack-on-red) | `scripts/automation_health.py --verbose` (daily task `automation-health-daily` 12:15pm; SSOT `HEARTBEAT_RULES.md`; beats via `appyhour_lib.heartbeat.beat`) | ✅ |
 | Weekly routing loop-closure scorecard (reship-recovery check, Indy pins, MILP A/B, postmortem link — matured cohort) | `ShipRouting/scripts/loop_scorecard.py [_SHIP_tag]` (weekly task `loop-scorecard-weekly` Mon 1:15pm; read-only) | ✅ |
 | Weekly corrections-mining digest (Kurt-corrections -> instinct CANDIDATES for confirmation; never auto-saved) | `_outputs/scripts/corrections_digest.py` (weekly task `corrections-mining-weekly` Sun 1:30pm; candidates -> `~/.claude/instincts/candidates/`) | ✅ |
+| Weekday ShipRouting test cadence (silent-green, Slack #kurt-ops on red; CARRIER_TNT_CACHE_ONLY=1) | `_outputs/scripts/pytest_cadence.py` (via `~/.claude/hooks/catch-up-missed-tasks.sh` `run_if_due pytest-shiprouting 12`, stamp-guarded once/weekday). Motivator: pp_derive suite red 6 days unseen (`f53043a`). NOT self-healing — fix implementation, not tests. | ✅ |
 | Execute a SKU swap on a cohort (audited, $0-variant) | `/swap OLD NEW SHIP_TAG` | 🔒✍️ |
 | Build carrier-routing assignment sheet for a cohort | `ship-routing-assignment` | 🔒 |
 | Daily Command Center brief | `/today` | 🔒 |
