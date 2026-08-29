@@ -89,6 +89,15 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
    The crash path (exit 2) skips dispatch entirely — a partial run must not reset streaks it
    never got to check.
 
+13. **The weekly freshness sweep is a SECOND reader of `EXPECTED`, never a second copy of it.**
+   `Claude Projects/_outputs/scripts/freshness_sweep.py` (beat-or-fail check, 2026-08-29) imports
+   `automation_health.EXPECTED` and FLAGs any beat older than its declared limit — the WEAK form of
+   exit-0-without-beat detection (the beats' owning Claude-internal scheduled tasks leave no
+   queryable last-run record, so "ran without beating" and "never ran" are indistinguishable; both
+   are red). Rule 4 still holds: expectations change in `automation_health.py` ONLY — the sweep
+   imports, it never re-declares. The two checkers fail independently and watch each other
+   (`automation-health` and `freshness-sweep` are both rows in the table).
+
 ## Wired beats (update when adding/removing)
 
 | name | writer | max age |
