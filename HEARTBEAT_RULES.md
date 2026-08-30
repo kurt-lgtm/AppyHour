@@ -108,6 +108,7 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
 | `corrections-mining` | `_outputs/scripts/corrections_digest.py` | 8 days |
 | `automation-health` | `scripts/automation_health.py` self-beat | 2 days |
 | `freshness-sweep` | `_outputs/scripts/freshness_sweep.py` (weekly data-freshness monitor — Mon 12:33 Claude scheduled task; beats on run, flags or not) | 8 days |
+| `pytest-shiprouting` | `_outputs/scripts/pytest_cadence.py` (weekday ShipRouting fast-tier suite via `~/.claude/hooks/catch-up-missed-tasks.sh` — stamp-guarded; Slack only on red, beat every run) | 4 days |
 
 Checker also probes (no beat needed): `sync_heartbeat.json` age (>48h), `schtasks` AppyHour* Last
 Result ≠ 0, shipping.db `PRAGMA quick_check` (read-only immutable), **dev↔prod tree parity on

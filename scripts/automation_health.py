@@ -33,6 +33,8 @@ EXPECTED = {
     "corrections-mining": 8 * 24,
     "automation-health": 2 * 24,
     "freshness-sweep": 8 * 24,
+    # weekday-only via catch-up-missed-tasks.sh; 4d allows the Fri->Mon gap + one missed day
+    "pytest-shiprouting": 4 * 24,
 }
 SYNC_HEARTBEAT_MAX_H = 48
 SCHTASK_PREFIXES = ("appyhour_daily",)  # Windows tasks whose Last Result we audit
