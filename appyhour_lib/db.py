@@ -76,6 +76,7 @@ from .paths import db_path
 __all__ = [
     "connect", "connect_ro", "integrity_ok", "BUSY_TIMEOUT_MS",
     "DBWriterBusy", "LockedConnection",
+    "write_lock_holder", "assert_write_lock_free",
 ]
 
 BUSY_TIMEOUT_MS = 10_000
@@ -362,6 +363,45 @@ def connect_ro(path: str | Path | None = None, *, timeout: float = 30.0) -> sqli
     # busy_timeout still helps a reader wait out a checkpoint instead of erroring.
     con.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
     return con
+
+
+def write_lock_holder(path: str | Path | None = None) -> dict | None:
+    """Return the LIVE holder record of ``<db>.writelock``, else ``None``.
+
+    ``None`` means "no writer process holds this DB right now" — either the file is
+    absent, or it is stale by the same rules :func:`connect` uses to break it (dead PID,
+    reused PID, past ``AH_WRITE_LOCK_MAX_AGE``). Read-only: it never creates, breaks, or
+    waits on the lock, so a monitor or a test may call it freely.
+
+    🔴 This is the ACCEPTANCE PROBE for stage cancellation (2026-08-31). "The stage
+    stopped" is not the claim that matters; "the stage left no lock behind" is. A
+    cancelled stage that unwound without closing its connection still holds this file,
+    and the next writer still starves.
+    NEGATIVE: a free lockfile does NOT prove the DB is unwritten — 25 of 33 writers open
+    it with raw ``sqlite3.connect`` and never touch the lock (``scripts/db_write_gate.py``).
+    Use it to prove a lock-taking writer released, not to prove the DB is quiet.
+    """
+    target = Path(path) if path is not None else db_path()
+    lockpath = str(target) + ".writelock"
+    if not os.path.exists(lockpath):
+        return None
+    holder = _read_lock(lockpath)
+    max_age = _env_float("AH_WRITE_LOCK_MAX_AGE", _DEFAULT_WRITE_LOCK_MAX_AGE)
+    if _lock_is_stale(lockpath, holder, max_age):
+        return None
+    return holder or {"pid": None, "script": "?", "started_at": "?"}
+
+
+def assert_write_lock_free(path: str | Path | None = None) -> None:
+    """Raise :class:`DBWriterBusy` if a live writer still holds ``<db>.writelock``.
+
+    The assertion form of :func:`write_lock_holder`, for use right after a stage is
+    cancelled: "no collisions" is a testable claim, and this is the test.
+    """
+    holder = write_lock_holder(path)
+    if holder is not None:
+        target = Path(path) if path is not None else db_path()
+        raise DBWriterBusy(_holder_msg(str(target) + ".writelock", holder))
 
 
 def integrity_ok(con: sqlite3.Connection) -> bool:

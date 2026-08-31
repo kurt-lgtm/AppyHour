@@ -62,7 +62,12 @@ from appyhour_lib import paths  # noqa: E402
 BYPASSING_WRITERS = (
     "AppyHourMCP/server.py",          # -> tools/cache.py, raw connect; usually 1-3 live
     "AppyHourMCP\\server.py",
-    "sync_logon.py",                  # takes the lock, but its abandoned stage thread outlives it
+    # 2026-08-31: its stages are cancellable now (appyhour_lib/cancel.py) so the abandoned-thread
+    # rationale is gone — but it STAYS, for two live reasons: (a) run_fulfillments takes the lock
+    # PER BATCH, so it is unlocked most of its run and will write again seconds from now, and
+    # (b) its auto_import stage writes through shipping_invoice_db.init_db's RAW sqlite3.connect
+    # and never touches the lock at all. Same "do NOT remove on migration" note as above.
+    "sync_logon.py",
     "sync_carrier_invoices.py",
     "daily_shipping_sync.py",         # migrated 2026-08-31: per-checkpoint lock, NOT continuous
     "gel_pack_webview.py",            # Kori -> kori/db_snapshots.py

@@ -134,12 +134,52 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
      `%APPDATA%/AppyHour/sync_logs/daily_*.log` (in-process: survives a deploy, needs no elevation).
      Wrapping the task action in `cmd.exe /c ... >> log 2>&1` is still worth doing and requires an
      elevated `schtasks /Change` — Kurt's terminal, not an agent's.
-   - **🔴 OPEN — the abandoned daemon thread is the deeper defect.** `sync_logon._run_stage` stamps
-     `fail:Timeout` at 600s and moves on, but Python cannot kill the thread: it keeps writing
-     (measured ~11,900 upserts through ~12:22) while holding the advisory lock its owner will never
-     release. That is a writer nobody is tracking. Until stages take a cooperative cancel flag,
-     *something* will collide again — the per-checkpoint lock makes the collision survivable, it
-     does not remove it. Scoped separately; do not close this bullet by re-tuning timeouts.
+   - **🔴 A timeout that only "moves on" is not a timeout — it is a second writer nobody is
+     tracking. RESOLVED 2026-08-31 by cooperative cancellation.** `sync_logon._run_stage` stamped
+     `fail:Timeout` at 600s and continued, but Python cannot kill a thread: the abandoned stage
+     kept writing (measured ~11,900 upserts through ~12:22) while holding the advisory lock its
+     owner would never release. The per-checkpoint lock made that collision *survivable*; it did
+     not remove it. What now holds, all of it negatives-first:
+     - **A stage that can be abandoned must be cancellable, and a stage that cannot be cancelled
+       cleanly must NOT get a flag.** One primitive — `appyhour_lib/cancel.py` (`CancelToken`,
+       `StageCancelled`, `checkpoint()`) — passed down from `_run_stage`, never per-loop ad-hoc
+       booleans. `run_post_ingest_backup` is deliberately NOT cancellable mid-flight (one
+       `sqlite3.backup` call; the only interior "boundary" is a torn snapshot file) — it takes no
+       write lock, so its only cancel point is refusing to START.
+     - **NEVER check a cancel token inside a transaction, and never while a write connection is
+       open.** Cancelling mid-transaction abandons a partial write; cancelling with the connection
+       open swaps a silent orphan for a loud one — the lock is still held. Every checkpoint sits
+       AFTER `commit()` and AFTER `close()`. In `backfill_sync` the boundaries are the month-chunk
+       loop, the `while url:` pagination loop (nothing written yet), and a per-`PP_FLUSH_EVERY`
+       (200) batch flush; in `auto_import` it is BETWEEN FILES, never inside `ingest_file`'s
+       per-invoice loop.
+     - **Never replace a silent abandonment with a quieter one.** `_run_stage` now signals →
+       joins with a bounded `STAGE_GRACE_S` (120s) → and if the thread is STILL alive raises
+       `ZombieStageError`, a named CRITICAL alarm that ABORTS the run (exit 3). Process exit is
+       the only thing that actually stops a daemon thread, and continuing would run the remaining
+       stages beside an untracked writer. 🔴 Do not "fix" a zombie by raising a timeout; the grace
+       window is not a second ceiling to tune — needing more of it means the checkpoints are too
+       far apart.
+     - **"The stage stopped" is not the acceptance test; "the stage left no lock" is.** After a
+       clean cancel `_run_stage` runs a lock-release proof (`appyhour_lib.db.write_lock_holder`)
+       and alarms CRITICAL if this process still holds `<db>.writelock`. Measured on a scratch DB:
+       old shape → second writer REFUSED after 10.16s; new shape → cancelled at chunk 51 on an
+       exact 5,100-row boundary, lock free, second writer **OK after 0.03s**.
+       Tests: `tests/test_stage_cancel.py` (8, scratch `tmp_path` only — never the live DB).
+     - **`run_fulfillments` held ONE `db.connect()` across its whole stage** (the long-hold this
+       rule already forbade, still live in the file that broke). It now passes an `open_conn`
+       factory down, so the lock is taken per committed batch and released across the HTTP calls.
+       NEGATIVE: do not reintroduce a single `conn` "for efficiency" — the time is in the HTTP.
+     - **A cancel is NOT a failure.** Stages stamp `cancelled:Timeout` and re-raise; `_run_stage`
+       stamps `fail:Timeout:<n>s:cancelled-clean`. Never fold `StageCancelled` into
+       `sync_all_carriers`' `failures` list — that would fire rule 8's partial-run alarm for legs
+       that were never attempted.
+     - **🔴 STILL OPEN (smaller, named):** `auto_import` is cancellable but frees no lock, because
+       `shipping_invoice_db.init_db` opens shipping.db with a RAW `sqlite3.connect` and holds it
+       for the whole scan — one of the 25 lock-bypassing writers measured in
+       `scripts/db_write_gate.py`. Migrating `init_db` to `appyhour_lib.db.connect` is a separate
+       change (Kori, both MCP servers and ~30 callers share it) and must not be done as a side
+       effect of a cancellation fix.
 
 ## Wired beats (update when adding/removing)
 
