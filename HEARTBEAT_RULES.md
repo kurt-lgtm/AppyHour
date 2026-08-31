@@ -181,6 +181,53 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
        change (Kori, both MCP servers and ~30 callers share it) and must not be done as a side
        effect of a cancellation fix.
 
+15. **The three `shipping.db` corruptions were caused by TWO NAMES for one file, not by concurrent
+   writers. Concurrency was never the bug — and every fix aimed at concurrency missed.** 🔴 Measured
+   2026-08-31 on scratch DBs (`walrace.py`, 4 writer processes, raw `sqlite3.connect`, per-transaction
+   reconnect, WAL + `synchronous=NORMAL`, ~20s, INSERT/DELETE + `wal_checkpoint(TRUNCATE)` every txn):
+
+   | writers reach the file by | `busy_timeout` | runs corrupted |
+   |---|---|---|
+   | ONE path | 0 (none at all) | **0 / 5** |
+   | ONE path | 10000 | **0 / 5** |
+   | TWO paths (NTFS hardlink, same bytes) | 10000 | **5 / 5** |
+
+   The two-name runs fail with `database disk image is malformed` — the verbatim string from
+   `notify_fallback.log` on 2026-07-01 and from the 6/27 handoff. SQLite keeps its WAL locks in the
+   `-shm` file, and sqlite creates `-wal`/`-shm` beside **whichever NAME was opened**: two names ⇒ two
+   `-shm` ⇒ the writers never see each other's locks at all, and each checkpoints its own WAL into the
+   one shared main image. NEGATIVES:
+   - **Do not "prove" concurrency corrupts a WAL DB by reasoning about it — it does not.** Four
+     processes with NO `busy_timeout`, all calling `wal_checkpoint(TRUNCATE)`, ran ~2,900 transactions
+     clean. That is SQLite working as designed. `busy_timeout` buys clean *waits*, not integrity, and
+     its absence was never the corruption mechanism (2026-06-27 fix, `bff150f`).
+   - **The advisory lock is per-NAME, not per-IMAGE — it cannot bind a second name.** `db.connect()`
+     locks `str(target) + ".writelock"` (`appyhour_lib/db.py`). Measured: two `connect()` calls on two
+     names for one file BOTH acquired a lock; the same-name control was correctly refused. That is why
+     Phase 1 (`7d5e1a5`) did not stop 2026-07-03 — the `writelock.stale-2026-07-03-1030` corpse shows
+     `sync_logon.py` holding it since 04:02 while the image went malformed at 10:19.
+   - **All three corruptions (6/27, 7/01, 7/03) happened while the DB lived in MSIX-virtualized
+     `%APPDATA%\AppyHour`; there has been none since it moved to `C:\AppyHourData` on 7/08** — 8 weeks,
+     with the same ~30 writers and 24 of them still on raw `sqlite3.connect`. The move, believed at the
+     time to be about a *missing-file* false alarm, is what actually fixed the corruption. Packaged
+     (Claude/MCP) processes got a copy-on-write shadow of that path while scheduled tasks and Kori got
+     the real Roaming file: one image, two names, exactly the row above.
+   - **A second name is a LATENT corruption machine, so a writer that resolves a non-canonical path is
+     a 🔴 bug even when it "works".** Still live at time of writing: `GelPackCalculator/backfill_sync.py`
+     (`init_db(".")` — relative CWD), `validate_fix1_rescore.py:21` and `validate_thermal_fixes.py:17`
+     (hardcoded `%APPDATA%\AppyHour\shipping.db`), `backfill_box_type.py` + `import_other_data.py`
+     (`_get_app_dir()`), `ShippingReports/reports/box_size_report.py:340` (`%APPDATA%` with no canonical
+     branch), and `shipping_invoice_db._db_path()`, whose no-arg fallback is
+     `GelPackCalculator/shipping.db`. Each is one invocation away from reproducing the table above.
+   - **Never verify single-image-ness from inside the MSIX container.** `fsutil file queryfileid` on the
+     Roaming and LocalCache paths returns the SAME id from a packaged process — the VFS makes both names
+     hit one file for the caller that asked. That is the identical illusion as the retracted 7/01
+     `samefile=True` finding (REBUILD §5.1). The directory *listings* differ, which is the tell.
+   - **`database is locked` (rule 14) and `database disk image is malformed` (this rule) are different
+     failures with opposite fixes.** Locking work — the advisory lock, per-checkpoint acquisition,
+     cooperative cancellation — buys availability and is worth doing; it does not and cannot address
+     corruption. Do not let a green lock story stand in for path canonicalization.
+
 ## Wired beats (update when adding/removing)
 
 | name | writer | max age |
