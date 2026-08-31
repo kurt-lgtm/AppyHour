@@ -87,8 +87,12 @@ SYNC_HEARTBEAT_MAX_H = 48
 SCHTASK_SCOPE = "appyhour"  # every task whose name starts with this is in the audit's remit
 
 # name (lowercased, leading "\" stripped, as schtasks reports it) -> max last-run age in DAYS,
-# or None = audit Last Result only (no cadence to be stale against).
-SCHTASK_EXPECTED = {
+# or None = audit Last Result only (no cadence to be stale against). The `| None` is load-bearing
+# and annotated so a checker cannot infer `dict[str, int]` and call the None a type error: the
+# sole consumer guards with `if max_age_d is not None` before any comparison, because None here
+# means "this task has no cadence", NOT "no result yet" — a sentinel compared against a threshold
+# would grade the logon task stale on every run.
+SCHTASK_EXPECTED: dict[str, int | None] = {
     # -- weekly, one fire per week each (was the only audited family, via the old prefix) --
     "appyhour_daily_tue": 10,   # daily_shipping_sync, Tue 12:00
     "appyhour_daily_wed": 10,   # daily_shipping_sync, Wed 12:00
