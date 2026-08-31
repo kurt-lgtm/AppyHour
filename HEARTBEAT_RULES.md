@@ -98,6 +98,49 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
    imports, it never re-declares. The two checkers fail independently and watch each other
    (`automation-health` and `freshness-sweep` are both rows in the table).
 
+14. **Two scheduled writers of `shipping.db` must not overlap — and a write collision must never
+   take down the stages that had nothing to do with it.** 🔴 2026-08-31: `daily_shipping_sync`
+   (`appyhour_daily_tue/wed/thu/fri`, 12:00 since 2026-05-14) died **three runs running** with
+   `sqlite3.OperationalError: database is locked` from `store_delivery_status`. Two things had to
+   land together: `appyhour_sync_daily_noon` was created 2026-08-25 on a **12:05** trigger — newly
+   overlapping the 12:00 daily — and commit `811914b` added the replica-pull stage, expanding the PP
+   work list 124 → 2,436 and pushing the first 200-order checkpoint from ~12:01:35 out to ~12:05,
+   straight into that window. NEGATIVES:
+   - **A new schtask that writes `shipping.db` gets its start time checked against every existing
+     writer task's RUN DURATION, not against their start times.** 12:05 "looks clear" of a 12:00
+     task and is not; the 12:00 daily now runs ~180 min.
+   - **Never open `shipping.db` for writing with raw `sqlite3.connect` in a scheduled task.**
+     `busy_timeout` alone only makes you *wait* before losing; the advisory single-writer lock in
+     `appyhour_lib/db.py` is what serializes writer *processes* (`appyhour_lib/CLAUDE.md`).
+   - **Never hold `db.connect()` across a long stage either.** A 3-hour lock hold starves every
+     other writer and gets BROKEN anyway at `AH_WRITE_LOCK_MAX_AGE` (1800s) — a lock nobody can
+     respect is worse than none. Take it **per checkpoint** and release. That long-hold hazard, not
+     an exemption, is why `daily_shipping_sync`/`sync_logon` sat in
+     `scripts/db_write_gate.BYPASSING_WRITERS`; that list stays populated after a migration
+     (see its header) because a per-checkpoint holder is unlocked most of its run.
+   - **A lock loss must be DEFERRAL, never loss and never death.** Rows already paid for with an API
+     call are HELD and retried at the next checkpoint (the `PPThrottled` shape); the named
+     `PP DB-LOCK` line is logged; the run continues. Every stage is now wrapped so a stage's
+     exception fails **that stage only** — the 08-25/27/28 collisions also killed the Gorgias and
+     reclassify stages, which never touched the contended write. That blast radius was the real
+     damage.
+   - **Never let "we could not write" report as a dead feed.** `written == 0` from lock starvation
+     and `written == 0` from a dead ParcelPanel feed demand opposite actions; they are counted and
+     reported separately (`PP DB-LOCK STARVED` vs `PP FAIL`), same reason rule-8-style throttling is
+     diagnosed before the dead-feed guard.
+   - **A scheduled task whose action is a bare `python.exe <script>` discards stderr, so a crash
+     leaves no evidence.** The absence of it is the only reason this took a full reconstruction.
+     `daily_shipping_sync.main()` now writes any escaping traceback into its own
+     `%APPDATA%/AppyHour/sync_logs/daily_*.log` (in-process: survives a deploy, needs no elevation).
+     Wrapping the task action in `cmd.exe /c ... >> log 2>&1` is still worth doing and requires an
+     elevated `schtasks /Change` — Kurt's terminal, not an agent's.
+   - **🔴 OPEN — the abandoned daemon thread is the deeper defect.** `sync_logon._run_stage` stamps
+     `fail:Timeout` at 600s and moves on, but Python cannot kill the thread: it keeps writing
+     (measured ~11,900 upserts through ~12:22) while holding the advisory lock its owner will never
+     release. That is a writer nobody is tracking. Until stages take a cooperative cancel flag,
+     *something* will collide again — the per-checkpoint lock makes the collision survivable, it
+     does not remove it. Scoped separately; do not close this bullet by re-tuning timeouts.
+
 ## Wired beats (update when adding/removing)
 
 | name | writer | max age |

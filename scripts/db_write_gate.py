@@ -50,15 +50,21 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from appyhour_lib import db as ahdb  # noqa: E402
 from appyhour_lib import paths  # noqa: E402
 
-# 🔴 Processes that write shipping.db WITHOUT honoring the advisory lock. Measured, not guessed —
-# each is a file that both contains write SQL against shipping.db and opens it via raw
-# sqlite3.connect. Re-derive with the scan in INVOICE_INGEST_RULES §11 when this list ages.
+# 🔴 Processes whose LIVENESS must block a Claude write. Measured, not guessed — each is a file
+# that contains write SQL against shipping.db. Re-derive with the scan in INVOICE_INGEST_RULES §11
+# when this list ages.
+#
+# 🔴 Do NOT remove an entry just because it migrated to `appyhour_lib.db.connect()`. Holding the
+# advisory lock is not the same as holding it CONTINUOUSLY: a migrated writer that takes the lock
+# per checkpoint (daily_shipping_sync, 2026-08-31) is unlocked most of its ~180-minute run and will
+# write again seconds from now, so `check_lockfile` would see "free" and wave us through. The
+# PROCESS check is what covers that window — same reason it covers the raw-connect writers.
 BYPASSING_WRITERS = (
     "AppyHourMCP/server.py",          # -> tools/cache.py, raw connect; usually 1-3 live
     "AppyHourMCP\\server.py",
-    "sync_logon.py",
+    "sync_logon.py",                  # takes the lock, but its abandoned stage thread outlives it
     "sync_carrier_invoices.py",
-    "daily_shipping_sync.py",
+    "daily_shipping_sync.py",         # migrated 2026-08-31: per-checkpoint lock, NOT continuous
     "gel_pack_webview.py",            # Kori -> kori/db_snapshots.py
     "gel_pack_shopify.py",
     "auto_import.py",
