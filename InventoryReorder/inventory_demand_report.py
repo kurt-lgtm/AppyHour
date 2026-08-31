@@ -108,6 +108,25 @@ _assert_window_invariants()
 
 PICKABLE_PREFIXES = ("CH-", "MT-", "AC-", "MR-", "PK-")
 
+# Monthly-box bucketing. By default the AHB-MED/CMED/LGE slot tables are grouped by
+# CHARGE MONTH ("2026-09"). Kurt sometimes needs the week split on explicit BILLING
+# DATE ranges instead — e.g. 8/30-8/31 vs 9/1-9/5 — because those two groups get
+# different monthly recipes even though they land in one cut. Set
+# settings["monthly_split_ranges"] = [["2026-08-30","2026-08-31"], ["2026-09-01","2026-09-05"]]
+# to bucket by range; each range becomes its own AHB-MED/CMED/LGE block, keyed by its
+# label. Charges outside every range keep their charge-month bucket, so nothing is
+# silently dropped. (Kurt 2026-08-31)
+MONTHLY_SPLIT_RANGES: list = []
+
+
+def _monthly_bucket(sched: str) -> str:
+    """Bucket a charge's scheduled date for the monthly slot tables."""
+    d = (sched or "")[:10]
+    for lo, hi in MONTHLY_SPLIT_RANGES:
+        if lo <= d <= hi:
+            return f"{lo[5:]}–{hi[5:]}"   # "08-30–08-31"
+    return d[:7]
+
 # ── Bundle / limited-release recipes ────────────────────────────────
 # A "bundle" (BL-*) or limited-release box (AHB-X*) ships several component
 # SKUs. The recipe (component -> qty per box) lives in Shopify's Simple Bundles
@@ -612,7 +631,7 @@ def fetch_recharge_api(api_token, out_specialty=None, out_bundles=None, shop_cre
             # Custom curations (AHB-MCUST-MDT, AHB-LCUST-OWC) are already in per-curation tables
             if cur == "MONTHLY":
                 is_cmed = "CMED" in upper_box
-                charge_month = sched[:7]  # "2026-04" or "2026-05"
+                charge_month = _monthly_bucket(sched)
                 week_label = "WK1" if is_wk1 else "WK2"
                 if is_lg:
                     if is_wk1:
@@ -739,7 +758,7 @@ def _wk1_ship_tags(today=None):
 WK1_SHIP_TAGS = _wk1_ship_tags()
 
 
-def fetch_shopify_orders(settings, out_specialty=None, out_bundles=None):
+def fetch_shopify_orders(settings, out_specialty=None, out_bundles=None, out_monthly=None):
     """Fetch open Shopify orders for WK1/WK2 ship tags.
 
     Returns per-week:
@@ -903,6 +922,15 @@ def fetch_shopify_orders(settings, out_specialty=None, out_bundles=None):
             if cur == "MONTHLY":
                 # Plain AHB-MED/AHB-LGE/AHB-CMED — count as box totals
                 is_cmed = "CMED" in box_sku
+                # Also bucket by the order's own date so Shopify monthlies land in the
+                # right billing-date block. A Shopify order IS a processed charge, so
+                # created_at is its billing date; without this they all collapsed into
+                # one ship-tag-month bucket. (Kurt 2026-08-31)
+                if out_monthly is not None:
+                    _bt = "LGE" if is_lg else ("CMED" if is_cmed else "MED")
+                    _k = ("WK1" if is_wk1 else "WK2", _monthly_bucket(order.get("created_at") or ""))
+                    _b = out_monthly.setdefault(_k, {})
+                    _b[_bt] = _b.get(_bt, 0) + 1
                 if is_lg:
                     if is_wk1:
                         wk1_lge["MONTHLY"] = wk1_lge.get("MONTHLY", 0) + 1

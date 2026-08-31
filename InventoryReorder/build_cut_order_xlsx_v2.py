@@ -135,7 +135,11 @@ def _set_col_widths(ws: Worksheet, widths: dict[int, float]) -> None:
 
 def _dark_header_row(ws: Worksheet, row: int, headers: list[str], col_start: int = 1) -> None:
     for ci, h in enumerate(headers):
-        c = ws.cell(row=row, column=col_start + ci, value=h)
+        # A blank slot gets a SPACE, not None: an empty neighbour lets a long title
+        # spill across the next columns, which looked like data in the wrong cell once
+        # the merges were removed. A space is invisible but non-empty, so Excel and
+        # Sheets clip the overflow. (Kurt 2026-08-31)
+        c = ws.cell(row=row, column=col_start + ci, value=(h if h else " "))
         c.font = F_HDR
         c.fill = FILL_HEADER
         c.alignment = A_CENTER
@@ -308,12 +312,22 @@ def _fetch_all_data(settings: dict) -> dict:
         except Exception as e:
             print(f"  Warning: Could not load corrected inventory: {e}")
 
+    # Monthly slot tables can be split on explicit billing-date ranges instead of
+    # charge month (settings["monthly_split_ranges"]) — see _monthly_bucket().
+    import inventory_demand_report as _idr
+    _idr.MONTHLY_SPLIT_RANGES = [list(r) for r in (settings.get("monthly_split_ranges") or [])]
+    if _idr.MONTHLY_SPLIT_RANGES:
+        print(f"  Monthly boxes split by billing date: {_idr.MONTHLY_SPLIT_RANGES}")
+
     # -- Recharge --
     print("Fetching Recharge charges...")
     # Specialty/bundle accumulator (AHB-X*, BL-*) — populated by both fetchers
     specialty: dict = {"WK1": {}, "WK2": {}}
     # Bundle explosion breakdown (per-box components) for the Cut Order tab.
     bundles: dict = {"WK1": {}, "WK2": {}}
+    # Shopify MONTHLY boxes bucketed by the ORDER's own date (its billing date), so
+    # they slot into the same billing-date blocks as the Recharge charges.
+    sh_monthly: dict = {}
 
     # Shopify creds for live bundle-recipe lookups from the Recharge fetcher.
     _bstore = settings.get("shopify_store_url", "").strip()
@@ -355,7 +369,8 @@ def _fetch_all_data(settings: dict) -> dict:
         sh_wk2_med,
         sh_wk1_lge,
         sh_wk2_lge,
-    ) = fetch_shopify_orders(settings, out_specialty=specialty, out_bundles=bundles)
+    ) = fetch_shopify_orders(settings, out_specialty=specialty, out_bundles=bundles,
+                             out_monthly=sh_monthly)
 
     # -- Normalize aliased SKUs across all demand dicts --
     if SKU_ALIASES:
@@ -593,12 +608,19 @@ def _fetch_all_data(settings: dict) -> dict:
         bucket = monthly_by_week_month.setdefault(key, {})
         bucket[box_type] = bucket.get(box_type, 0) + qty
 
-    _add_monthly("WK1", _wk1_month, "MED", sh_wk1_med.get("MONTHLY", 0))
-    _add_monthly("WK1", _wk1_month, "CMED", sh_wk1_med.get("CMED", 0))
-    _add_monthly("WK1", _wk1_month, "LGE", sh_wk1_lge.get("MONTHLY", 0))
-    _add_monthly("WK2", _wk2_month, "MED", sh_wk2_med.get("MONTHLY", 0))
-    _add_monthly("WK2", _wk2_month, "CMED", sh_wk2_med.get("CMED", 0))
-    _add_monthly("WK2", _wk2_month, "LGE", sh_wk2_lge.get("MONTHLY", 0))
+    if sh_monthly:
+        # Per-order date buckets (preferred — matches the Recharge billing-date blocks)
+        for (_wk, _bkt), _counts in sh_monthly.items():
+            for _bt, _q in _counts.items():
+                _add_monthly(_wk, _bkt, _bt, _q)
+    else:
+        # Fallback: no per-order dates available, bucket by ship-tag month
+        _add_monthly("WK1", _wk1_month, "MED", sh_wk1_med.get("MONTHLY", 0))
+        _add_monthly("WK1", _wk1_month, "CMED", sh_wk1_med.get("CMED", 0))
+        _add_monthly("WK1", _wk1_month, "LGE", sh_wk1_lge.get("MONTHLY", 0))
+        _add_monthly("WK2", _wk2_month, "MED", sh_wk2_med.get("MONTHLY", 0))
+        _add_monthly("WK2", _wk2_month, "CMED", sh_wk2_med.get("CMED", 0))
+        _add_monthly("WK2", _wk2_month, "LGE", sh_wk2_lge.get("MONTHLY", 0))
 
     # WK2 dropped entirely (per user 2026-05-05 — "drop week 2 for now").
     # WK1 cohort only. If Monday run, both this-Mon and next-Mon ship tags
@@ -850,17 +872,14 @@ def _write_assignments_on_cut_order(ws: Worksheet, data: dict, settings: dict) -
         slot_skus: dict | None = None,
     ) -> int:
         slot_skus = slot_skus or {}
-        ws_.merge_cells(
-            start_row=start_row,
-            start_column=col_start,
-            end_row=start_row,
-            end_column=col_start + 3,
-        )
+        # NOT merged: a merged title row makes Excel/Sheets refuse a paste that spans
+        # it, which blocked pasting assignment blocks into col X (Kurt 2026-08-31).
         c = ws_.cell(row=start_row, column=col_start, value=f"{label} ({w1_count} W1 / {w2_count} W2)")
         c.font = Font(name="Calibri", size=10, bold=True, color=OK_FG)
         c.fill = PatternFill("solid", fgColor=OK_BG)
         for ci in range(col_start + 1, col_start + 4):
-            ws_.cell(row=start_row, column=ci).fill = PatternFill("solid", fgColor=OK_BG)
+            _f = ws_.cell(row=start_row, column=ci, value=" ")   # clip title overflow
+            _f.fill = PatternFill("solid", fgColor=OK_BG)
         r = start_row
         for slot_name, _prefix in slots:
             r += 1
@@ -1305,12 +1324,13 @@ def _build_cut_order_tab(
     jam_w1_range = f"$AI$3:$AI${jam_last_row}"
     jam_w2_range = f"$AJ$3:$AJ${jam_last_row}"
     # Bundle EXTRA boxes: hidden helper cols written by the bundles section at the
-    # bottom of this sheet — S = bare component SKU, T = extra units (= Add boxes x
+    # bottom of this sheet — AL = bare component SKU, AM = extra units (= Add boxes x
     # per-box). Deliberately a wide fixed span: the bundles section starts below the
-    # SKU table, whose length isn't known when these formulas are written. S/T are
-    # used by nothing else on this sheet.
-    BUNDLE_SKU_RANGE = "$S$1:$S$600"
-    BUNDLE_EXTRA_RANGE = "$T$1:$T$600"
+    # SKU table, whose length isn't known when these formulas are written. Parked at
+    # AL/AM (past the assignment blocks, which end at AJ) so S..V stay free for Kurt
+    # to delete/reuse — they were at S/T and blocked that (Kurt 2026-08-31).
+    BUNDLE_SKU_RANGE = "$AL$1:$AL$600"
+    BUNDLE_EXTRA_RANGE = "$AM$1:$AM$600"
 
     # ── Pre-compute urgency for each SKU ──
     # We need to calculate actual numeric values for sorting, not just formulas
@@ -1697,13 +1717,13 @@ def _write_bundles_on_cut_order(ws: Worksheet, data: dict, settings: dict, start
             # Hidden helper pair the main table's +Assign SUMIF reads. Only pickable
             # components can be cut, so only those feed demand.
             if cd["pickable"]:
-                ws.cell(row=row, column=19, value=cs).font = F_NUM_MUTED
-                ws.cell(row=row, column=20).value = f"=G{row}"
+                ws.cell(row=row, column=38, value=cs).font = F_NUM_MUTED
+                ws.cell(row=row, column=39).value = f"=G{row}"
             row += 1
         row += 1  # spacer between bundles
 
-    ws.column_dimensions["S"].hidden = True
-    ws.column_dimensions["T"].hidden = True
+    ws.column_dimensions["AL"].hidden = True
+    ws.column_dimensions["AM"].hidden = True
     return row
 
 
