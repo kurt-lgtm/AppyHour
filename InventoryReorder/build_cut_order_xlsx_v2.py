@@ -1492,10 +1492,17 @@ def _build_cut_order_tab(
         # usable weight BEFORE the ROUNDUP (Kurt 2026-07-28: "factor that in with
         # the round up") — rounding first would under-order wheels.
         #   Wheels = ROUNDUP(Cut x Slice oz / (Wheel lb x 16 x usable), 0)
-        ws_[f"P{row_num}"] = (
-            f'=IF(OR(K{row_num}=0,N{row_num}=0,O{row_num}=0),"",'
-            f"ROUNDUP(K{row_num}*O{row_num}/(N{row_num}*16*{_USABLE:.4g}),0))"
-        )
+        _spw = _spec.get("slices_per_wheel")
+        if _spw:
+            # Fixed slices-per-wheel spec (e.g. CH-BRIE 20, CH-OTTA 7): the target
+            # count already accounts for trim, so do NOT apply oz/lb or the waste
+            # factor on top — that would double-count the loss. (Kurt 2026-08-31)
+            ws_[f"P{row_num}"] = f'=IF(K{row_num}=0,"",ROUNDUP(K{row_num}/{_spw:g},0))'
+        else:
+            ws_[f"P{row_num}"] = (
+                f'=IF(OR(K{row_num}=0,N{row_num}=0,O{row_num}=0),"",'
+                f"ROUNDUP(K{row_num}*O{row_num}/(N{row_num}*16*{_USABLE:.4g}),0))"
+            )
         ws_.cell(row=row_num, column=16).font = F_NUM_BOLD
         ws_.cell(row=row_num, column=16).alignment = A_RIGHT
         # Q: Safety (hidden) — flat 25 if raw demand (D+E+F+G) > 25 else 0; avoids circular ref with I
@@ -1513,9 +1520,9 @@ def _build_cut_order_tab(
         """Write a section header + sub-grouped rows. Returns next available row."""
         if not rows_:
             return start_row
+        # No section header: there is only ONE section now (the urgency groups were
+        # removed), so a lone "SKUs" banner was a redundant row. (Kurt 2026-08-31)
         r = start_row + 1
-        _section_header(ws_, r, label, bg, fg, LAST_COL)
-        r += 1
 
         current_cat = None
         cat_start_rows: dict[str, list[int]] = {}  # track rows per category for subtotals

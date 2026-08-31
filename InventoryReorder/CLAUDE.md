@@ -36,6 +36,13 @@ Demand forecasting + cut order generation + fulfillment web dashboard. Single-fi
   RMFG count. **Monday's cut is a DRAFT; there is ONE cut per week**, so Monday's Cut column is a plan
   that has not been produced and must never land in Avail. Burn: added Monday's Cut to the 8/25 count and
   CH-ASST read 668 against a true HAVE of 150. If a number looks wrong, ask for a fresh HAVE — don't patch it.
+- **Fixed slices-per-wheel beats the yield math** — `cut_order_specs[sku]["slices_per_wheel"]`
+  makes Wheels `=ROUNDUP(Cut / slices_per_wheel)` and SKIPS oz/lb and the 10% waste factor: a
+  target slice COUNT already accounts for trim, so applying waste on top double-counts the loss.
+  Known: **CH-BRIE 20** (every cut-order email since 6/2025 says "target 20 slices per wheel"),
+  **CH-OTTA 7** (Kurt's sheet note "CUT EACH WHEEL INTO 7 SLICES - 4.57OZ"). Candidates seen in
+  old emails but NOT confirmed current — do not encode without asking: CH-ALP 39 slices/wheel,
+  CH-CTUF 10; and an oz-per-slice axis (CH-PRAD 5oz, CH-BRZ 5oz) which still uses the wheel math.
 - **Avail = corrected_inventory_path** — update BEFORE running cut order
 - **Calibri everywhere** in `build_cut_order_xlsx_v2.py` output
 - **Assignment-area layout (Kurt 2026-08-31)** — blocks start at **S**, no dead columns:
