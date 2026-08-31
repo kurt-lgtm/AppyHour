@@ -20,12 +20,38 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
 2. **`beat()` must NEVER fail the host task.** It is fire-and-forget (try/except swallow, atomic
    temp+replace write). A backup that succeeded but couldn't record a heartbeat must still exit 0 —
    the checker will alarm the missing beat, which is the correct signal, not the task failing.
-3. **The ledger is `%APPDATA%/AppyHour/heartbeats.json` — NOT shipping.db.** Nothing in this system
-   touches shipping.db read-write, ever (MSIX+WAL corruption). The checker's DB health probe opens
-   `mode=ro&immutable=1` only.
+3. **The ledger is `C:\AppyHourData\heartbeats.json` — NOT `%APPDATA%`, NOT shipping.db.** Nothing
+   in this system touches shipping.db read-write, ever (MSIX+WAL corruption). The checker's DB
+   health probe opens `mode=ro&immutable=1` only.
+   🔴 **Why it moved off `%APPDATA%` (2026-08-31):** MSIX virtualizes that directory, so
+   agent/routine writes landed in the sandbox overlay while real-context (schtask) writes landed in
+   the real profile — **two physical ledgers with disjoint histories**. Measured that morning: the
+   overlay held 8 keys with `offsite-backup` frozen at 08-22 (→ a "9.2d stale" finding), while the
+   real profile held that ONE key correct at 08-30. The backup had run fine; the ledger was split.
+   Both `automation_health.py` and (since `e528823`) `freshness_sweep.py` read this ledger, so
+   rule 13's mutual check bought nothing here — **they went blind together, at the same instant,
+   for the same reason.** `C:\AppyHourData` is outside the virtualization scope, the same reason
+   the canonical shipping.db and `replica_pull_stamp.json` live there; verified by writing through
+   `\\localhost\C$\AppyHourData\...` and reading the byte-identical file back through `C:\`.
+   NEGATIVES: (a) **never seed a moved ledger by COPYING one side** — the two hold disjoint
+   histories, so copying the side with more keys carries its stale value forward and keeps
+   false-alarming; the merge is **newest-wins per key**. (b) Any reader that hand-rolls
+   the deprecated `Path(os.environ["APPDATA"]) / "AppyHour" / "heartbeats.json"` instead of calling
+   `read_ledger()` is a second, silently-diverging path — `read_ledger()` is the only sanctioned
+   access.
+   (c) `read_ledger()` merges the deprecated `%APPDATA%` file newest-wins for ONE deprecation
+   window and logs LOUDLY on stderr whenever it contributes a key; a silent fallback would be the
+   split ledger wearing a fix's name. Remove the fallback once no unmigrated writer/reader remains.
 4. **Expectations live in the checker, not the ledger.** A task that stops being scheduled must be
    removed from `EXPECTED` in the same change — a stale expectation = permanent false alarm, which
    trains alarm-deafness (the failure mode that killed the old monitoring).
+   🔴 **A max-age must clear the owning schedule's longest legal gap, or it IS the stale
+   expectation this rule bans (2026-08-31).** `automation-health` sat at 2d while its routine runs
+   `15 12 * * 1-5` — weekdays only, so the Fri→Mon gap is 72h and every Monday graded a healthy
+   Friday run stale. Structural false alarms are worse than none: this one reached the rule-12
+   dispatcher and was on course to hand Kurt noise. Check the cron before setting a limit; prefer a
+   flat hours limit over weekday-aware logic (a limit anyone can verify with one subtraction beats
+   one that needs a holiday calendar the checker does not have).
 5. **Anomaly-first Slack** (per `feedback-appyhour-tasks-slack-summary`): silent when green; one
    consolidated message when red, via canonical `appyhour_lib.notify.notify()` — never a new webhook,
    never MCP from a scheduled run (`scheduled-tasks-use-cli-not-mcp`).
@@ -256,7 +282,7 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
 | `forecast-a-monitor` | `_outputs/scripts/forecast_a_monitor.py` | 8 days |
 | `loop-scorecard` | `ShipRouting/scripts/loop_scorecard.py` | 8 days |
 | `corrections-mining` | `_outputs/scripts/corrections_digest.py` | 8 days |
-| `automation-health` | `scripts/automation_health.py` self-beat | 2 days |
+| `automation-health` | `scripts/automation_health.py` self-beat | 4 days (routine is Mon–Fri; 2d graded every Friday run stale on Monday) |
 | `freshness-sweep` | `_outputs/scripts/freshness_sweep.py` (weekly data-freshness monitor — Mon 12:33 Claude scheduled task; beats on run, flags or not) | 8 days |
 | `pytest-shiprouting` | `_outputs/scripts/pytest_cadence.py` (weekday ShipRouting fast-tier suite via `~/.claude/hooks/catch-up-missed-tasks.sh` — stamp-guarded; Slack only on red, beat every run) | 4 days |
 
@@ -264,3 +290,8 @@ Checker also probes (no beat needed): `sync_heartbeat.json` age (>48h), `schtask
 Result ≠ 0, shipping.db `PRAGMA quick_check` (read-only immutable), **dev↔prod tree parity on
 DB-relevant `*.py` (rule 9)**, **cloud-replica freshness — `shopify_orders`/`weather_history` data
 age + `C:\AppyHourData\replica_pull_stamp.json` ingest stamp (rule 11)**.
+
+Ledger file: **`C:\AppyHourData\heartbeats.json`** (moved off `%APPDATA%` 2026-08-31, rule 3).
+Access it ONLY through `appyhour_lib.heartbeat.beat()` / `read_ledger()` — a hand-rolled
+`%APPDATA%` path is a second ledger that diverges silently. `slack-reship` also beats here (checked
+by `freshness_sweep.py` D3, not by `EXPECTED`).

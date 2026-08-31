@@ -31,7 +31,15 @@ EXPECTED = {
     "forecast-a-monitor": 8 * 24,
     "loop-scorecard": 8 * 24,
     "corrections-mining": 8 * 24,
-    "automation-health": 2 * 24,
+    # 🔴 4d, not 2d (2026-08-31): the owning routine `automation-health-daily` is cron
+    # `15 12 * * 1-5` — WEEKDAYS ONLY. Friday 12:16 -> Monday 12:16 is 72h, so a 48h limit graded
+    # Friday's healthy run stale every single Monday, forever, and 08-31 fed that false alarm into
+    # the rule-12 dispatcher. 4d = the Fri->Mon gap plus one missed weekday, same shape and reason
+    # as pytest-shiprouting below. Chosen over a weekday-aware limit deliberately: "is the beat
+    # older than N hours" is one comparison anyone can verify, while "what was the previous
+    # SCHEDULED run day" needs a calendar the checker does not have (holidays, a disabled task, a
+    # cron change) — an unprovable threshold in a false-alarm fix is the bug again.
+    "automation-health": 4 * 24,
     "freshness-sweep": 8 * 24,
     # weekday-only via catch-up-missed-tasks.sh; 4d allows the Fri->Mon gap + one missed day
     "pytest-shiprouting": 4 * 24,
@@ -297,11 +305,19 @@ def dispatch_findings(findings: list[str]) -> None:
         import finding_dispatch
         finding_dispatch.SOURCE = "automation-health"
         seen: list[str] = []
-        for text in findings:
-            key = finding_key(text)
-            seen.append(key)
-            print(f"dispatch[{key}]: {finding_dispatch.report(key, text, ref=_DISPATCH_REF)}")
-        finding_dispatch.finalize(seen)
+        try:
+            for text in findings:
+                key = finding_key(text)
+                seen.append(key)
+                print(f"dispatch[{key}]: {finding_dispatch.report(key, text, ref=_DISPATCH_REF)}")
+        finally:
+            # 🔴 finalize() runs even if report() dies mid-loop (2026-08-31). Skipping it FREEZES
+            # every streak: a finding that a fix has already cleared keeps its old count, and the
+            # next real appearance walks it to 3 and files a handoff for a bug that no longer
+            # exists — the false-alarm class this dispatcher exists to stop, one level up.
+            # Finalizing on the partial `seen` under-counts (streaks reset early), which is the
+            # safe direction: a real finding just re-counts next run.
+            finding_dispatch.finalize(seen)
     except Exception as e:  # never fail the checker over its dispatcher — but never silently
         print(f"finding-dispatch unavailable ({type(e).__name__}: {e}) — "
               "repeat findings NOT tracked this run")

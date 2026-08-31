@@ -93,6 +93,21 @@ class DispatchWiringTest(unittest.TestCase):
         sys.modules["finding_dispatch"].report = boom
         ah.dispatch_findings(["ingest sync heartbeat stale: 7.0d"])  # must not raise
 
+    def test_report_failure_mid_loop_still_finalizes(self):
+        """A skipped finalize() freezes every streak, so a finding a fix already cleared keeps
+        its count and can still reach 3 — the false-alarm bug one level up (2026-08-31)."""
+        def boom_on_second(key, desc, ref=""):
+            self.calls["report"].append((key, desc, ref))
+            if len(self.calls["report"]) == 2:
+                raise RuntimeError("dispatcher broke mid-loop")
+            return "counted 1/3"
+        sys.modules["finding_dispatch"].report = boom_on_second
+        ah.dispatch_findings(["ingest sync heartbeat stale: 7.0d (max 48h)",
+                              "prod tree STALE vs dev on 9 DB-relevant file(s): a.py",
+                              "shipping.db unreadable read-only (OSError: x)"])
+        self.assertEqual(self.calls["finalize"],
+                         [["ingest-heartbeat-stale", "prod-tree-drift"]])
+
 
 if __name__ == "__main__":
     unittest.main()
