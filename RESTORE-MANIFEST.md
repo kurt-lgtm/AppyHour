@@ -10,7 +10,7 @@ Decrypt tool: `scripts/decrypt_creds.py`. Off-machine secret you MUST keep: the
 
 | Asset | Tier / where | Backup artifact | Restore command |
 |---|---|---|---|
-| `shipping.db` (analytics/routing DB) | C daily → `E:\AppyHourBackups\daily\`; weekly → Drive | `shipping.daily-<date>.db` / `shipping.weekly-<date>.db` | copy newest snapshot → `%APPDATA%\AppyHour\shipping.db` |
+| `shipping.db` (analytics/routing DB) | C daily → `E:\AppyHourBackups\daily\`; weekly → Drive | `shipping.daily-<date>.db` / `shipping.weekly-<date>.db` | copy newest snapshot → **`C:\AppyHourData\shipping.db`** (🔴 NOT `%APPDATA%\AppyHour\shipping.db` — canonical moved 2026-07-08 and the legacy path is hard-refused with no override since 2026-08-31; restoring there yields a DB no tool can open) |
 | `~/.knowledge` vault + durable `~/.claude` (skills, hooks, agents, plans, scheduled-tasks, rules, commands, projects/*/memory) | weekly → Drive + `E:\...\weekly\` | `coldchain-knowledge-backup-<date>.zip` (CLEARTEXT — no secrets; settings moved out) | unzip into `%USERPROFILE%\` (arcnames are home-relative) |
 | Credentials (`%APPDATA%/AppyHour/*.json` + `*.txt` keys + `portal_profiles/` + repo-root `.env` + **`~/.claude/settings*.json`**) | weekly → Drive (**encrypted**) + `E:\...\creds\` | `coldchain-creds-backup-<date>.zip.enc` | `python scripts/decrypt_creds.py <file>.zip.enc <out_dir>` then place files back (arcnames: bare name → `%APPDATA%\AppyHour\`, `claude/...` → `%USERPROFILE%\.claude\`, `repo/.env` → repo root) |
 | Box-size lookup xlsx | weekly → Drive + `E:\...\reference\` | `coldchain-reference-backup-<date>.zip` | unzip → `%USERPROFILE%\Desktop\` (`box_simulation.py:20` reads it there) |

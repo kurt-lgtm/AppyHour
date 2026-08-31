@@ -17,7 +17,8 @@ backed up. Copy these from the old disk (mounted as e.g. `E:\`) before falling b
 
 | From old disk (`Users\Work\...`) | To new machine | Why it matters |
 |---|---|---|
-| `AppData\Roaming\AppyHour\` (whole folder) | `%APPDATA%\AppyHour\` | **Creds + settings + live `shipping.db`** — in NO backup. Skips §3 and §5 entirely. |
+| `AppData\Roaming\AppyHour\` (whole folder) | `%APPDATA%\AppyHour\` | **Creds + settings** (`gel_calc_shopify_settings.json`, `inventory_reorder_settings.json`, `portal_creds.json`, `*_api_key.txt`, `flow_api_token.txt`) — in NO backup. Skips §5 entirely. 🔴 **The live `shipping.db` is NOT here any more** (moved to `C:\AppyHourData\` on 2026-07-08) — see the row below; copying an old `shipping.db*` out of this folder onto the new box restores a corruption remnant. |
+| `C:\AppyHourData\` (whole folder) | `C:\AppyHourData\` | **Live `shipping.db` + `-wal`/`-shm`, `backups\`, `heartbeats.json`, `carrier_tnt_cache*.json`.** This is the canonical data root since 2026-07-08. Skips §3. |
 | `.knowledge\` (whole folder) | `~/.knowledge\` | Full vault, **no 06-11 gap** — better than the knowledge zip. Skips §4 vault. |
 | `.claude\skills\` | `~/.claude\skills\` | Skills, current. |
 | `.claude\hooks\` and `.claude\settings.json` | `~/.claude\` | Stop-hook, permissions, MCP prefs. |
@@ -79,9 +80,9 @@ on `sys.path`. Keep these names or fix the sys.path blocks (§6).
 > `%APPDATA%\AppyHour\backups\` (recover from the old SSD per §0a). Fix the uploader
 > first (reinstall/auth `gws`, or swap in rclone / the Drive API) — see §5a.
 > Use the newest available, NOT the stale `pre-cutover` snapshot the old recovery doc named.
-- [ ] **First check `%APPDATA%\AppyHour\backups\` (local) / the old SSD** for a snapshot newer than 06-21 — the local weeklies kept running even though the Drive upload didn't.
+- [ ] **First check `C:\AppyHourData\backups\` (local) / the old SSD** for a snapshot newer than 06-21 — the local weeklies kept running even though the Drive upload didn't. 🔴 Snapshots moved with the DB on 2026-07-08; the legacy `%APPDATA%\AppyHour\backups\` folder stops at 2026-07-10 and (verified 2026-08-31) exists **only in the MSIX sandbox view**, so a real-context restore that looks there finds nothing.
 - [ ] Download **`shipping.weekly-2026-06-21.db`** — id `1wcYREgMgGw339GYmDmzTBxhQsWDzhE1c` (130 MB; last one that reached Drive)
-- [ ] Copy to `%APPDATA%\AppyHour\shipping.db`
+- [ ] Copy to **`C:\AppyHourData\shipping.db`** — 🔴 NEVER to `%APPDATA%\AppyHour\shipping.db`. That legacy MSIX-virtualized path is hard-refused by `appyhour_lib.paths.assert_canonical_db()` with no override (since 2026-08-31), so a DB restored there is unreadable by every tool. It is the second name behind the 2026-07-22 nine-day split-brain and the 6/27, 7/01, 7/03 WAL corruptions. Create `C:\AppyHourData\` if missing, and do not carry a `-wal`/`-shm` pair across.
 - [ ] Catch up the gap since the snapshot: re-run importers (carrier emails re-downloadable from carrier portals + RMFG emails)
 - [ ] Fallback if the weekly is corrupt: `shipping.weekly-2026-06-19.db` (id `1sTPOsEvR4FKo3_bcSYyOtHI5qVWVkGjZ`) or the original `shipping.pre-cutover-2026-06-11.db` (id `14Wjf8EOPnSqh_kwBPQSK9403AIAnq-4l`)
 
