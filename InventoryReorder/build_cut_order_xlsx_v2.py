@@ -52,6 +52,8 @@ from inventory_demand_report import (
     load_settings,
     parse_depletion_xlsx,
     SETTINGS_PATH,
+    _get_bundle_recipe,
+    PICKABLE_PREFIXES,
 )
 from fulfillment_web.invoice_processor import extract_bulk_weights
 
@@ -1663,6 +1665,23 @@ def _write_bundles_on_cut_order(ws: Worksheet, data: dict, settings: dict, start
                                                     "pickable": cd.get("pickable", True)})
                 c["added"] += cd.get("added", 0)
                 c["already"] += cd.get("already", 0)
+
+    # Force-include any bundle named in settings["bundle_add_boxes"] even when ZERO
+    # were detected in orders/charges. A brand-new limited release (DRAFT product, no
+    # orders yet) otherwise gets no row, so there is nowhere to type the Add boxes that
+    # would pull its components into the cut. (Kurt 2026-09-01: AHB-XFALL26-*)
+    _store = settings.get("shopify_store_url", "").strip()
+    if _store and not _store.startswith("http"):
+        _store = f"https://{_store}.myshopify.com"
+    _tok = settings.get("shopify_access_token", "").strip()
+    for _p in add_cfg:
+        if _p in merged:
+            continue
+        _recipe = _get_bundle_recipe(_store, _tok, _p)
+        merged[_p] = {"count": 0, "no_recipe": not _recipe,
+                      "components": {c: {"per": q, "added": 0, "already": 0,
+                                         "pickable": any(c.startswith(x) for x in PICKABLE_PREFIXES)}
+                                     for c, q in _recipe.items()}}
 
     if not merged:
         return start_row
