@@ -5,11 +5,18 @@ Alarms on ABSENCE (missing/stale heartbeats) — the signal the Slack-on-complet
 structurally can't produce. Also probes: sync_heartbeat.json age, AppyHour schtasks Last Result,
 shipping.db integrity (READ-ONLY immutable — never a writer, rule 3).
 
+Every check above grades ONE automation. `check_task_set` grades the SET — same-slot collisions,
+two owners on one script, two writers on one heartbeat key (which defeats this very checker), and
+expectations/beats with no counterpart. See its block comment for what it deliberately lets
+through and why.
+
 Run:  python scripts/automation_health.py [--verbose]   (bootstrap.init handles UTF-8 stdio)
 Exit: 0 green, 1 findings, 2 checker-broken (treat as red).
 """
 from __future__ import annotations
 
+import ast
+import contextlib
 import json
 import os
 import sqlite3
@@ -197,12 +204,35 @@ def check_sync_heartbeat(findings: list[str]) -> None:
         findings.append(f"ingest legs not ok: {', '.join(bad)}")
 
 
-def check_schtasks(findings: list[str]) -> None:
-    try:
-        out = subprocess.run(
+_SCHTASKS_CSV: str | None = None
+
+
+def _schtasks_csv() -> str:
+    """`schtasks /query /fo csv /v`, queried ONCE per process and memoised.
+
+    Two checks read it now (check_schtasks and check_task_set) and the query costs seconds on a
+    machine with ~35 tasks. Memoised rather than passed around so neither check can silently run
+    against a DIFFERENT snapshot of the task list than the other — a set-level check that
+    disagreed with the per-task check about which tasks exist would produce findings nobody
+    could reproduce. Raises; both callers catch and report the blindness.
+
+    ⚠️ Process-lifetime cache: a test that injects a different task list MUST set
+    `automation_health._SCHTASKS_CSV = None` first, or it silently grades the previous test's
+    fixture. (Measured 2026-08-31: adding this memo turned 9 passing schtask tests red, all of
+    them re-running test #1's CSV.)
+    """
+    global _SCHTASKS_CSV
+    if _SCHTASKS_CSV is None:
+        _SCHTASKS_CSV = subprocess.run(
             ["schtasks", "/query", "/fo", "csv", "/v"],
             capture_output=True, text=True, timeout=120,
         ).stdout
+    return _SCHTASKS_CSV
+
+
+def check_schtasks(findings: list[str]) -> None:
+    try:
+        out = _schtasks_csv()
     except Exception as e:
         findings.append(f"schtasks query failed ({type(e).__name__}) — Windows task states unknown")
         return
@@ -443,6 +473,574 @@ def check_prod_parity(findings: list[str]) -> None:
         )
 
 
+# --- SET-LEVEL check (2026-08-31) -------------------------------------------------------
+# 🔴 WHY A SET-LEVEL CHECK EXISTS AT ALL. Every check above this line grades ONE automation at a
+# time: is this beat fresh, is this schtask's Last Result 0, is this replica moving. A whole class
+# of failure is invisible to that method because it is not a property of any member — it exists
+# only in the SET. Two were found BY HAND on 2026-08-31, both after the per-item checks reported
+# green:
+#   (a) `weekly-shipping-vendor-matrix` and `weekly-reship-report` are pinned to the SAME cron
+#       slot (`0 12 * * 2`), and both publish weekly reship numbers to Google Sheets off the same
+#       Slack window. Nothing about either task, read alone, is wrong.
+#   (b) the freshness sweep had TWO owners — a Windows schtask `\AppyHour\FreshnessSweep` (Mon
+#       12:00) and the Claude routine `freshness-sweep` (Mon 12:30) — running the SAME script and
+#       therefore writing the SAME heartbeat key. 🔴 That one is the worst of the class: a beat
+#       from EITHER owner made the OTHER look alive, so `check_beats` above could not have
+#       detected either owner dying. The duplication defeated the detector. (Resolved that day:
+#       the schtask was deleted, the routine is sole owner — so it is now reconstructed as a
+#       FIXTURE in tests, not expected live.)
+# Both were CROSS-SYSTEM (a Windows schtask paired with a Claude routine), which is exactly where
+# a single-system audit cannot look.
+#
+# 🔴 NEGATIVES that shaped this — a check that fires on benign overlap is worse than no check
+# (rule 4), and every one of these was a tempting design that would have done exactly that:
+#   - **Do NOT infer a task's write surface by grepping its SKILL.md prose.** Measured: the
+#     prewarm routines' SKILL.md contain the literal strings "no sheet writes" and "no shipping.db
+#     writes" — a marker scan reads those as sheet+db writers and collides them with everything at
+#     noon. Negations, warnings and don't-do-this lists are the MAJORITY of what a good SKILL.md
+#     says about a resource.
+#   - **Do NOT infer it from the target SCRIPT source either.** Same measurement: `backup_offsite.py`
+#     mentions `carrier_tnt_cache.json` three times (in comments, as a file it SKIPS), and the
+#     slack_reship modules that demonstrably write Google Sheets contain no sheet marker at all
+#     because they push through a helper. Inference is wrong in BOTH directions here.
+#     → surfaces are a hand-triaged REGISTRY (TASK_SURFACES), same shape and same reason as
+#       SCHTASK_EXPECTED above. A pair collides only when BOTH members are registered and share a
+#       surface. An unregistered task is never half of a collision finding.
+#   - **Do NOT treat "same cron minute" as "same instant", and do NOT treat jitter as a fix.**
+#     Claude routines carry a stored `jitterSeconds` (0..~600). The Tuesday pair above is
+#     separated TODAY by 9m07s of incidental jitter (19s vs 566s) — but jitter is a value nobody
+#     chose, re-rolled whenever a task is edited, so it MASKS the collision rather than resolving
+#     it. The comparison is therefore CRON SLOT (dow, hour, minute); the effective offsets and the
+#     current gap are printed IN the finding so the reader can judge the urgency themselves.
+#   - **Do NOT count the heartbeat ledger as a shared write surface.** Every scheduled thing beats;
+#     including it would collide everything with everything. Writes are atomic-replace anyway.
+#   - **Do NOT flag same-script tasks whose ARGUMENTS differ.** `appyhour_daily_{tue,wed,thu,fri}`
+#     all run `daily_shipping_sync.py`, on four different days, with four different `--day` values.
+#     That is one job scheduled four times, not four owners.
+#
+# INPUT PROBLEM (read before "why a snapshot file"): Claude routines are CLOUD-side objects. Only
+# SKILL.md is on disk; `cronExpression` / `enabled` / `jitterSeconds` live server-side and are
+# reachable only through the `scheduled-tasks` MCP tool, which a plain Python checker cannot call.
+# So the routine half comes from a SNAPSHOT that an agent refreshes. A stale snapshot would arm
+# FALSE pairs (a routine disabled since capture still counted as live), so past the soft limit this
+# check does NOT guess: it drops to Windows-only and says so loudly (rule 1 — blind is not green).
+CLAUDE_TASKS_SNAPSHOT = Path(
+    r"C:\Users\Work\Claude Projects\_outputs\cache\claude_scheduled_tasks.json")
+CLAUDE_TASKS_SNAPSHOT_MAX_D = 7
+WORKSPACE_ROOT = Path(r"C:\Users\Work\Claude Projects")
+
+# Shared-resource labels, hand-triaged per task. A label means "this task WRITES this resource".
+# Absent from this dict = surface UNKNOWN = never reported as half of a collision. Adding a row is
+# a triage step: read the task's command, read what the script actually writes, then write the row.
+# 🔴 Populating this by pattern-matching names or grepping prose re-introduces the exact failure
+# the block comment above measures.
+TASK_SURFACES: dict[str, frozenset[str]] = {
+    # -- Claude routines --
+    # `-m ingest.slack_reship.sync --report --history-sheet`: writes the reship HISTORY sheet and
+    # DMs Kurt, off the Mon-Sun Slack #reship-and-order-requests window.
+    "weekly-shipping-vendor-matrix": frozenset({"gsheets", "slack-reship-window"}),
+    # `-m ingest.slack_reship.weekly_task`: overwrites THIS week's tab in the reship Google Sheet,
+    # off the same Slack window and the same fulfillments denominator. Same package as above.
+    "weekly-reship-report": frozenset({"gsheets", "slack-reship-window"}),
+    # friday_forecast_refresh.py = build -> fetch_cohort_forecast -> build -> upload_sheet.py: it
+    # PUBLISHES over the live routing sheet and re-sizes the cohort's ice.
+    "friday-forecast-refresh": frozenset({"gsheets", "routing-cohort"}),
+    # prewarm_carrier_tnt.py: sole write is the ShipEngine quote cache. Verified in the script, not
+    # in the prose (the prose says "no sheet writes", which is why prose is not evidence here).
+    "prewarm-carrier-tnt-thursday": frozenset({"carrier-tnt-cache"}),
+    "prewarm-carrier-tnt-friday-delta": frozenset({"carrier-tnt-cache"}),
+    "prewarm-carrier-tnt-hourly-fill": frozenset({"carrier-tnt-cache"}),
+    # shipping_cost_report.py --push: rewrites the CEO shipping-cost sheet.
+    "shipping-cost-sheet": frozenset({"gsheets"}),
+    # backup_offsite.py: uploads the rescue set to Drive. Same surface as the Sunday schtask below
+    # — which is the point (see DUAL-OWNER below).
+    "appyhour-offsite-backup": frozenset({"offsite-backup"}),
+    # Read-only by charter (both SKILL.mds forbid writes; both scripts open the DB mode=ro). An
+    # EMPTY surface set is a triaged answer, not a missing row — it means "collides with nothing".
+    "automation-health-daily": frozenset(),
+    "freshness-sweep": frozenset(),
+    "warm-cohort-report": frozenset(),       # reports + Slack; no sheet push
+    "evo-transfer-monday-reminder": frozenset(),   # one Slack DM
+    "vault-bm25-refresh": frozenset(),       # rebuilds a local vault index only
+    # -- Windows schtasks (keys as check_schtasks normalises them: lowercased, leading \ stripped) --
+    "appyhour_daily_tue": frozenset({"shipping-db-write"}),
+    "appyhour_daily_wed": frozenset({"shipping-db-write"}),
+    "appyhour_daily_thu": frozenset({"shipping-db-write"}),
+    "appyhour_daily_fri": frozenset({"shipping-db-write"}),
+    "appyhour_sync_daily_noon": frozenset({"shipping-db-write"}),
+    "appyhour_sync_on_logon": frozenset({"shipping-db-write"}),
+    "appyhour carrier invoice sync": frozenset({"shipping-db-write"}),
+    "appyhour weekly offsite backup": frozenset({"offsite-backup"}),
+    "appyhour-db-healthcheck": frozenset(),        # mode=ro integrity probe
+    "appyhour-vf-archive-refresh": frozenset(),    # copies vF xlsx into an archive dir
+}
+
+# Pairs that DO run the same target on purpose, with the reason. Keyed by the two task names,
+# sorted. A row here suppresses the DUAL-OWNER finding for that pair ONLY — never the DUAL-BEAT
+# finding, because a shared heartbeat key is dangerous even when the duplication is deliberate.
+ALLOWED_DUAL_OWNERS: dict[tuple[str, str], str] = {
+    ("appyhour_sync_daily_noon", "appyhour_sync_on_logon"): (
+        "deliberate catch-up pair: the logon trigger exists BECAUSE the fixed-time daily one is "
+        "missed whenever the machine is asleep at its slot (the dead-job rule). They serialise on "
+        "the shipping.db advisory write lock rather than racing, and sync_logon.py is idempotent. "
+        "Neither writes a heartbeat key, so this does not blind any dead-man switch."),
+}
+
+def _norm_target(raw: str) -> str | None:
+    """Collapse every spelling of one script to ONE id.
+
+    dev tree vs C:\\AppyHourProd, `/c/users/...` (git-bash) vs `C:\\Users\\...`, forward vs
+    backslash, quoted vs bare all name the same file — and a duplicate-owner check that compares
+    raw command strings sees two different scripts and reports nothing. That is precisely how the
+    FreshnessSweep pair (schtask on the prod path, routine on the dev path) stayed invisible.
+    """
+    s = (raw or "").strip().strip('"\'').replace("\\", "/").lower()
+    while s.endswith('"') or s.endswith("'"):
+        s = s[:-1]
+    if not s.endswith((".py", ".bat", ".sh")):
+        return None
+    if s.startswith("/c/"):           # git-bash spelling of C:\
+        s = "c:/" + s[3:]
+    for prefix, repl in (("c:/appyhourprod/", ""),
+                         ("c:/users/work/claude projects/", ""),
+                         ("c:/users/work/", "~/")):
+        if s.startswith(prefix):
+            s = repl + s[len(prefix):]
+            break
+    return s.lstrip("/")
+
+
+def _dev_path(target_id: str) -> Path | None:
+    """Resolve a normalised id back to a readable file in the DEV tree.
+
+    Reading the DEV copy of a target a PROD-tree task runs is deliberate: C:\\AppyHourProd may not
+    exist on a given machine, and the two copies are the same script by definition of _norm_target.
+    Prod/dev DRIFT is check_prod_parity's job, not this one's."""
+    if not target_id:
+        return None
+    p = (Path(r"C:\Users\Work") / target_id[2:]) if target_id.startswith("~/") \
+        else (WORKSPACE_ROOT / target_id)
+    return p if p.exists() else None
+
+
+def _beats_in_file(path: Path, _depth: int = 0) -> set[str]:
+    """Heartbeat keys a script writes: `beat("name")` in EXECUTABLE code only.
+
+    🔴 Comments and docstrings are stripped first, and this is not fussiness. `freshness_sweep.py`
+    carries the line `#  ... while `beat("slack-reship")` wrote canonical` — a naive regex reads
+    that comment as freshness-sweep writing weekly-reship-report's key and files a DUAL-BEAT
+    finding on two tasks that share nothing. One false finding of that shape teaches the reader to
+    skim the next one.
+    """
+    keys: set[str] = set()
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return keys
+    if path.suffix.lower() in (".bat", ".sh"):
+        # one hop: a .bat wrapper's real payload is the .py it launches
+        if _depth == 0:
+            import re as _re
+            for m in _re.finditer(r"[^\s\"']+\.py", text):
+                sub = _dev_path(_norm_target(m.group(0)) or "")
+                if sub:
+                    keys |= _beats_in_file(sub, _depth + 1)
+        return keys
+    # 🔴 TOKENISED, not regexed. A line-based regex with hand-rolled comment/docstring stripping
+    # was written first and was wrong on its FIRST real run: it read the literal `beat("name")`
+    # out of this very function's own docstring and filed an UNWATCHED-BEAT finding for a
+    # heartbeat key called "name". Prose about beats is everywhere in this codebase (a comment in
+    # freshness_sweep.py quotes `beat("slack-reship")`, another task's key), so "is this token a
+    # string in executable code" has to be answered by the tokeniser, not by guessing quote state.
+    import io as _io
+    import token as _tok
+    import tokenize as _tokenize
+    try:
+        toks = [t for t in _tokenize.generate_tokens(_io.StringIO(text).readline)
+                if t.type not in (_tok.COMMENT, _tok.NL, _tok.NEWLINE, _tok.INDENT,
+                                  _tok.DEDENT)]
+    except (SyntaxError, _tokenize.TokenError, IndentationError, ValueError):
+        return keys  # unparseable: report NOTHING rather than guess (a wrong key is worse)
+    for i, t in enumerate(toks[:-3]):
+        if t.type != _tok.NAME or t.string not in ("beat", "_beat"):
+            continue
+        if i and toks[i - 1].type == _tok.NAME and toks[i - 1].string == "def":
+            continue  # the definition in heartbeat.py, not a call
+        if toks[i + 1].string != "(" or toks[i + 2].type != _tok.STRING:
+            continue  # beat(name) with a variable is unresolvable here; skip, never guess
+        try:
+            val = ast.literal_eval(toks[i + 2].string)
+        except (ValueError, SyntaxError):
+            continue
+        if isinstance(val, str) and val:
+            keys.add(val)
+    return keys
+
+
+def _targets_from_text(text: str) -> set[tuple[str, str]]:
+    """(normalised target, normalised argv-tail) for every INVOCATION in a command blob.
+
+    🔴 Only lines that actually invoke python count. A SKILL.md names many scripts in prose — the
+    one it runs, the ones it must NOT run, the ones a comment cites as provenance — and treating a
+    mention as an invocation would collide two routines that merely reference the same file.
+    """
+    import re as _re
+    found: set[tuple[str, str]] = set()
+    for line in text.splitlines():
+        if "python" not in line.lower():
+            continue
+        cwd = ""
+        m = _re.search(r"\bcd\s+[\"']?([A-Za-z]:[\\/][^\"'&;|]+)", line)
+        if m:
+            cwd = (_norm_target(m.group(1).rstrip("/\\ ") + "/x.py") or "")[:-4]
+        # 🔴 Find the EXTENSION first, then walk BACK to the last drive-letter/`/c/` marker. A
+        # token regex (`[^\s"']+\.py`) looks correct and silently misses every real invocation on
+        # this machine, because the canonical paths contain a space: "C:/Users/Work/Claude
+        # Projects/AppyHour/scripts/backup_offsite.py" tokenises to "C:/Users/Work/Claude", which
+        # has no .py and is dropped. schtasks also mangles its own quoting, so quote-aware parsing
+        # is not enough either. The two DUAL-OWNER findings this check exists to make both live on
+        # such paths — a token regex reports a clean set-level run over a set it never read.
+        for m in _re.finditer(r"\.(?:py|bat|sh)(?![A-Za-z0-9])", line):
+            seg = line[:m.end()]
+            starts = [s.start() for s in _re.finditer(r"[A-Za-z]:[\\/]|/c/", seg)]
+            if not starts:
+                continue
+            raw = seg[starts[-1]:]
+            if _re.search(r"\.exe[\s\"'`]", raw):
+                # The walk-back ran through the interpreter, i.e. the SCRIPT was written relative
+                # ("python.exe rebuild_zone_floor.py"). Its real location depends on the task's
+                # working directory, which is not in this text — so skip it rather than mint an
+                # id like "~/anaconda3/python.exe rebuild_zone_floor.py" that could false-match
+                # another task's equally unresolvable relative script. Same rule as `-m` with no
+                # `cd`: unresolvable is skipped, never guessed.
+                continue
+            tid = _norm_target(raw)
+            if tid:
+                found.add((tid, _args_tail(line, m.end())))
+        for m in _re.finditer(r"-m\s+([A-Za-z_][\w.]*)", line):
+            if not cwd:
+                continue  # `-m pkg.mod` is unresolvable without the cwd; skip rather than guess
+            found.add((f"{cwd}{m.group(1).replace('.', '/')}.py", _args_tail(line, m.end())))
+    return found
+
+
+def _args_tail(line: str, start: int) -> str:
+    """Everything after the invoked target, normalised — this is what tells four `--day` variants
+    of ONE job apart from four owners of one script."""
+    import re as _re
+    # Cut at the first backtick: these commands are quoted inside markdown fences/spans, so the
+    # backtick is where the command stops and the SKILL.md's prose about it begins. Without the
+    # cut, one routine's args read "` from working dir `C:\\...`" — prose in an identity field.
+    tail = line[start:].split("`")[0].strip().strip('"').strip()
+    tail = _re.sub(r"\s+", " ", tail.replace('"', "").replace("'", ""))
+    return tail.lower()
+
+
+def _cron_field(field: str, lo: int, hi: int) -> set[int]:
+    vals: set[int] = set()
+    for part in field.split(","):
+        step = 1
+        if "/" in part:
+            part, s = part.split("/", 1)
+            step = int(s)
+        if part in ("*", ""):
+            a, b = lo, hi
+        elif "-" in part:
+            a_s, b_s = part.split("-", 1)
+            a, b = int(a_s), int(b_s)
+        else:
+            a = b = int(part)
+        vals.update(range(a, b + 1, step))
+    return vals
+
+
+def _cron_slots(expr: str) -> set[tuple[int, int, int]] | None:
+    """`M H DOM MON DOW` -> {(dow, hour, minute)}. None = a shape this expander does not model.
+
+    Returning None (not an empty set) on day-of-month / month restrictions is deliberate: an
+    unmodelled schedule must make the task INELIGIBLE for a collision finding, never make it look
+    like it never fires. Nothing in the current set uses those fields."""
+    parts = expr.split()
+    if len(parts) != 5:
+        return None
+    minute, hour, dom, mon, dow = parts
+    if dom != "*" or mon != "*":
+        return None
+    try:
+        minutes, hours = _cron_field(minute, 0, 59), _cron_field(hour, 0, 23)
+        dows = {0 if d == 7 else d for d in _cron_field(dow, 0, 6)}
+    except (ValueError, TypeError):
+        return None
+    return {(d, h, m) for d in dows for h in hours for m in minutes}
+
+
+_WIN_DOW = {"SUN": 0, "MON": 1, "TUE": 2, "WED": 3, "THU": 4, "FRI": 5, "SAT": 6}
+
+
+def _win_slots(sched_type: str, start: str, days: str) -> set[tuple[int, int, int]] | None:
+    """Windows trigger -> the same (dow, hour, minute) space. None = not a clock trigger."""
+    t = _parse_schtask_time("1/1/2000 " + start.strip()) if start.strip() else None
+    if t is None:
+        for fmt in ("%I:%M:%S %p", "%H:%M:%S"):
+            try:
+                from datetime import datetime as _dt
+                t = _dt.strptime(start.strip(), fmt)
+                break
+            except ValueError:
+                continue
+    if t is None:
+        return None  # "At logon time" / "N/A" — no clock slot, so no same-slot comparison
+    st = (sched_type or "").strip().lower()
+    if st.startswith("daily"):
+        dows = set(range(7))
+    elif st.startswith("weekly"):
+        dows = {_WIN_DOW[d.strip().upper()[:3]] for d in days.split(",")
+                if d.strip().upper()[:3] in _WIN_DOW}
+        if not dows:
+            return None
+    else:
+        return None
+    return {(d, t.hour, t.minute) for d in dows}
+
+
+def _pair_hash(*names: str) -> str:
+    """Short stable discriminator appended to every pair key.
+
+    🔴 finding_key()'s slug turns EVERY separator into '-', so a bare `a__b` key lets the pair
+    (x, y-z) and the pair (x-y, z) collapse onto one dispatch key — the same class of collapse
+    that let three space-named schtasks share one key until it was fixed this morning. The hash of
+    the sorted member tuple cannot collapse, and it is stable across runs (no ages, no counts)."""
+    # blake2b, not sha1 — this is an identity digest, not a security primitive, and a flagged
+    # hash in a monitoring file invites someone to "fix" it later, which would silently re-key
+    # every open finding streak. 🔴 Changing this function's output IS a streak reset for every
+    # pair currently counting toward dispatch.
+    import hashlib
+    return hashlib.blake2b("\x00".join(sorted(names)).encode("utf-8"), digest_size=4).hexdigest()
+
+
+def _load_claude_routines(snapshot: Path) -> tuple[list[dict], str | None]:
+    """Routine records from the snapshot, or ([], reason) when it cannot be trusted."""
+    try:
+        blob = json.loads(snapshot.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return [], (f"snapshot missing at {snapshot}")
+    except Exception as e:
+        return [], f"snapshot unreadable ({type(e).__name__}: {e})"
+    try:
+        cap = datetime.fromisoformat(str(blob.get("captured_at", "")).replace("Z", "+00:00"))
+        if cap.tzinfo is None:
+            cap = cap.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return [], "snapshot has no parseable captured_at"
+    age_d = (datetime.now(timezone.utc) - cap).total_seconds() / 86400
+    if age_d > CLAUDE_TASKS_SNAPSHOT_MAX_D:
+        return [], (f"snapshot {age_d:.1f}d old (max {CLAUDE_TASKS_SNAPSHOT_MAX_D}d)")
+    out: list[dict] = []
+    for t in blob.get("tasks", []):
+        name = t.get("taskId") or ""
+        cron = t.get("cronExpression")
+        slots = _cron_slots(cron) if cron else None   # one-time tasks have fireAt, not cron
+        text = ""
+        with contextlib.suppress(OSError):
+            # a routine whose SKILL.md is unreadable contributes no targets and no beats — it is
+            # still counted for SAME-SLOT, which needs only its cron and its registered surface
+            text = Path(t.get("path", "")).read_text(encoding="utf-8", errors="replace")
+        out.append({"name": name, "system": "routine", "enabled": bool(t.get("enabled")),
+                    "slots": slots, "jitter": int(t.get("jitterSeconds") or 0),
+                    "targets": _targets_from_text(text)})
+    return out, None
+
+
+def _inscope_schtask_names() -> set[str]:
+    """Every in-scope task the machine actually has, BEFORE SCHTASK_EXCLUDED is applied.
+
+    Needed unfiltered: an EXCLUDED row for a task that still exists is fine, an EXCLUDED row for a
+    task that is gone is dead registry text — and filtering first would report the former as the
+    latter."""
+    import csv
+    import io
+    return {n for n in ((row.get("TaskName") or "").lstrip("\\").lower()
+                        for row in csv.DictReader(io.StringIO(_schtasks_csv())))
+            if n.startswith(SCHTASK_SCOPE)}
+
+
+def _load_schtask_records() -> list[dict]:
+    import csv
+    import io
+    by_name: dict[str, dict] = {}
+    for row in csv.DictReader(io.StringIO(_schtasks_csv())):
+        name = (row.get("TaskName") or "").lstrip("\\")
+        key = name.lower()
+        if not key.startswith(SCHTASK_SCOPE) or key in SCHTASK_EXCLUDED:
+            continue
+        rec = by_name.setdefault(key, {
+            "name": name, "system": "schtask", "slots": set(), "jitter": 0,
+            "enabled": (row.get("Status") or "").strip().lower() != "disabled",
+            "targets": _targets_from_text("python " + (row.get("Task To Run") or "")),
+        })
+        # schtasks /v emits one row PER TRIGGER: union every trigger's slots, and let a single
+        # unmodellable trigger (logon) mark the whole task ineligible rather than half-modelled.
+        slots = _win_slots(row.get("Schedule Type") or "", row.get("Start Time") or "",
+                           row.get("Days") or "")
+        if rec["slots"] is not None:
+            if slots is None:
+                rec["slots"] = None
+            else:
+                rec["slots"] |= slots
+    return list(by_name.values())
+
+
+def check_task_set(findings: list[str], snapshot: Path | None = None) -> None:
+    """Failures that exist only ACROSS automations — see the block comment above."""
+    snapshot = snapshot or CLAUDE_TASKS_SNAPSHOT
+    routines, blind = _load_claude_routines(snapshot)
+    if blind:
+        findings.append(
+            f"task-set SNAPSHOT BLIND: {blind} — Claude routines are cloud-side objects with no "
+            "local schedule file, so the cross-system half of the set check is running "
+            "WINDOWS-ONLY. Refresh: call mcp__scheduled-tasks__list_scheduled_tasks and write its "
+            f"list verbatim to {snapshot} under a `tasks` key with a fresh `captured_at`. Not "
+            "green — blind (rule 1).")
+    try:
+        schtasks_live = _inscope_schtask_names()
+        tasks = routines + _load_schtask_records()
+    except Exception as e:
+        findings.append(f"task-set schtask enumeration failed ({type(e).__name__}: {e}) — "
+                        "set-level check BLIND for Windows tasks")
+        return
+    live = [t for t in tasks if t["enabled"]]
+    for t in live:                       # beats are derived, not declared: read what runs
+        keys: set[str] = set()
+        for tid, _args in t["targets"]:
+            p = _dev_path(tid)
+            if p:
+                keys |= _beats_in_file(p)
+        t["beats"] = keys
+
+    # (1) SAME-SLOT: identical (dow, hour, minute) AND a shared, registered write surface.
+    slot_map: dict[tuple[int, int, int], list[dict]] = {}
+    for t in live:
+        for slot in (t["slots"] or ()):
+            slot_map.setdefault(slot, []).append(t)
+    reported: set[tuple[str, str]] = set()
+    for slot, group in sorted(slot_map.items()):
+        for i, a in enumerate(group):
+            for b in group[i + 1:]:
+                pair = tuple(sorted((a["name"], b["name"])))
+                if pair in reported:
+                    continue
+                sa = TASK_SURFACES.get(a["name"].lower())
+                sb = TASK_SURFACES.get(b["name"].lower())
+                if sa is None or sb is None:
+                    continue     # unregistered surface — never half of a collision finding
+                shared = sa & sb
+                if not shared:
+                    continue
+                reported.add(pair)
+                dow, hh, mm = slot
+                ea, eb = mm * 60 + a["jitter"], mm * 60 + b["jitter"]
+                gap = abs(ea - eb)
+                findings.append(
+                    f"task-set SAME-SLOT: '{a['name']}' and '{b['name']}' both fire "
+                    f"{['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dow]} {hh:02d}:{mm:02d} and "
+                    f"share write surface(s) {sorted(shared)}. Effective offsets after stored "
+                    f"jitter: +{a['jitter']}s vs +{b['jitter']}s (gap {gap // 60}m{gap % 60:02d}s) "
+                    "— jitter is an incidental value re-rolled on any edit, so it masks this "
+                    "rather than resolving it. Fix by moving one cron minute, not by trusting the "
+                    f"gap [{_pair_hash(*pair)}]")
+
+    # (2) DUAL-OWNER: two live tasks that ARE the same job — same script, same arguments, and the
+    # script is each task's WHOLE job.
+    # 🔴 The sole-target condition is not a nicety; without it the first real run reported the
+    # three `prewarm-carrier-tnt-*` routines as "3 owners" of `build_prewarm_universe.py`. They
+    # are three different jobs (Thursday bulk / Friday delta / paced weekday fill, on different
+    # days, feeding different `--max` budgets) that happen to share a pipeline STEP. A shared step
+    # is a library call; a duplicated owner is a task whose entire content is that one script —
+    # which is exactly the shape of both real instances (backup_offsite.py; and the FreshnessSweep
+    # schtask-vs-routine pair). Flagging shared steps is benign-overlap noise (rule 4).
+    owners: dict[tuple[str, str], list[str]] = {}
+    for t in live:
+        if len(t["targets"]) != 1:
+            continue
+        for tgt in t["targets"]:
+            owners.setdefault(tgt, []).append(t["name"])
+    for (tid, args), names in sorted(owners.items()):
+        uniq = sorted(set(names))
+        if len(uniq) < 2:
+            continue
+        allowed = ALLOWED_DUAL_OWNERS.get(tuple(sorted(n.lower() for n in uniq))[:2])
+        if allowed and len(uniq) == 2:
+            continue
+        findings.append(
+            f"task-set DUAL-OWNER: {len(uniq)} live tasks run the same target '{tid}"
+            f"{(' ' + args) if args else ''}': {uniq}. Two owners means two runs of one job and "
+            "no single place to disable it; if either also writes a heartbeat, see DUAL-BEAT. "
+            "Justified? Add the pair to ALLOWED_DUAL_OWNERS with the reason "
+            f"(scripts/automation_health.py) [{_pair_hash(*uniq)}]")
+
+    # (3) DUAL-BEAT — the dangerous one: two live writers of ONE heartbeat key.
+    beat_owners: dict[str, list[str]] = {}
+    for t in live:
+        for k in t.get("beats", ()):
+            beat_owners.setdefault(k, []).append(t["name"])
+    for key, names in sorted(beat_owners.items()):
+        uniq = sorted(set(names))
+        if len(uniq) < 2:
+            continue
+        findings.append(
+            f"task-set DUAL-BEAT: heartbeat '{key}' is written by {len(uniq)} live tasks {uniq} "
+            "— 🔴 a beat from EITHER makes the OTHER look alive, so check_beats CANNOT detect "
+            "either one dying. This defeats the dead-man switch for that key; it is not merely "
+            "redundant scheduling. Fix: one owner beats, or split into two keys with two EXPECTED "
+            f"rows [{_pair_hash(*uniq)}]")
+
+    # (4) Expectations and beats that have no counterpart, BOTH directions.
+    written_anywhere: dict[str, list[str]] = {}
+    for base in (WORKSPACE_ROOT / "_outputs" / "scripts", WORKSPACE_ROOT / "AppyHour",
+                 WORKSPACE_ROOT / "ShipRouting"):
+        if not base.exists():
+            continue
+        for py in base.rglob("*.py"):
+            if {"_archive", "archive", ".git", "__pycache__", "tests"} & set(py.parts):
+                continue
+            for k in _beats_in_file(py):
+                written_anywhere.setdefault(k, []).append(py.name)
+    # 🔴 A registry row whose task no longer exists is SILENT, not green. check_schtasks iterates
+    # the rows schtasks RETURNS, so a task that is deleted simply stops being visited — its
+    # SCHTASK_EXPECTED row keeps standing as a documented expectation that nothing can ever
+    # satisfy or violate. Observed live 2026-08-31: `appyhour zone floor rebuild` was registered
+    # (deliberately, as a known-broken job awaiting Kurt's call) and the task was then deleted
+    # mid-day; the row survived and nothing said so. Exact set comparison, no inference — both
+    # sides are authoritative — and it is skipped entirely when the query returned nothing in
+    # scope, so a failed/empty query cannot mass-report every row as orphaned.
+    if schtasks_live:
+        for key in sorted(set(SCHTASK_EXPECTED) | set(SCHTASK_EXCLUDED)):
+            if key not in schtasks_live:
+                where = "SCHTASK_EXPECTED" if key in SCHTASK_EXPECTED else "SCHTASK_EXCLUDED"
+                findings.append(
+                    f"task-set ORPHAN-REGISTRATION: {where}['{key}'] names a Windows task that no "
+                    "longer exists, so check_schtasks never visits it and the row can neither "
+                    "pass nor fail. Delete the row (rule 4) — or restore the task if the deletion "
+                    "was not intended")
+    for name in sorted(EXPECTED):
+        if name not in written_anywhere:
+            findings.append(
+                f"task-set ORPHAN-EXPECTATION: EXPECTED['{name}'] is graded every run but NO "
+                "script in the tree calls beat() with that key — the expectation can only ever go "
+                "stale, which is a guaranteed future false alarm. Either the writer was renamed/"
+                "retired (delete the EXPECTED row, rule 4) or the beat was never wired (rule 16)")
+    # The other direction, kept DELIBERATELY NARROW: only a key a live task's own target writes.
+    # 🔴 NOT "every routine with no heartbeat" — that would arm ~16 findings for routines nobody
+    # triaged, which is the widen-the-prefix mistake this file already carries a scar from.
+    for key, names in sorted(beat_owners.items()):
+        if key not in EXPECTED:
+            findings.append(
+                f"task-set UNWATCHED-BEAT: live task(s) {sorted(set(names))} write heartbeat "
+                f"'{key}' but no EXPECTED row grades it — the beat is written and read by nobody, "
+                "so that task's silence is invisible. Add an EXPECTED row (max age must clear the "
+                "schedule's longest legal gap) or stop writing the beat")
+
+
 # --- findings -> dispatch loop (2026-08-29, HEARTBEAT_RULES rule 12) --------------------
 # Evidence (_outputs/reports/harness-efficiency-review-2026-08-29.md, "The one systemic
 # finding"): this checker re-reported identical findings daily for a month (ingest
@@ -490,6 +1088,31 @@ def finding_key(text: str) -> str:
         return "replica-" + m.group(1)
     if text.startswith("prod tree STALE"):
         return "prod-tree-drift"
+    # 🔴 Set-level findings are keyed by the PAIR/SET, not by the class. Every pair line ends in
+    # `[<8-hex>]`, a hash of the sorted member names (see _pair_hash) — the member names are the
+    # only stable identity a pair has, and slugging them directly lets distinct pairs collapse
+    # onto one key. Anything that collapses here silently caps three findings at one streak.
+    m = re.match(r"task-set (SAME-SLOT|DUAL-OWNER|DUAL-BEAT).*\[([0-9a-f]{8})\]\s*$", text,
+                 re.DOTALL)
+    if m:
+        return f"taskset-{m.group(1).lower()}-{m.group(2)}"
+    # 🔴 Anchor on the FIELD, never on "the first quoted thing". A `.*?'([^']+)'` was written here
+    # first and keyed UNWATCHED-BEAT by the TASK name (the finding names the task list before the
+    # heartbeat), so one task writing two unwatched beats collapsed to one key and one task
+    # renamed minted a fresh streak. Both of these findings are about the KEY; key them by it.
+    m = re.match(r"task-set ORPHAN-REGISTRATION: SCHTASK_\w+\['([^']+)'\]", text)
+    if m:
+        return "taskset-orphan-registration-" + m.group(1)
+    m = re.match(r"task-set ORPHAN-EXPECTATION: EXPECTED\['([^']+)'\]", text)
+    if m:
+        return "taskset-orphan-expectation-" + m.group(1)
+    m = re.match(r"task-set UNWATCHED-BEAT:.*?write heartbeat '([^']+)'", text, re.DOTALL)
+    if m:
+        return "taskset-unwatched-beat-" + m.group(1)
+    if text.startswith("task-set SNAPSHOT BLIND"):
+        return "taskset-snapshot-blind"
+    if text.startswith("task-set schtask enumeration failed"):
+        return "taskset-schtask-enum-failed"
     # fallback: slug the leading words before any '(' — error-type detail varies per run
     words = re.split(r"[^A-Za-z]+", text.split("(")[0])
     return "-".join(w for w in words if w)[:60].lower().strip("-") or "unclassified-finding"
@@ -529,6 +1152,7 @@ def main(argv: list[str]) -> int:
         check_beats(findings)
         check_sync_heartbeat(findings)
         check_schtasks(findings)
+        check_task_set(findings)  # set-level: collisions/dual-owners no per-task check can see
         check_shipping_db(findings)
         check_replica_freshness(findings)
         check_prod_parity(findings)
@@ -544,7 +1168,8 @@ def main(argv: list[str]) -> int:
         notify(msg, level="error")
         return 1
     if verbose:
-        print("automation-health: all green (beats, ingest, schtasks, db, replicas, prod-parity)")
+        print("automation-health: all green (beats, ingest, schtasks, task-set, db, replicas, "
+              "prod-parity)")
     return 0
 
 

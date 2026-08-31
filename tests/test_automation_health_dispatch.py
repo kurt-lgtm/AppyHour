@@ -124,6 +124,11 @@ class SchtaskAuditTest(unittest.TestCase):
     def _run(self, csv_text, now=None):
         import subprocess as _sp
         findings = []
+        # check_schtasks reads through the process-lifetime memo _schtasks_csv() added 2026-08-31
+        # (so check_task_set cannot grade a DIFFERENT snapshot of the task list). Clearing it is
+        # mandatory here: without this line every test after the first silently re-graded test
+        # #1's CSV and 9 of these tests went red for the wrong reason.
+        ah._SCHTASKS_CSV = None
         real = _sp.run
         _sp.run = lambda *a, **k: types.SimpleNamespace(stdout=csv_text)
         try:
