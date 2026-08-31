@@ -38,6 +38,17 @@ Demand forecasting + cut order generation + fulfillment web dashboard. Single-fi
   CH-ASST read 668 against a true HAVE of 150. If a number looks wrong, ask for a fresh HAVE — don't patch it.
 - **Avail = corrected_inventory_path** — update BEFORE running cut order
 - **Calibri everywhere** in `build_cut_order_xlsx_v2.py` output
+- **Assignment-area layout (Kurt 2026-08-31)** — blocks start at **S**, no dead columns:
+  PR-CJAM `S`=Curation `T`=Cheese SKU `U/V`=counts · spacer `W` · CEX-EC `X/Y/Z/AA` ·
+  spacer `AB` · PR-CJAM JAM `AC/AD/AE/AF`. Bundle SUMIF helpers live at hidden `AL/AM`.
+  🔴 Section titles are **NOT merged** — a merged title makes Excel/Sheets refuse a paste
+  spanning it. Overflow is contained by an invisible space parked in each spacer column,
+  so a title spills inside its own block but never into the next one.
+- **Monthly split by billing date** — `settings["monthly_split_ranges"]`
+  (e.g. `[["2026-08-30","2026-08-31"],["2026-09-01","2026-09-05"]]`) gives one
+  AHB-MED/CMED/LGE block per range instead of per charge month. Recharge buckets on
+  `scheduled_at`, Shopify on the order's `created_at` (a Shopify order IS a processed
+  charge). Anything outside every range falls back to its charge month — never dropped.
 - **Bundle/limited-release explosion (BL-*, AHB-X*)** — recipes come LIVE from Shopify Simple Bundles
   variant metafield `simple_bundles.bundled_variants` (`quantity_in_bundle` = per-box qty; nested bundles
   expand recursively). Recharge-native bundles absent from Simple Bundles go in `BUNDLE_RECIPE_OVERRIDES`

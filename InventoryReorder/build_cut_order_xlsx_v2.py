@@ -135,11 +135,7 @@ def _set_col_widths(ws: Worksheet, widths: dict[int, float]) -> None:
 
 def _dark_header_row(ws: Worksheet, row: int, headers: list[str], col_start: int = 1) -> None:
     for ci, h in enumerate(headers):
-        # A blank slot gets a SPACE, not None: an empty neighbour lets a long title
-        # spill across the next columns, which looked like data in the wrong cell once
-        # the merges were removed. A space is invisible but non-empty, so Excel and
-        # Sheets clip the overflow. (Kurt 2026-08-31)
-        c = ws.cell(row=row, column=col_start + ci, value=(h if h else " "))
+        c = ws.cell(row=row, column=col_start + ci, value=h)
         c.font = F_HDR
         c.fill = FILL_HEADER
         c.alignment = A_CENTER
@@ -742,16 +738,16 @@ def _write_assignments_on_cut_order(ws: Worksheet, data: dict, settings: dict) -
     monthly_by_week_month = data["monthly_by_week_month"]
 
     # Column constants
-    COL_V = 22  # spacer
-    COL_W = 23  # PR-CJAM: Curation
-    COL_X = 24  # PR-CJAM: Cheese SKU (SUMIF lookup)
-    COL_Y = 25  # PR-CJAM: W1 Count
-    COL_Z = 26  # PR-CJAM: W2 Count
-    COL_AA = 27  # spacer
-    COL_AB = 28  # CEX-EC: Curation
-    COL_AC = 29  # CEX-EC: Cheese SKU (SUMIF lookup)
-    COL_AD = 30  # CEX-EC: W1 CEX Count
-    COL_AE = 31  # CEX-EC: W2 CEX Count
+    COL_V = 18  # spacer
+    COL_W = 19  # PR-CJAM: Curation
+    COL_X = 20  # PR-CJAM: Cheese SKU (SUMIF lookup)
+    COL_Y = 21  # PR-CJAM: W1 Count
+    COL_Z = 22  # PR-CJAM: W2 Count
+    COL_AA = 23  # spacer
+    COL_AB = 24  # CEX-EC: Curation
+    COL_AC = 25  # CEX-EC: Cheese SKU (SUMIF lookup)
+    COL_AD = 26  # CEX-EC: W1 CEX Count
+    COL_AE = 27  # CEX-EC: W2 CEX Count
 
     # Column widths for assignment area
     _set_col_widths(
@@ -820,11 +816,11 @@ def _write_assignments_on_cut_order(ws: Worksheet, data: dict, settings: dict) -
     # PR-CJAM ships as a cheese + jam PAIR, so the jam count == the cheese count
     # per curation. The cheese block (X) already feeds +Assign; this parallel
     # block feeds the jam SKU with the SAME W1/W2 counts (Kurt 2026-07-28).
-    COL_AF = 32  # spacer
-    COL_AG = 33  # JAM: Curation
-    COL_AH = 34  # JAM: Jam SKU (SUMIF lookup)
-    COL_AI = 35  # JAM: W1 Count
-    COL_AJ = 36  # JAM: W2 Count
+    COL_AF = 28  # spacer
+    COL_AG = 29  # JAM: Curation
+    COL_AH = 30  # JAM: Jam SKU (SUMIF lookup)
+    COL_AI = 31  # JAM: W1 Count
+    COL_AJ = 32  # JAM: W2 Count
     _set_col_widths(ws, {COL_AF: 2, COL_AG: 14, COL_AH: 18, COL_AI: 10, COL_AJ: 10})
     _dark_header_row(ws, 1, ["PR-CJAM JAM ASSIGNMENTS", "", "", ""], col_start=COL_AG)
     _dark_header_row(ws, 2, ["Curation", "Jam SKU", "W1 Count", "W2 Count"], col_start=COL_AG)
@@ -878,8 +874,7 @@ def _write_assignments_on_cut_order(ws: Worksheet, data: dict, settings: dict) -
         c.font = Font(name="Calibri", size=10, bold=True, color=OK_FG)
         c.fill = PatternFill("solid", fgColor=OK_BG)
         for ci in range(col_start + 1, col_start + 4):
-            _f = ws_.cell(row=start_row, column=ci, value=" ")   # clip title overflow
-            _f.fill = PatternFill("solid", fgColor=OK_BG)
+            ws_.cell(row=start_row, column=ci).fill = PatternFill("solid", fgColor=OK_BG)
         r = start_row
         for slot_name, _prefix in slots:
             r += 1
@@ -946,6 +941,17 @@ def _write_assignments_on_cut_order(ws: Worksheet, data: dict, settings: dict) -
                     summary_start += 1
 
     # Return info needed for SUMIF references:
+    # Titles are unmerged so they can be pasted over, which lets a long one overflow
+    # to the right. Overflowing INSIDE its own 4-column block is fine and readable;
+    # crossing into the NEXT block is what looked like data in the wrong cell. Park an
+    # invisible space in each spacer column so Excel/Sheets clip exactly at the block
+    # boundary and titles stay fully legible. (Kurt 2026-08-31)
+    _last = max(prcjam_monthly_last_row, cexec_end, jam_end, summary_start) + 2
+    for _r in range(1, _last + 1):
+        for _spacer in (COL_AA, COL_AF):
+            if ws.cell(row=_r, column=_spacer).value in (None, ""):
+                ws.cell(row=_r, column=_spacer, value=" ")
+
     # prcjam_monthly_last_row = last row of contiguous PR-CJAM + MONTHLY slot SKU data in col X
     # cexec_end = last row of CEX-EC data in col AC
     # jam_end = last row of PR-CJAM JAM data in col AH
@@ -1311,18 +1317,18 @@ def _build_cut_order_tab(
 
     # SUMIF references — same sheet, two ranges:
     # 1) PR-CJAM + MONTHLY slots: col X (SKU), Y (W1 count), Z (W2 count) rows 3..prcjam_monthly_last_row
-    # 2) CEX-EC: col AC (SKU), AD (W1 lg count), AE (W2 lg count) rows 3..cexec_last_row
+    # 2) CEX-EC: col Y (SKU), Z (W1 lg count), AA (W2 lg count) rows 3..cexec_last_row
     # +Assign = SUMIF(pr_cjam_monthly_sku, A{row}, pr_cjam_monthly_w) + SUMIF(cexec_sku, A{row}, cexec_w)
-    prcjam_sku_range = f"$X$3:$X${prcjam_monthly_last_row}"
-    prcjam_w1_range = f"$Y$3:$Y${prcjam_monthly_last_row}"
-    prcjam_w2_range = f"$Z$3:$Z${prcjam_monthly_last_row}"
-    cexec_sku_range = f"$AC$3:$AC${cexec_last_row}"
-    cexec_w1_range = f"$AD$3:$AD${cexec_last_row}"
-    cexec_w2_range = f"$AE$3:$AE${cexec_last_row}"
-    # PR-CJAM jam pair (col AH sku, AI/AJ counts) — same counts as the cheese.
-    jam_sku_range = f"$AH$3:$AH${jam_last_row}"
-    jam_w1_range = f"$AI$3:$AI${jam_last_row}"
-    jam_w2_range = f"$AJ$3:$AJ${jam_last_row}"
+    prcjam_sku_range = f"$T$3:$T${prcjam_monthly_last_row}"
+    prcjam_w1_range = f"$U$3:$U${prcjam_monthly_last_row}"
+    prcjam_w2_range = f"$V$3:$V${prcjam_monthly_last_row}"
+    cexec_sku_range = f"$Y$3:$Y${cexec_last_row}"
+    cexec_w1_range = f"$Z$3:$Z${cexec_last_row}"
+    cexec_w2_range = f"$AA$3:$AA${cexec_last_row}"
+    # PR-CJAM jam pair (col AD sku, AE/AF counts) — same counts as the cheese.
+    jam_sku_range = f"$AD$3:$AD${jam_last_row}"
+    jam_w1_range = f"$AE$3:$AE${jam_last_row}"
+    jam_w2_range = f"$AF$3:$AF${jam_last_row}"
     # Bundle EXTRA boxes: hidden helper cols written by the bundles section at the
     # bottom of this sheet — AL = bare component SKU, AM = extra units (= Add boxes x
     # per-box). Deliberately a wide fixed span: the bundles section starts below the
