@@ -21,14 +21,26 @@ Guardrails (NEGATIVES first):
 - 🔴 REFUSES --apply entirely (exit 2, zero copies) while ANY tracked file is newer in
   prod with differing bytes — that is a prod-side hand-edit; surface it, never clobber
   (HEARTBEAT_RULES rule 9 NEGATIVE). No force flag, by design. Reconcile dev first.
+- 🔴 NEVER ship an unrelated session's work as a side effect of an urgent fix. The dev tree
+  is shared by parallel sessions, so "everything that is stale" is NOT the same set as "the
+  fix I verified". 2026-08-31: the daily_shipping_sync lock fix needed to reach prod the same
+  day and the stale list also carried two InventoryReorder cut-order files from another
+  session, unreviewed and untested by this one. `--only <glob>` (repeatable) restricts BOTH
+  the report and the copy set; out-of-scope files are listed as SKIPPED so scoping is never
+  silent. Unscoped runs are unchanged — deploy everything remains the default.
+- Every overwritten prod file is copied to `<name>.bak-YYYYMMDD` first (`-HHMMSS` appended
+  rather than overwriting a same-day backup), and the path is recorded in the JSONL row.
+  Without it, a bad deploy has no rollback that does not depend on dev still being intact.
 - Copies are read back and byte-compared after write (audit the artifact that landed).
 
 Run:  python scripts/deploy_prod.py            # dry-run (exit 1 if drift, 0 if clean)
       python scripts/deploy_prod.py --apply    # Kurt's call — live tree for schtasks
+      python scripts/deploy_prod.py --only "GelPackCalculator/*" --apply   # scoped
 """
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import hashlib
 import json
 import shutil
@@ -91,7 +103,32 @@ def classify(dev_root: Path, prod_root: Path) -> dict[str, list[dict]]:
     return out
 
 
-def print_report(c: dict[str, list[dict]], dev_root: Path, prod_root: Path) -> None:
+def _matches(rel: Path, patterns: tuple[str, ...]) -> bool:
+    """True when `rel` matches any --only glob. Both slash styles accepted, case-insensitive
+    (Windows paths), and a bare directory pattern implies everything under it."""
+    if not patterns:
+        return True
+    posix = rel.as_posix().lower()
+    for raw in patterns:
+        pat = raw.replace("\\", "/").lower()
+        if fnmatch.fnmatch(posix, pat) or fnmatch.fnmatch(posix, pat.rstrip("/") + "/*"):
+            return True
+    return False
+
+
+def scope(c: dict[str, list[dict]], patterns: tuple[str, ...]) -> tuple[dict, dict]:
+    """Split the classification into (selected, skipped) by --only. Never silent: the caller
+    prints the skipped set, so scoping a deploy can't hide drift it chose not to ship."""
+    sel: dict[str, list[dict]] = {}
+    skip: dict[str, list[dict]] = {}
+    for bucket, rows in c.items():
+        sel[bucket] = [r for r in rows if _matches(r["rel"], patterns)]
+        skip[bucket] = [r for r in rows if not _matches(r["rel"], patterns)]
+    return sel, skip
+
+
+def print_report(c: dict[str, list[dict]], dev_root: Path, prod_root: Path,
+                 skipped: dict[str, list[dict]] | None = None) -> None:
     print(f"deploy_prod DRY-RUN  dev={dev_root}  prod={prod_root}")
     print(f"STALE — dev newer, would copy with --apply: {len(c['stale'])}")
     for r in c["stale"]:
@@ -107,6 +144,24 @@ def print_report(c: dict[str, list[dict]], dev_root: Path, prod_root: Path) -> N
           f"{len(c['dev_only'])}")
     for r in c["dev_only"]:
         print(f"  {r['rel']}  dev {_mt(r['dev'])}")
+    if skipped:
+        n = sum(len(v) for v in skipped.values())
+        print(f"SKIPPED by --only — real drift this run deliberately does NOT ship: {n}")
+        for bucket in ("stale", "prod_newer", "dev_only"):
+            for r in skipped.get(bucket, []):
+                print(f"  [{bucket}] {r['rel']}  dev {_mt(r['dev'])}")
+
+
+def _backup(prod_file: Path) -> Path:
+    """Copy the prod file aside before it is overwritten. Never clobbers an earlier backup —
+    a same-day one gets the time appended (never-overwrite-prior-output rule)."""
+    dest = prod_file.with_name(prod_file.name + f".bak-{datetime.now():%Y%m%d}")
+    if dest.exists():
+        dest = prod_file.with_name(prod_file.name + f".bak-{datetime.now():%Y%m%d-%H%M%S}")
+    shutil.copy2(prod_file, dest)
+    if dest.read_bytes() != prod_file.read_bytes():
+        raise OSError(f"backup verify FAILED for {prod_file} — refusing to overwrite it")
+    return dest
 
 
 def apply_copies(c: dict[str, list[dict]], prod_root: Path, log_path: Path,
@@ -128,7 +183,9 @@ def apply_copies(c: dict[str, list[dict]], prod_root: Path, log_path: Path,
         for r in todo:
             _assert_deployable(r["rel"])
             dev_bytes = r["dev"].read_bytes()
-            prod_mtime_before = _mt(r["prod"]) if r["prod"].exists() else None
+            existed = r["prod"].exists()
+            prod_mtime_before = _mt(r["prod"]) if existed else None
+            bak = _backup(r["prod"]) if existed else None   # rollback that doesn't need dev
             r["prod"].parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(r["dev"], r["prod"])
             if r["prod"].read_bytes() != dev_bytes:  # audit the artifact that landed
@@ -138,9 +195,10 @@ def apply_copies(c: dict[str, list[dict]], prod_root: Path, log_path: Path,
                 "action": "copy", "rel": str(r["rel"]),
                 "dev_mtime": _mt(r["dev"]), "prod_mtime_before": prod_mtime_before,
                 "sha256_10": _sha(dev_bytes), "bytes": len(dev_bytes),
+                "backup": str(bak) if bak else None,
                 "new_file": bool(r.get("new")), "prod_root": str(prod_root),
             }) + "\n")
-            print(f"deployed {r['rel']}")
+            print(f"deployed {r['rel']}" + (f"  (backup: {bak.name})" if bak else "  (new)"))
     print(f"deployed {len(todo)} file(s); logged to {log_path}")
     return 0
 
@@ -150,6 +208,10 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--apply", action="store_true", help="copy dev->prod (default: dry-run)")
     ap.add_argument("--include-new", action="store_true",
                     help="with --apply, also copy dev-only files missing from prod")
+    ap.add_argument("--only", action="append", default=[], metavar="GLOB",
+                    help="restrict report AND copy set to paths matching this glob "
+                         "(repeatable, e.g. --only 'GelPackCalculator/*'). Skipped drift is "
+                         "still listed — scoping is never silent.")
     ap.add_argument("--dev-root", type=Path, default=ah.DEV_ROOT)
     ap.add_argument("--prod-root", type=Path, default=ah.PROD_ROOT)
     ap.add_argument("--log", type=Path, default=DEFAULT_LOG)
@@ -158,9 +220,18 @@ def main(argv: list[str]) -> int:
         print(f"root missing: dev={args.dev_root} prod={args.prod_root}")
         return 2
     c = classify(args.dev_root, args.prod_root)
+    patterns = tuple(args.only)
+    c, skipped = scope(c, patterns)
+    if patterns:
+        print(f"SCOPED to {list(patterns)}")
     if args.apply:
+        if skipped and sum(len(v) for v in skipped.values()):
+            print(f"NOT shipping {sum(len(v) for v in skipped.values())} out-of-scope file(s):")
+            for bucket in ("stale", "prod_newer", "dev_only"):
+                for r in skipped.get(bucket, []):
+                    print(f"  [{bucket}] {r['rel']}")
         return apply_copies(c, args.prod_root, args.log, args.include_new)
-    print_report(c, args.dev_root, args.prod_root)
+    print_report(c, args.dev_root, args.prod_root, skipped if patterns else None)
     return 1 if (c["stale"] or c["prod_newer"] or c["dev_only"]) else 0
 
 
