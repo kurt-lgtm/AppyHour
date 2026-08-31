@@ -226,36 +226,46 @@ def box_summary_grid(rows: list[dict], denom: int) -> tuple[list[list], int]:
 
 
 # ---------- deterministic matrix (GATE rule 2: % of denom) -------------------
-def matrix_grid(rows: list[dict], denom: int, issues: list[str]) -> list[list]:
-    """Same numbers as build_matrix() but as a 2D list for the Google Sheet."""
-    grid = defaultdict(lambda: defaultdict(int))
+def counts_by_vendor(rows: list[dict], issues: list[str]) -> dict[str, dict[str, int]]:
+    """THE aggregation — vendor -> issue -> count, in display order.
+
+    🔴 Every consumer (the markdown DM matrix, the sheet grid, the history ledger) reads THIS.
+    A second consumer that re-tallies `rows` its own way is how the DM and the durable tab drift
+    into reporting two different numbers for the same week (the D35c lesson, already paid for on
+    the neighbouring `Carrier Mix` tab).
+    """
+    grid: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for x in rows:
         grid[x["carrier"]][x["col"]] += 1
     vendors = VENDOR_ORDER + sorted(c for c in grid if c not in VENDOR_ORDER)
-    vendors = [v for v in vendors if grid[v]]
+    return {v: {i: grid[v].get(i, 0) for i in issues} for v in vendors if grid[v]}
+
+
+def unclassified_count(rows: list[dict], issues: list[str]) -> int:
+    """Tickets whose issue falls outside `issues` — dropped by the matrix, so say so out loud."""
+    return sum(1 for x in rows if x["col"] not in issues)
+
+
+def matrix_grid(rows: list[dict], denom: int, issues: list[str]) -> list[list]:
+    """Same numbers as build_matrix() but as a 2D list for the Google Sheet."""
+    counts = counts_by_vendor(rows, issues)
     pct = lambda n: f"{100*n/denom:.2f}%" if denom else "—"
     out = [["Vendor"] + issues + ["Total", "% denom"]]
     col_tot = defaultdict(int)
     grand = 0
-    for v in vendors:
-        rt = sum(grid[v].get(i, 0) for i in issues)
+    for v, c in counts.items():
+        rt = sum(c[i] for i in issues)
         for i in issues:
-            col_tot[i] += grid[v].get(i, 0)
+            col_tot[i] += c[i]
         grand += rt
-        out.append([v] + [grid[v].get(i, 0) for i in issues] + [rt, pct(rt)])
+        out.append([v] + [c[i] for i in issues] + [rt, pct(rt)])
     out.append(["Total"] + [col_tot[i] for i in issues] + [grand, pct(grand)])
     out.append(["% denom"] + [pct(col_tot[i]) for i in issues] + ["", ""])
     return out
 
 
 def build_matrix(rows: list[dict], denom: int, issues: list[str]) -> str:
-    grid = defaultdict(lambda: defaultdict(int))
-    for x in rows:
-        grid[x["carrier"]][x["col"]] += 1
-    vendors = VENDOR_ORDER + sorted(
-        c for c in grid if c not in VENDOR_ORDER
-    )
-    vendors = [v for v in vendors if grid[v]]
+    counts = counts_by_vendor(rows, issues)
     pct = lambda n: f"{100*n/denom:.2f}%" if denom else "—"
 
     head = "| Vendor | " + " | ".join(issues) + " | **Total** | **% denom** |"
@@ -263,11 +273,11 @@ def build_matrix(rows: list[dict], denom: int, issues: list[str]) -> str:
     lines = [head, sep]
     col_tot = defaultdict(int)
     grand = 0
-    for v in vendors:
-        cells = [str(grid[v].get(i, 0)) for i in issues]
-        rt = sum(grid[v].get(i, 0) for i in issues)
+    for v, c in counts.items():
+        cells = [str(c[i]) for i in issues]
+        rt = sum(c[i] for i in issues)
         for i in issues:
-            col_tot[i] += grid[v].get(i, 0)
+            col_tot[i] += c[i]
         grand += rt
         lines.append(f"| {v} | " + " | ".join(cells) + f" | **{rt}** | {pct(rt)} |")
     tot_cells = " | ".join(f"**{col_tot[i]}**" for i in issues)
@@ -290,6 +300,9 @@ def main() -> None:
     ap.add_argument("--push", action="store_true",
                     help="write/refresh this week's tab in the reship Google Sheet")
     ap.add_argument("--sheet-id", default=None, help="override cached sheet id")
+    ap.add_argument("--history-sheet", action="store_true",
+                    help="record this week in the vendor-matrix ledger and repaint the "
+                         "'Vendor Matrix' history tab on the Running Reship sheet (D39)")
     args = ap.parse_args()
 
     oldest, latest, start_date, end_date = week_window(args.week)
@@ -327,6 +340,19 @@ def main() -> None:
         url = push(args.week, sheet_rows, vendor_hdr, box_hdr, sheet_id=args.sheet_id)
         print(f"\nPUSHED: {url}")
 
+    if args.history_sheet:
+        # Durable HISTORY for the DM (D39). The DM still posts every week — this is the record it
+        # leaves behind, not a replacement for it. Same `counts_by_vendor` the matrix above used,
+        # so the tab cannot disagree with what was DM'd.
+        from ingest.slack_reship import matrix_history as mh
+        led = mh.load_ledger()
+        notes = mh.upsert(led, args.week, denom, len(rows), start_date, end_date, src, issues,
+                          counts_by_vendor(rows, issues), unclassified_count(rows, issues))
+        mh.write_sheet(led, VENDOR_ORDER, ISSUE_ORDER, notes)
+        mh.save_ledger(led)   # ledger last: a failed paint must not record a week as published
+        print(f"\nHISTORY: {mh.SHEET_TAB!r} tab updated for {args.week} "
+              f"(ledger {mh.LEDGER})")
+
     # Dead-man-switch beat for `weekly-shipping-vendor-matrix` (HEARTBEAT_RULES; added 2026-08-31
     # so that routine could go exception-only — a run that never happens sends no Slack, and
     # absence of this beat is then the ONLY signal left).
@@ -334,6 +360,9 @@ def main() -> None:
     # weekly_task.py with `--report --push`, and that routine already owns the separate
     # `slack-reship` beat. Beating one key from both callers would let either routine's death hide
     # behind the other's success — two routines, two keys, and `--push` is what tells them apart.
+    # 🔴 `--history-sheet` (D39) is deliberately NOT part of this condition: it is an addition to
+    # the vendor-matrix routine's own invocation, so the beat must still fire on the shape that
+    # routine actually runs (`--report --history-sheet`, no `--push`). Verified live 2026-08-31.
     if args.report and not args.push:
         beat("vendor-matrix")
 

@@ -29,6 +29,16 @@ Analytics pipeline for subscription box shipping. Ingests carrier invoices (OnTr
 > the routing-tag service token and the carrier-invoice cost both live). 🔴 FedEx 2Day is ALWAYS its own
 > row, never merged into Ground-HD; OnTrac/LaserShip are ONE carrier via `canon.normalize_carrier`.
 > Counts and costs freeze on **two independent clocks**. ⚠️ **UNOWNED — no scheduled owner yet** (D35).
+>
+> 🔴 **`Vendor Matrix` tab** = the durable HISTORY of the weekly carrier×issue matrix —
+> `AppyHour/ingest/slack_reship/matrix_history.py`, written by
+> `sync.py --report --history-sheet` (owner: the `weekly-shipping-vendor-matrix` routine, beat
+> `vendor-matrix`, 10d threshold). Same shape as `Carrier Mix`: ship weeks as columns, ledger
+> (`_outputs/reports/vendor_matrix_ledger.json`) is the MEMORY, tab is a VIEW. Rules SSOT =
+> [`RESHIP_REPORT_RULES.md`](RESHIP_REPORT_RULES.md) **D39**; read it first. 🔴 The routine's Slack
+> DM **posts every week and must never be made exception-only** — it is a report, not a monitor
+> (Kurt 2026-08-31). 🔴 Counts come from Slack, never `feedback.issue_type`; `denom == 0` refuses
+> the whole write rather than publishing a 0-denominator rate.
 
 ## Task Routing
 

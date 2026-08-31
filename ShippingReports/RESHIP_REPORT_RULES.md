@@ -3342,3 +3342,68 @@ arm the headerless assert; holdRefresh_ run-batching emits identical cells to th
 seeded plans, including gap splits).
 
 > D33 companion: hold tag taxonomy, _FLOWHOLD reason classes, _UNRESOLVED lifecycle + cancellation terms = [HOLD_BUSINESS_RULES.md](HOLD_BUSINESS_RULES.md) (mirrors Kurt's Google Doc, the authority).
+
+---
+
+### D39 — `Vendor Matrix`: THE WEEKLY MATRIX EXISTED ONLY IN SLACK SCROLLBACK, AND THAT IS NOT A RECORD (2026-08-31)
+
+**The observation.** `weekly-shipping-vendor-matrix` (routine SKILL at
+`~/.claude/scheduled-tasks/weekly-shipping-vendor-matrix/SKILL.md`) DM'd Kurt a carrier×issue matrix
+every week and persisted **nothing but the Slack fixture it parsed**. There was no queryable
+history, nothing to trend week over week, and the whole record disappears the day Slack retention
+bites. Its three sibling weekly routines each already leave an artifact — this one did not.
+
+**The rule.** `sync.py --report --history-sheet` records the week in
+`_outputs/reports/vendor_matrix_ledger.json` and repaints the **`Vendor Matrix`** tab on the
+canonical pivot sheet `1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU`. Implementation:
+`AppyHour/ingest/slack_reship/matrix_history.py`.
+
+1. 🔴 **The DM is NOT exception-only and must never become it.** This was proposed and rejected the
+   same day. Exception-only is for **monitors** — silent when healthy. This is a **report Kurt
+   reads**: the number is the deliverable, not an alert about a number, and "only tell me when
+   something's wrong" is meaningless for a metric tracked week over week. The tab is for HISTORY; it
+   does not license silencing the DM. Both ship, every week.
+2. 🔴 **One aggregation, two renderers.** `counts_by_vendor()` in `sync.py` is the only tally; the
+   markdown DM matrix, the sheet grid and the ledger all consume it. A second consumer that
+   re-tallies `rows` its own way is how the DM and the tab come to report two different numbers for
+   the same week — already paid for once on `Carrier Mix` (D35c).
+3. 🔴 **Never a rate over a zero denominator.** `denom <= 0` means the cohort tag is wrong.
+   `upsert()` raises `VM_ZERO_DENOM` and **neither** the ledger **nor** the sheet is touched; the
+   routine reports the bad tag in the DM and stops. A bogus 0-denom percentage is worse than no
+   number.
+4. **Weeks as COLUMNS, one tab — deliberately the same shape as `Carrier Mix` beside it.** A
+   tab-per-week would add ~52 tabs/yr to a spreadsheet already carrying 23, and would force
+   cross-tab reading to answer "is FedEx delayed getting worse". The **ledger is the MEMORY**, the
+   tab is a **VIEW** repainted whole each run — do not add per-cell write-once to the tab, that
+   duplicates the ledger's job in a second store and the two will disagree.
+5. **A prior week CAN legitimately move** — tickets get posted to #reship late, and a ship week is
+   multi-leg so its denominator grows when the Tuesday Dallas leg lands. So this is an upsert, not a
+   freeze (contrast D23/D33 write-once). What is forbidden is a **silent** restatement: any change
+   to a week on record emits `VM_RESTATED` into the tab's notes and appends to that week's log.
+6. 🔴 **Additive only.** This tool owns exactly one tab and refuses (`VM_SHEET_FOREIGN_TAB`) to
+   overwrite a tab whose A1 is not its own marker. It never reads, writes or reorders any other tab
+   — `_exc_state` in particular is the Exceptions sweep's durable state and clobbering it loses
+   every open box.
+7. **`0` is a measured zero; `—` means not tracked that week.** Blank ≠ zero, same reading as D35's
+   un-invoiced cost cells. All values go up `valueInputOption=RAW` so Sheets coerces nothing and
+   `0.55%` stays literal text.
+8. **The stamp asserts a VERIFIED paint.** The header row is read back before the
+   `Last refreshed: … ET` row is written, as a separate final write. A missing stamp row means the
+   paint died partway — rerun. All human-read timestamps are Eastern.
+9. **The beat is unchanged and is NOT keyed on `--history-sheet`.** `sync.py` beats `vendor-matrix`
+   when `--report` and not `--push` — `weekly-reship-report` runs the same `main()` with
+   `--report --push` and owns the separate `slack-reship` key. Two routines, two keys.
+
+**Verification (2026-08-31).** `matrix_history --self-test` (10 assertions: grid shape, absent
+vendors/untracked issues excluded, `% denom` rows, restatement logged, both zero-denom arms refuse
+AND leave the ledger untouched, foreign-tab guard). Live: 9 weeks (2026-06-22 … 2026-08-17)
+backfilled from the archived fixtures; tab read back and reconciled cell-for-cell against the
+2026-08-17 DM matrix (FedEx 13/0.55%, OnTrac 8/0.34%, UPS 2/0.08%, unjoined 1/0.04%, total
+24/1.01%, and every per-issue `% denom` cell). Denominators cross-check exactly against the
+`Carrier Mix` totals for the four overlapping weeks (2225 / 2362 / 2365 / 2366). Beat `vendor-matrix`
+observed moving to 2026-08-31 4:05 PM ET on the `--report --history-sheet` path. Spreadsheet tab
+count 23 → 24: one tab added, none touched.
+
+**Provenance caveat, stated in the tab itself:** the nine backfilled weeks were RE-DERIVED from the
+archived Slack fixtures by the same tool, not transcribed from the DMs sent at the time, so a cell
+may differ from that week's DM if a `fulfillments` carrier join has changed since.
