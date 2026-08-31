@@ -227,6 +227,26 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
      failures with opposite fixes.** Locking work — the advisory lock, per-checkpoint acquisition,
      cooperative cancellation — buys availability and is worth doing; it does not and cannot address
      corruption. Do not let a green lock story stand in for path canonicalization.
+   - **🔴 Canonicalizing onto `db_path()` would NOT have prevented 7/03, and saying otherwise is the
+     trap.** On 7/03 the canonical path WAS `%APPDATA%\AppyHour\shipping.db` — the virtualized one. MSIX
+     splits packaged from unpackaged writers at the SAME name, so pointing every writer at one path
+     string still yields two images. Only moving OFF the VFS removes it, which is what 7/08 did. The
+     guard below prevents a REGRESSION back onto a virtualized or relative name; it was never the
+     missing 7/03 fix. Do not re-derive "take the lock properly" from the four docs that record only
+     two incidents (`appyhour_lib/CLAUDE.md:33`, `REBUILD-WITH-AI.md:272`,
+     `ShippingReports/RESHIP_REPORT_RULES.md:218`) — that remedy was already deployed when 7/03 hit.
+   - **The guard already exists in exactly one writer; promote it, do not reinvent it.**
+     `sync_logon._resolve_db_guarded()` (`GelPackCalculator/sync_logon.py:165-188`) resolves at CALL
+     time and raises + notifies CRITICAL when the path is not under `DATA_ROOT`. That belongs in
+     `appyhour_lib.db.connect()` and `shipping_invoice_db.init_db()` so all ~30 writers inherit it.
+     Note it also fixes the module-import resolution class: 20 writers still do `DB = db_path()` at
+     import, which is what produced the 9-day 7/22 split-brain.
+   - **RCA fix #2's stagger is HALF shipped and is not load-bearing anyway.**
+     `appyhour_sync_on_logon` carries `delay=PT2M`, not the ~5 min proposed. Under the table above a
+     stagger narrows the overlap WINDOW without touching the mechanism, and the MCP servers are
+     long-running (hours, "usually 1-3 live"), so no logon delay avoids them. Treat it as noise
+     reduction, never as the corruption fix — Kurt's "I don't want any collisions" is satisfied by
+     path canonicalization, not by scheduling.
 
 ## Wired beats (update when adding/removing)
 
