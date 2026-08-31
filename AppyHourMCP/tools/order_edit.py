@@ -92,18 +92,27 @@ def _lookup_variant_gids(base: str, headers: dict[str, str], skus: set[str]) -> 
 def _paid_skus_on_order(base: str, headers: dict[str, str], order_gid: str, skus: set[str]) -> dict[str, list[float]]:
     """Map sku -> list of paid signals (>0 only) for the given SKUs on the order.
 
-    A line counts as PAID if actual-paid > 0 OR its variant's catalog price > 0.
+    A line counts as PAID if actual-paid > 0, OR its variant's catalog price > 0 on a line
+    that is actually an ADD-ON (`_parent_subscription_id` or `Type` custom attribute).
     🔴 The catalog check is load-bearing (Kurt 2026-07-21, #163709): a Recharge ONETIME
     add-on collects the money on the Recharge charge and pushes the Shopify line at $0 —
     actual-paid alone reads $0 and a $9 paid salami got swapped. The line still carries
-    the PRICED variant, so catalog price is the reliable signal.
+    the PRICED variant, so catalog price is the reliable signal FOR ADD-ON LINES.
+    🔴 But catalog>0 ALONE is NOT a paid signal (Kurt 2026-08-25/29): an `_rc_bundle` line
+    is FREE box content sitting on the priced variant because the SKU also sells standalone
+    — the customer paid $0 for it. The old catalog-only predicate refused 107 AC-GLAW swaps
+    (paid=0.0 catalog=6.0) on one path and halted the 08-31 vF mirror (818 edits: #174564
+    MT-SFEN paid $0 catalog $9 with _rc_bundle) on this one. A real add-on never carries
+    `_rc_bundle`, so the #163709 protection is preserved. SSOT for this predicate:
+    InventoryReorder/fulfillment_web/shopify_swap.py + tests/test_swap_paid_guard.py.
     """
     data = shopify_graphql(base, headers, """
         query($id: ID!) {
             order(id: $id) {
                 lineItems(first: 100) {
                     nodes { sku discountedUnitPriceAfterAllDiscountsSet { shopMoney { amount } }
-                            variant { price } }
+                            variant { price }
+                            customAttributes { key value } }
                 }
             }
         }
@@ -114,7 +123,10 @@ def _paid_skus_on_order(base: str, headers: dict[str, str], order_gid: str, skus
         if sku in skus:
             paid = float(li["discountedUnitPriceAfterAllDiscountsSet"]["shopMoney"]["amount"])
             catalog = float((li.get("variant") or {}).get("price") or 0)
-            if paid > 0 or catalog > 0:
+            props = {p["key"] for p in (li.get("customAttributes") or [])}
+            onetime = "_parent_subscription_id" in props or "Type" in props
+            rc_bundle = "_rc_bundle" in props
+            if paid > 0 or (catalog > 0 and onetime and not rc_bundle):
                 hits.setdefault(sku, []).append(paid if paid > 0 else catalog)
     return hits
 
@@ -123,7 +135,7 @@ def _paid_skus_on_order(base: str, headers: dict[str, str], order_gid: str, skus
 NEVER_SWAP_TAGS = {"pr box"}
 
 
-def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: dict[str, str], variant_gids: dict[str, str], rc_bundle_only: bool = True, allow_paid: bool = False) -> list[str]:
+def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: dict[str, str], variant_gids: dict[str, str], rc_bundle_only: bool = True, allow_paid: bool = False, qty_limits: dict[str, int] | None = None) -> list[str]:
     """Swap SKUs on a single order. Returns list of swap descriptions.
 
     Safety: snapshots all line items after beginEdit, verifies only target
@@ -131,6 +143,13 @@ def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: 
 
     When rc_bundle_only=True (default), only line items with the `_rc_bundle`
     custom attribute are eligible — paid add-ons (no props) are never swapped.
+
+    QTY LIMIT (Kurt 2026-08-29, #178510): with no limit, EVERY matching line swaps —
+    an order carrying old_sku on 2 lines (or qty>1) gets ALL of them converted to the one
+    target, which overshot a declared 1-unit swap (2x AC-PBLINI both became AC-BRJA when
+    the sheet wanted BRJA+DCRAN). Pass qty_limits={old_sku: n} to cap how many UNITS swap;
+    a line bigger than the remaining cap is partially swapped (reduced, remainder kept).
+    Balance invariant still holds: units removed == units added.
 
     PAID-ITEM GUARD (Kurt 2026-07-10): even with rc_bundle_only=False, a line
     the customer actually paid for (discounted price > $0) is skipped unless
@@ -203,7 +222,16 @@ def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: 
     modified_li_ids: set[str] = set()
     qty_removed = 0
     qty_added = 0
+    remaining = dict(qty_limits) if qty_limits else None
     for old_sku, calc_li_id, qty in calc_items:
+        if remaining is not None:
+            cap = remaining.get(old_sku, 0)
+            if cap <= 0:
+                continue  # limit for this SKU exhausted — leave further lines untouched
+            take = min(qty, cap)
+            remaining[old_sku] = cap - take
+        else:
+            take = qty
         new_sku = swaps[old_sku]
         new_gid = variant_gids[new_sku]
         modified_li_ids.add(calc_li_id)
@@ -215,8 +243,9 @@ def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: 
                     userErrors { field message }
                 }
             }
-        """, {"id": calc_id, "lineItemId": calc_li_id, "quantity": 0})
-        qty_removed += qty
+        """, {"id": calc_id, "lineItemId": calc_li_id, "quantity": qty - take})
+        qty_removed += take
+        qty = take
 
         shopify_graphql(base, headers, """
             mutation orderEditAddVariant($id: ID!, $variantId: ID!, $quantity: Int!, $allowDuplicates: Boolean) {
@@ -229,6 +258,9 @@ def _swap_order_skus(base: str, headers: dict[str, str], order_gid: str, swaps: 
         qty_added += qty
 
         swapped.append(f"{old_sku}->{new_sku}(qty={qty})")
+
+    if not swapped:
+        raise RuntimeError("No swappable line items found in calculated order (qty_limits exhausted before any line)")
 
     # BALANCE INVARIANT (Kurt 2026-07-09, order #157930: removed 2 trays, added 1
     # back — box shipped a tray short). Every swap must put back exactly as much

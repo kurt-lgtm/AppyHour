@@ -72,6 +72,8 @@ class FakeGQL:
             edges = [{"node": {"id": li_id, "sku": sku, "quantity": 0 if li_id in zeroed else qty}}
                      for li_id, sku, qty, _ in self.items]
             return {"node": {"lineItems": {"edges": edges}}}
+        if "tags" in query:
+            return {"order": {"tags": []}}
         raise AssertionError(f"unexpected query: {query[:80]}")
 
 
@@ -270,3 +272,73 @@ def test_mcp_swap_unbalanced_impossible_by_construction(monkeypatch, tmp_path):
     import inspect
     src = inspect.getsource(order_edit._swap_order_skus)
     assert "qty_removed != qty_added" in src
+
+
+def test_qty_limits_caps_units_across_lines(monkeypatch):
+    """#178510 overshoot (2026-08-29): 2x AC-PBLINI on two lines both became AC-BRJA
+    when the declared swap wanted ONE unit. qty_limits must cap units swapped and
+    leave the remainder untouched (line partially reduced, not zeroed)."""
+    from tools import order_edit as oe
+
+    calls = []
+    calc = {"orderEditBegin": {"calculatedOrder": {"id": "gid://co/1", "lineItems": {"edges": [
+        {"node": {"id": "li1", "quantity": 1, "sku": "AC-PBLINI", "customAttributes": []}},
+        {"node": {"id": "li2", "quantity": 1, "sku": "AC-PBLINI", "customAttributes": []}},
+    ]}}, "userErrors": []}}
+    post = {"node": {"lineItems": {"edges": [
+        {"node": {"id": "li1", "quantity": 0, "sku": "AC-PBLINI"}},
+        {"node": {"id": "li2", "quantity": 1, "sku": "AC-PBLINI"}},
+    ]}}}
+
+    def fake_gql(base, headers, query, variables=None, resource=None):
+        calls.append((query.split("(")[0].strip().split()[-1], variables))
+        if "tags" in query: return {"order": {"tags": []}}
+        if "orderEditBegin" in query: return calc
+        if "orderEditSetQuantity" in query: return {"orderEditSetQuantity": {"userErrors": []}}
+        if "orderEditAddVariant" in query: return {"orderEditAddVariant": {"userErrors": []}}
+        if "orderEditCommit" in query: return {"orderEditCommit": {"userErrors": []}}
+        if "CalculatedOrder" in query: return post
+        raise AssertionError(query)
+
+    monkeypatch.setattr(oe, "shopify_graphql", fake_gql)
+    monkeypatch.setattr(oe, "_paid_skus_on_order", lambda *a, **k: {})
+    monkeypatch.setattr(oe, "_audit", lambda row: None)
+
+    out = oe._swap_order_skus("b", {}, "gid://o/1", {"AC-PBLINI": "AC-BRJA"},
+                              {"AC-BRJA": "gid://v/9"}, rc_bundle_only=False,
+                              qty_limits={"AC-PBLINI": 1})
+    assert out == ["AC-PBLINI->AC-BRJA(qty=1)"]
+    setq = [v for q, v in calls if v and "lineItemId" in v]
+    assert len(setq) == 1 and setq[0]["quantity"] == 0  # one line zeroed, second untouched
+
+
+def test_qty_limits_partial_line_reduction(monkeypatch):
+    """One line qty=2, limit 1 -> line reduced to 1 (not zeroed), one unit added."""
+    from tools import order_edit as oe
+    calls = []
+    calc = {"orderEditBegin": {"calculatedOrder": {"id": "gid://co/1", "lineItems": {"edges": [
+        {"node": {"id": "li1", "quantity": 2, "sku": "AC-PBLINI", "customAttributes": []}},
+    ]}}, "userErrors": []}}
+    post = {"node": {"lineItems": {"edges": [
+        {"node": {"id": "li1", "quantity": 1, "sku": "AC-PBLINI"}},
+    ]}}}
+    def fake_gql(base, headers, query, variables=None, resource=None):
+        calls.append((query, variables))
+        if "tags" in query: return {"order": {"tags": []}}
+        if "orderEditBegin" in query: return calc
+        if "orderEditSetQuantity" in query: return {"orderEditSetQuantity": {"userErrors": []}}
+        if "orderEditAddVariant" in query: return {"orderEditAddVariant": {"userErrors": []}}
+        if "orderEditCommit" in query: return {"orderEditCommit": {"userErrors": []}}
+        if "CalculatedOrder" in query: return post
+        return {"order": {"tags": []}}
+    monkeypatch.setattr(oe, "shopify_graphql", fake_gql)
+    monkeypatch.setattr(oe, "_paid_skus_on_order", lambda *a, **k: {})
+    monkeypatch.setattr(oe, "_audit", lambda row: None)
+    out = oe._swap_order_skus("b", {}, "gid://o/1", {"AC-PBLINI": "AC-BRJA"},
+                              {"AC-BRJA": "gid://v/9"}, rc_bundle_only=False,
+                              qty_limits={"AC-PBLINI": 1})
+    assert out == ["AC-PBLINI->AC-BRJA(qty=1)"]
+    setq = [v for q, v in calls if v and "lineItemId" in v]
+    assert setq[0]["quantity"] == 1  # reduced, not zeroed
+    addv = [v for q, v in calls if v and "variantId" in v]
+    assert addv[0]["quantity"] == 1
