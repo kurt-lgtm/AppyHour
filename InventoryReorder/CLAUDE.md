@@ -44,11 +44,12 @@ Demand forecasting + cut order generation + fulfillment web dashboard. Single-fi
   🔴 Section titles are **NOT merged** — a merged title makes Excel/Sheets refuse a paste
   spanning it. Overflow is contained by an invisible space parked in each spacer column,
   so a title spills inside its own block but never into the next one.
-- **Monthly split by billing date** — `settings["monthly_split_ranges"]`
-  (e.g. `[["2026-08-30","2026-08-31"],["2026-09-01","2026-09-05"]]`) gives one
-  AHB-MED/CMED/LGE block per range instead of per charge month. Recharge buckets on
-  `scheduled_at`, Shopify on the order's `created_at` (a Shopify order IS a processed
-  charge). Anything outside every range falls back to its charge month — never dropped.
+- 🔴 **Monthly boxes are ALWAYS divided by MONTH** (Kurt 2026-08-31) — one
+  AHB-MED/CMED/LGE block per calendar month. Recharge buckets on `scheduled_at`,
+  Shopify on the order's `created_at` (a Shopify order IS a processed charge, and its
+  creation date can predate the charge window — 4 boxes on the 9/07 cut were created
+  8/21-8/29 and belong to August). `settings["monthly_split_ranges"]` can override with
+  explicit date ranges, but it is OFF by default and month is the canonical format.
 - **Bundle/limited-release explosion (BL-*, AHB-X*)** — recipes come LIVE from Shopify Simple Bundles
   variant metafield `simple_bundles.bundled_variants` (`quantity_in_bundle` = per-box qty; nested bundles
   expand recursively). Recharge-native bundles absent from Simple Bundles go in `BUNDLE_RECIPE_OVERRIDES`
