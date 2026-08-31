@@ -16,6 +16,7 @@ a quieter abandonment.
 """
 from __future__ import annotations
 
+import pathlib
 import sqlite3
 import subprocess
 import sys
@@ -175,10 +176,25 @@ def test_after_cancelled_stage_stops_on_a_boundary_and_frees_the_lock(scratch_db
     then that a second writer PROCESS succeeds immediately where the test above was refused.
     """
     chunks_done = []
+    ran_out = []
 
     def stage(token):
-        """Mirrors the fixed shape: open → write a batch → commit → CLOSE → then check."""
-        for ci in range(1, 1000):
+        """Mirrors the fixed shape: open → write a batch → commit → CLOSE → then check.
+
+        🔴 UNBOUNDED on purpose. An earlier version looped a fixed 1000 chunks and finished
+        on its own inside the grace window — so deleting ``token.cancel()`` from the
+        watchdog still made this test pass. A cancellation test that a stage can satisfy by
+        simply ENDING is testing nothing. Only the cancel gets us out of here; the wall-clock
+        valve exists solely so a broken build fails instead of hanging, and it records that
+        it fired so the assertions can reject that outcome.
+        """
+        deadline = time.monotonic() + 60
+        ci = 0
+        while True:
+            if time.monotonic() > deadline:
+                ran_out.append(True)
+                return
+            ci += 1
             con = dbmod.connect(scratch_db)
             try:
                 con.executemany("INSERT INTO rows_written (i) VALUES (?)",
@@ -191,6 +207,7 @@ def test_after_cancelled_stage_stops_on_a_boundary_and_frees_the_lock(scratch_db
             time.sleep(0.02)
 
     sync_logon._run_stage("fake_fulfillments", stage, timeout_s=1)
+    assert not ran_out, "the stage ended on its own timer — the cancel was never what stopped it"
 
     # 1. it stopped
     assert not any(t.name == "stage-fake_fulfillments" and t.is_alive()
@@ -238,6 +255,9 @@ def test_main_aborts_the_run_on_a_zombie_stage(monkeypatch, tmp_path, stamps):
     """Process exit is the ONLY thing that stops a deaf daemon thread, so main() must not
     continue into the remaining stages alongside an untracked writer."""
     calls = []
+    # `stamps` is requested for its side effect, not an assertion: it redirects _stamp and
+    # _notify away from the REAL %APPDATA% heartbeat ledger for the duration of this test.
+    assert stamps["stamp"] == [] and stamps["notify"] == []
     monkeypatch.setattr(sync_logon, "_bootstrap_init", lambda: None)
     monkeypatch.setattr(sync_logon, "LOG_DIR", tmp_path)
     monkeypatch.setattr(sync_logon, "APP_DIR", tmp_path)
@@ -257,57 +277,64 @@ def test_main_aborts_the_run_on_a_zombie_stage(monkeypatch, tmp_path, stamps):
 
 # ── the real loop, not a mock of it ──────────────────────────────────────────
 
-class _StubPP:
-    """Minimal ParcelPanel client: one shipment per order, no network."""
+_PP_DRIVER = textwrap.dedent('''
+    """Drive the real backfill_sync.sync_parcel_panel loop in a CLEAN interpreter."""
+    import sqlite3, sys
+    APPYHOUR, TMP = sys.argv[1], sys.argv[2]
+    sys.path.insert(0, APPYHOUR)
+    sys.path.insert(0, APPYHOUR + r"\\GelPackCalculator")
+    from appyhour_lib import db as dbmod
+    from appyhour_lib.cancel import CancelToken, StageCancelled
+    import backfill_sync, shipping_invoice_db as sidb
 
-    def __init__(self):
-        self.polled = 0
-
-    def get_order_tracking(self, order_number, stats=None):
-        self.polled += 1
-        return {"order": {"shipments": [{"tracking_number": f"TRK{order_number}"}]}}
-
-    def _normalize_parcel(self, ship, order_num):
-        return {"tracking_number": ship["tracking_number"], "carrier": "FedEx",
-                "delivery_status": "in_transit", "order_number": order_num}
-
-
-def test_sync_parcel_panel_cancels_on_a_flush_boundary(tmp_path, monkeypatch):
-    """The actual ``backfill_sync.sync_parcel_panel`` loop — the one that kept upserting.
-
-    Cancel is set immediately; the loop must commit the first batch, release the lock, and
-    stop AT that batch boundary — never mid-batch, never past it.
-    """
-    backfill_sync = pytest.importorskip("backfill_sync")
-    sidb = pytest.importorskip("shipping_invoice_db")
-
-    monkeypatch.setattr(backfill_sync, "PP_FLUSH_EVERY", 10)
-    db_file = tmp_path / "shipping.db"
-    con = sidb.init_db(str(tmp_path))
+    backfill_sync.PP_FLUSH_EVERY = 10
+    db_file = TMP + r"\\shipping.db"
+    con = sidb.init_db(TMP)
     con.executemany(
         "INSERT INTO fulfillments (order_number, tracking_number, fulfilled_at) VALUES (?,?,?)",
-        [(str(1000 + i), f"T{i}", "2026-08-30") for i in range(40)])
-    con.commit()
-    con.close()
+        [(str(1000 + i), "T%d" % i, "2026-08-30") for i in range(40)])
+    con.commit(); con.close()
+
+    class StubPP:
+        def get_order_tracking(self, order_number, stats=None):
+            return {"order": {"shipments": [{"tracking_number": "TRK" + order_number}]}}
+        def _normalize_parcel(self, ship, order_num):
+            return {"tracking_number": ship["tracking_number"], "carrier": "FedEx",
+                    "delivery_status": "in_transit", "order_number": order_num}
 
     token = CancelToken("fulfillments")
-    token.cancel("test")                       # already cancelled before the first flush
-    opened = []
-
-    def _open():
-        c = dbmod.connect(db_file)
-        opened.append(c)
-        return c
-
-    with pytest.raises(StageCancelled) as e:
-        backfill_sync.sync_parcel_panel(None, _StubPP(), since_days=None,
-                                        token=token, open_conn=_open)
-
-    assert "parcel_panel after order 10/40" in str(e.value)
-    ro = sqlite3.connect(f"file:{db_file.as_posix()}?mode=ro", uri=True)
+    token.cancel("test")                 # already cancelled before the first flush
     try:
-        written = ro.execute("SELECT COUNT(*) FROM delivery_status").fetchone()[0]
-    finally:
-        ro.close()
-    assert written == 10, f"cancel landed off a flush boundary: {written} rows"
-    assert dbmod.write_lock_holder(db_file) is None, "the lock survived the cancel"
+        backfill_sync.sync_parcel_panel(None, StubPP(), since_days=None, token=token,
+                                        open_conn=lambda: dbmod.connect(db_file))
+        print("WHERE=<none: loop ran to completion>")
+    except StageCancelled as e:
+        print("WHERE=" + e.where)
+    ro = sqlite3.connect("file:" + db_file.replace("\\\\", "/") + "?mode=ro", uri=True)
+    print("WRITTEN=%d" % ro.execute("SELECT COUNT(*) FROM delivery_status").fetchone()[0])
+    ro.close()
+    print("LOCK=%r" % (dbmod.write_lock_holder(db_file),))
+''')
+
+
+def test_sync_parcel_panel_cancels_on_a_flush_boundary(tmp_path):
+    """The actual ``backfill_sync.sync_parcel_panel`` loop — the one that kept upserting.
+
+    Cancel is set before the first flush; the loop must commit that batch, release the
+    lock, and stop AT the batch boundary — never mid-batch, never past it.
+
+    🔴 Run in a CLEAN subprocess on purpose. In-process, ``parcel_panel``'s ShipRouting
+    rate-limiter shim resolves ``server`` to ``AppyHourMCP/server.py`` once another test
+    has put that dir ahead on ``sys.path``, so ``importorskip`` SKIPPED this — silently,
+    only in the full-suite run. A test that vanishes depending on suite order is the
+    same silent-degrade class this whole change is about; a subprocess makes it run
+    everywhere or fail loudly.
+    """
+    appyhour = str(pathlib.Path(dbmod.__file__).resolve().parent.parent)
+    proc = subprocess.run([sys.executable, "-c", _PP_DRIVER, appyhour, str(tmp_path)],
+                          capture_output=True, text=True, timeout=180)
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 0, out
+    assert "WHERE=parcel_panel after order 10/40" in out, out
+    assert "WRITTEN=10" in out, f"cancel landed off a flush boundary: {out}"
+    assert "LOCK=None" in out, f"the lock survived the cancel: {out}"
