@@ -47,22 +47,30 @@ def _settings_fallback_path() -> Path | None:
     return None
 
 
-def get_google_credentials_path() -> str:
-    """Service account JSON path. Priority:
-    1. GOOGLE_SVC_ACCOUNT_JSON_CONTENT env var (inline JSON, App Platform pattern)
-       → decoded to /tmp/gsvc.json on first call
-    2. GOOGLE_SVC_ACCOUNT_JSON env var (file path)
-    3. InventoryReorder settings.json fallback (local dev)
-    4. AppyHour root fallback file
-    """
-    content = os.environ.get("GOOGLE_SVC_ACCOUNT_JSON_CONTENT", "").strip()
-    if content:
-        tmp = Path("/tmp/gsvc.json") if os.name != "nt" else Path(os.environ.get("TEMP", ".")) / "gsvc.json"
-        if not tmp.exists() or tmp.stat().st_size != len(content):
-            tmp.parent.mkdir(parents=True, exist_ok=True)
-            tmp.write_text(content, encoding="utf-8")
-        return str(tmp)
+def get_google_credentials(scopes=None):
+    """PREFERRED: a google.oauth2 Credentials object, no file needed.
 
+    Delegates to appyhour_lib.credentials — the single reader. Works on App
+    Platform (inline JSON) with no key file on disk.
+    """
+    from appyhour_lib.credentials import get_google_credentials as _get
+    return _get(scopes)
+
+
+def get_google_credentials_path() -> str:
+    """Service account JSON FILE path — legacy, path-consumers only.
+
+    Prefer get_google_credentials(). Priority:
+    1. GOOGLE_SVC_ACCOUNT_JSON env var (file path)
+    2. InventoryReorder settings.json fallback (local dev)
+    3. GOOGLE_CREDENTIALS_JSON / AppyHour root fallback file (via appyhour_lib)
+
+    🔴 GOOGLE_SVC_ACCOUNT_JSON_CONTENT is deliberately NOT handled here any
+    more. It used to be decoded to a temp file on first call, which wrote the
+    private key to disk on every cloud host — an inline-only secret must stay
+    in memory. A caller with only the inline var set gets a RuntimeError
+    telling it to use get_google_credentials() instead.
+    """
     p = os.environ.get("GOOGLE_SVC_ACCOUNT_JSON", "").strip()
     if p and Path(p).exists():
         return p
@@ -78,12 +86,8 @@ def get_google_credentials_path() -> str:
         except (OSError, json.JSONDecodeError):
             pass
 
-    fallback = _APPYHOUR_ROOT / "shipping-perfomance-review-accd39ac4b78.json"
-    if fallback.exists():
-        return str(fallback)
-    raise RuntimeError(
-        "Google service account JSON missing — set GOOGLE_SVC_ACCOUNT_JSON_CONTENT env var"
-    )
+    from appyhour_lib.credentials import get_google_credentials_path as _path
+    return _path()
 
 
 def get_recharge_token() -> str:

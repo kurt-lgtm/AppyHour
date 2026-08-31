@@ -78,6 +78,7 @@ sys.path.insert(0, str(_HERE.parents[2] / "ShipRouting"))       # ShipRouting/ �
 # `lib` resolves at RUNTIME via the insert above; a static checker cannot see a sys.path mutation,
 # so pyright's reportMissingImports here is a false positive, not a broken import.
 from appyhour_lib.cloud_reads import connect_reporting  # noqa: E402  isort:skip
+from appyhour_lib.credentials import get_google_credentials  # noqa: E402  isort:skip
 from lib import canon  # type: ignore[reportMissingImports]  # noqa: E402  isort:skip
 
 # ── Row model ────────────────────────────────────────────────────────────────
@@ -127,7 +128,9 @@ REPORT = OUT_DIR / "carrier-mix-pivot.md"
 # the ledger above is the memory. NOT an Apps Script tab (D35 "Why it is not a .gs tab").
 SHEET_ID = "1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU"
 SHEET_TAB = "Carrier Mix"
-SHEET_CREDS = _HERE.parents[1] / "shipping-perfomance-review-accd39ac4b78.json"  # gitignored SA key
+# SA credentials resolve via appyhour_lib.credentials.get_google_credentials():
+# GOOGLE_SVC_ACCOUNT_JSON_CONTENT (inline JSON, App Platform) else the gitignored
+# key file. No path literal here — see that module for the resolution order.
 # A1 marker: ownership test for the repaint gate AND the tab's visible title. 🔴 Written in the
 # MAIN batch; the "Last refreshed" stamp row is written LAST in a separate call, so a missing
 # stamp row = an incomplete paint (crash between clear and finish), loudly visible.
@@ -630,13 +633,12 @@ def write_sheet(cols, ledger, notes):
     # google-api-python-client ships no py.typed/stubs — resolvable at runtime (proved by the
     # hold_write/tnt1 writers on this same SA), invisible to a static checker. Suppressed
     # narrowly, same pattern as `from lib import canon` above.
-    from google.oauth2.service_account import Credentials  # type: ignore[reportMissingImports]  # noqa: PLC0415
     from googleapiclient.discovery import build  # type: ignore[reportMissingImports]  # noqa: PLC0415
 
-    if not SHEET_CREDS.exists():
-        raise CarrierMixError(f"CM_SHEET_NO_CREDS: {SHEET_CREDS} not found")
-    creds = Credentials.from_service_account_file(
-        str(SHEET_CREDS), scopes=["https://www.googleapis.com/auth/spreadsheets"])
+    try:
+        creds = get_google_credentials(["https://www.googleapis.com/auth/spreadsheets"])
+    except RuntimeError as exc:
+        raise CarrierMixError(f"CM_SHEET_NO_CREDS: {exc}") from exc
     svc = build("sheets", "v4", credentials=creds, cache_discovery=False)
 
     # Metadata first: prove we can see the spreadsheet (and echo its identity) before writing.

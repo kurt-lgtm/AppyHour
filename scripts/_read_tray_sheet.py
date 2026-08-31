@@ -7,18 +7,14 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
-from cut_order_server.app.creds import get_google_credentials_path  # noqa: E402
+from appyhour_lib.credentials import get_google_credentials  # noqa: E402
 
-from google.oauth2.service_account import Credentials  # noqa: E402
 from googleapiclient.discovery import build  # noqa: E402
 
 SHEET_ID = "1MHyIyWhDO8P1Y66dbmZXNXp9TWPyycUBP9O60h1G0Rs"
 GID = 461556308
 
-creds = Credentials.from_service_account_file(
-    get_google_credentials_path(),
-    scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"],
-)
+creds = get_google_credentials(["https://www.googleapis.com/auth/spreadsheets.readonly"])
 svc = build("sheets", "v4", credentials=creds)
 
 meta = svc.spreadsheets().get(spreadsheetId=SHEET_ID).execute()

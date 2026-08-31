@@ -11,7 +11,6 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from .creds import get_google_credentials_path
 
 _SHEETS_SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 _LTF_SHEET_ID = os.environ.get(
@@ -25,13 +24,14 @@ _CACHE_TTL = 300.0
 
 
 def _service():
-    from google.oauth2.service_account import Credentials
     from googleapiclient.discovery import build
 
-    creds = Credentials.from_service_account_file(
-        get_google_credentials_path(),
-        scopes=_SHEETS_SCOPES,
-    )
+    # Canonical resolver: inline JSON from GOOGLE_SVC_ACCOUNT_JSON_CONTENT on
+    # App Platform (no key file exists there), key file locally. Never spills
+    # the inline credential to disk the way a path-only API would have to.
+    from appyhour_lib.credentials import get_google_credentials
+
+    creds = get_google_credentials(_SHEETS_SCOPES)
     return build("sheets", "v4", credentials=creds, cache_discovery=False)
 
 

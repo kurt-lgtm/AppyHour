@@ -13,9 +13,9 @@ import os
 from datetime import datetime
 
 import gspread
-from google.oauth2.service_account import Credentials
 
-SVC_JSON = r"C:\Users\Work\Claude Projects\AppyHour\shipping-perfomance-review-accd39ac4b78.json"
+from appyhour_lib.credentials import get_google_credentials
+
 SHARE_WITH = "kurt@elevatefoods.co"
 _ID_CACHE = r"C:\Users\Work\Claude Projects\_outputs\cache\reship_sheet_id.txt"
 _SCOPES = ["https://www.googleapis.com/auth/spreadsheets",
@@ -25,8 +25,14 @@ _HDR_BG = {"red": 0.12, "green": 0.23, "blue": 0.37}
 _WHITE = {"red": 1, "green": 1, "blue": 1}
 
 
-def _client(svc_json: str):
-    creds = Credentials.from_service_account_file(svc_json, scopes=_SCOPES)
+def _client(svc_json: str | None = None):
+    """gspread client. An explicit svc_json path still wins; otherwise the
+    canonical resolver (env inline JSON on App Platform, key file locally)."""
+    if svc_json:
+        from google.oauth2.service_account import Credentials
+        creds = Credentials.from_service_account_file(svc_json, scopes=_SCOPES)
+    else:
+        creds = get_google_credentials(_SCOPES)
     return gspread.authorize(creds)
 
 
@@ -83,7 +89,7 @@ def _style(ss, ws, n_cols: int, header_rows: list[int]):
 
 
 def push(week: str, rows: list[list], vendor_hdr_row: int, box_hdr_row: int,
-         sheet_id: str | None = None, svc_json: str = SVC_JSON,
+         sheet_id: str | None = None, svc_json: str | None = None,
          share_with: str = SHARE_WITH) -> str:
     gc = _client(svc_json)
     sid = sheet_id or _cached_id()

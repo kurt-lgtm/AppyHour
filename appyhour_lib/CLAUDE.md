@@ -9,7 +9,8 @@ appyhour_lib/
 ├── __init__.py
 ├── bootstrap.py      # init()/require_env() — MANDATORY first call in scheduled/CLI mains
 │                     #   (UTF-8 stdio + canonical .env; reuses notify's loader)
-├── credentials.py    # get_shopify_auth() — single source of truth
+├── credentials.py    # get_shopify_auth() + get_google_credentials() — single source
+│                     #   of truth for BOTH Shopify auth and the Google service account
 ├── paths.py          # db_path() — canonical shipping.db location
 ├── db.py             # connect()/connect_ro() — MANDATORY shipping.db opener
 │                     #   + write_lock_holder()/assert_write_lock_free() (lock-release proof)
@@ -29,6 +30,27 @@ appyhour_lib/
 
 - **Pure-only.** stdlib + `requests` for weather. No GUI, no MCP, no Flask.
 - **`get_shopify_auth()` is the SINGLE source.** AppyHourMCP re-exports it. Never duplicate auth elsewhere.
+- **🔴 `get_google_credentials(scopes)` is the SINGLE source for the Google service account (2026-08-31).**
+  NEVER write `Credentials.from_service_account_file(<literal path>)` in a consumer again — the path
+  `AppyHour/shipping-perfomance-review-accd39ac4b78.json` was hardcoded at ~30 call sites with no env
+  escape, so **every** sheet-writing job was structurally unable to run on App Platform (which has no
+  such file). That is not "misconfigured", it is impossible; five business jobs were blocked by it.
+  - Resolution order: **`GOOGLE_SVC_ACCOUNT_JSON_CONTENT`** (inline JSON — the cloud path) →
+    `GOOGLE_SVC_ACCOUNT_JSON` (path) → `GOOGLE_CREDENTIALS_JSON` (path, legacy `.env` key) → the
+    repo-root key file. With no env var set this is the last step, i.e. **local behaviour is
+    unchanged**. Names match the pre-existing convention in `cut_order_server/DEPLOY.md` +
+    `deploy/provision.sh` — do NOT coin a new prefix.
+  - 🔴 **Never print, log, or interpolate the credential value.** `json.JSONDecodeError` embeds the
+    whole document — which for this var IS the private key — so the malformed-JSON path re-raises a
+    scrubbed `RuntimeError` (`from None`, byte length + line/col only). Use `google_sa_source()`
+    (returns `env:NAME` / `file:<path>` / `MISSING`) for any diagnostic output.
+  - 🔴 **Missing/invalid RAISES; it never degrades to an unauthenticated client.** A sheet writer
+    that silently no-ops is indistinguishable from one with nothing to write.
+  - `get_google_credentials_path()` exists for path-only consumers and **deliberately refuses** when
+    only the inline var is set — the old `cut_order_server` behaviour spilled the key to a temp file
+    on every cloud host. An inline-only secret stays in memory.
+  - Layer rule: `google.oauth2` is imported **lazily inside the function**, never at module scope.
+  - `GelPackCalculator/GoogleIntegration(credentials_path=None)` routes here when given no path.
 - **`db.connect()`/`db.connect_ro()` are the ONLY sanctioned way to open `shipping.db`.** NEVER `sqlite3.connect()` it raw. The helper enforces `journal_mode=WAL` + `busy_timeout=10000` + `synchronous=NORMAL`; `busy_timeout` is per-connection (not persisted), and its absence let concurrent writers race a checkpoint and corrupt the DB on 2026-06-27. Writers → `connect()`, readers → `connect_ro()` (`mode=ro`, can't take a write lock or trigger a checkpoint).
 - **ONE writer at a time — busy_timeout does NOT prevent two independent checkpointers from corrupting the WAL.** Corrupted again 2026-07-01 when a manual `weather_sync_cron.py` raced the live MCP servers. **Claude/agents stay READ-ONLY** (`connect_ro`); manual writers run only when the MCP servers aren't mid-sync. Recovery + the canonical DB path (**`C:\AppyHourData\shipping.db` as of 2026-07-08 — moved OUT of `%APPDATA%` because MSIX virtualizes it; never symlink the legacy path, never restore to Roaming/LocalCache**) live in `REBUILD-WITH-AI.md` §5.1 + memory `shipping-db-msix-wal-corruption`. Health check: `_outputs/scripts/shipping_db_healthcheck.py`.
 - **🔴 SINGLE-WRITER LOCK (2026-07-02) — `connect()` enforces one writer *process* at a time.** It takes an advisory `<db>.writelock` (atomic `O_CREAT|O_EXCL`, JSON `{pid, create_time, script, started_at, host}`) beside the *real* DB. A 2nd `connect()` waits `AH_WRITE_LOCK_WAIT` (default **90s**) then raises **`DBWriterBusy`** naming the holder — it does NOT corrupt. Crash-safe: a dead-PID / reused-PID (create_time mismatch) / over-`AH_WRITE_LOCK_MAX_AGE` (default 1800s) lock is auto-broken; refcount makes nested `connect()` reentrant; `atexit` releases on exit. Escape hatch `AH_WRITE_LOCK_DISABLE=1`. **`connect_ro()` NEVER touches the lock** (readers must never block). The lock only protects code that opens via the helper — raw `sqlite3.connect(shipping.db)` still bypasses it, so ALL writers MUST route through `connect()` (Part 2 migration in progress; `shipping_invoice_db.init_db` migrated 2026-07-02). Tests: `tests/test_db_writelock.py` (temp DB only — NEVER the live file). Manual 2-terminal collision test is a human step.

@@ -1,9 +1,11 @@
 
 import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath('.')), 'GelPackCalculator'))
-sys.path.insert(0, 'GelPackCalculator')
+_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, _ROOT)
+sys.path.insert(0, os.path.join(_ROOT, 'GelPackCalculator'))
 from google_integration import GoogleIntegration
-gi = GoogleIntegration('shipping-perfomance-review-accd39ac4b78.json')
+# No path -> resolves via appyhour_lib.credentials (inline JSON or key file).
+gi = GoogleIntegration()
 email = gi.test_connection()
 print(f'Connected as: {email}')
 

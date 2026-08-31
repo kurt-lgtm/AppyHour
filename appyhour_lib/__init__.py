@@ -10,6 +10,9 @@ Public surface:
   • EXEMPT_INVOICE_ACCOUNTS          — invoice account numbers to skip
 
   • credentials.get_shopify_credentials() — Shopify auth from env/settings
+  • credentials.get_google_credentials()  — Google service account; SINGLE source.
+                                            Env inline JSON (cloud) else key file.
+                                            NEVER hardcode the SA path again.
   • weather.fetch_weather_by_zip(...)     — OWM 5-day forecast
 """
 from __future__ import annotations

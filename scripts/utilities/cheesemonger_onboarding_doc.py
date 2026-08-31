@@ -476,11 +476,9 @@ print(f"Document saved: {out_path}")
 # ── Upload to Google Drive ──────────────────────────────────────────
 try:
     from google_integration import GoogleIntegration
-    creds_path = os.path.join(out_dir, "shipping-perfomance-review-accd39ac4b78.json")
-    creds_path = os.path.normpath(creds_path)
-    print(f"Using credentials: {creds_path}")
-
-    gi = GoogleIntegration(creds_path)
+    # No path -> resolves via appyhour_lib.credentials (inline JSON or key file).
+    gi = GoogleIntegration()
+    print(f"Using credentials: {gi.credentials_path}")  # 'env:NAME' or 'file:path'
     email = gi.test_connection()
     print(f"Connected as: {email}")
 

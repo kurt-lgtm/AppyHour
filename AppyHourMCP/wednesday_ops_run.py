@@ -140,12 +140,9 @@ def build_cohort_report(tue: date, out_path: Path) -> dict:
     # 1. Read sheet
     settings = _load_settings()
     creds_path = settings.get("google_credentials_path", "")
-    if not creds_path or not os.path.exists(creds_path):
-        creds_path = str(
-            Path(__file__).resolve().parent.parent
-            / "shipping-perfomance-review-accd39ac4b78.json"
-        )
-    gclient = GoogleIntegration(creds_path)
+    # No settings path -> GoogleIntegration resolves via appyhour_lib.credentials
+    # (GOOGLE_SVC_ACCOUNT_JSON_CONTENT on App Platform, key file locally).
+    gclient = GoogleIntegration(creds_path or None)
     rows = gclient.read_sheet(SPREADSHEET_ID, f"'{TAB_NAME}'!A:J")
     if not rows:
         raise RuntimeError("No sheet data")

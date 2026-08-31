@@ -5,27 +5,25 @@ via the existing GoogleIntegration service account.
 
 import json
 import os
-from pathlib import Path
 
-from utils import APPDATA_SETTINGS, APPYHOUR_ROOT, format_error
-
-_FALLBACK_CREDS = APPYHOUR_ROOT / "shipping-perfomance-review-accd39ac4b78.json"
+from utils import APPDATA_SETTINGS, format_error
 
 
-def _get_credentials_path() -> str:
-    """Resolve Google service account credentials path."""
+def _get_credentials_path() -> str | None:
+    """Kori settings' explicit credentials path, or None.
+
+    None is NOT an error — GoogleIntegration then resolves through
+    appyhour_lib.credentials (GOOGLE_SVC_ACCOUNT_JSON_CONTENT inline JSON on
+    App Platform, the AppyHour key file locally), which fails loud on its own
+    if nothing is available. No path literal lives here any more.
+    """
     if APPDATA_SETTINGS.exists():
         with open(APPDATA_SETTINGS, encoding="utf-8") as f:
             settings = json.load(f)
         path = settings.get("google_credentials_path", "")
         if path and os.path.exists(path):
             return path
-    if _FALLBACK_CREDS.exists():
-        return str(_FALLBACK_CREDS)
-    raise FileNotFoundError(
-        "No Google service account credentials found. "
-        "Configure google_credentials_path in Kori settings or place credentials in AppyHour/."
-    )
+    return None
 
 
 def _get_client() -> object:

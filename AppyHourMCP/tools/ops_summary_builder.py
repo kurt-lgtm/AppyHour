@@ -113,10 +113,9 @@ def _get_google_client() -> object:
     from google_integration import GoogleIntegration
     settings = _load_settings()
     creds = settings.get("google_credentials_path", "")
-    if not creds or not os.path.exists(creds):
-        creds = str(Path(__file__).resolve().parent.parent.parent
-                     / "shipping-perfomance-review-accd39ac4b78.json")
-    return GoogleIntegration(creds)
+    # No settings path -> GoogleIntegration resolves via appyhour_lib.credentials
+    # (GOOGLE_SVC_ACCOUNT_JSON_CONTENT on App Platform, key file locally).
+    return GoogleIntegration(creds or None)
 
 
 def _parse_date(date_str: str) -> datetime | None:

@@ -35,7 +35,8 @@ from zoneinfo import ZoneInfo
 SHEET_ID = "1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU"   # "Running Reship Report"
 SHEET_TAB = "Vendor Matrix"
 SHEET_TITLE = "Vendor Matrix — carrier×issue by ship week, weeks as columns (D39)"
-SHEET_CREDS = Path(__file__).resolve().parents[2] / "shipping-perfomance-review-accd39ac4b78.json"
+# SA credentials resolve via appyhour_lib.credentials.get_google_credentials():
+# GOOGLE_SVC_ACCOUNT_JSON_CONTENT (inline JSON, App Platform) else the key file.
 LEDGER = Path(r"C:\Users\Work\Claude Projects\_outputs\reports\vendor_matrix_ledger.json")
 ET = ZoneInfo("America/New_York")   # 🔴 every human-read timestamp is Eastern; UTC stays in code.
 
@@ -192,13 +193,14 @@ def write_sheet(led: dict, vendor_order: list[str], issue_order: list[str],
     🔴 valueInputOption=RAW everywhere: `0.55%` must land as literal text, not be coerced to a
     number by Sheets, and `—` must stay `—`.
     """
-    from google.oauth2.service_account import Credentials  # type: ignore[reportMissingImports]  # noqa: PLC0415
     from googleapiclient.discovery import build  # type: ignore[reportMissingImports]  # noqa: PLC0415
 
-    if not SHEET_CREDS.exists():
-        raise VendorMatrixError(f"VM_SHEET_NO_CREDS: {SHEET_CREDS} not found")
-    creds = Credentials.from_service_account_file(
-        str(SHEET_CREDS), scopes=["https://www.googleapis.com/auth/spreadsheets"])
+    from appyhour_lib.credentials import get_google_credentials  # noqa: PLC0415
+
+    try:
+        creds = get_google_credentials(["https://www.googleapis.com/auth/spreadsheets"])
+    except RuntimeError as exc:
+        raise VendorMatrixError(f"VM_SHEET_NO_CREDS: {exc}") from exc
     svc = build("sheets", "v4", credentials=creds, cache_discovery=False)
     meta = svc.spreadsheets().get(spreadsheetId=sheet_id,
                                   fields="properties.title,sheets.properties.title").execute()
