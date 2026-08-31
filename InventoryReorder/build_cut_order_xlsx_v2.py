@@ -1286,9 +1286,9 @@ def _build_cut_order_tab(
         NOTES_COL,
     )
 
-    # Row 3: blank
-    # Row 4: column headers
-    HDR_ROW = 4
+    # Row 3: column headers — no blank spacer row. Title (1), subtitle (2), headers (3),
+    # data from 4. (Kurt 2026-08-31: "it should just be the sku name avail row")
+    HDR_ROW = 3
     headers = [
         "SKU",
         "Name",
@@ -1521,8 +1521,10 @@ def _build_cut_order_tab(
         if not rows_:
             return start_row
         # No section header: there is only ONE section now (the urgency groups were
-        # removed), so a lone "SKUs" banner was a redundant row. (Kurt 2026-08-31)
-        r = start_row + 1
+        # removed), so a lone "SKUs" banner was a redundant row. Start ON start_row,
+        # not start_row+1 — the +1 was the slot that banner occupied, and leaving it
+        # left a blank row under the column headers. (Kurt 2026-08-31)
+        r = start_row
 
         current_cat = None
         cat_start_rows: dict[str, list[int]] = {}  # track rows per category for subtotals
@@ -1627,7 +1629,7 @@ def _build_cut_order_tab(
     _write_bundles_on_cut_order(ws, data, settings, last_row + 2)
 
     # Freeze panes: row 4 header + columns A:B
-    ws.freeze_panes = "C5"
+    ws.freeze_panes = "C4"
 
 
 def _write_bundles_on_cut_order(ws: Worksheet, data: dict, settings: dict, start_row: int) -> int:
