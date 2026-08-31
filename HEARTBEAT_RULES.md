@@ -274,6 +274,30 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
      reduction, never as the corruption fix — Kurt's "I don't want any collisions" is satisfied by
      path canonicalization, not by scheduling.
 
+16. **A routine may go EXCEPTION-ONLY only AFTER its beat is wired and verified.** 🔴 2026-08-31:
+   **silence must be EARNED.** Making a routine silent-when-clean while nothing watches it makes it
+   silent AND unwatched — strictly worse than the weekly all-clear it replaces, because the
+   all-clear was at least a human-readable liveness signal. Kurt's standing preference is
+   exception-only; rule 1 says silence is the failure signal; the two only compose when something
+   else is watching. Order, non-negotiable: (1) land `beat()` in the code path that does the work,
+   (2) register the name in `EXPECTED` with a max age clearing the schedule's longest legal gap
+   (rule 4 — **weekly routines get ~10 days, never 7**: a catch-up run after a slept-through slot
+   legally lands >7d after the last one), (3) verify it lands in the canonical ledger via
+   `read_ledger()`, (4) only then flip the Slack step. Flipping first and wiring later is the
+   failure mode this rule names; there is no window in which it is acceptable. NEGATIVES:
+   - **A beat placed where the work did not happen is worse than no beat.** `shipping-cost-sheet`
+     beats INSIDE the `--push` branch after `push()` returns a URL, not at the end of `main()` — a
+     compute-only run is not the routine (rule 8's shape).
+   - **Two routines sharing one Python entry point need TWO keys.** `weekly-reship-report` and
+     `weekly-shipping-vendor-matrix` both run `ingest/slack_reship/sync.main()`; one key would let
+     either routine's death hide behind the other's success. `--push` is what tells them apart.
+   - **A routine whose beat could NOT be landed stays LOUD.** As of 2026-08-31 that is
+     `friday-forecast-refresh` and the three `prewarm-carrier-tnt-*` routines: every one of their
+     beat targets is a `ShipRouting/scripts/*.py` file, off-limits to the session that wired the
+     rest. They keep posting on success until someone with that repo lands `beat()` in
+     `friday_forecast_refresh.py`, `build_prewarm_universe.py` and `prewarm_carrier_tnt.py`. Do NOT
+     flip them to exception-only before then.
+
 ## Wired beats (update when adding/removing)
 
 | name | writer | max age |
@@ -285,6 +309,10 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
 | `automation-health` | `scripts/automation_health.py` self-beat | 4 days (routine is Mon–Fri; 2d graded every Friday run stale on Monday) |
 | `freshness-sweep` | `_outputs/scripts/freshness_sweep.py` (weekly data-freshness monitor — Mon 12:33 Claude scheduled task; beats on run, flags or not) | 8 days |
 | `pytest-shiprouting` | `_outputs/scripts/pytest_cadence.py` (weekday ShipRouting fast-tier suite via `~/.claude/hooks/catch-up-missed-tasks.sh` — stamp-guarded; Slack only on red, beat every run) | 4 days |
+| `warm-cohort-report` | `_outputs/scripts/warm_cohort_report.py` end of `main()`, after the report file is written (routine `warm-cohort-report`, Mon ~14:10) | 10 days |
+| `shipping-cost-sheet` | `_outputs/scripts/shipping_cost_report.py` INSIDE the `--push` branch, after `push()` returns a URL (routine `shipping-cost-sheet`, Mon ~13:09) | 10 days |
+| `vendor-matrix` | `ingest/slack_reship/sync.py` end of `main()` when `--report` and NOT `--push` (routine `weekly-shipping-vendor-matrix`, Tue ~12:00) | 10 days |
+| `slack-reship` | `ingest/slack_reship/weekly_task.py` (routine `weekly-reship-report`, Tue ~12:00) — pre-existing beat, promoted into `EXPECTED` 2026-08-31 | 10 days |
 
 Checker also probes (no beat needed): `sync_heartbeat.json` age (>48h), `schtasks` AppyHour* Last
 Result ≠ 0, shipping.db `PRAGMA quick_check` (read-only immutable), **dev↔prod tree parity on
@@ -293,5 +321,15 @@ age + `C:\AppyHourData\replica_pull_stamp.json` ingest stamp (rule 11)**.
 
 Ledger file: **`C:\AppyHourData\heartbeats.json`** (moved off `%APPDATA%` 2026-08-31, rule 3).
 Access it ONLY through `appyhour_lib.heartbeat.beat()` / `read_ledger()` — a hand-rolled
-`%APPDATA%` path is a second ledger that diverges silently. `slack-reship` also beats here (checked
-by `freshness_sweep.py` D3, not by `EXPECTED`).
+`%APPDATA%` path is a second ledger that diverges silently.
+
+🔴 **`slack-reship` is NOT in `automation_health.EXPECTED`** (verified 2026-08-31 by reading the
+dict — the earlier claim here that it "is now an `EXPECTED` row" was doc-ahead-of-code drift).
+So `freshness_sweep.py` D3's own `slack-reship` row on `SLACK_RESHIP_MAX_D = 8` is **not**
+redundant with the rule-13 loop — it is the ONLY thing checking that name, and retiring it would
+have removed the check outright. It is KEPT, and as of 2026-08-31 it reads `read_ledger()` +
+`age_hours()` instead of the hand-rolled `%APPDATA%` path (rule 3 negative (b) — that read was
+frozen on the deprecated file while `beat()` wrote canonical; the two files still disagree today
+on `offsite-backup` 08-22 vs 08-30 and `forecast-a-monitor` 08-10 vs 08-31, so the split is live,
+not theoretical). Whether `slack-reship` should ALSO become an `EXPECTED` row is a rule-4 decision
+for the checker's owner; until it is one, do not delete the D3 row as "duplicate".

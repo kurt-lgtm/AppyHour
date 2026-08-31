@@ -26,15 +26,27 @@ import json
 import os
 import sqlite3
 import sys
-import io
 import urllib.parse
 import urllib.request
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+# 🔴 UTF-8 stdio + canonical .env, via the ONE bootstrap every other scheduled entry point uses
+# (2026-08-31). Two bugs fixed at once by deleting the hand-rolled line that stood here:
+#   (a) ENV: this module reads AH_SLACK_BOT_TOKEN straight off os.environ, and nothing loaded
+#       AppyHour/.env on the `python -m ingest.slack_reship.sync` path — only weekly_task.py called
+#       init(). A scheduled shell has no such var, so the LIVE Slack path reported "token not set"
+#       while the token sat in .env the whole time (the 2026-08-11/18/22/28 class, which
+#       bootstrap.init already fixed everywhere else). Real env vars still win over .env.
+#   (b) STDIO: `sys.stdout = io.TextIOWrapper(sys.stdout.buffer, ...)` is the bare-wrapper
+#       anti-pattern bootstrap.py names — the discarded wrapper can be GC'd and close the shared
+#       buffer ("I/O operation on closed file"). init() reconfigures in place and keeps a GC guard.
+# init() is idempotent, so weekly_task.py calling it first costs nothing.
+from appyhour_lib.bootstrap import init as _bootstrap_init  # noqa: E402
+
+_bootstrap_init()
 from ingest.slack_reship.parse import (  # noqa: E402
     ReshipRecord, parse_concise_blob, parse_detailed_blob, parse_messages,
 )
@@ -46,11 +58,12 @@ try:
     from appyhour_lib.paths import db_path
 except Exception:
     def db_path() -> Path:  # type: ignore
-        return Path(os.environ.get("APPYHOUR_DB_PATH") or (r"C:\AppyHourData\shipping.db" if os.path.exists(r"C:\AppyHourData\shipping.db") else str(Path(os.environ["APPDATA"]) / "AppyHour" / "shipping.db")))
+        return Path(os.environ.get("APPYHOUR_DB_PATH") or (r"C:\AppyHourData\shipping.db" if os.path.isdir(r"C:\AppyHourData") else str(Path(os.environ["APPDATA"]) / "AppyHour" / "shipping.db")))  # dir-keyed 2026-07-22 (login-race split-brain guard)
 
 # Readers MUST use connect_ro (mode=ro) — never raw sqlite3.connect on the live
 # DB (MSIX+WAL corruption guard, appyhour_lib/CLAUDE.md).
 from appyhour_lib.db import connect_ro  # noqa: E402
+from appyhour_lib.heartbeat import beat  # noqa: E402  — dead-man-switch (HEARTBEAT_RULES)
 
 CHANNEL_ID = "C095UVCKCBB"  # #reship-and-order-requests
 REPORT_TZ = "America/Chicago"
@@ -313,6 +326,16 @@ def main() -> None:
         box_hdr = 8 + len(vmatrix)     # matrix rows 6..5+N, blank, "BOX TYPE" label, then box hdr
         url = push(args.week, sheet_rows, vendor_hdr, box_hdr, sheet_id=args.sheet_id)
         print(f"\nPUSHED: {url}")
+
+    # Dead-man-switch beat for `weekly-shipping-vendor-matrix` (HEARTBEAT_RULES; added 2026-08-31
+    # so that routine could go exception-only — a run that never happens sends no Slack, and
+    # absence of this beat is then the ONLY signal left).
+    # 🔴 NOT keyed on --report alone. `weekly-reship-report` runs THIS SAME main() via
+    # weekly_task.py with `--report --push`, and that routine already owns the separate
+    # `slack-reship` beat. Beating one key from both callers would let either routine's death hide
+    # behind the other's success — two routines, two keys, and `--push` is what tells them apart.
+    if args.report and not args.push:
+        beat("vendor-matrix")
 
 
 if __name__ == "__main__":

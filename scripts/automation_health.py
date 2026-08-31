@@ -43,6 +43,26 @@ EXPECTED = {
     "freshness-sweep": 8 * 24,
     # weekday-only via catch-up-missed-tasks.sh; 4d allows the Fri->Mon gap + one missed day
     "pytest-shiprouting": 4 * 24,
+    # --- WEEKLY business-tracking posters, wired 2026-08-31 so they could go EXCEPTION-ONLY ---
+    # 🔴 10d, NEVER 7d (rule 4). These fire once a week at a fixed noon-ish slot, and the machine
+    # routinely sleeps through a slot: the catch-up run lands hours-to-days late, so the legal gap
+    # between two healthy beats is >7d on any week with a catch-up. A 7d limit would grade a
+    # perfectly healthy late run stale — the same structural false alarm that `automation-health`
+    # itself carried at 2d until this morning, and the reason a weekday-aware limit is refused
+    # here too (the checker has no calendar; one subtraction anyone can verify beats a threshold
+    # nobody can). 10d still fails a genuinely SKIPPED week (next healthy beat lands at ~14d).
+    # Each of the four routines below now posts to Slack ONLY on an exception, so absence of the
+    # beat is the sole remaining evidence that the routine still runs. If one is ever unscheduled,
+    # DELETE its row here in the same change (rule 4).
+    "warm-cohort-report": 10 * 24,   # _outputs/scripts/warm_cohort_report.py (Mon ~14:10)
+    "shipping-cost-sheet": 10 * 24,  # _outputs/scripts/shipping_cost_report.py --push (Mon ~13:09)
+    "vendor-matrix": 10 * 24,        # ingest/slack_reship/sync.py --report (Tue ~12:00)
+    # `slack-reship` is weekly-reship-report's PRE-EXISTING beat (ingest/slack_reship/weekly_task.py,
+    # Tue ~12:00) — promoted into EXPECTED rather than minting a second key for one routine.
+    # ⚠️ freshness_sweep.py D3 also checks this name on its own 8d constant; that block is now
+    # redundant with the rule-13 beat-or-fail loop and is the sweep owner's to retire (it also
+    # still hand-rolls the deprecated %APPDATA% ledger path, which rule 3 bans).
+    "slack-reship": 10 * 24,
 }
 SYNC_HEARTBEAT_MAX_H = 48
 SCHTASK_PREFIXES = ("appyhour_daily",)  # Windows tasks whose Last Result we audit
