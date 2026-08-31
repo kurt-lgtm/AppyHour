@@ -27,9 +27,12 @@ _LEDGER = Path(r"C:\AppyHourData\heartbeats.json")
 # DEPRECATION WINDOW (one cycle, opened 2026-08-31): read-only fallback so a beat written by a
 # writer still running the old code is not lost. read_ledger() merges it newest-wins and says so
 # LOUDLY on stderr — a silent fallback would just be the split ledger again, wearing a fix's name.
-# Nothing writes here any more. Remove once no unmigrated writer/reader remains (the last known
-# hand-rolled reader is `_outputs/scripts/freshness_sweep.py` D3, owned elsewhere — it must move to
-# read_ledger() before this block goes).
+# Nothing writes here any more. Remove once no unmigrated writer/reader remains. The last known
+# hand-rolled reader, `_outputs/scripts/freshness_sweep.py` D3, was DELETED outright on 2026-08-31
+# (its `slack-reship` row became redundant once that name entered automation_health.EXPECTED), so
+# no known reader is left and this block now stands only for unmigrated WRITERS. The merge still
+# earns its keep: measured that day the two files disagreed on `offsite-backup` (08-22 vs 08-30)
+# and `forecast-a-monitor` (08-10 vs 08-31).
 _LEGACY_LEDGER = (Path(os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming")))
                   / "AppyHour" / "heartbeats.json")
 
