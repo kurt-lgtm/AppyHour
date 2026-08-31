@@ -88,6 +88,52 @@ it. **Keep both — they fail independently.**
 
 ### 9. Gorgias tag counts are NOT valid as metrics (rule 81603). Read ticket bodies.
 
+### 9b. 🔴 `feedback` IS APPEND-ONLY. A "full refresh from sheet" wiped `gorgias_link` on 1,121 rows.
+`shipping_invoice_db.store_feedback()` was `DELETE FROM feedback` followed by a reinsert —
+docstring "Replace feedback entries (full refresh from sheet)" — wired to a live Kori button
+(`sync_feedback_sheet`, and the same block inside the full sync). `feedback` has **several
+writers with different column coverage**: the Gorgias tee writes `gorgias_link` /
+`raw_issue_type`, the Kori sheet payload carries neither. So each "refresh" rewrote the whole
+table from the narrowest view of it, and **every column the current sync does not populate was
+blanked on rows that already had it**. Measured on the live table (3,595 rows, 2026-08-31):
+replaying one sync through the old path destroys **2,474 `gorgias_link` values and 3,379
+`raw_issue_type` values**; the 1,121 rows sitting there today with no link are what a previous
+pass already cost us. `gorgias_link` is the join key of the completeness assert (gotcha 8) and
+the dedup index — losing it silently shrinks the denominator every ticket rate is computed on.
+
+Second loss on this same table by a different mechanism (gotcha 2 orphaned 34 of 55 wk0817
+rows), which is why the write path is now **structurally incapable of loss** rather than
+carefully correct. Kurt's ruling 2026-08-31: *"I don't see a reason why we should delete
+anything there."* A ticket happened; that fact does not stop being true.
+
+**The rules now enforced in `store_feedback()`:**
+- **No DELETE in any sync/import path.** The only function that removes rows is
+  `delete_feedback_rows(conn, ids, confirm=True, reason=...)` — id-addressed (no widenable
+  WHERE), gated on an explicit confirm **and** a written reason, and never called by a sync.
+- **An empty incoming value never overwrites a populated column.** Every column update is
+  `CASE WHEN <incoming> <> '' THEN <incoming> ELSE <col> END`. A sync that stops emitting a
+  field can no longer erase it.
+- **Upsert key = `(gorgias_link, issue_type)`** — measured on the live table: 2,474 rows,
+  **0 duplicate groups**, already backed by the partial UNIQUE index
+  `idx_feedback_dedup_link_issue`.
+- **There is NO proven key for the 1,121 link-less historical rows.**
+  `(order_number, issue_type, date_reported)` has 8 duplicate groups / 202 excess rows among
+  them, so upserting on it would MERGE genuinely distinct events. Link-less rows are therefore
+  **insert-only**, deduped on the full natural tuple with multiplicity preserved (insert the
+  shortfall, never the whole batch) — idempotent without ever touching an existing row.
+- 🔴 **"Rows that vanished from the sheet should vanish here" is NOT what this path does any
+  more.** Sheet rows do get deleted occasionally (audit sweeps —
+  `scripts/audits/apply_trawl_and_mark_nosignal.py` removed 51). Under the old code that
+  silently deleted DB rows as a side effect of the next sync. If that removal is genuinely
+  wanted, express it as an explicit `delete_feedback_rows()` call driven by the audit that
+  decided it — absence from a sheet is not evidence that the ticket did not happen.
+
+Pinned by `GelPackCalculator/tests/test_feedback_append_only.py` — **production-shape**: a
+read-only slice of the live table copied to scratch sqlite, not an invented fixture. All six
+behavioural cases were verified RED against the old `DELETE`-and-reinsert implementation before
+being made green (three of four guards this codebase wrote for earlier data-loss bugs were green
+against injected shapes and still failed).
+
 ### 10. Prod runs from a SEPARATE COPY: `C:\AppyHourProd\AppyHour\...`
 Editing the working tree does not change what the scheduled task runs. As of 2026-08-25 the
 prod copy predates several working-tree fixes. **A fix is not deployed until that copy is
@@ -107,11 +153,22 @@ synced** — verify the prod file, not the repo file.
    message. Raising it to silence a flag is prohibited — the flag means the join population
    shrank and every rate off it is a floor.
 6. Any new extraction path ships with a test that proves it **returns a value** on real data.
+7. **No sync, import, or refresh path may DELETE from `feedback`** (gotcha 9b). Removal happens
+   only through `delete_feedback_rows(..., confirm=True, reason=...)`.
+8. **No write may replace a populated column with an empty value**, whatever the writer's column
+   coverage. Adding a writer that covers fewer columns must be safe by construction.
+9. An upsert key is adopted only after its **duplicate count is measured against the live
+   table** and reported. Unproven key → insert-only, never upsert (an upsert on a non-unique key
+   merges distinct events, which reads as a clean table and is a silent subtraction).
 
 ## Files
 
 | Path | Role |
 |------|------|
+| `GelPackCalculator/shipping_invoice_db.py` | `store_feedback` (append-only merge) + `delete_feedback_rows` (the only deleter) |
+| `GelPackCalculator/kori/gel_pack_webview.py` | Kori sheet sync — the button; supplies `gorgias_link` so rows land on the proven key |
+| `GelPackCalculator/tests/test_feedback_append_only.py` | production-shape append-only + idempotency tests |
+| `ShipRouting/server/shipping_invoice_db.py` | vendored copy for the DO deploy — keep `store_feedback` identical |
 | `AppyHourMCP/tools/gorgias_sheets_sync.py` | sync + extraction + SQLite tee |
 | `AppyHourMCP/run_gorgias_update.py` | CLI entry (`gorgias_update.bat`, scheduled task) |
 | `appyhour_lib/feedback_completeness.py` | field-level completeness assert + threshold derivation |
