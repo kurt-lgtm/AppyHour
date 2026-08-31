@@ -766,9 +766,16 @@ def insert_missing(lc, cc, m: dict, manifest_path: Path, batch: int = BATCH) -> 
         try:
             cur.executemany(sql, buf)
             cc.commit()
-        except Exception as exc:
+        except BaseException as exc:
+            # 🔴 BaseException, not Exception. A real interrupt — Ctrl+C, a killed process, a
+            # SystemExit — raises KeyboardInterrupt/SystemExit, which `except Exception` does NOT
+            # catch. Proven against live MySQL on 2026-08-31: the committed batches were banked
+            # correctly, but the manifest was left saying `status: running`, so the durable record
+            # of a DEAD run claimed it was still going. The banked keys were never at risk; the
+            # ability to TELL was. An interrupt is the case this manifest exists for.
             cc.rollback()
-            man["status"] = "FAILED"
+            man["status"] = ("INTERRUPTED" if isinstance(exc, KeyboardInterrupt | SystemExit)
+                             else "FAILED")
             man["failed_batch_keys"] = [list(k) for k in keys]
             man["error"] = f"{type(exc).__name__}: {exc}"
             _flush_manifest(manifest_path, man)

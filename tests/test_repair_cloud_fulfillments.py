@@ -45,10 +45,11 @@ class FakeCursor:
     """A sqlite cursor pretending to be pymysql: `%s` params, backticks, SHOW TABLES,
     information_schema. Deliberately thin — the point is to run the REAL script functions."""
 
-    def __init__(self, con: sqlite3.Connection, fail_on=None):
+    def __init__(self, con: sqlite3.Connection, fail_on=None, fail_with=RuntimeError):
         self._con = con
         self._cur = con.cursor()
         self._fail_on = fail_on          # int: raise on the Nth executemany (interrupt sim)
+        self._fail_with = fail_with
         self._many = 0
         self._rows: list = []
 
@@ -78,7 +79,7 @@ class FakeCursor:
     def executemany(self, sql, seq):
         self._many += 1
         if self._fail_on and self._many == self._fail_on:
-            raise RuntimeError("simulated interrupt mid-run")
+            raise self._fail_with("simulated interrupt mid-run")
         self._cur.executemany(sql.replace("`", '"').replace("%s", "?"), seq)
 
     def fetchone(self):
@@ -88,7 +89,7 @@ class FakeCursor:
         return list(self._rows)
 
 
-class FakeMySQL:
+class FakeMySQLBase:
     """🔴 `busy_timeout` is load-bearing, not tidiness. Without it this suite failed roughly one
     run in eight: several of these handles are open on the same file at once (a test holds the
     interrupted connection while the resume connection writes), and sqlite intermittently raised
@@ -97,13 +98,14 @@ class FakeMySQL:
     worth less than no test at all. The flake was in the harness; the script was never at fault.
     """
 
-    def __init__(self, path: Path, fail_on=None):
+    def __init__(self, path: Path, fail_on=None, fail_with=RuntimeError):
         self.con = sqlite3.connect(path, timeout=30)
         self.con.execute("PRAGMA busy_timeout=30000")
         self.fail_on = fail_on
+        self.fail_with = fail_with
 
     def cursor(self):
-        return FakeCursor(self.con, self.fail_on)
+        return FakeCursor(self.con, self.fail_on, self.fail_with)
 
     def commit(self):
         self.con.commit()
@@ -113,6 +115,9 @@ class FakeMySQL:
 
     def close(self):
         self.con.close()
+
+
+FakeMySQL = FakeMySQLBase
 
 
 # --------------------------------------------------------------------- fixtures
@@ -375,6 +380,32 @@ def test_interrupted_run_banks_progress_and_resumes_without_duplicates(tmp_path)
     assert raw.execute("SELECT COUNT(*) FROM (SELECT order_number, tracking_number "
                        "FROM fulfillments GROUP BY 1,2 HAVING COUNT(*)>1)").fetchone()[0] == 0
     raw.close()
+
+
+@pytest.mark.parametrize("exc,expected_status", [
+    (KeyboardInterrupt, "INTERRUPTED"),      # Ctrl+C / kill — NOT caught by `except Exception`
+    (SystemExit, "INTERRUPTED"),
+    (RuntimeError, "FAILED"),                # a genuine SQL/driver error
+])
+def test_a_real_kill_still_marks_the_manifest(tmp_path, exc, expected_status):
+    """🔴 Found against LIVE MySQL: the committed batches were banked correctly but the manifest
+    still said `status: running`, because `KeyboardInterrupt` is a BaseException. The durable
+    record of a dead run claimed it was still going — the keys were never at risk, the ability to
+    TELL was."""
+    lc, cp = _make(tmp_path, local_n=10, cloud_n=7)
+    man_path = tmp_path / "m.json"
+    man_path.write_text("{}", encoding="utf-8")
+
+    dying = FakeMySQL(cp, fail_on=3, fail_with=exc)
+    m = R.measure(lc, dying)
+    with pytest.raises(exc):
+        R.insert_missing(lc, dying, m, man_path, batch=1)
+
+    man = json.loads(man_path.read_text(encoding="utf-8"))
+    assert man["status"] == expected_status
+    assert man["inserted_count"] == 2          # progress still banked
+    assert len(man["failed_batch_keys"]) == 1  # and the undo record is still exact
+    dying.close()
 
 
 def test_existing_cloud_rows_are_never_modified(tmp_path):
