@@ -109,19 +109,22 @@ var EXC_HOST_SHEET_ID = '1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU';
 // #exceptions is the failure this whole job exists to prevent.
 //
 //   PINGS — a customer's box has a problem  -> #exceptions (private, C0BLKKPAW8P). Unchanged.
-//   OPS   — the job telling on itself       -> the appyhour-ops-reader DM (U08R19137UL resolves to
-//                                              DM D0BG1541F0A). Kurt only.
+//   OPS   — the job telling on itself       -> #kurt-ops (private, C0BT47XG8CW). Kurt only.
 //
-// 🔴 The ops destination is NOT a new channel and needs NO new Slack scope: `slack_` in Code.gs has
-// posted there with THIS SAME `SLACK_BOT_TOKEN` since 2026-07-13 (reship-report FAILED alerts, the
-// missing-tab warning). Posting a user id to chat.postMessage opens/reuses the bot DM. Verified by
-// reading D0BG1541F0A on 2026-08-19: it already holds this project's Code.gs failure alerts.
+// 🔴 The ops destination MOVED from the appyhour-ops-reader DM (U08R19137UL -> DM D0BG1541F0A)
+// to the private #kurt-ops channel on 2026-08-27, when Kurt consolidated every AppyHour ops writer
+// into one place. It is still Kurt-only — #kurt-ops holds exactly Kurt and appyhour-ops-reader — so
+// P8's actual invariant (ops noise never lands where Dan reads box pings) is unchanged; only the
+// container is. It needs NO new Slack scope: the bot posts with THIS SAME `SLACK_BOT_TOKEN` and was
+// verified a member of C0BT47XG8CW on 2026-08-27 via conversations.info (is_member: true).
+// 🔴 The TWO-CLASS split itself is NOT dissolved. Do not point PINGS here as well — Dan reads
+// #exceptions for boxes, and moving his pings into a channel he is not in silently drops them.
 //
 // Both are overridable by Script Property so routing can change WITHOUT a code push (a push here
 // takes the hourly reship report down with it if it lands wrong). 🔴 An unset property falls back
 // to the literal below — never to empty, which would post nowhere and lose the alert silently.
 var EXC_CHANNEL_PINGS_DEFAULT = 'C0BLKKPAW8P';   // private #exceptions — Kurt + Dan + the bot
-var EXC_CHANNEL_OPS_DEFAULT   = 'U08R19137UL';   // -> DM D0BG1541F0A with appyhour-ops-reader
+var EXC_CHANNEL_OPS_DEFAULT   = 'C0BT47XG8CW';   // private #kurt-ops — Kurt + the bot (was U08R19137UL DM, moved 2026-08-27)
 
 function excChannelPings_() {
   return PropertiesService.getScriptProperties().getProperty('EXC_CHANNEL_PINGS') ||
@@ -425,12 +428,45 @@ var EXC_SHOPIFY_DELAYED_ = {};
 // 🔴 This map plus DELAYED plus "no movement scan at all" IS the Shopify triage of directive P5(a):
 // the set ParcelPanel is still worth asking about. Everything else Shopify has already answered.
 var EXC_SHOPIFY_ATTEMPTED_ = {};
-// order -> hub name parsed from the order's routing tags (`... - <Hub>_AHB!`). Same free ride as
-// the maps above: `tags` is one more field on the request excResolveDelivered_ already makes, so
-// the P15 hub collapse costs ZERO extra calls anywhere. Run-scoped; never persisted to _exc_state
-// (the state schema is untouched — hub is re-derived each run from live tags, which also means a
-// corrective retag moves the box's hub attribution instantly, the D17/D37 lesson).
+// order -> hub name parsed from the order's routing tags (`... - <Hub>_AHB!`).
+// 🔴 NO LONGER A FREE RIDE ON excResolveDelivered_ (changed 2026-08-31). It was, in the only sense
+// P15 measured — no extra CALLS — and that framing hid the cost that actually binds this project:
+// `tags` on the hot-path request more than DOUBLED its response (6,692 -> 15,577 bytes per 100
+// orders, measured), on every open box every hour, against Google's daily url-fetch DATA quota.
+// Filled on the COLD path now by excHubsForOrders_, for the handful of boxes being alarmed.
+// Still run-scoped and still never persisted to _exc_state (the state schema is untouched — hub is
+// re-derived from live tags each run, so a corrective retag moves attribution instantly, the
+// D17/D37 lesson).
 var EXC_SHOPIFY_HUB_ = {};
+
+/**
+ * Fill EXC_SHOPIFY_HUB_ for exactly the orders handed in — the COLD path (see above).
+ * 🔴 FAIL SOFT, ALWAYS. Hub is an ATTRIBUTION NICETY on an alarm whose job is telling Kurt a box is
+ * stuck. If Shopify is unreachable, or the daily byte quota is gone, the alarm still goes out with
+ * '(unknown hub)'; it must never be the reason a stuck box goes unreported. That inversion — an
+ * enrichment taking down the alarm it decorates — is the 2026-08-31 failure this whole change is
+ * about.
+ */
+function excHubsForOrders_(orderNums) {
+  var uniq = (orderNums || []).filter(function (n, i) {
+    return n && orderNums.indexOf(n) === i && !EXC_SHOPIFY_HUB_[n];
+  });
+  if (!uniq.length) return;
+  for (var i = 0; i < uniq.length; i += 100) {
+    var batch = uniq.slice(i, i + 100);
+    try {
+      var d = shopifyGql_('query($q:String!){orders(first:100, query:$q){edges{node{ name tags }}}}',
+                          { q: batch.map(function (n) { return 'name:' + n; }).join(' OR ') });
+      d.orders.edges.forEach(function (e) {
+        var hub = excHubOfTags_(e.node.tags);
+        if (hub) EXC_SHOPIFY_HUB_[String(e.node.name).replace(/^#/, '')] = hub;
+      });
+    } catch (e) {
+      Logger.log('  ⚠️ hub lookup failed for ' + batch.length + ' order(s), grouping them as ' +
+                 '(unknown hub) — the alarm still goes out: ' + e);
+    }
+  }
+}
 
 /**
  * PURE. Hub from an order's Shopify routing tags. Assignment tags win over `!NO` fences (a fence
@@ -465,7 +501,15 @@ function excResolveDelivered_(orders, st) {
     // (directive P9), supplying the union's movement signal, and (P15) supplying the routing tags
     // the hub collapse groups on. All four therefore cost ZERO extra ParcelPanel budget — they
     // ride on a request that was already being made.
-    var q = 'query($q:String!){orders(first:100, query:$q){edges{node{ name cancelledAt tags ' +
+    // 🔴 `tags` IS NOT ON THIS QUERY ANY MORE (2026-08-31). P15 added it here to harvest the hub
+    // "for free" — free of extra CALLS, which was true and beside the point. Measured on the same
+    // 100 orders: adding `tags` changed requestedQueryCost not at all (101 -> 101) and
+    // actualQueryCost not at all (20 -> 20), but grew the RESPONSE from 6,692 to 15,577 bytes
+    // (+132.8%). The meter that binds this project is Google's daily url-fetch DATA quota, so a
+    // field that doubles a response on the HOT path (every open box, every hour) is expensive
+    // precisely where it looked free. Hubs are now fetched on the COLD path instead — see
+    // excHubsForOrders_, called only for the boxes actually being alarmed.
+    var q = 'query($q:String!){orders(first:100, query:$q){edges{node{ name cancelledAt ' +
             'fulfillments(first:10){ displayStatus events(first:50){edges{node{status}}} } }}}}';
     var qs = batch.map(function (n) { return 'name:' + n; }).join(' OR ');
     var d;
@@ -488,8 +532,6 @@ function excResolveDelivered_(orders, st) {
       // records (171813, 173555, 173559, 173560, 173562, 173596, 173632, 174409, 174413) produced
       // the "9/19 hard failures" that suppressed the whole sweep hourly. Close them here, for free.
       if (e.node.cancelledAt) { isCancelled[num] = 1; }
-      var hub = excHubOfTags_(e.node.tags);
-      if (hub) EXC_SHOPIFY_HUB_[num] = hub;
       (e.node.fulfillments || []).forEach(function (f) {
         if (f.displayStatus === 'DELIVERED') { delivered[num] = 1; }
         if (f.displayStatus === 'DELAYED') { EXC_SHOPIFY_DELAYED_[num] = 1; }
@@ -575,12 +617,25 @@ function excScopeRatchet_(computed, stored) {
  */
 function excCurrentCohortTag_() {
   var probe = '';
-  for (var wk = 0; wk < EXC_COHORT_LOOKBACK_WEEKS; wk++) {
-    var tag = excMondayTag_(wk);
-    var edges = shopifyGql_('query($q:String!){orders(first:1, query:$q){edges{node{name}}}}',
-                            { q: "tag:'" + tag + "' -status:cancelled" }).orders.edges;
-    if (edges.length) { probe = tag; break; }
-    Logger.log('  no orders for ' + tag + ' — walking back a week');
+  // 🔴 A SHOPIFY FAILURE HERE MUST NOT COST THE WHOLE SWEEP (2026-08-31). This probe used to be
+  // unguarded, so an unreachable Shopify — or the daily url-fetch byte quota running out — threw
+  // straight past the seed into the sweep's outer catch, which alarmed and RE-THREW. The result was
+  // an hour with no ParcelPanel polling and no exception alarms at all, for want of a cohort NAME
+  // the ratchet property had already stored. The stored ratchet is the fallback: it is the same
+  // value this probe would have produced, minus the ability to advance to a NEW cohort.
+  try {
+    for (var wk = 0; wk < EXC_COHORT_LOOKBACK_WEEKS; wk++) {
+      var tag = excMondayTag_(wk);
+      var edges = shopifyGql_('query($q:String!){orders(first:1, query:$q){edges{node{name}}}}',
+                              { q: "tag:'" + tag + "' -status:cancelled" }).orders.edges;
+      if (edges.length) { probe = tag; break; }
+      Logger.log('  no orders for ' + tag + ' — walking back a week');
+    }
+  } catch (eProbe) {
+    // Deliberately swallowed ONLY when a stored scope exists; the throw below still fires when it
+    // does not, so "a sweep that cannot name its cohort must not run silently" is preserved.
+    Logger.log('  ⚠️ cohort probe failed (' + eProbe + ') — falling back to the stored ratchet. ' +
+               'Scope cannot ADVANCE to a new cohort this run.');
   }
   var props = PropertiesService.getScriptProperties();
   var stored = String(props.getProperty(EXC_SCOPE_PROP) || '').trim();
@@ -588,6 +643,10 @@ function excCurrentCohortTag_() {
   if (!eff) {
     throw new Error('no _SHIP_ cohort with orders found in the last ' +
                     EXC_COHORT_LOOKBACK_WEEKS + ' weeks — refusing to sweep with no scope');
+  }
+  if (!probe && stored) {
+    Logger.log('  🔴 scope is the STORED ratchet ' + eff + ', not a live probe — if a new cohort ' +
+               'opened this hour it is NOT in scope until the probe succeeds again.');
   }
   if (eff !== stored) props.setProperty(EXC_SCOPE_PROP, eff);
   if (probe && eff !== probe) {
@@ -1085,9 +1144,15 @@ function excSeedCohort_() {
   tags.forEach(function (tag) {
     var cursor = null, page = 0;
     do {
+      // 🔴 NEVER ASK FOR A FIELD NOTHING READS. `id` was fetched here and used by nothing — the row
+      // built below carries order/cohort/customer/state only. Measured 2026-08-31: the gid string
+      // cost 10,250 bytes per 250-order page (26.6% of the page), and this seed re-pulls ~5,186
+      // orders EVERY hourly run, so one unread field was 5.10 MB/day of the script owner's daily
+      // url-fetch data quota — the quota whose exhaustion killed the sweep that day. Field lists on
+      // a paginated hourly job are a byte budget, not a convenience.
       var d2 = shopifyGql_(
         'query($q:String!,$after:String){ orders(first:250, query:$q, after:$after){ ' +
-        'pageInfo{hasNextPage endCursor} edges{ node{ name id ' +
+        'pageInfo{hasNextPage endCursor} edges{ node{ name ' +
         'shippingAddress{ provinceCode } customer{ displayName } } } } }',
         { q: "tag:'" + tag + "' -status:cancelled", after: cursor }
       ).orders;
@@ -1353,7 +1418,9 @@ function excLog_(stamp, rec, cls, detail, eventAt) {
 /**
  * 🔴 P15 — A DOCK-MISS IS ONE EVENT, NOT N CUSTOMER PINGS (Kurt 2026-08-26: "i don't want another
  * stream of exceptions"). Flush the run's deferred NEVER_PICKED_UP set, grouped by the hub parsed
- * from live routing tags (EXC_SHOPIFY_HUB_, harvested for free off excResolveDelivered_'s call).
+ * from live routing tags (EXC_SHOPIFY_HUB_, filled by excHubsForOrders_ on the COLD path — P16
+ * moved it off excResolveDelivered_'s call, where "free" meant free of CALLS but doubled the
+ * response BYTES on every open box every hour).
  *
  * Per hub group:
  *   count <  EXC_NPU_COLLAPSE_MIN  -> the per-box semantics of the inline path, verbatim:
@@ -1378,6 +1445,9 @@ function excNpuFlush_(pending, stamp) {
   var out = { posted: 0, recorded: 0, collapsed: 0, alarms: 0, hubs: [] };
   if (!pending || !pending.length) return out;
   var pingDay = excPingDayET_();
+  // COLD-PATH hub fetch: only the boxes in this flush, and only when there are any. Typically tens
+  // of orders once a flood exists, versus `tags` on every open box every hour (see EXC_SHOPIFY_HUB_).
+  excHubsForOrders_(pending.map(function (p) { return p.on; }));
   var byHub = {};
   pending.forEach(function (p) {
     var hub = EXC_SHOPIFY_HUB_[p.on] || '(unknown hub)';
@@ -1568,12 +1638,35 @@ function hourlyExceptionSweep() {
     var st = excLoadState_();
 
     // seed any cohort orders we haven't seen yet
-    excSeedCohort_().forEach(function (row) {
-      if (!st[row.order]) {
-        st[row.order] = { order: row.order, cohort: row.cohort, customer: row.customer,
-                          state: row.state, carrier: '', open: true, alerted: [], last_seen: '' };
-      }
-    });
+    // 🔴 THE SEED IS ENRICHMENT, NOT A PREREQUISITE (2026-08-31). It was unguarded, and it is the
+    // single biggest Shopify draw in the run (~5,186 orders re-paginated EVERY hour), so it is also
+    // the most likely thing to hit the daily byte quota — which is exactly what happened on
+    // 2026-08-31: the seed threw, the outer catch alarmed and re-threw, and an hourly run that
+    // could have polled every already-known open box did nothing at all. `_exc_state` ALREADY holds
+    // every open box with its cohort; missing this pull costs only the discovery of orders added
+    // since the last successful seed. Skipping it is a bad hour. Dying on it is a blind hour.
+    var seedFailed = '';
+    try {
+      excSeedCohort_().forEach(function (row) {
+        if (!st[row.order]) {
+          st[row.order] = { order: row.order, cohort: row.cohort, customer: row.customer,
+                            state: row.state, carrier: '', open: true, alerted: [], last_seen: '' };
+        }
+      });
+    } catch (eSeed) {
+      // Loud, not silent: the run continues on existing state and SAYS it is running blind to new
+      // orders. Silence here would look identical to a clean seed.
+      seedFailed = String(eSeed);
+      Logger.log('  🔴 SEED FAILED — sweeping on EXISTING state only, blind to orders added since ' +
+                 'the last successful seed: ' + seedFailed);
+      try {
+        excSlackOps_(':warning: exceptions sweep: cohort SEED failed, sweeping on existing state ' +
+          'only (alarms still live; blind to orders added since the last successful seed)' +
+          (shopifyQuotaWall_(eSeed)
+            ? ' — cause is the Apps Script daily URL-FETCH DATA quota, *not* Shopify throttling.'
+            : '') + '\n> ' + seedFailed.slice(0, 300));
+      } catch (eS2) { Logger.log('seed-failure note did not post: ' + eS2); }
+    }
 
     // 🔴 SCOPE THE CANDIDATE SET (directive P10) — current cohort + the previous one, nothing
     // older. An out-of-scope row is left OPEN and simply IGNORED: not polled, not classified, not
@@ -1870,6 +1963,9 @@ function hourlyExceptionSweep() {
                ', min remaining ' + (pp.remainingMin == null ? 'n/a' : pp.remainingMin) + '/120' +
                '  [today ' + String(PropertiesService.getScriptProperties()
                                       .getProperty(EXC_PP_CALLS_PROP) || '(unset)') + ']');
+    // 🔴 The Shopify BYTE draw, every run. This is the meter that actually ran out on 2026-08-31,
+    // and it was the one number nobody had. Descriptive only — nothing caps on it.
+    Logger.log('  ' + shopifyIoSummary_());
     Logger.log('exceptions sweep: reached ' + reached + ' of ' + batch.length + ' polled (' +
                open.length + ' open in scope, ' + ignoredOut + ' open out of scope and ignored, ' +
                neverPolled + ' still never polled, throttled ' +
@@ -1905,7 +2001,19 @@ function hourlyExceptionSweep() {
       // are exactly those days, and exactly the days that produced no evidence of anything wrong.
       // A crash is not an exception PING; the day gate exists to spare Dan customer noise, never
       // to hide a broken sweep. Exception pings keep the gate; this does not.
-      excSlackOps_(':rotating_light: exceptions sweep FAILED: ' + e);
+      // 🔴 NAME THE RIGHT METER (2026-08-31). The raw message for a byte-quota wall is
+      // "Bandwidth quota exceeded: <shopify url>. Try reducing the rate of data transfer." — it
+      // names Shopify's host and says "rate", so it reads as Shopify throttling us. It is not:
+      // it is UrlFetchApp refusing on the SCRIPT OWNER's daily data-received quota, and Shopify's
+      // own cost bucket was measured healthy (actualQueryCost 20-35 against 4,000 at 200/s) the day
+      // it fired. An alarm that sends the next reader to the wrong system costs an investigation.
+      excSlackOps_(':rotating_light: exceptions sweep FAILED: ' + e +
+        (shopifyQuotaWall_(e)
+          ? '\n> :red_circle: This is the *Apps Script daily URL-fetch DATA quota* for the script ' +
+            'owner — NOT Shopify throttling (the URL is just what was in flight). Do not tune the ' +
+            'GraphQL cost; reduce BYTES or calls, and note it resets on Google\'s daily cycle. ' +
+            shopifyIoSummary_()
+          : ''));
     } catch (e2) {
       MailApp.sendEmail(Session.getEffectiveUser().getEmail(), '[exceptions] sweep failed', String(e));
     }

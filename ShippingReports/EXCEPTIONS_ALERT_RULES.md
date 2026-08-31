@@ -77,7 +77,7 @@ real issues… sometimes you get a notification and they just changed the label.
 6b. **NEVER post an OPERATIONAL failure into #exceptions** (directive P8, Kurt 2026-08-19). That
    channel is Dan's box-problem feed. Infra noise there is what gets it muted, and a muted
    #exceptions converts every real customer exception into a silent one — constraint 3's failure
-   mode arriving by a different door. Failures go to the **appyhour-ops-reader DM**.
+   mode arriving by a different door. Failures go to **#kurt-ops** (`C0BT47XG8CW`).
 7. **NEVER let a PP outage look like "no exceptions."** Zero findings on a run where the PP fetch
    errored must alert as a FAILURE, not pass silently as good news (fail-loud, per host job).
 8. **NEVER widen the poll set to all cohorts.** Apps Script has a 6-minute execution ceiling and PP
@@ -455,7 +455,7 @@ else** — not the threshold, not the suppression, not the message.
 | class | what it is | destination | day gate | `EXC_DRY_RUN` |
 |-------|-----------|-------------|----------|----------------|
 | **PING** (`excSlackPost_`) | a customer's box has a problem — never picked up, address issue, damaged, delayed, attempt failed | **#exceptions** `C0BLKKPAW8P` (private; Kurt + Dan + bot) | **YES**, Wed–Sun | **YES**, suppressed |
-| **OPS** (`excSlackOps_`) | the job telling on itself — sweep FAILED, PP hard-failure ratio, starved/blindspot alarm, budget bit, missing-tab warning, `PA_ASSERT_*` refusal | **appyhour-ops-reader DM** `U08R19137UL` → `D0BG1541F0A` (Kurt only) | **NO** | **NO** — still posts |
+| **OPS** (`excSlackOps_`) | the job telling on itself — sweep FAILED, PP hard-failure ratio, starved/blindspot alarm, budget bit, missing-tab warning, `PA_ASSERT_*` refusal | **#kurt-ops** `C0BT47XG8CW` (Kurt + the bot only; was the ops DM `U08R19137UL` → `D0BG1541F0A` until 2026-08-27) | **NO** | **NO** — still posts |
 
 🔴 **Why the ops channel is that DM and not a new channel.** No channel named "ops reader" exists in
 the workspace (searched 2026-08-19: only `#ops-strategy`, `#devops`, `#contara-appyhour`,
@@ -637,7 +637,7 @@ A quarantined box is **an undelivered box we have stopped checking**. It is surf
 
 - a row on the **`Exceptions` tab**, class `PP_NO_RECORD`, labelled
   *"NOT BEING CHECKED — ParcelPanel has no record of this order"*, deduped through `logged_classes`;
-- one **ops message** (`excSlackOps_`, per P8 → appyhour-ops-reader DM) naming every order
+- one **ops message** (`excSlackOps_`, per P8 → #kurt-ops since 2026-08-27) naming every order
   quarantined that run and saying plainly that if any is a real box it is now unmonitored.
 
 The cancelled-order close in rule 1 is **not** a quarantine and gets neither — a cancelled order was
@@ -1702,10 +1702,14 @@ mid-flood Slack 429 would also throw out of the posting loop AFTER `excLog_` row
 posted ~10 (08-19 21:46–23:46); the flood class is 500+, and a single missed pallet is ~50+ boxes.
 25 clears every observed straggler run with headroom and every real dock-miss lands far above it.
 
-**Hub attribution costs nothing and fabricates nothing.** The hub is parsed from the order's LIVE
-routing tags (`... - <Hub>_AHB!`), harvested by adding `tags` to the Shopify request
-`excResolveDelivered_` already makes (the P5a/P9 one-request-many-jobs pattern — zero extra calls
-anywhere). Assignment tags outrank `!NO` fences; several surviving hubs read `(multi-hub tags)`,
+**Hub attribution fabricates nothing.** ~~It costs nothing~~ — 🔴 **superseded by P16: it cost
+bytes, and bytes are the budget that binds this project.** The `tags` field was originally harvested
+by adding it to the Shopify request `excResolveDelivered_` already makes (the P5a/P9
+one-request-many-jobs pattern — zero extra *calls* anywhere, which was true and was the wrong
+meter). It now comes from a targeted cold-path lookup (`excHubsForOrders_`) over only the boxes
+being alarmed. The PARSE is unchanged and still authoritative: hub is read from the order's LIVE
+routing tags (`... - <Hub>_AHB!`).
+Assignment tags outrank `!NO` fences; several surviving hubs read `(multi-hub tags)`,
 no routing tag reads `(unknown hub)` — grouped honestly, never guessed (never-fabricate applies to
 hub attribution). Hub is re-derived each run and NEVER persisted — `_exc_state`'s schema is
 untouched, and a corrective retag moves a box's attribution instantly (the D17/D37 lesson).
@@ -1733,6 +1737,99 @@ nothing, the first ping day after a record-only flood alarms exactly once; `excS
 PASS under node (hub parsing: assignment beats fence, lone fence names its hub, multi-fence reads
 `(multi-hub tags)`, no tag reads empty); `node --check` ×5 + concat-of-4 clean; collision sweep
 0 duplicates.
+
+### P16 — "ZERO EXTRA CALLS" IS THE WRONG METER; THE BUDGET IS **BYTES**, AND IT IS GOOGLE'S (2026-08-31)
+
+**The burn.** At 14:20 ET the hourly sweep died and posted:
+
+> `exceptions sweep FAILED: Exception: Bandwidth quota exceeded: https://504ac4.myshopify.com/admin/api/2026-04/graphql.json. Try reducing the rate of data transfer.`
+
+The whole sweep died — no ParcelPanel polling, no exception alarms, nothing — for one hour. Two
+things were wrong, and the alarm text actively encouraged both mistakes.
+
+🔴 **MISTAKE 1: it is NOT Shopify throttling us.** The message names a Shopify URL and says "rate",
+so it reads as Shopify's leaky cost bucket. It is not. `UrlFetchApp` **throws** this when the SCRIPT
+OWNER's **daily url-fetch data-received quota** runs out; the Shopify URL is merely what was in
+flight. Two independent proofs:
+
+- **Measured the same day** against live Shopify: the sweep's own queries cost `actualQueryCost`
+  **20** (resolve) and **35** (seed) against a **4,000**-point bucket restoring at **200/s**. Observed
+  `currentlyAvailable` never dropped below **3,965**. Shopify throttling is not remotely in play.
+- **Structural**: a real Shopify GraphQL error surfaces through `shopifyGql_` as
+  `Error: [{"message":…}]` (it throws `JSON.stringify(d.errors)`). The alarm read `Exception: ` +
+  prose + the URL — the Apps Script platform-throw shape, identical to the documented
+  `Exception: Address unavailable: <same url>` precedent that `muteHttpExceptions` never sees.
+  Shopify never formats errors that way and never echoes the request URL.
+
+🔴 **Never chase Shopify's cost bucket off this message.** Tune BYTES and CALLS. Shopify's cost is
+now logged every run anyway (`shopifyIoSummary_`) so the question is answerable with a number.
+
+🔴 **MISTAKE 2 (the one that actually mattered): an ENRICHMENT took down the ALARM.** The sweep's job
+is telling Kurt a box is stuck. It died on `excSeedCohort_` — a *discovery* pull — while `_exc_state`
+already held every open box with its cohort and could have been swept normally. Now: the seed and
+the cohort-scope probe are **fail-soft**. A Shopify failure costs the discovery of newly-added
+orders and posts a loud ops note saying so; it never costs the alarms. Only "no stored scope at all"
+still refuses to sweep.
+
+**Was P15 the cause? Partly, and not in the way the alarm implied.** Measured on the same 100 orders,
+adding `tags`:
+
+| | requestedQueryCost | actualQueryCost | response bytes |
+|---|---|---|---|
+| pre-P15 | 101 | 20 | 6,692 |
+| P15 (`tags`) | 101 | 20 | **15,577 (+132.8%)** |
+
+P15 added **exactly zero** query cost and **+133% bytes** on the hot path — every open box, every
+hour. Its report ("zero extra API calls") was true and measured the wrong thing. But P15 is a
+**minor** contributor, ~**+2.56 MB/day** of a sweep drawing ~**24 MB/day** from Shopify. The
+dominant term is `excSeedCohort_`: **798 KB/run — 19.16 MB/day** re-paginating **5,186 orders every
+hour** to discover the few that are new.
+
+**Ruled out with evidence, not assumed:**
+
+- **Our own session's Shopify load** (bulk order lookups, tag reconciles). Structurally impossible:
+  the Apps Script url-fetch quota is charged to the script owner's Google account for Apps Script
+  executions. Local Python/MCP calls cannot touch it — they draw on Shopify's bucket, measured
+  healthy. **The victim/cause framing does not apply here.**
+- **First occurrence ever.** A workspace-wide Slack search for "Bandwidth quota exceeded" returns
+  exactly **one** message. Every prior `sweep FAILED` (8/07, 8/20, 8/24) was ParcelPanel. It has not
+  recurred — Google's quota resets on a daily cycle.
+
+**Fixes (this commit):**
+
+1. **Fail soft.** `excSeedCohort_` wrapped; `excCurrentCohortTag_` falls back to the stored ratchet
+   property. Alarms survive a Shopify outage or a byte wall. *This is the blast-radius fix and it
+   matters more than the tuning below.*
+2. **Instrument the meter.** `shopifyGql_` now counts response bytes/calls and keeps
+   `extensions.cost` (previously parsed and thrown away). `shopifyIoSummary_()` is logged every run
+   and attached to the failure alarm. **You cannot manage a cost you do not measure** — this number
+   did not exist on 8/31.
+3. **Name the right system.** `shopifyQuotaWall_()` classifies the wall so the alarm says
+   *Apps Script daily data quota, NOT Shopify* — it sent this investigation at the wrong meter once.
+4. **Cut bytes, keep behaviour.** Dropped the **unused `id`** from the seed (never read; **10,250 B
+   per 250-order page, 26.6% of it — 5.10 MB/day**) and moved `tags` off the hot path to a targeted
+   `excHubsForOrders_` over only the boxes being alarmed (**2.56 MB/day**; a 40-order flood costs
+   ~11.5 KB once). **~7.7 MB/day, ~32% of the sweep's Shopify draw, with no feature lost.**
+
+🔴 **Do NOT retry a quota wall.** `netRetryable_` deliberately excludes it: a DAILY byte budget does
+not refill in seven seconds, and retrying spends more of the thing that just ran out.
+
+🔴 **Standing rule for this project: a field list on a paginated hourly job is a byte budget.** Never
+add a field because it costs no extra call, and never leave a field nothing reads. Both were true
+here and both were expensive.
+
+**Open / unmeasured:** ParcelPanel's byte draw — **9,600 calls/day** (400 × 24) — is almost certainly
+the largest single consumer of the account's daily quota, and its response size is **not measured**
+(the PP key lives only in Script Properties, not locally). Sizing it is the next step before any
+further tuning; the per-run byte log added here will report it once deployed. Also unaddressed: the
+seed still re-pulls both full cohorts hourly. A watermark (`updated_at`, not `created_at` — a
+drift-in is tagged *after* creation) would remove nearly all of the remaining 19 MB/day, but it
+changes which orders get discovered and is a **Kurt decision**, not an agent edit.
+
+**Verification:** `node --check` ×5 + concat-of-4 clean; collision sweep 0 duplicates across 438
+top-level globals; all new symbols resolve (`Exceptions.gs` → `Code.gs`, the existing
+`shopifyGql_` dependency shape — **both files must deploy together**). Cost/byte figures above are
+live measurements, not estimates.
 
 ## Known gaps (v1)
 

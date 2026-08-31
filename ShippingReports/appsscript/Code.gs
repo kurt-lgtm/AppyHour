@@ -10,7 +10,8 @@
  *       SHOPIFY_TOKEN   Admin API access token
  *       GORGIAS_USER    Gorgias account email
  *       GORGIAS_KEY     Gorgias API key
- *       SLACK_WEBHOOK   incoming-webhook URL (breach + failure alerts)
+ *       SLACK_WEBHOOK   DEAD 2026-08-27 — bound by URL to public #reships, read by nothing here.
+ *                       Alerts go through slack_ -> excChannelOps_() -> #kurt-ops.
  *  3. Run seedStateFromSheet() once if importing the local runner's state
  *     (paste reship_report_state.json rows into a temp tab first), or just
  *     let enrichment catch up over a few runs.
@@ -34,7 +35,7 @@ var MAX_ENRICH_PER_RUN = 60; // Gorgias 429 guard
 
 function refresh() {
   // ALL Slack alerts from this file (error + breach) are OPS-class and go to the
-  // appyhour-ops-reader DM via slack_ — never SLACK_WEBHOOK (public #reships) and never
+  // #kurt-ops via slack_ — never SLACK_WEBHOOK (public #reships) and never
   // #exceptions (Kurt 2026-07-13; destination restated 2026-08-19, directive P8).
   // Apps Script failure emails are the backup.
   try {
@@ -332,6 +333,42 @@ function netFetch_(url, params, tag) {
 
 // ---------- Shopify ----------
 
+// ---------- Shopify I/O accounting (2026-08-31) ----------
+// 🔴 THE BUDGET THAT BINDS IS **BYTES**, AND IT IS GOOGLE'S, NOT SHOPIFY'S. On 2026-08-31 the
+// hourly sweep died with "Exception: Bandwidth quota exceeded: <shopify url>. Try reducing the rate
+// of data transfer." That is thrown by UrlFetchApp when the SCRIPT OWNER's daily url-fetch
+// data-received quota runs out — the Shopify URL appears only because that was the request in
+// flight. It is NOT Shopify's cost bucket: measured the same day, the sweep's own queries cost
+// actualQueryCost 20 (resolve) and 35 (seed) against a 4,000-point bucket restoring at 200/s, which
+// never dropped below 3,965. Chasing Shopify's leaky bucket after this alarm is chasing the wrong
+// meter, which is exactly what the raw message invites.
+// 🔴 So: count BYTES, per run, and say so out loud. Cost is logged too, but only to keep the
+// "is it Shopify throttling us?" question answerable with a number instead of a guess.
+var SHOPIFY_IO_BYTES_ = 0;      // response bytes this execution
+var SHOPIFY_IO_CALLS_ = 0;      // graphql calls this execution
+var SHOPIFY_IO_COST_ = 0;       // summed actualQueryCost this execution
+var SHOPIFY_IO_THROTTLE_ = null; // newest throttleStatus seen {currentlyAvailable,maximumAvailable,restoreRate}
+
+/** One line naming what this execution actually drew from Shopify. Log it at the end of any job. */
+function shopifyIoSummary_() {
+  var t = SHOPIFY_IO_THROTTLE_;
+  return 'shopify I/O this run: ' + SHOPIFY_IO_CALLS_ + ' call(s), ' +
+         (SHOPIFY_IO_BYTES_ / 1024).toFixed(1) + ' KB received, actualQueryCost ' + SHOPIFY_IO_COST_ +
+         (t ? '; bucket ' + t.currentlyAvailable + '/' + t.maximumAvailable +
+              ' restoring ' + t.restoreRate + '/s' : '');
+}
+
+/**
+ * True for the Apps Script url-fetch DATA quota wall. It is not an HTTP status and not a Shopify
+ * error, so no response-code check and no `d.errors` branch can ever see it — UrlFetchApp throws it
+ * straight out of `fetch`. Not retryable: a DAILY byte budget does not refill in seven seconds, and
+ * retrying spends more of the thing that just ran out (netRetryable_ deliberately excludes it).
+ */
+function shopifyQuotaWall_(e) {
+  return /bandwidth quota|reducing the rate of data transfer|service invoked too many times/i
+    .test(String((e && e.message) || e || ''));
+}
+
 function shopifyGql_(query, variables) {
   var props = PropertiesService.getScriptProperties();
   var url = 'https://' + props.getProperty('SHOPIFY_STORE') + '.myshopify.com/admin/api/2026-04/graphql.json';
@@ -344,7 +381,17 @@ function shopifyGql_(query, variables) {
       muteHttpExceptions: true,
     }, 'shopify graphql');
     if (resp.getResponseCode() === 429) { Utilities.sleep(2000); continue; }
-    var d = JSON.parse(resp.getContentText());
+    var body = resp.getContentText();
+    SHOPIFY_IO_CALLS_ += 1;
+    SHOPIFY_IO_BYTES_ += body.length;
+    var d = JSON.parse(body);
+    // extensions.cost used to be parsed and thrown away with the rest of the envelope. Keep it:
+    // it is the only direct evidence about Shopify's bucket, and it costs nothing to read.
+    var cost = (d.extensions || {}).cost;
+    if (cost) {
+      SHOPIFY_IO_COST_ += Number(cost.actualQueryCost) || 0;
+      if (cost.throttleStatus) SHOPIFY_IO_THROTTLE_ = cost.throttleStatus;
+    }
     if (d.errors) {
       if (JSON.stringify(d.errors).indexOf('THROTTLED') >= 0) { Utilities.sleep(2000); continue; }
       throw new Error(JSON.stringify(d.errors).slice(0, 400));
@@ -765,9 +812,10 @@ function breachAlert_(state, thisMon, denoms, today) {
 
 var KURT_SLACK_ID = 'U08R19137UL';
 
-// Alert Kurt PRIVATELY only (Kurt 2026-07-13: never a public channel). Bot DM
+// Alert Kurt PRIVATELY only (Kurt 2026-07-13: never a public channel). Bot post
 // via chat.postMessage (SLACK_BOT_TOKEN prop, needs Bot chat:write); email
 // fallback. NEVER the SLACK_WEBHOOK — that's bound to public #reships.
+// Destination is #kurt-ops (C0BT47XG8CW) as of 2026-08-27 — see excChannelOps_.
 //
 // 🔴 THIS IS THE OPS CLASS (directive P8, Kurt 2026-08-19). Every caller of slack_ is the job
 // telling on itself — a FAILED run, a refused write, an empty Raw Data, a created-ghost tab, a
@@ -781,7 +829,11 @@ var KURT_SLACK_ID = 'U08R19137UL';
 // from Script Properties without a code push — a push here is the one that can take the hourly
 // report down. The typeof guard is not decoration: Exceptions.gs has been deleted from this
 // project once (2026-08-14, by a push carrying only [appsscript, Code]); an alert path must not
-// be the thing that breaks when it happens again. Unset property -> KURT_SLACK_ID, today's behavior.
+// be the thing that breaks when it happens again.
+// 🔴 The typeof-guard fallback is now STALE-BY-DESIGN: if Exceptions.gs is missing, slack_ falls
+// back to KURT_SLACK_ID (the old ops DM), not #kurt-ops. That is deliberate — a surviving DM is a
+// worse channel but still Kurt-only, and hardcoding the new id here would create the second
+// "the channel" constant P8 deleted. Fix the missing file, don't repoint this literal.
 function slack_(text, critical) {
   var pfx = (critical ? ':rotating_light: ' : ':warning: ') + text;
   var to = (typeof excChannelOps_ === 'function') ? excChannelOps_() : KURT_SLACK_ID;
