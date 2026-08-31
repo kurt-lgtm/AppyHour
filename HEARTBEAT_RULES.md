@@ -239,12 +239,23 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
      (Claude/MCP) processes got a copy-on-write shadow of that path while scheduled tasks and Kori got
      the real Roaming file: one image, two names, exactly the row above.
    - **A second name is a LATENT corruption machine, so a writer that resolves a non-canonical path is
-     a 🔴 bug even when it "works".** Still live at time of writing: `GelPackCalculator/backfill_sync.py`
-     (`init_db(".")` — relative CWD), `validate_fix1_rescore.py:21` and `validate_thermal_fixes.py:17`
-     (hardcoded `%APPDATA%\AppyHour\shipping.db`), `backfill_box_type.py` + `import_other_data.py`
-     (`_get_app_dir()`), `ShippingReports/reports/box_size_report.py:340` (`%APPDATA%` with no canonical
-     branch), and `shipping_invoice_db._db_path()`, whose no-arg fallback is
-     `GelPackCalculator/shipping.db`. Each is one invocation away from reproducing the table above.
+     a 🔴 bug even when it "works".** ✅ **CLOSED 2026-08-31** — the guard below is now enforced and all
+     seven stragglers are resolved: `backfill_sync.py` (`init_db(".")` → `init_db()`),
+     `validate_fix1_rescore.py` + `validate_thermal_fixes.py` (hardcoded `%APPDATA%` → `db_path()`, and
+     opened `mode=ro`; both had been printing "shipping.db not found" since the 7/08 move, i.e. they
+     validated nothing for 8 weeks), `backfill_box_type.py` (`_get_app_dir()` → `init_db()`),
+     `ShippingReports/reports/box_size_report.py` (`%APPDATA%` with no canonical branch → `db_path()`,
+     `mode=ro`), `shipping_invoice_db._db_path()` (no-arg fallback `GelPackCalculator/shipping.db` →
+     `paths.db_path()`), and `import_other_data.py` → **archived** to
+     `GelPackCalculator/archive/` (one-time-and-applied: its `other data/` input folder no longer
+     exists, and its target state is in the DB — 6 `invoices` rows with `source='other_data'` and
+     ~12,742 `shipments` carrying those workbook names). Also canonicalized: Kori's `_db_dir()`
+     `%APPDATA%` fallback, the component most likely to still hit it after the DO ingest migration.
+     🔴 Retirement selection was EVIDENCE-based, not name-based: a reference count is not evidence for
+     a manually-run CLI (it is never imported, so zero refs is expected). The axis is
+     one-time-and-applied vs repeatable-diagnostic — the two `validate_*` scripts LOOK like spent
+     one-shots and are not; they re-check the newest Kori snapshot against the shipped fix invariants
+     and pass today against real data.
    - **Never verify single-image-ness from inside the MSIX container.** `fsutil file queryfileid` on the
      Roaming and LocalCache paths returns the SAME id from a packaged process — the VFS makes both names
      hit one file for the caller that asked. That is the identical illusion as the retracted 7/01
@@ -261,12 +272,68 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
      missing 7/03 fix. Do not re-derive "take the lock properly" from the four docs that record only
      two incidents (`appyhour_lib/CLAUDE.md:33`, `REBUILD-WITH-AI.md:272`,
      `ShippingReports/RESHIP_REPORT_RULES.md:218`) — that remedy was already deployed when 7/03 hit.
-   - **The guard already exists in exactly one writer; promote it, do not reinvent it.**
-     `sync_logon._resolve_db_guarded()` (`GelPackCalculator/sync_logon.py:165-188`) resolves at CALL
-     time and raises + notifies CRITICAL when the path is not under `DATA_ROOT`. That belongs in
-     `appyhour_lib.db.connect()` and `shipping_invoice_db.init_db()` so all ~30 writers inherit it.
-     Note it also fixes the module-import resolution class: 20 writers still do `DB = db_path()` at
-     import, which is what produced the 9-day 7/22 split-brain.
+   - **The guard already exists in exactly one writer; promote it, do not reinvent it.** ✅ **DONE
+     2026-08-31.** `sync_logon._resolve_db_guarded()` was lifted verbatim into
+     **`appyhour_lib.paths.assert_canonical_db()`** and is now called from
+     **`appyhour_lib.db.connect()`** and **`shipping_invoice_db.init_db()`**, so every writer inherits
+     it. `sync_logon._resolve_db_guarded` remains as the CALL SITE (that is what makes resolution
+     happen at call time) and delegates — do not re-inline the check there.
+     - **It is a HARD REFUSE, not a warning** (Kurt's call). `NonCanonicalDBPath` subclasses
+       `RuntimeError` so the pre-existing `except RuntimeError` callers still work. It breaks any
+       one-shot run from the wrong directory — that is the point — and the message names the offending
+       path, the canonical path, and how to fix the invocation, so the break is self-servicing.
+     - **🔴 A refusal RAISES; it does not Slack.** Same day, the promoted guard kept
+       `sync_logon`'s `notify(level="critical")` as a library default and **one test run posted 7
+       CRITICALs to #kurt-ops in 90 seconds**. The page was correct *in sync_logon* — that task runs
+       off a logon trigger with stdout teed to a file, so a refusal nobody sees is a silent stall —
+       and wrong as a default: every pytest run, CI pass and developer typo pages Kurt, and an alarm
+       that fires on typos gets muted, which is worse than no alarm. `assert_canonical_db(...,
+       notify=...)` defaults to `None` = page only when **`AH_UNATTENDED=1`**; `sync_logon` passes
+       `notify=True` explicitly. Pages are deduped one-per-offending-path-per-process so a retry
+       loop cannot storm. NEGATIVE: do NOT infer unattended from `sys.stdin.isatty()` — sync_logon
+       tees stdout to a log, so an isatty probe gets it backwards in both directions.
+     - **🔴 A temp-dir scratch DB must work with NO env var**, or the next person disables the guard
+       to get their tests green. `%TEMP%` is an unconditional allow, so pytest's `tmp_path` needs
+       nothing. The three fixtures that broke (`GelPackCalculator/tests/_tmp_db_{heal,acct,dims}`)
+       were writing a **repo-local** `shipping.db` — the exact second name this rule bans — and were
+       moved to `tmp_path`, not handed an `APPYHOUR_DB_PATH`. Wiring tests through an env var would
+       make a passing suite depend on ambient state; that is not the fix.
+     - **Escape hatches are deliberately narrow, and the legacy Roaming path has NONE.** Allowed:
+       a file whose name is not `shipping.db`; a path under `%TEMP%` (tests, scratch copies); an
+       `APPYHOUR_DB_PATH`/`AH_DB_OVERRIDE` naming exactly that file, which prints a warning so it is
+       never silent; a machine with no `C:\AppyHourData` at all (pre-migration). `%APPDATA%\AppyHour\
+       shipping.db` is refused unconditionally — it is the specific virtualized second name behind the
+       7/22 split-brain.
+     - **`connect_ro` is deliberately NOT guarded.** A `mode=ro` connection cannot take a write lock or
+       trigger a checkpoint, so it cannot join the race, and read-only work on a scratch copy is the
+       sanctioned way to investigate this DB at all. Guarding it would block the safe path.
+     - **Module-import resolution: partially closed.** Removed: `sync_logon.py:39`'s `DB = db_path()`
+       (the line its own docstring named as the 7/22 root cause; `DB` was used only by a status
+       `print`), plus `sync_shopify_orders`, `import_feedback_csv`, `pp_backfill_aged_out` and
+       `kori/db_snapshots` (now `_default_db_path()`). 🔴 **Deliberately left at import, with reasons:**
+       `pipeline_run.py:32` resolves once ON PURPOSE — it exports the value as `APPYHOUR_DB_PATH` to
+       its subprocesses, so one resolution per pipeline is the invariant, not the bug;
+       `gmail_fedex_sync.py:34` and `import_missing_fedex.py:35` define `DB_PATH` and never read it
+       (writes are centralized in `auto_import`) — dead constants, no writer behind them;
+       `fl_audit_v2.py` / `fl_force2day_audit.py` are read-only audits. In every remaining case the
+       guard converts a stale import-time value from a silent legacy write into a loud refusal, which
+       is the property that mattered.
+   - **🔴 `shipping_invoice_db.init_db` still opens a RAW `sqlite3.connect` and takes no advisory
+     write lock — that migration was SCOPED AND DECLINED on 2026-08-31, not forgotten.** Measured
+     scope (not the ~30 assumed): **one** `sqlite3.connect` in the whole module (`init_db`); **~24 call
+     sites across 8 files** — `kori/gel_pack_webview.py` (16), `backfill_box_type` (2), `auto_import`,
+     `backfill_pp`, `backfill_sync`, `import_missing_fedex`, `sync_carrier_invoices`, plus the archived
+     `import_other_data`. **Neither MCP server imports it** (grepped: `AppyHourMCP`, `AppyHourShippingMCP`
+     have zero references) — that premise was wrong, and the MCP raw-connect exposure is
+     `AppyHourMCP/tools/cache.py`, a different file. Why declined: most of those call sites are READS
+     (`load_all_shipments`, `query_*`, `stats_by_box_type`, and `box_size_report`) that reach the DB
+     through `init_db` because it is the only entry point. Routing them through `db.connect()` hands
+     every read path an exclusive write lock and a 90 s `DBWriterBusy` — Kori's UI would start failing
+     whenever a long writer is mid-run. That trades integrity it does not need for availability it
+     does. **The prerequisite is to split read from write first** (add an `open_ro()` and move the
+     ~15 query paths onto it); only then migrate the remaining writers. Do not do the one-line
+     `init_db` swap on its own. It buys availability, never integrity — see the `database is locked`
+     vs `malformed` bullet above.
    - **RCA fix #2's stagger is HALF shipped and is not load-bearing anyway.**
      `appyhour_sync_on_logon` carries `delay=PT2M`, not the ~5 min proposed. Under the table above a
      stagger narrows the overlap WINDOW without touching the mechanism, and the MCP servers are
@@ -321,15 +388,11 @@ age + `C:\AppyHourData\replica_pull_stamp.json` ingest stamp (rule 11)**.
 
 Ledger file: **`C:\AppyHourData\heartbeats.json`** (moved off `%APPDATA%` 2026-08-31, rule 3).
 Access it ONLY through `appyhour_lib.heartbeat.beat()` / `read_ledger()` — a hand-rolled
-`%APPDATA%` path is a second ledger that diverges silently.
-
-🔴 **`slack-reship` is NOT in `automation_health.EXPECTED`** (verified 2026-08-31 by reading the
-dict — the earlier claim here that it "is now an `EXPECTED` row" was doc-ahead-of-code drift).
-So `freshness_sweep.py` D3's own `slack-reship` row on `SLACK_RESHIP_MAX_D = 8` is **not**
-redundant with the rule-13 loop — it is the ONLY thing checking that name, and retiring it would
-have removed the check outright. It is KEPT, and as of 2026-08-31 it reads `read_ledger()` +
-`age_hours()` instead of the hand-rolled `%APPDATA%` path (rule 3 negative (b) — that read was
-frozen on the deprecated file while `beat()` wrote canonical; the two files still disagree today
-on `offsite-backup` 08-22 vs 08-30 and `forecast-a-monitor` 08-10 vs 08-31, so the split is live,
-not theoretical). Whether `slack-reship` should ALSO become an `EXPECTED` row is a rule-4 decision
-for the checker's owner; until it is one, do not delete the D3 row as "duplicate".
+`%APPDATA%` path is a second ledger that diverges silently. `slack-reship` is now an `EXPECTED` row
+(2026-08-31); ✅ `freshness_sweep.py` D3's duplicate row for it — own 8d constant, hand-rolled
+`%APPDATA%` read — was **retired the same day** (workspace-root `9a771a7`; a tombstone comment there
+records why it is a delete and not a repoint), leaving the rule-13 loop as the single checker on the
+one canonical 10d threshold. 8d was also the wrong number for the reason rule 4 gives: a catch-up run
+after a slept-through weekly slot legally lands >7d out. ⚠️ The now-orphaned `SLACK_RESHIP_MAX_D = 8`
+constant still sits at `freshness_sweep.py:271`, referenced only by its own tombstone — delete it
+before someone greps it up and re-adds a per-name row against a second expectation table (rule 4).

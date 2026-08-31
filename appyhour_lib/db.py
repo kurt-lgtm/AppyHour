@@ -38,6 +38,27 @@ then raises :class:`DBWriterBusy` naming the holder, instead of corrupting.
   monitors, and analysis tools must never block.
 * Escape hatch: ``AH_WRITE_LOCK_DISABLE=1`` restores the pre-lock behavior.
 
+Canonical-path guard (2026-08-31)
+=================================
+🔴 Neither of the two paragraphs above is the corruption story. A controlled experiment
+(4 writer processes, scratch DBs) ran ~2,900 transactions clean on ONE path with no
+``busy_timeout``, and corrupted 5/5 on TWO NAMES for one file (NTFS hardlink) *with*
+``busy_timeout=10000``. The mechanism is two names → two ``-shm`` lock namespaces → two
+independent checkpointers folding their own WAL into one shared image. The advisory lock
+cannot see it: the lock file is ``str(target) + ".writelock"``, so a second name gets its
+own lock and both writers are granted one (measured).
+
+So :func:`connect` now calls :func:`appyhour_lib.paths.assert_canonical_db` and RAISES
+:class:`NonCanonicalDBPath` on a non-canonical ``shipping.db``. A one-shot run from the
+wrong directory breaks — deliberately; the message names the offending path, the canonical
+path, and the fix. Promoted from ``sync_logon._resolve_db_guarded`` (the only writer that
+had it) rather than reinvented.
+
+NEGATIVE: this prevents a REGRESSION to a second name. It would NOT have prevented
+2026-07-03 — the canonical path that day was the MSIX-virtualized ``%APPDATA%`` one, and
+MSIX splits packaged from unpackaged writers at the same name string. The 7/08 move to
+``C:\\AppyHourData`` is what stopped the corruptions. Do not report the guard as that fix.
+
 Pragma rationale
 ================
 * ``journal_mode=WAL``     - many concurrent readers don't block the writer.
@@ -71,11 +92,11 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from .paths import db_path
+from .paths import NonCanonicalDBPath, assert_canonical_db, db_path
 
 __all__ = [
     "connect", "connect_ro", "integrity_ok", "BUSY_TIMEOUT_MS",
-    "DBWriterBusy", "LockedConnection",
+    "DBWriterBusy", "LockedConnection", "NonCanonicalDBPath",
     "write_lock_holder", "assert_write_lock_free",
 ]
 
@@ -327,8 +348,17 @@ def connect(path: str | Path | None = None, *, timeout: float = 30.0,
 
     Raises:
         DBWriterBusy: another live process already holds the write lock.
+        NonCanonicalDBPath: ``target`` is a SECOND NAME for the shared shipping.db image
+            (legacy %APPDATA%, a relative dir, the repo-local copy). Hard refusal, not a
+            warning — see :func:`appyhour_lib.paths.assert_canonical_db` for why a second
+            name is the corruption mechanism and why the advisory lock cannot catch it.
+            🔴 ``connect_ro`` is deliberately NOT guarded: a ``mode=ro`` connection cannot
+            take a write lock or trigger a checkpoint, so it cannot participate in the
+            race, and read-only work on a scratch copy is the sanctioned way to
+            investigate this DB at all.
     """
     target = Path(path) if path is not None else db_path()
+    assert_canonical_db(target, caller="appyhour_lib.db.connect")
     con = sqlite3.connect(str(target), timeout=timeout, factory=LockedConnection)
     _apply_writer_pragmas(con)
     con._lock_path = None

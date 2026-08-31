@@ -21,8 +21,10 @@ HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent.parent
 GELPACK = REPO_ROOT / "GelPackCalculator"
 sys.path.insert(0, str(GELPACK))
+sys.path.insert(0, str(REPO_ROOT))
 
 import shipping_invoice_db as sidb  # noqa: E402
+from appyhour_lib.paths import db_path as _canonical_db_path  # noqa: E402
 from fpdf import FPDF  # noqa: E402
 
 
@@ -334,14 +336,18 @@ def generate_report(
         since = (date.today() - timedelta(days=90)).isoformat()
 
     if db_path is None:
-        # Default to Kori's live DB
-        appdata = os.environ.get("APPDATA")
-        if appdata:
-            db_path = os.path.join(appdata, "AppyHour", "shipping.db")
-        if not db_path or not os.path.exists(db_path):
+        # 🔴 2026-08-31: this defaulted to %APPDATA%\AppyHour\shipping.db with NO canonical
+        # branch — the legacy MSIX-virtualized path, i.e. a SECOND NAME for the shared image
+        # (HEARTBEAT_RULES rule 15: two names → two -shm lock namespaces → the 6/27, 7/01,
+        # 7/03 corruptions). Nothing has lived there since the 7/08 move, so this report has
+        # been raising FileNotFoundError rather than rendering.
+        db_path = str(_canonical_db_path())
+        if not os.path.exists(db_path):
             raise FileNotFoundError(f"shipping.db not found at {db_path}")
 
-    conn = sqlite3.connect(db_path)
+    # READ-ONLY (mode=ro). This is a report: it only SELECTs, and a mode=ro connection
+    # cannot take a write lock or trigger a checkpoint, so it can never join the write race.
+    conn = sqlite3.connect(f"file:{Path(db_path).as_posix()}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
 
     stats = sidb.stats_by_box_type(conn, since=since)
