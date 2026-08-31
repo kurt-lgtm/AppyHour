@@ -109,5 +109,136 @@ class DispatchWiringTest(unittest.TestCase):
                          [["ingest-heartbeat-stale", "prod-tree-drift"]])
 
 
+CSV_HEAD = '"HostName","TaskName","Next Run Time","Status","Last Run Time","Last Result"'
+
+
+def _csv(*rows: str) -> str:
+    return "\n".join([CSV_HEAD, *rows]) + "\n"
+
+
+class SchtaskAuditTest(unittest.TestCase):
+    """The 2026-08-31 widening: SCHTASK_PREFIXES=("appyhour_daily",) made
+    `AppyHour\\GorgiasUpdate` structurally invisible for five days while it returned
+    0x8007042B every Wednesday."""
+
+    def _run(self, csv_text, now=None):
+        import subprocess as _sp
+        findings = []
+        real = _sp.run
+        _sp.run = lambda *a, **k: types.SimpleNamespace(stdout=csv_text)
+        try:
+            ah.check_schtasks(findings)
+        finally:
+            _sp.run = real
+        return findings
+
+    def test_gorgiasupdate_is_audited_at_all(self):
+        """The regression under test: this row produced NO finding before the widening."""
+        f = self._run(_csv('"H","\\AppyHour\\GorgiasUpdate","x","Ready",'
+                           '"8/26/2026 9:00:00 AM","-2147023829"'))
+        self.assertEqual(len(f), 1)
+        self.assertIn("GorgiasUpdate", f[0])
+        self.assertIn("-2147023829", f[0])
+
+    def test_process_aborted_is_not_reported_as_an_access_violation(self):
+        """-2147023829 is 0x8007042B (win32 1067, process KILLED), NOT 0xC0000005. The two
+        point at different investigations and the raw decimal is routinely misread."""
+        hint = ah._win32_hint("-2147023829")
+        self.assertIn("0x8007042B", hint)
+        self.assertIn("ERROR_PROCESS_ABORTED", hint)
+        self.assertNotIn("ACCESS_VIOLATION", hint)
+        self.assertIn("ACCESS_VIOLATION", ah._win32_hint(str(0xC0000005 - (1 << 32))))
+        self.assertIn("ERROR_FILE_NOT_FOUND", ah._win32_hint("2"))
+
+    def test_space_named_tasks_get_distinct_dispatch_keys(self):
+        """`schtask (\\S+):` captured only "AppyHour", collapsing three tasks onto one key —
+        two of them could then never dispatch while the third held the streak."""
+        keys = {ah.finding_key(f"schtask '{n}': Last Result 2")
+                for n in ("AppyHour Carrier Invoice Sync", "AppyHour Weekly Offsite Backup",
+                          "AppyHour Zone Floor Rebuild")}
+        self.assertEqual(len(keys), 3)
+        # legacy unquoted form still keys (older/handwritten finding text)
+        self.assertEqual(ah.finding_key("schtask appyhour_daily_tue: Last Result 1"),
+                         "schtask-appyhour_daily_tue")
+
+    def test_unregistered_in_scope_task_is_itself_a_finding(self):
+        f = self._run(_csv('"H","\\AppyHour NewThing","x","Ready","8/31/2026 9:00:00 AM","0"'))
+        self.assertEqual(len(f), 1)
+        self.assertIn("UNREGISTERED", f[0])
+
+    def test_out_of_scope_task_is_ignored(self):
+        self.assertEqual(self._run(_csv('"H","\\OneDrive Reporting Task","x","Ready",'
+                                        '"8/31/2026 9:00:00 AM","-2147160572"')), [])
+
+    def test_explicit_exclusion_silences_a_task(self):
+        ah.SCHTASK_EXCLUDED["appyhour excluded thing"] = "reason recorded here"
+        try:
+            self.assertEqual(self._run(_csv('"H","\\AppyHour Excluded Thing","x","Ready",'
+                                            '"8/31/2026 9:00:00 AM","7"')), [])
+        finally:
+            del ah.SCHTASK_EXCLUDED["appyhour excluded thing"]
+
+    def test_weekly_threshold_clears_a_catch_up_gap(self):
+        """HEARTBEAT_RULES rule 4: weekly gets 10d, NEVER 7d — the machine sleeps through a
+        fixed-time slot and the catch-up run legally lands >7d after the last one. An 8-day-old
+        weekly run must NOT be graded stale."""
+        self.assertEqual(ah.SCHTASK_EXPECTED["appyhour\\postmortemrunner"], 10)
+        for wk in ("appyhour\\gorgiasupdate", "appyhour\\safetyfactorsweep",
+                   "appyhour weekly offsite backup", "appyhour-vf-archive-refresh"):
+            self.assertGreaterEqual(ah.SCHTASK_EXPECTED[wk], 10, wk)
+
+        from datetime import datetime, timedelta
+        eight_d = (datetime.now() - timedelta(days=8)).strftime("%m/%d/%Y %I:%M:%S %p")
+        self.assertEqual(self._run(_csv(f'"H","\\AppyHour\\PostmortemRunner","x","Ready",'
+                                        f'"{eight_d}","0"')), [])
+        twelve_d = (datetime.now() - timedelta(days=12)).strftime("%m/%d/%Y %I:%M:%S %p")
+        f = self._run(_csv(f'"H","\\AppyHour\\PostmortemRunner","x","Ready","{twelve_d}","0"'))
+        self.assertEqual(len(f), 1)
+        self.assertIn("has not run for", f[0])
+
+    def test_logon_task_gets_no_staleness_gate(self):
+        """Its Last Run Time tracks the last BOOT — an age gate there measures how long Kurt
+        has gone without rebooting, which is not a health signal."""
+        self.assertIsNone(ah.SCHTASK_EXPECTED["appyhour_sync_on_logon"])
+        from datetime import datetime, timedelta
+        old = (datetime.now() - timedelta(days=90)).strftime("%m/%d/%Y %I:%M:%S %p")
+        self.assertEqual(self._run(_csv(f'"H","\\appyhour_sync_on_logon","x","Ready","{old}","0"')), [])
+
+    def test_disabled_expected_task_is_a_finding(self):
+        f = self._run(_csv('"H","\\appyhour_daily_tue","x","Disabled","8/31/2026 12:00:00 PM","0"'))
+        self.assertEqual(len(f), 1)
+        self.assertIn("DISABLED", f[0])
+
+    def test_one_finding_per_task_even_with_several_problems(self):
+        from datetime import datetime, timedelta
+        old = (datetime.now() - timedelta(days=40)).strftime("%m/%d/%Y %I:%M:%S %p")
+        f = self._run(_csv(f'"H","\\appyhour_daily_tue","x","Disabled","{old}","1"'))
+        self.assertEqual(len(f), 1)
+        for part in ("DISABLED", "Last Result 1", "has not run for"):
+            self.assertIn(part, f[0])
+
+    def test_never_run_sentinel_is_not_graded_stale(self):
+        self.assertEqual(self._run(_csv('"H","\\appyhour_daily_tue","x","Ready",'
+                                        '"11/30/1999 12:00:00 AM","267011"')), [])
+
+    def test_multi_trigger_task_audited_once(self):
+        """schtasks /v emits one row PER TRIGGER; appyhour_sync_daily_noon has several."""
+        row = '"H","\\appyhour_sync_daily_noon","x","Ready","8/31/2026 12:05:01 PM","9"'
+        f = self._run(_csv(row, row, row))
+        self.assertEqual(len(f), 1)
+
+    def test_unparseable_last_run_is_loud_not_silent(self):
+        f = self._run(_csv('"H","\\appyhour_daily_tue","x","Ready","not-a-date","0"'))
+        self.assertEqual(len(f), 1)
+        self.assertIn("BLIND", f[0])
+
+    def test_every_registered_name_is_lowercase(self):
+        """Lookup is on name.lower(); an uppercase key could never match and would silently
+        report UNREGISTERED forever."""
+        for k in ah.SCHTASK_EXPECTED:
+            self.assertEqual(k, k.lower(), k)
+            self.assertTrue(k.startswith(ah.SCHTASK_SCOPE), k)
+
+
 if __name__ == "__main__":
     unittest.main()

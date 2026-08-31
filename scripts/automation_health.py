@@ -65,7 +65,85 @@ EXPECTED = {
     "slack-reship": 10 * 24,
 }
 SYNC_HEARTBEAT_MAX_H = 48
-SCHTASK_PREFIXES = ("appyhour_daily",)  # Windows tasks whose Last Result we audit
+
+# --- Windows scheduled tasks ------------------------------------------------------------
+# 🔴 Why this is a REGISTRY and not a prefix (2026-08-31): the audit filtered on
+# `startswith("appyhour_daily")`, so `AppyHour\GorgiasUpdate` — which had been returning
+# 0x8007042B (ERROR_PROCESS_ABORTED) since 08-26 — was structurally invisible for five days.
+# Eight AppyHour tasks sat outside the filter. NEGATIVES that shaped this:
+#   - **Do NOT just widen the prefix.** That arms findings for eight tasks nobody triaged, and
+#     an expectation you cannot justify trains alarm-deafness — the exact failure rule 4 bans.
+#     Every row below was triaged individually (schedule read from the task XML, last success
+#     read from its own log where it keeps one) before it was added.
+#   - **A max age must clear the schedule's longest legal gap (rule 4).** Weekly → 10d, NEVER
+#     7d: this machine sleeps through fixed-time slots and the catch-up run legally lands >7d
+#     after the last one. Daily → 4d (weekend + one missed fire), the same number and reasoning
+#     as REPLICA_STAMP_MAX_D.
+#   - **An UNREGISTERED in-scope task is itself a finding.** A task absent from BOTH dicts is
+#     reported, because "nobody added it to the registry" is precisely how GorgiasUpdate went
+#     five days unwatched. Silence about a task we do not know about is the original blind spot.
+#   - **A DISABLED expected task is a finding.** Last Result stays 0 forever on a task that can
+#     no longer fire — a green reading from a task that is structurally dead.
+SCHTASK_SCOPE = "appyhour"  # every task whose name starts with this is in the audit's remit
+
+# name (lowercased, leading "\" stripped, as schtasks reports it) -> max last-run age in DAYS,
+# or None = audit Last Result only (no cadence to be stale against).
+SCHTASK_EXPECTED = {
+    # -- weekly, one fire per week each (was the only audited family, via the old prefix) --
+    "appyhour_daily_tue": 10,   # daily_shipping_sync, Tue 12:00
+    "appyhour_daily_wed": 10,   # daily_shipping_sync, Wed 12:00
+    "appyhour_daily_thu": 10,   # daily_shipping_sync, Thu 12:00
+    "appyhour_daily_fri": 10,   # daily_shipping_sync, Fri 12:00
+    # -- newly audited 2026-08-31, each triaged before being added --
+    # Gorgias sync + enrich of UPDATE_Operational Issues. Weekly Wed 09:00, runs
+    # C:\AppyHourProd\...\gorgias_update.bat. Last clean exit 08-12 (08-26 did all its work
+    # then died between python's exit and the .bat's exit-code echo).
+    "appyhour\\gorgiasupdate": 10,
+    # Carrier invoice ingest (run_carrier_sync.bat). DAILY 16:00, last success 08-31 16:00.
+    "appyhour carrier invoice sync": 4,
+    # backup_offsite.py. Weekly Sun 02:00, WakeToRun=true, last success 08-30 02:00. Also
+    # covered by the `offsite-backup` beat — the beat catches ABSENCE, this catches a non-zero
+    # exit on a run that happened; they fail independently (rule 13's shape).
+    "appyhour weekly offsite backup": 10,
+    # ShipRouting zone-floor rebuild. Weekly Sun 06:00. 🔴 CURRENTLY BROKEN and audited on
+    # purpose: Last Result 2 (ERROR_FILE_NOT_FOUND) — its action is
+    # `python.exe rebuild_zone_floor.py` in C:\AppyHourProd\ShipRouting, and that script exists
+    # ONLY in Claude Projects\_archive\shiprouting-feasible-hub-fence-2026-06\ (archived
+    # 06-19). It has been failing every Sunday since. Registered rather than excluded because
+    # it is a genuine dead job, not an unjustified expectation; rule 12 will file ONE handoff
+    # to Kurt triage on the 3rd consecutive run and then dedupe. Fix is Kurt's call (restore
+    # the script or delete the task) — ShipRouting was out of scope for this change.
+    "appyhour zone floor rebuild": 10,
+    # melt_efficiency_calibrator.bat. Weekly Mon 09:15, last success 08-31 09:15.
+    "appyhour\\meltefficiencycalibrator": 10,
+    # postmortem_runner.py. Weekly Mon 09:00, WakeToRun=true, last success 08-31 09:02.
+    "appyhour\\postmortemrunner": 10,
+    # safety_factor_sweep.bat. Weekly Mon 09:30, last success 08-31 09:30.
+    "appyhour\\safetyfactorsweep": 10,
+    # sync_logon.py on a noon trigger. DAILY, last success 08-31 12:05.
+    "appyhour_sync_daily_noon": 4,
+    # shipping_db_healthcheck.py. DAILY 12:10, last success 08-31 12:10.
+    "appyhour-db-healthcheck": 4,
+    # vf_archive_refresh.bat. Weekly Tue 11:00, last success 08-31 10:59 (catch-up).
+    "appyhour-vf-archive-refresh": 10,
+    # sync_logon.py. Trigger is "at logon", NOT a clock — so Last Run Time tracks the last
+    # BOOT, and any age gate here measures how long Kurt has gone without rebooting, a number
+    # with no health meaning. Deliberately None: Last Result is audited, the staleness gate is
+    # refused. The work this task does is covered for freshness by sync_heartbeat.json age
+    # (check_sync_heartbeat) instead.
+    "appyhour_sync_on_logon": None,
+}
+
+# In scope (name starts with SCHTASK_SCOPE) but deliberately NOT audited at all, reason
+# recorded. Empty today — every in-scope task is registered above. A name lands here only with
+# a reason a reader can check; "we never looked at it" is not one (that was the bug).
+SCHTASK_EXCLUDED: dict[str, str] = {}
+
+# Last Result values that are not failures: 0 = ok, 267009 = currently running,
+# 267011 = never yet run (fresh trigger), "" = column absent.
+SCHTASK_OK_RESULTS = ("0", "267009", "267011", "")
+# schtasks /v prints this for a task that has never run.
+SCHTASK_NEVER_RUN = ("11/30/1999 12:00:00 AM", "N/A", "")
 
 
 def check_beats(findings: list[str]) -> None:
@@ -126,14 +204,102 @@ def check_schtasks(findings: list[str]) -> None:
         return
     import csv
     import io
+    unparseable: list[str] = []
+    seen: set[str] = set()
     for row in csv.DictReader(io.StringIO(out)):
         name = (row.get("TaskName") or "").lstrip("\\")
-        if not name.lower().startswith(SCHTASK_PREFIXES):
+        key = name.lower()
+        if not key.startswith(SCHTASK_SCOPE) or key in seen:
+            continue  # schtasks /v emits one row PER TRIGGER — audit each task once
+        seen.add(key)
+        if key in SCHTASK_EXCLUDED:
             continue
+        if key not in SCHTASK_EXPECTED:
+            findings.append(
+                f"schtask '{name}': UNREGISTERED — not in SCHTASK_EXPECTED or SCHTASK_EXCLUDED "
+                "in scripts/automation_health.py, so nothing audits it. Triage it and add a row "
+                "(HEARTBEAT_RULES rule 4)")
+            continue
+
+        # One finding per task: report() dedupes a repeated key within a run, but a single
+        # line keeps the Slack message and the dispatched handoff readable.
+        problems: list[str] = []
+        last_run = (row.get("Last Run Time") or "").strip()
+
+        if (row.get("Status") or "").strip().lower() == "disabled":
+            problems.append("DISABLED — it can no longer fire, and a disabled task's Last "
+                            "Result stays green forever")
+
         result = (row.get("Last Result") or "").strip()
-        # 0 = ok; 267009 = currently running; 267011 = never yet run (fresh trigger)
-        if result not in ("0", "267009", "267011", ""):
-            findings.append(f"schtask {name}: Last Result {result} (last run {row.get('Last Run Time', '?')})")
+        if result not in SCHTASK_OK_RESULTS:
+            problems.append(f"Last Result {result}{_win32_hint(result)} (last run {last_run or '?'})")
+
+        max_age_d = SCHTASK_EXPECTED[key]
+        if max_age_d is not None and last_run not in SCHTASK_NEVER_RUN:
+            ts = _parse_schtask_time(last_run)
+            if ts is None:
+                unparseable.append(name)
+            else:
+                age_d = (datetime.now() - ts).total_seconds() / 86400
+                if age_d > max_age_d:
+                    problems.append(
+                        f"has not run for {age_d:.1f}d (max {max_age_d}d) — last run {last_run}")
+        if problems:
+            findings.append(f"schtask '{name}': " + "; ".join(problems))
+
+    if unparseable:
+        # Aggregated on purpose: a locale change breaks EVERY row at once, and one finding per
+        # task would bury the real ones. Loud, because an unreadable last-run time means the
+        # staleness half of this check is blind — not that it passed (rule 1).
+        findings.append(
+            f"schtask last-run time unparseable for {len(unparseable)} task(s) "
+            f"({', '.join(sorted(unparseable)[:6])}) — staleness gate BLIND for them")
+
+
+def _win32_hint(result: str) -> str:
+    """Decode the common HRESULT-shaped Last Result values into words.
+
+    🔴 A bare `-2147023829` gets misread. It is 0x8007042B = HRESULT_FROM_WIN32(1067)
+    ERROR_PROCESS_ABORTED — "the process terminated unexpectedly", i.e. the task's process
+    was KILLED. It is NOT 0xC0000005 (an access violation), which is -1073741819 and means a
+    native crash. Those two point at completely different investigations, and the finding is
+    read by someone who will not stop to convert signed decimal to hex.
+    """
+    names = {
+        1: "ERROR_INVALID_FUNCTION — the action ran and exited 1; read the task's own log",
+        2: "ERROR_FILE_NOT_FOUND — the action's exe or script path is wrong",
+        3: "ERROR_PATH_NOT_FOUND — the action's working directory is wrong",
+        5: "ERROR_ACCESS_DENIED",
+        1067: "ERROR_PROCESS_ABORTED — the process was killed, not a Python crash",
+        267014: "task terminated by the user or by Task Scheduler",
+    }
+    try:
+        n = int(result)
+    except ValueError:
+        return ""
+    if 0 < n <= 0xFFFF:  # a plain exit code / win32 error, not an HRESULT
+        return f": {names[n]}" if n in names else ""
+    if n >= 0:
+        return ""
+    u = n + (1 << 32)
+    if (u >> 16) == 0x8007:  # HRESULT_FROM_WIN32
+        w = u & 0xFFFF
+        return f" [0x{u:08X} = win32 {w}" + (f": {names[w]}" if w in names else "") + "]"
+    if u == 0xC0000005:
+        return " [0xC0000005 = STATUS_ACCESS_VIOLATION — a native crash]"
+    return f" [0x{u:08X}]"
+
+
+def _parse_schtask_time(s: str):
+    """schtasks /v prints Last Run Time in the machine's short date/time format."""
+    from datetime import datetime as _dt
+    for fmt in ("%m/%d/%Y %I:%M:%S %p", "%m/%d/%Y %H:%M:%S",
+                "%d/%m/%Y %I:%M:%S %p", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return _dt.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
 
 
 def check_shipping_db(findings: list[str]) -> None:
@@ -300,6 +466,14 @@ def finding_key(text: str) -> str:
         return "ingest-heartbeat-stale"
     if text.startswith("ingest legs not ok"):
         return "ingest-legs-not-ok"
+    # 🔴 Quoted form FIRST. Three audited task names contain spaces ("AppyHour Carrier Invoice
+    # Sync", "AppyHour Weekly Offsite Backup", "AppyHour Zone Floor Rebuild"), and the bare
+    # `(\S+)` pattern below captures only "AppyHour" — collapsing all three onto ONE key, so
+    # two of them could never dispatch while the third held the streak. check_schtasks emits
+    # the quoted form; the bare form is kept for any older/handwritten finding text.
+    m = re.match(r"schtask '([^']+)':", text)
+    if m:
+        return "schtask-" + m.group(1)
     m = re.match(r"schtask (\S+):", text)
     if m:
         return "schtask-" + m.group(1)
