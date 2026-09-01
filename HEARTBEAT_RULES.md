@@ -42,6 +42,38 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
    (c) `read_ledger()` merges the deprecated `%APPDATA%` file newest-wins for ONE deprecation
    window and logs LOUDLY on stderr whenever it contributes a key; a silent fallback would be the
    split ledger wearing a fix's name. Remove the fallback once no unmigrated writer/reader remains.
+3b. **`sync_heartbeat.json` moved for the SAME reason, one file later (2026-09-01) — canonical
+   `C:\AppyHourData\sync_heartbeat.json`, accessed ONLY via `appyhour_lib.sync_heartbeat`.**
+   This is the ingest-leg heartbeat (`carriers`, `fulfillments`, `auto_import`, `shopify_orders`,
+   `post_ingest_backup`), and it was the LAST file left on the virtualized path. `sync_logon.py`
+   stamps it from the `appyhour_sync_on_logon` schtask (real context); `automation_health` reads it
+   packaged (agent context). Measured 2026-09-01: the overlay was frozen at **08-25** and
+   `check_sync_heartbeat` reported **"ingest sync heartbeat stale: 6.8d"** while the real-profile
+   file had been written **13:22 that same day** with every leg current. 🔴 The false alarm landed
+   on the one signal whose entire job is to say the ingest died — the monitor was not lagging, it
+   was reading a different file. Writers: `GelPackCalculator/sync_logon.py`,
+   `GelPackCalculator/pipeline_run.py`. Reader: `automation_health.check_sync_heartbeat`.
+   NEGATIVES, all measured that day:
+   (a) **Never seed by copying a side.** Same trap as the ledger, but sharper here: the overlay
+   carried `fulfillments_status: "ok"` from 08-25 while the real profile carried
+   `fail:Timeout:600s:cancelled-clean` from that morning. Copying the overlay would have buried a
+   live failure under a stale success — a monitoring path repaired into lying. Merge newest-wins
+   per key (`sync_heartbeat.merge`).
+   (b) **A `_status` key has NO timestamp of its own — do not merge it independently.** Its
+   recency is `max(<name>, <name>_last_attempt)` (`sync_heartbeat.stamp_time`), because `_stamp`
+   advances the bare key only on success. Comparing statuses by the success timestamp alone loses
+   exactly the failure in (a).
+   (c) **`_last_attempt` is NOT a freshness signal** and must stay excluded from the staleness
+   gate. A leg failing every run stamps a fresh attempt every run; counting it would hold the gate
+   green forever — the silent-degrade class this checker exists to catch.
+   (d) **`retired:` is a PASS, not a failure.** `shopify_orders_status: "retired:cloud-owned"` is
+   terminal and will never change back; grading it red posts an unfixable finding every run, which
+   is the alarm-deafness rule 4 bans. It was invisible while the checker read the frozen overlay.
+   (e) Timestamps here are **naive local**, unlike `heartbeats.json` (aware UTC). Do not
+   "harmonise" them: both consumers compare against a naive `datetime.now()`, so a mixed
+   comparison raises and an offset shift silently moves the 48h gate.
+   (f) `%APPDATA%\AppyHour\sync_logs\` deliberately did NOT move — it is write-only, with no
+   cross-context reader to diverge from. A split matters when two contexts READ one name.
 4. **Expectations live in the checker, not the ledger.** A task that stops being scheduled must be
    removed from `EXPECTED` in the same change — a stale expectation = permanent false alarm, which
    trains alarm-deafness (the failure mode that killed the old monitoring).
@@ -381,7 +413,8 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
 | `vendor-matrix` | `ingest/slack_reship/sync.py` end of `main()` when `--report` and NOT `--push` (routine `weekly-shipping-vendor-matrix`, Tue ~12:00) | 10 days |
 | `slack-reship` | `ingest/slack_reship/weekly_task.py` (routine `weekly-reship-report`, Tue ~12:00) — pre-existing beat, promoted into `EXPECTED` 2026-08-31 | 10 days |
 
-Checker also probes (no beat needed): `sync_heartbeat.json` age (>48h), `schtasks` AppyHour* Last
+Checker also probes (no beat needed): `C:\AppyHourData\sync_heartbeat.json` age (>48h, via
+`appyhour_lib.sync_heartbeat.read()` — moved off `%APPDATA%` 2026-09-01, rule 3b), `schtasks` AppyHour* Last
 Result ≠ 0, shipping.db `PRAGMA quick_check` (read-only immutable), **dev↔prod tree parity on
 DB-relevant `*.py` (rule 9)**, **cloud-replica freshness — `shopify_orders`/`weather_history` data
 age + `C:\AppyHourData\replica_pull_stamp.json` ingest stamp (rule 11)**.

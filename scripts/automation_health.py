@@ -18,7 +18,6 @@ from __future__ import annotations
 import ast
 import contextlib
 import json
-import os
 import sqlite3
 import subprocess
 import sys
@@ -29,8 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from appyhour_lib.bootstrap import init  # noqa: E402
 from appyhour_lib.heartbeat import read_ledger, age_hours, beat  # noqa: E402
 from appyhour_lib.notify import notify  # noqa: E402
-
-APPDATA_AH = Path(os.environ.get("APPDATA", "")) / "AppyHour"
+from appyhour_lib.sync_heartbeat import read as read_sync_heartbeat  # noqa: E402
 
 # Expectations live HERE, not in the ledger (rule 4): name -> max age in hours.
 EXPECTED = {
@@ -177,15 +175,33 @@ def check_beats(findings: list[str]) -> None:
 
 
 def check_sync_heartbeat(findings: list[str]) -> None:
-    p = APPDATA_AH / "sync_heartbeat.json"
+    """Grade the ingest legs off `C:\\AppyHourData\\sync_heartbeat.json`.
+
+    🔴 READ IT THROUGH `appyhour_lib.sync_heartbeat`, NEVER a hand-rolled %APPDATA% path
+    (2026-09-01). This function used to build `APPDATA_AH / "sync_heartbeat.json"` itself, and
+    %APPDATA% is MSIX-virtualized: `sync_logon` stamps the real profile from its schtask while
+    THIS checker runs packaged and read the package-private overlay. Two physical files, disjoint
+    histories. Measured that morning: the overlay was frozen at 08-25 and this check reported
+    "ingest sync heartbeat stale: 6.8d" while the real file had been written 13:22 that same day
+    with every leg current. A checker structurally unable to see its own subject does not lag —
+    it reports a fiction, and it does so on the one signal whose job is to say the ingest died.
+    Same fix, same reason, one file later than `heartbeats.json` (rule 3).
+    """
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
+        data = read_sync_heartbeat()
     except Exception as e:
         findings.append(f"sync_heartbeat.json unreadable ({type(e).__name__}) — ingest state unknown")
         return
     newest = None
     for key, val in data.items():
-        if key.endswith("_status"):
+        # 🔴 `_last_attempt` is NOT a freshness signal — skip it (2026-09-01). `sync_logon._stamp`
+        # advances the bare `<name>` key ONLY on success and writes `<name>_last_attempt` on
+        # failure, precisely so a failed run cannot mute its own 12h retry. Counting attempts here
+        # would invert that: an ingest leg failing every single run stamps a fresh attempt every
+        # run and would hold this gate green forever, which is the silent-degrade class this whole
+        # checker exists to catch. These keys were invisible until the file moved off the frozen
+        # %APPDATA% overlay, so the exclusion is new even though the rule is not.
+        if key.endswith(("_status", "_last_attempt")):
             continue
         try:
             ts = datetime.fromisoformat(str(val))
@@ -195,12 +211,22 @@ def check_sync_heartbeat(findings: list[str]) -> None:
     if newest is None:
         findings.append("sync_heartbeat.json has no parseable timestamps")
         return
+    # ⚠️ KNOWN, PRE-EXISTING, deliberately NOT fixed in the move commit: this is max() ACROSS legs,
+    # so one fresh leg masks every other leg being frozen. Tracked as W5(b) in
+    # .claude/plans/2026-08-31-do-sole-ingest.md ("make it per-leg"). Fixing it here would have
+    # bundled a grading change into a path change and made a regression impossible to bisect.
     age_h = (datetime.now() - newest).total_seconds() / 3600
     if age_h > SYNC_HEARTBEAT_MAX_H:
         findings.append(f"ingest sync heartbeat stale: {age_h/24:.1f}d (max {SYNC_HEARTBEAT_MAX_H}h)")
-    # status values may carry detail suffixes ("ok:new_invoices=6 ...") — prefix match, not equality
+    # status values may carry detail suffixes ("ok:new_invoices=6 ...") — prefix match, not equality.
+    # 🔴 `retired:` is a PASS (2026-09-01). It is a terminal state meaning the leg no longer runs
+    # here at all — `shopify_orders_status: "retired:cloud-owned"` was set when that ingest moved to
+    # the cloud. It is not a failure and it will never change back, so grading it red would post an
+    # unfixable finding on every single run; an expectation nobody can satisfy trains alarm-deafness,
+    # which rule 4 bans. This key was invisible while the checker read the frozen overlay — the move
+    # is what surfaced it, and it must NOT be reported as a new breakage.
     bad = [k for k, v in data.items() if k.endswith("_status")
-           and not str(v).lower().startswith(("ok", "success"))]
+           and not str(v).lower().startswith(("ok", "success", "retired"))]
     if bad:
         findings.append(f"ingest legs not ok: {', '.join(bad)}")
 

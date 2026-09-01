@@ -233,8 +233,12 @@ def cred_files() -> list[Path]:
     # is not the test — that reasoning is what left the quote cache unbacked.
     # `carrier_tnt_cache.json` stays listed because the file MOVED to C:\AppyHourData on
     # 2026-08-10 and is now backed up by canonical_dir_files(); the legacy %APPDATA% copy is a
-    # renamed .MIGRATED- corpse. `sync_heartbeat.json` is genuinely per-run state, rewritten
-    # every sync, and nothing downstream reads a historical value.
+    # renamed .MIGRATED- corpse. `sync_heartbeat.json` is the SAME shape as of 2026-09-01: it
+    # moved to C:\AppyHourData too (MSIX was serving the writer and the checker two different
+    # physical files), so canonical_dir_files() now sweeps it up — 658 bytes, and per that
+    # function's own rule forgetting to SKIP something only costs space while forgetting to ADD
+    # it loses the file. Both names stay listed here to keep any stale %APPDATA% copy — which is
+    # now a dead legacy read-fallback, not state — out of the credential set.
     _SKIP_JSON = {"carrier_tnt_cache.json", "sync_heartbeat.json"}
 
     def _is_junk(name: str) -> bool:
