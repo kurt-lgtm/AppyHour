@@ -116,15 +116,16 @@ SCHTASK_EXPECTED: dict[str, int | None] = {
     # covered by the `offsite-backup` beat — the beat catches ABSENCE, this catches a non-zero
     # exit on a run that happened; they fail independently (rule 13's shape).
     "appyhour weekly offsite backup": 10,
-    # ShipRouting zone-floor rebuild. Weekly Sun 06:00. 🔴 CURRENTLY BROKEN and audited on
-    # purpose: Last Result 2 (ERROR_FILE_NOT_FOUND) — its action is
-    # `python.exe rebuild_zone_floor.py` in C:\AppyHourProd\ShipRouting, and that script exists
-    # ONLY in Claude Projects\_archive\shiprouting-feasible-hub-fence-2026-06\ (archived
-    # 06-19). It has been failing every Sunday since. Registered rather than excluded because
-    # it is a genuine dead job, not an unjustified expectation; rule 12 will file ONE handoff
-    # to Kurt triage on the 3rd consecutive run and then dedupe. Fix is Kurt's call (restore
-    # the script or delete the task) — ShipRouting was out of scope for this change.
-    "appyhour zone floor rebuild": 10,
+    # REMOVED 2026-09-01: `AppyHour Zone Floor Rebuild` was DELETED (Kurt, elevated shell) after
+    # investigation showed it had never once succeeded — Last Result 2 every Sunday since
+    # 06-19, because its action pointed at `rebuild_zone_floor.py` in C:\AppyHourProd\ShipRouting
+    # where that file has never existed. The FEATURE was retired 2026-06-25: tail-insurance ice
+    # (P95) via `_ice_eff`/`lane_p95` replaced the precomputed zone_floor.json
+    # (ROUTING_RULES.md:2290-2294; TOOL_REGISTRY.md:121 "Do not port"). Nothing reads the cache
+    # and the cache file does not exist, so ten weeks of no rebuild cost nothing.
+    # 🔴 The row outlived the task by a day and became an ORPHAN-REGISTRATION: check_schtasks
+    # iterates the rows `schtasks /query` RETURNS, so a deleted task goes SILENT rather than red —
+    # an expectation that can neither pass nor fail. Rule 4: delete the row with the task.
     # melt_efficiency_calibrator.bat. Weekly Mon 09:15, last success 08-31 09:15.
     "appyhour\\meltefficiencycalibrator": 10,
     # postmortem_runner.py. Weekly Mon 09:00, WakeToRun=true, last success 08-31 09:02.
