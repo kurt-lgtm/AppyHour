@@ -404,6 +404,10 @@ def main() -> str | None:
     ap.add_argument("--push", action="store_true",
                     help="write/refresh this week's tab in the reship Google Sheet")
     ap.add_argument("--sheet-id", default=None, help="override cached sheet id")
+    ap.add_argument("--note", default=None,
+                    help="one provenance line written under the tab's subtitle. Use it whenever "
+                         "republishing a week whose numbers CHANGE — someone may have read the "
+                         "old ones, and a silent restatement is worse than a wrong number.")
     ap.add_argument("--history-sheet", action="store_true",
                     help="record this week in the vendor-matrix ledger and repaint the "
                          "'Vendor Matrix' history tab on the Running Reship sheet (D39)")
@@ -446,11 +450,9 @@ def main() -> str | None:
         vmatrix = matrix_grid(rows, denom, issues)
         bgrid, _ = box_summary_grid(rows, denom)
         sheet_rows = build_rows(args.week, denom, len(rows), start_date, end_date,
-                                src, vmatrix, bgrid)
-        # header rows (1-indexed) for styling: vendor block hdr, box block hdr
-        vendor_hdr = 6                 # title(1) sub(2) note(3) blank(4) "CARRIER"(5) -> matrix hdr(6)
-        box_hdr = 8 + len(vmatrix)     # matrix rows 6..5+N, blank, "BOX TYPE" label, then box hdr
-        pushed_url = push(args.week, sheet_rows, vendor_hdr, box_hdr, sheet_id=args.sheet_id)
+                                src, vmatrix, bgrid, note=args.note)
+        # header rows are derived from the grid inside push() — never hand-counted here
+        pushed_url = push(args.week, sheet_rows, sheet_id=args.sheet_id)
         print(f"\nPUSHED: {pushed_url}")
 
     if args.history_sheet:

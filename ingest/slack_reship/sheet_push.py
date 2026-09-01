@@ -49,25 +49,58 @@ def _save_id(sid: str):
         f.write(sid)
 
 
+CARRIER_LABEL = "CARRIER × ISSUE"
+BOX_LABEL = "BOX TYPE OF RESHIPPED ORDERS  (MCUST=Medium Tray, LCUST=Large Tray, else Regular Box)"
+
+
 def build_rows(week: str, denom: int, n_tickets: int, start_date: str, end_date: str,
-               source: str, vendor_matrix: list[list], box_summary: list[list]) -> list[list]:
-    """Assemble the tab's 2D rows: title + vendor×issue block + box-type block."""
+               source: str, vendor_matrix: list[list], box_summary: list[list],
+               note: str | None = None) -> list[list]:
+    """Assemble the tab's 2D rows: title + vendor×issue block + box-type block.
+
+    `note` adds one italic line under the subtitle. Its job is RESTATEMENT PROVENANCE: when a
+    week is republished with different numbers, someone may already have read the old ones, so
+    the tab has to say on its face that it changed and why. Same reason D39 rule 5 emits
+    `VM_RESTATED` rather than silently moving a cell — a silent restatement is indistinguishable
+    from the reader having misremembered.
+    """
     rows: list[list] = [
         [f"Weekly Reship Report — _SHIP_{week}"],
         [f"Tickets received {start_date}–{end_date}  |  denom {denom}  |  "
          f"{n_tickets} shipping tickets  |  source {source}  |  "
          f"generated {datetime.now():%Y-%m-%d %H:%M}"],
+    ]
+    if note:
+        rows.append([note])
+    rows += [
         ["Percent = count ÷ denominator (rate vs shipped volume), never share-of-issues."],
         [],
-        ["CARRIER × ISSUE"],
+        [CARRIER_LABEL],
     ]
     rows += vendor_matrix
     rows += [
         [],
-        ["BOX TYPE OF RESHIPPED ORDERS  (MCUST=Medium Tray, LCUST=Large Tray, else Regular Box)"],
+        [BOX_LABEL],
     ]
     rows += box_summary
     return rows
+
+
+def section_header_rows(rows: list[list]) -> tuple[int, int, int]:
+    """1-indexed (carrier label row, vendor header row, box header row).
+
+    🔴 DERIVED, never hand-counted. These were three literals in `sync.main` with a comment
+    counting the preamble by hand ("title(1) sub(2) note(3) blank(4)…"), so adding a single
+    line to the preamble silently painted the dark header band across a row of DATA. Anything
+    that changes `build_rows` must not have to remember to update arithmetic somewhere else.
+    """
+    def find(label):
+        for i, r in enumerate(rows):
+            if r and str(r[0]).startswith(label[:20]):
+                return i + 1
+        raise ValueError(f"section label not found in rows: {label!r}")
+    carrier = find(CARRIER_LABEL)
+    return carrier, carrier + 1, find(BOX_LABEL) + 1
 
 
 def _col_letter(i: int) -> str:
@@ -105,9 +138,15 @@ def _style(ss, ws, n_cols: int, header_rows: list[int]):
             "backgroundColor": _HDR_BG})
 
 
-def push(week: str, rows: list[list], vendor_hdr_row: int, box_hdr_row: int,
+def push(week: str, rows: list[list], vendor_hdr_row: int | None = None,
+         box_hdr_row: int | None = None,
          sheet_id: str | None = None, svc_json: str | None = None,
          share_with: str = SHARE_WITH) -> str:
+    # header rows are DERIVED from the grid; the params remain only so an explicit override is
+    # still possible, and are no longer computed by hand at the call site.
+    carrier_label_row, derived_vendor, derived_box = section_header_rows(rows)
+    vendor_hdr_row = vendor_hdr_row or derived_vendor
+    box_hdr_row = box_hdr_row or derived_box
     gc = _client(svc_json)
     sid = sheet_id or _cached_id()
     if sheet_id:                       # explicit id given -> persist it for next runs
@@ -142,7 +181,7 @@ def push(week: str, rows: list[list], vendor_hdr_row: int, box_hdr_row: int,
                if r]
     if residue:
         ws.batch_clear(residue)
-    _style(ss, ws, n_cols, header_rows=[5, vendor_hdr_row, box_hdr_row])
+    _style(ss, ws, n_cols, header_rows=sorted({carrier_label_row, vendor_hdr_row, box_hdr_row}))
     # newest week first: move this tab to the front
     try:
         ss.reorder_worksheets([ws] + [w for w in ss.worksheets() if w.id != ws.id])
