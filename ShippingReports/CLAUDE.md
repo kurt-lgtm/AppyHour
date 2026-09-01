@@ -29,6 +29,13 @@ Analytics pipeline for subscription box shipping. Ingests carrier invoices (OnTr
 > the routing-tag service token and the carrier-invoice cost both live). 🔴 FedEx 2Day is ALWAYS its own
 > row, never merged into Ground-HD; OnTrac/LaserShip are ONE carrier via `canon.normalize_carrier`.
 > Counts and costs freeze on **two independent clocks**. ⚠️ **UNOWNED — no scheduled owner yet** (D35).
+> 🔴 **D41** — the tab paint is GATED per column: a cohort is paintable only once its week has closed
+> (Wed) **and** its Tuesday leg is actually in `fulfillments`. A weekday check alone is not enough —
+> the `2026-08-24` column published the Monday-only **2,500** (true 2,545) from a *Wednesday* run,
+> because the ingest, not the week, was still open. Every column now carries `Counts basis` +
+> `Counts as_of`. Sibling guard on `TnT2` (`PivotAnalytics.gs`): the ceiling assert that catches its
+> `2,227`-against-`2,226`. 🔴 The two tabs count DIFFERENT populations (orders vs `fulfillments`
+> rows) — never use one as the other's ceiling.
 >
 > 🔴 **Weekly reship report (one tab per week)** = `ingest/slack_reship/weekly_task.py` →
 > `sync.py --report --push` → `sheet_push.py`, owner: the `weekly-reship-report` routine, beat

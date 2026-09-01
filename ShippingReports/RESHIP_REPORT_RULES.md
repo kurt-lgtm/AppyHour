@@ -193,8 +193,9 @@ backfill/debug tool and its 12:18 schtask is DISABLED once the Apps Script trigg
 - **Fail loud:** wrap main in try/catch → Slack webhook `[CRITICAL] reship report failed: …`;
   Apps Script's own failure emails stay on as backup.
   🔴 **Destination (directive P8, `EXCEPTIONS_ALERT_RULES.md` — SSOT for the routing rule).** As
-  built this does NOT use the webhook: `slack_` posts to the **appyhour-ops-reader DM**
-  (`U08R19137UL` → `D0BG1541F0A`) via `chat.postMessage`, never the public `SLACK_WEBHOOK`
+  built this does NOT use the webhook: `slack_` posts to **#kurt-ops** (`C0BT47XG8CW`,
+  private — Kurt + the bot) via `chat.postMessage`, never the public `SLACK_WEBHOOK`.
+  Moved there 2026-08-27 from the appyhour-ops-reader DM (`U08R19137UL` → `D0BG1541F0A`)
   (#reships) and **never #exceptions** (`C0BLKKPAW8P` — Dan's customer-ping channel; infra noise
   there gets it muted, and a muted #exceptions makes every real box problem silent). Every `slack_`
   caller in `Code.gs`/`PivotAnalytics.gs` is ops-class: FAILED run, empty Raw Data, ghost-tab
@@ -830,7 +831,7 @@ and warn", not (b) "a reserved `Notes` column". Rejected because:
   the defect.**
 
 **Mechanism.** `refreshCurrentColumn` is now a thin wrapper: any throw DMs Kurt privately via
-`slack_` (Code.gs — bot DM, email fallback; never the public `SLACK_WEBHOOK`), naming the matched
+`slack_` (Code.gs — posts to #kurt-ops, email fallback; never the public `SLACK_WEBHOOK`), naming the matched
 `PA_*` invariant and, for `PA_ASSERT_HEADERLESS_COLUMN`, the fix ("clear the cell or give the column
 a row-1 header"), then **RETHROWS** so the execution still registers as failed. The previous-leg
 `catch` — which swallows by design so a reconcile failure cannot cost us the current column — alerts
@@ -3539,3 +3540,110 @@ with `sync.main` and `heartbeat.beat` both stubbed — URL → `rc=0` + one beat
 confirmed byte-identical before and after. Push ordering exercised against a fake worksheet: no
 `clear()` call at all, `update` strictly before `batch_clear`, and a forced `update` failure left the
 prior tab contents intact while the error propagated. `main()` was never run: it writes a live sheet.
+
+### D41 — `TnT2` PUBLISHED A BOX THAT CANNOT EXIST, AND `Carrier Mix` FROZE A HALF-LANDED COHORT (Kurt 2026-09-01)
+
+**Scope.** The two cohort-size surfaces on the PIVOT sheet
+(`1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU`): the `TnT2` tab (`appsscript/PivotAnalytics.gs`,
+bound project `15K0MrUss…`) and the `Carrier Mix` tab (`ShippingReports/carrier_mix_pivot.py`,
+D35/D35c). Both found by eye. The guards below are the same three D40 gave the weekly reship report
+(`ingest/slack_reship/sync.py`), deliberately reusing its names and its `NotPublishable` shape —
+one convention for "the number is not wrong, it is not ready", not two.
+
+**🔴 FIRST: THE TWO TABS COUNT DIFFERENT POPULATIONS, AND MOST OF THE CONFUSION IS THAT.**
+
+| tab | population | basis | date predicate |
+|---|---|---|---|
+| `TnT2` | Shopify **ORDERS** `tag:'_SHIP_<wk>' -status:cancelled -tag:'Reship'` | `reship_excluded` | none |
+| `Carrier Mix` | `shipping.db` **`fulfillments` ROWS** `tags LIKE '%_SHIP_<wk>%'` | `raw` | none |
+
+They are supposed to disagree for one week, and a `fulfillments` count is **not** the ceiling for
+`TnT2`: a tagged, uncancelled order whose label was never cut has no `fulfillments` row at all —
+the boxes `TnT2`'s own `never picked up by carrier` row counts. Measured 2026-09-01 for
+`_SHIP_2026-07-27`: **2,226** Shopify orders vs **2,225** `fulfillments` rows. Comparing across
+them manufactures an off-by-one that will never resolve.
+
+**1. 🔴 THE OLDER COLUMNS ARE NOT WRONG, AND MUST NOT BE RESTATED.** Every `TnT2` column sits
+ABOVE its own reship-excluded net recomputed today, monotonically by age — `2026-07-13` published
+2,025 and nets 1,944 now; `2026-08-17` and `2026-08-24` match their nets EXACTLY (2,324 / 2,503)
+because barely any reship tags have accrued yet. Reship tags and cancellations keep landing on a
+cohort for weeks, so a recompute subtracts more than it did then. **That drift is the data.** The
+defect was never the number; it was publishing a number with no record of when it was true.
+
+**2. 🔴 `_SHIP_2026-07-27` ON `TnT2` PUBLISHES 2,227 AGAINST A CEILING OF 2,226 — ONE BOX THAT
+CANNOT EXIST.** Every valid basis is a subset of `tag:'_SHIP_<wk>' -status:cancelled`; the reship
+exclusion only removes orders. The obvious objection — "the ceiling shrank afterwards, so 2,227
+was true when written", i.e. finding 1 again — was **measured and refuted**: all 18 cancellations
+on that cohort landed 07-20…07-27, on or before the ship Monday and weeks before the column froze
+at age 10 (`PA_MATURITY_DAYS`). The ceiling was 2,226 at every instant the column was writable.
+`paAssertNotAboveRaw_` refuses and names both numbers. Nine weeks of arithmetic to find by eye;
+one comparison to catch.
+
+**3. 🔴 `Carrier Mix` `_SHIP_2026-08-24` READS 2,500 — THE MONDAY-ONLY COUNT.** Neither the raw
+tag population (2,545) nor any net (2,503). `fulfilled_at` on that cohort is 2,500 rows dated
+08-24 plus 45 dated 08-25, the Tuesday Dallas leg that lands EVERY week. Its four older columns
+equal the full raw total, so this is one early paint, not a definition — and this tab has **no
+scheduled owner** (D35) to restate it.
+
+**🔴 A WEEKDAY GATE ALONE WOULD NOT HAVE CAUGHT IT, and that is the lesson.** The paint ran
+2026-08-26 09:52 ET — a **Wednesday**, two days after the Tuesday leg was fulfilled. The calendar
+week was closed; **our ingest** was not, and `build_column` counts rows that are in the table. So
+`assert_cohort_settled` has two arms: `CM_COHORT_WEEK_OPEN` (calendar: today < ship Monday + 2)
+and `CM_TUESDAY_LEG_MISSING` (data: Monday rows present, ZERO Tuesday rows). `updated_at` cannot
+answer the second — it is ingest metadata that is re-stamped wholesale, reading `2026-09-01` for
+all 2,545 rows on 09-01. Metadata is not an event date (standing rule).
+
+**4. 🔴 "SETTLED" IS NOT "FROZEN".** Kurt's rule — a ship week is fully fulfilled by Wednesday
+morning — MEASURED on `fulfilled_at` over seven cohorts 07-13…08-24 and it holds with room to
+spare: every cohort is a Monday bulk plus a Tuesday tail (39/48/90/119/108/84/45 boxes) and **not
+one records a single Wednesday fulfilment**. But 3 of 7 kept gaining afterwards, always on a
+LATER MONDAY — `2026-07-20` +7 (fulfilled 07-27), `2026-08-10` +3 and `2026-08-03` +1 (both
+08-17): boxes re-tagged into an old cohort. Wednesday means *safe to publish*, never *final*.
+
+**5. 🔴 `as_of` AND BASIS TRAVEL WITH THE NUMBER.** This is what makes finding 1 legible instead
+of alarming.
+- `Carrier Mix`: two grid rows, `Counts basis` and `Counts as_of`, painted per column. `as_of` is
+  stamped in `reconcile_ledger` at COMPUTE time, where the value is assigned — **never on the
+  frozen-unchanged path**, or a frozen cell would claim it was recomputed today. Entries frozen
+  before the field existed are read back from their own event log, never back-dated to now.
+- `TnT2`: a **NOTE on the column's header cell**, not a row — D13 forbids the refresh writer from
+  inserting rows (an insert shifts every rate formula below it) and it runs unattended daily. The
+  note carries basis, cohort size vs raw population, `as_of`, cohort age, settled state, and the
+  warning that the number drifts downward and is not comparable to a `fulfillments` count.
+
+**6. 🔴 THE SETTLE GATE REFUSES ON `Carrier Mix` AND ONLY STAMPS ON `TnT2` — DELIBERATE, NOT AN
+OVERSIGHT.** `TnT2`'s denominator is read live from Shopify BY TAG, and the tag is applied when
+the cohort is built, days before the first box is fulfilled; fulfilment settling cannot truncate
+it. Measured: its `2026-08-17` and `2026-08-24` columns equal today's net exactly despite both
+being painted mid-week. `Carrier Mix` is fulfilment-derived and is genuinely truncatable. Adding a
+refusal to `TnT2` would cost a day of the D15 daily self-heal to guard a truncation that basis
+cannot suffer. Do not "fix" this asymmetry.
+
+**7. 🔴 THE `Carrier Mix` GATE DROPS A COLUMN, IT DOES NOT KILL THE RUN.** Refusing the whole
+paint over the current week would block the settled weeks — the D35d failure repeated. The
+terminal table and the markdown report keep EVERY column (a human reads those in context beside
+the run notes); the TAB drops any unsettled cohort and names it in the note block as
+`CM_COLUMN_NOT_PAINTED`. A missing column with a reason is loud; a painted half-cohort is silent.
+The ceiling (`CM_COUNTS_ABOVE_RAW`) is the exception — an impossibility takes the whole paint
+down, because it means the ledger and the cohort have come apart.
+
+**8. What was NOT changed.** No old column was restated on either tab. `_SHIP_2026-08-24`'s
+`Carrier Mix` column is provably wrong (2,500 vs a true **2,545** — OnTrac 1,770 / FedEx Ground-HD
+679 / FedEx 2Day Air 71 / UPS 25 / Other 0, pending 0) and its correction is a **Kurt decision**,
+not part of this change; the ledger entry for it is not frozen, so a `--write-sheet` run repaints
+it correctly on its own. `reship_report_refresh.py` (another session's uncommitted work) and
+`_exc_state` were not touched.
+
+**Verification (2026-09-01).** Populations re-derived read-only against
+`C:\AppyHourData\shipping.db` via `connect_ro` and reproduce the reported table exactly (raw /
+reship / net for all seven cohorts). Shopify ceilings counted live via `ordersCount`; the
+07-27 cancellation dates pulled per-order to refute the drift explanation. `carrier_mix_pivot.py`
+run end-to-end with `--no-ledger` (write-free by argument parsing: ledger/report writes are gated
+on `not --no-ledger`, the sheet on `--write-sheet`) — the two provenance rows render and the
+backfilled `as_of` resolves for the three pre-existing frozen columns. `--self-test` **38/38**,
+including eight new D41 cases; `ruff --select F821,E9` and a full default `ruff check` clean. The
+paint gate evaluated over the live six-week window allows the five settled cohorts and refuses
+`_SHIP_2026-08-31` with `CM_COHORT_WEEK_OPEN` naming Wednesday 2026-09-02. `PivotAnalytics.gs`
+checked with `node --check` and its guards EXECUTED under node against stubbed Apps Script globals:
+the ceiling fires on 2,227-vs-2,226 naming both numbers, passes at exactly 2,226, and passes on all
+six other published columns. `main()`/`refreshCurrentColumn` were never run: they write live.

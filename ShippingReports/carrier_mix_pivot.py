@@ -140,6 +140,33 @@ SHEET_TITLE = "Carrier Mix — ship weeks as columns (D35)"
 # mirrors `_outputs/scripts/freshness_sweep.py`'s own 3-day rule for the same table.
 STALE_AFTER_DAYS = 3
 
+# ── D41: basis, as_of, and the settle clock ──────────────────────────────────
+# 🔴 THIS PIVOT'S COUNT BASIS IS `raw` — every `fulfillments` row carrying the tag, with NO
+# reship exclusion and NO date predicate. Measured 2026-09-01: the four older columns equal the
+# full raw tag count exactly (2225 / 2362 / 2365 / 2366), which is what rules out the
+# once-suspected weekday filter. Named in the tab so it is never inferred: the sibling `TnT2`
+# tab is `reship_excluded` and over Shopify ORDERS, so the two tabs' totals for one week are
+# SUPPOSED to differ and a reader comparing them needs both bases on screen.
+COUNTS_BASIS = "raw"
+
+# 🔴 Kurt's rule: a ship week is fully fulfilled by WEDNESDAY morning. MEASURED over the seven
+# cohorts 07-13…08-24 on `fulfilled_at` (2026-09-01): every cohort is a Monday bulk plus a
+# Tuesday tail and NOT ONE records a single Wednesday fulfilment.
+#
+#   cohort      Monday   Tuesday(+1)   later
+#   07-13         1987          39
+#   07-20         2025          48       +7 on 07-27
+#   07-27         2135          90
+#   08-03         2235         119       +1 on 08-17  (+7 pre-Monday)
+#   08-10         2252         108       +3 on 08-17  (+2 pre-Monday)
+#   08-17         2282          84
+#   08-24         2500          45
+#
+# 🔴 SETTLED IS NOT FROZEN. 3 of 7 kept gaining afterwards, always on a LATER MONDAY — boxes
+# re-tagged into an old cohort. The gate says "safe to publish", never "final"; `as_of` is what
+# makes a published number honest after it stops being true.
+COHORT_SETTLES_DAY_OFFSET = 2      # Wednesday = ship Monday + 2
+
 # ── Reproduce-gate anchors ───────────────────────────────────────────────────
 # 🔴 THE GATE IS KEYED TO LOGIC, NEVER TO A VOLUME. See D35d.
 #
@@ -196,6 +223,22 @@ ANCHOR_COUNTS = {ONTRAC: 1133, FEDEX_GND: 359, FEDEX_AIR: 117, UPS_GND: 244, OTH
 
 class CarrierMixError(RuntimeError):
     """Named so a refusal is greppable in a log."""
+
+
+class NotPublishable(CarrierMixError):
+    """Base: this column must not be PAINTED to the sheet. Catch THIS to mean 'refused'.
+
+    Deliberately the same name and the same shape as `ingest/slack_reship/sync.NotPublishable`
+    — one convention for "the number is not wrong, it is not ready", not two.
+    """
+
+
+class CohortNotSettled(NotPublishable):
+    """Refusal to paint a cohort whose fulfilment has not landed in the table we are reading."""
+
+
+class CountsAboveRaw(NotPublishable):
+    """Refusal to paint a cohort size larger than the tag population can possibly support."""
 
 
 # ── Cohort discovery ─────────────────────────────────────────────────────────
@@ -416,6 +459,75 @@ def assert_column(col, known_key=None):
     return notes
 
 
+# ── D41 publish gates (paint path only — see `write_sheet`) ──────────────────
+def fulfilment_legs(con, tag):
+    """``{fulfilled_at date: row count}`` for the cohort. The cohort's SHAPE, not its size."""
+    return {d: c for d, c in con.execute(
+        "SELECT substr(fulfilled_at,1,10) d, COUNT(*) FROM fulfillments "
+        "WHERE tags LIKE ? GROUP BY d", (f"%{tag}%",)) if d}
+
+
+def assert_cohort_settled(con, tag, today=None):
+    """🔴 D41 — DO NOT PAINT AN OPEN WEEK. Two arms, because the calendar alone is not enough.
+
+    THE DEFECT THIS EXISTS FOR. The `Carrier Mix` tab published **2,500** for
+    `_SHIP_2026-08-24` — neither the raw tag count (2,545) nor any reship-excluded net (2,503).
+    2,500 is the MONDAY-ONLY count: `fulfilled_at` on that cohort is 2,500 rows dated 08-24 and
+    45 dated 08-25, the Tuesday Dallas leg that lands EVERY week. Its four older columns equal
+    the full raw total, so this is not a definition problem — one column was painted over a
+    half-landed cohort and never restated, and this tab has no scheduled owner to restate it.
+
+    🔴 A WEEKDAY GATE ALONE WOULD NOT HAVE CAUGHT IT, and that is the whole lesson. The paint
+    ran at 2026-08-26 09:52 ET — a WEDNESDAY, two days after the Tuesday leg was fulfilled. The
+    week was closed; what was still open was OUR INGEST. `build_column` counts rows in
+    `fulfillments`, and those 45 rows were not in the table yet. So the second arm asks the
+    DATA, not the calendar: a cohort with Monday rows and ZERO Tuesday rows has not finished
+    arriving here, whatever day it is. (`updated_at` cannot answer this — it is an ingest
+    metadata column that gets re-stamped wholesale; on 2026-09-01 it read `2026-09-01` for all
+    2,545 rows. Distinguishing metadata from event dates is the standing rule.)
+
+    Scoped to the PAINT. `--no-ledger`/terminal rendering and the ledger's own self-healing are
+    untouched: the ledger reconciles and reports growth every run, which is how the tab would
+    heal if anything ran it. A durable tab that nobody re-checks is the surface that needs the
+    refusal.
+    """
+    monday = date.fromisoformat(tag.replace("_SHIP_", ""))
+    ready = monday + timedelta(days=COHORT_SETTLES_DAY_OFFSET)
+    d = today or date.today()
+    if d < ready:
+        raise CohortNotSettled(
+            f"CM_COHORT_WEEK_OPEN: {tag} has not finished fulfilling — it settles Wednesday "
+            f"{ready.isoformat()} and today is {d.isoformat()}. Painting now publishes a "
+            "partially-fulfilled cohort into a tab with no scheduled owner to restate it.")
+    legs = fulfilment_legs(con, tag)
+    mon_n = legs.get(monday.isoformat(), 0)
+    tue = (monday + timedelta(days=1)).isoformat()
+    if mon_n and not legs.get(tue, 0):
+        raise CohortNotSettled(
+            f"CM_TUESDAY_LEG_MISSING: {tag} has {mon_n} fulfilments dated {monday.isoformat()} "
+            f"and ZERO dated {tue}. The Tuesday Dallas leg lands every week (measured 39–119 "
+            "boxes across seven cohorts), so it has not reached this table yet — the calendar "
+            "week is closed but the ingest is not. This is the exact shape of the 2,500 that "
+            "was painted for _SHIP_2026-08-24 against a true 2,545.")
+
+
+def assert_counts_not_above_raw(col, entry):
+    """🔴 D41 CEILING — the painted lane counts can never sum above the raw tag population.
+
+    Every valid basis is a SUBSET of `tags LIKE '%_SHIP_<week>%'`, and `col["total"]` IS that
+    population, so `published > total` is impossible rather than merely odd — it means the
+    frozen distribution and the live cohort are not the same cohort. The sibling instance on the
+    `TnT2` tab is what motivates it: 2,227 published for `_SHIP_2026-07-27` against a raw
+    uncancelled tag population of 2,226, one box that cannot exist, live for nine weeks.
+    """
+    published = sum((entry.get("counts") or {}).values())
+    if published > col["total"]:
+        raise CountsAboveRaw(
+            f"CM_COUNTS_ABOVE_RAW: {col['tag']} painted lane counts sum to {published}, above "
+            f"the raw tag population {col['total']} by {published - col['total']}. Every valid "
+            "basis is a subset of that population, so this cannot be a real cohort size.")
+
+
 # ── Ledger (write-once per matured cell) ─────────────────────────────────────
 def _load_ledger():
     if LEDGER.exists():
@@ -472,6 +584,13 @@ def reconcile_ledger(led, col):
                           f"(+{col['total'] - sum(prev.values())}) — a later leg landed; "
                           f"by lane {moved}")
         e["counts"] = col["counts"]
+        # 🔴 D41 — as_of is stamped at COMPUTE time and travels with the number it describes.
+        # A cohort keeps accruing (and losing) rows for weeks, so any published count is only
+        # true as of an instant; without that instant recorded, every later recompute reads as
+        # a discrepancy instead of as the expected drift. Stamped where the value is ASSIGNED,
+        # never on the frozen-unchanged path — a frozen cell keeps the as_of it was frozen at.
+        e["counts_as_of"] = now
+        e["counts_basis"] = COUNTS_BASIS
         age = col["age_days"]
         if col["total"] == 0:
             events.append("counts: no labels yet — nothing to write")
@@ -554,6 +673,28 @@ def _cell_cost(e, lane):
     return f"{v['coverage']:.0%} inv · ${v['per_box']:.2f}/bx · ${v['spend']:,.0f} so far"
 
 
+def _cell_as_of(e):
+    """🔴 D41 — when this column's counts were last computed, and whether they are frozen.
+
+    Prefers the explicit `counts_as_of` stamp. Entries frozen BEFORE that field existed carry
+    the same fact inside their own event log (`counts: FROZEN at <ts>` / `counts: provisional`),
+    so it is read back from there rather than left blank or, worse, back-dated to now — reading
+    the ledger's own record is not restating anything.
+    """
+    if not e:
+        return "—"
+    ts = e.get("counts_as_of")
+    if not ts:
+        for entry in reversed(e.get("log") or []):
+            if any(ev.startswith("counts:") and "frozen, unchanged" not in ev
+                   for ev in entry.get("events", [])):
+                ts = entry.get("at")
+                break
+    if not ts:
+        return "unrecorded"
+    return f"{ts[:16].replace('T', ' ')}{' (frozen)' if e.get('counts_frozen') else ''}"
+
+
 def grid(cols, ledger):
     """The pivot as a plain 2-D grid of cell STRINGS — header row first, label in column 0.
 
@@ -583,6 +724,15 @@ def grid(cols, ledger):
             done = sum(1 for ln in lanes if e.get("cost_frozen", {}).get(ln))
             tot.append("—" if not done else f"partial ({done}/{len(lanes)} lanes)")
     rows.append([TOTAL + " $"] + tot)
+    # 🔴 D41 — BASIS and as_of ride on every column, in the tab, beside the numbers they
+    # describe. `Counts basis` is constant today and written anyway: the sibling `TnT2` tab
+    # publishes a DIFFERENT basis (`reship_excluded`, over Shopify orders) for the same weeks,
+    # so a reader comparing the two tabs needs both stated rather than inferred. `Counts as_of`
+    # is what turns a later recompute from "these numbers disagree" into "of course, that was
+    # nine weeks ago" — the confusion that cost a day on 2026-09-01.
+    rows.append(["Counts basis"] + [
+        (ledger["columns"].get(c["tag"], {}).get("counts_basis") or COUNTS_BASIS) for c in cols])
+    rows.append(["Counts as_of"] + [_cell_as_of(ledger["columns"].get(c["tag"], {})) for c in cols])
     return rows
 
 
@@ -616,8 +766,15 @@ def _foreign_tab(a1_value, tab_is_empty):
     return str(a1_value or "").strip() != SHEET_TITLE
 
 
-def write_sheet(cols, ledger, notes):
+def write_sheet(cols, ledger, notes, con):
     """Repaint the `Carrier Mix` tab from `grid()` — full repaint, stamp written LAST.
+
+    🔴 D41 — THE PAINT IS GATED PER COLUMN, and the gate is here rather than in `main` on
+    purpose: this is the only durable, unowned surface. The terminal table and the markdown
+    report keep every column (a human reads those in context, with the run notes beside them);
+    the TAB drops any cohort that has not settled and names it in the note block. Dropping a
+    column is loud — the reader sees the week is missing AND why — whereas painting it is
+    silent, which is how 2,500 sat there for a week.
 
     🔴 The LEDGER is the memory (write-once semantics live there and only there); this tab is a
     VIEW and is cleared + rewritten whole every run. Do NOT "fix" the repaint into per-cell
@@ -634,6 +791,27 @@ def write_sheet(cols, ledger, notes):
     # hold_write/tnt1 writers on this same SA), invisible to a static checker. Suppressed
     # narrowly, same pattern as `from lib import canon` above.
     from googleapiclient.discovery import build  # type: ignore[reportMissingImports]  # noqa: PLC0415
+
+    # 🔴 Gate BEFORE any credential or network call, so a refusal costs nothing and reads first.
+    paintable, refusals = [], []
+    for c in cols:
+        entry = ledger["columns"].get(c["tag"], {})
+        # The ceiling is an IMPOSSIBILITY, not a timing problem: it takes the whole paint down
+        # rather than quietly dropping one column, because a number that cannot exist means the
+        # ledger and the cohort have come apart and nothing on the tab is trustworthy.
+        assert_counts_not_above_raw(c, entry)
+        try:
+            assert_cohort_settled(con, c["tag"])
+        except CohortNotSettled as exc:
+            refusals.append(str(exc))
+            continue
+        paintable.append(c)
+    if not paintable:
+        raise CohortNotSettled(
+            "CM_NOTHING_PUBLISHABLE: every column in the window was refused — "
+            + " | ".join(refusals))
+    notes = list(notes) + [f"CM_COLUMN_NOT_PAINTED: {r}" for r in refusals]
+    cols = paintable
 
     try:
         creds = get_google_credentials(["https://www.googleapis.com/auth/spreadsheets"])
@@ -1091,6 +1269,104 @@ def self_test(con):
         return f"rendered {len(cols)} columns incl. unlabelled {empty}, no fabricated zeros"
     check("render survives a column with no labels yet", _render_with_empty_column)
 
+    # ── D41 publish gates: each must FIRE on the shape that actually burned us ────
+    # 🔴 Every case below is keyed to a MEASURED failure, not to a hypothetical. A gate proven
+    # only by its happy path is the D35d mistake one level down.
+    def _settle_fixture(legs, tag="_SHIP_2026-08-24"):
+        mem = sqlite3.connect(":memory:")
+        mem.execute("CREATE TABLE fulfillments (tags TEXT, fulfilled_at TEXT)")
+        mem.executemany("INSERT INTO fulfillments VALUES (?,?)",
+                        [(tag, f"{d}T09:00:00") for d, n in legs.items() for _ in range(n)])
+        return mem
+
+    def _open_week():
+        # Monday 08-24 itself: the calendar arm, before any data question is asked.
+        try:
+            assert_cohort_settled(_settle_fixture({"2026-08-24": 2500}),
+                                  "_SHIP_2026-08-24", date(2026, 8, 24))
+        except CohortNotSettled as exc:
+            assert "CM_COHORT_WEEK_OPEN" in str(exc), exc
+            return "Monday paint refused; names the Wednesday it settles"
+        raise AssertionError("painted an open week")
+    check("D41 settle: refuses a cohort whose week is still open", _open_week)
+
+    def _tuesday_missing():
+        # THE LIVE DEFECT. Wednesday 08-26, week closed, but only the Monday leg is in the
+        # table — exactly the state that published 2,500 against a true 2,545.
+        try:
+            assert_cohort_settled(_settle_fixture({"2026-08-24": 2500}),
+                                  "_SHIP_2026-08-24", date(2026, 8, 26))
+        except CohortNotSettled as exc:
+            assert "CM_TUESDAY_LEG_MISSING" in str(exc), exc
+            assert "2500" in str(exc), "refusal must name the count it refused"
+            return "Wed paint of a Monday-only cohort refused — the 2,500 case"
+        raise AssertionError("painted a cohort whose Tuesday leg had not landed")
+    check("D41 settle: refuses Monday-only data AFTER the week closed", _tuesday_missing)
+
+    def _settled_passes():
+        assert_cohort_settled(_settle_fixture({"2026-08-24": 2500, "2026-08-25": 45}),
+                              "_SHIP_2026-08-24", date(2026, 8, 26))
+        return "both legs present on a closed week → paints"
+    check("D41 settle: PASSES once the Tuesday leg has landed", _settled_passes)
+
+    def _settle_live():
+        # The seven measured cohorts must all be paintable today, or the gate refuses healthy
+        # weeks — the failure mode that made the OLD reproduce-gate unusable for two days.
+        bad = []
+        for t in ["_SHIP_2026-07-13", "_SHIP_2026-07-20", "_SHIP_2026-07-27", "_SHIP_2026-08-03",
+                  "_SHIP_2026-08-10", "_SHIP_2026-08-17", "_SHIP_2026-08-24"]:
+            try:
+                assert_cohort_settled(con, t)
+            except CohortNotSettled as exc:
+                bad.append(f"{t}: {str(exc).split(':')[0]}")
+        assert not bad, bad
+        return "7/7 measured cohorts paintable on live data"
+    check("D41 settle: does NOT refuse the seven healthy cohorts", _settle_live)
+
+    def _ceiling_fires():
+        col = {"tag": "_SHIP_2026-07-27", "total": 2226}
+        try:
+            assert_counts_not_above_raw(col, {"counts": {ONTRAC: 2227}})
+        except CountsAboveRaw as exc:
+            assert "2227" in str(exc) and "2226" in str(exc), "must name BOTH numbers"
+            return "refused 2227 against a raw population of 2226 — the TnT2 shape"
+        raise AssertionError("published a cohort size above its own tag population")
+    check("D41 ceiling: refuses a count above the raw tag population", _ceiling_fires)
+
+    def _ceiling_allows_equal():
+        assert_counts_not_above_raw({"tag": "_X", "total": 2226}, {"counts": {ONTRAC: 2226}})
+        assert_counts_not_above_raw({"tag": "_X", "total": 2226}, {})     # no ledger entry yet
+        return "equal passes; a missing ledger entry is not a violation"
+    check("D41 ceiling: passes at exactly the ceiling and on an empty entry", _ceiling_allows_equal)
+
+    def _as_of_stamped():
+        led: dict[str, Any] = {"columns": {}}
+        e = reconcile_ledger(led, dict(base, tag="_A", pending=1, age_days=2))
+        assert e.get("counts_as_of"), "counts written with no as_of stamp"
+        assert e.get("counts_basis") == COUNTS_BASIS, e.get("counts_basis")
+        first = e["counts_as_of"]
+        # A frozen cell must KEEP the as_of it was frozen at — re-stamping it would claim the
+        # number was recomputed today when it was not.
+        e["counts_frozen"] = True
+        reconcile_ledger(led, dict(base, tag="_A", pending=0, age_days=9))
+        assert led["columns"]["_A"]["counts_as_of"] == first, "frozen cell was re-stamped"
+        return f"stamped {first[:16]} at compute time; frozen cell keeps it"
+    check("D41 as_of: stamped on write, never re-stamped once frozen", _as_of_stamped)
+
+    def _as_of_rendered():
+        led: dict[str, Any] = {"columns": {}}
+        col = dict(base, tag="_R", pending=0, age_days=3)
+        reconcile_ledger(led, col)
+        g = grid([col], led)
+        labels = [r[0] for r in g]
+        assert "Counts basis" in labels and "Counts as_of" in labels, labels
+        assert g[labels.index("Counts basis")][1] == COUNTS_BASIS
+        assert "(frozen)" in g[labels.index("Counts as_of")][1], g[labels.index("Counts as_of")]
+        # A week with no ledger entry must not fabricate provenance for numbers it does not have.
+        assert _cell_as_of({}) == "—", _cell_as_of({})
+        return "basis + as_of ride on every column; no entry renders '—'"
+    check("D41 as_of: basis and as_of reach the painted grid", _as_of_rendered)
+
     for name, status, detail in results:
         print(f"  [{status}] {name}: {detail}")
     failed = [r for r in results if r[1] == "FAIL"]
@@ -1175,7 +1451,7 @@ def main(argv=None):
             print(f"  ledger → {LEDGER}\n  report → {REPORT}")
         if a.write_sheet:
             # After the ledger persists: the view must never be newer than the memory.
-            write_sheet(cols, led, notes)
+            write_sheet(cols, led, notes, con)
         return 0
     finally:
         con.close()

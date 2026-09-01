@@ -1246,6 +1246,15 @@ function paRefreshOne_(shipWeek, dry, budget, allowAppend) {
          '  notArrived ' + (total - arr) + '  lost ' + lost + '  active ' + active +
          '  lateRate ' + (lt / total * 100).toFixed(2) + '%');
 
+  // 🔴 D41 CEILING — the last assert before any write, and the cheapest one to have had. The
+  // `TnT2` tab has carried 2,227 for `_SHIP_2026-07-27` against a raw population of 2,226 since
+  // July; one comparison catches it, and nine weeks of arithmetic went into finding it by eye.
+  var raw = paAssertNotAboveRaw_(shipWeek, total);
+  paLog_('  basis ' + PA_DENOM_BASIS + ': ' + total + ' of raw uncancelled tag population ' + raw +
+         ' (' + (raw - total) + ' reship orders excluded) · fulfilment settled: ' +
+         (paDenomSettled_(shipWeek) ? 'yes' : 'NO (age ' + age + 'd < ' +
+          PA_DENOM_SETTLES_DAY_OFFSET + 'd)'));
+
   var ss = SpreadsheetApp.openById(PIVOT_SHEET_ID);
 
   // 🔴 MONOTONICITY GATE (D16, Kurt: the lost number "should go down, not up"). The invariant is on
@@ -1315,6 +1324,10 @@ function paRefreshOne_(shipWeek, dry, budget, allowAppend) {
     var vals = paValues_(recs, name);
     paReclaimDrained_(sh, col, vals, name);             // D37 — a bucket that drained OUT of the universe
     paWriteOwned_(sh, col, vals, dry);
+    // 🔴 D41 — basis + as_of onto the column's own header cell, every run. AFTER the values, so
+    // a note can never claim provenance for numbers that failed to land; a NOTE and not a row,
+    // because D13 forbids this writer from inserting rows.
+    paWriteProvenanceNote_(sh, col, shipWeek, total, raw, dry);
     if (!dry) {
       SpreadsheetApp.flush();
       paAssertColumns_(sh);                             // post-write: still exactly one, still headed
@@ -1517,6 +1530,126 @@ function paCohortAgeDays_(shipWeek) {
   var mon = shipWeek.replace('_SHIP_', '');
   var today = Utilities.formatDate(new Date(), PA_TZ, 'yyyy-MM-dd');
   return paDayDiff_(mon, today);
+}
+
+// ------------------------------------------- D41: BASIS, as_of, and the CEILING
+
+/**
+ * 🔴 D41 — WHAT `Total Shipments` ACTUALLY IS. Not a fulfilment count and not a box count:
+ * it is `recs.length` from `paFetchCohort_`, i.e. Shopify ORDERS matching
+ * `tag:'_SHIP_<wk>' -status:cancelled -tag:'Reship'`. Naming the basis matters because the
+ * obvious neighbouring number is a DIFFERENT population: `shipping.db.fulfillments` rows
+ * carrying the same tag. Measured 2026-09-01 the two differ on every cohort (07-27: 2,226
+ * orders vs 2,225 fulfilment rows), because a tagged uncancelled order whose label was never
+ * cut has no fulfilments row at all — the boxes this tab's own `never picked up by carrier`
+ * observation counts. Comparing a number on this tab against a `fulfillments` count is a
+ * cross-population comparison and will read as an off-by-one defect forever.
+ */
+var PA_DENOM_BASIS = 'reship_excluded';
+
+/**
+ * 🔴 D41 — Kurt's rule: a ship week is fully fulfilled by WEDNESDAY morning. MEASURED over the
+ * seven cohorts 07-13…08-24 (`fulfillments.fulfilled_at`, 2026-09-01) and it holds with room to
+ * spare: every cohort is Monday bulk + a Tuesday tail (39/48/90/119/108/84/45 boxes) and NOT ONE
+ * records a single Wednesday fulfilment.
+ *
+ * 🔴 SETTLED IS NOT FROZEN. 3 of the 7 kept gaining after their Wednesday, always on a LATER
+ * MONDAY — `_SHIP_2026-07-20` +7 (fulfilled 07-27), `_SHIP_2026-08-10` +3 and `_SHIP_2026-08-03`
+ * +1 (both fulfilled 08-17) — boxes re-tagged into an old cohort. So no moment makes the number
+ * final; `as_of` is what makes a frozen value honest.
+ *
+ * 🔴 IT IS NOT A REFUSAL ON THIS TAB, AND THAT IS DELIBERATE. This tab's denominator is read
+ * LIVE FROM SHOPIFY BY TAG, and the tag is applied when the cohort is built — days BEFORE the
+ * first box is fulfilled. So fulfilment settling cannot truncate it: measured, the `2026-08-17`
+ * and `2026-08-24` columns equal today's reship-excluded net EXACTLY (2324 / 2503) even though
+ * both were painted mid-week. The sibling `Carrier Mix` pivot IS fulfilment-derived, is
+ * therefore genuinely truncatable, and DOES refuse (`CM_COHORT_WEEK_OPEN`). Refusing here would
+ * cost a day of the D15 daily self-heal to guard a truncation this basis cannot suffer.
+ * What the rule earns on this tab is a STAMP: the column says whether its cohort had settled.
+ */
+var PA_DENOM_SETTLES_DAY_OFFSET = 2;   // Wednesday = ship Monday + 2
+
+function paDenomSettled_(shipWeek) {
+  return paCohortAgeDays_(shipWeek) >= PA_DENOM_SETTLES_DAY_OFFSET;
+}
+
+/**
+ * The RAW tag population — this tab's own denominator WITHOUT the reship exclusion.
+ * 🔴 The ceiling has to come from the SAME source and the SAME instant as the number it bounds.
+ * `fulfillments` is not that source (see PA_DENOM_BASIS), and yesterday's count is not that
+ * instant.
+ */
+function paRawCohortCount_(shipWeek) {
+  return ordersCount_("tag:'" + shipWeek + "' -status:cancelled");
+}
+
+/**
+ * 🔴 D41 CEILING — a published cohort size can NEVER exceed the raw tag population. Every valid
+ * basis is a SUBSET of `tag:'_SHIP_<wk>' -status:cancelled`; the reship exclusion only removes
+ * orders from it. So `total > raw` is impossible rather than merely surprising, and means the
+ * number did not come from this cohort's tags.
+ *
+ * 🔴 LIVE INSTANCE THIS CATCHES, and it is not hypothetical drift: the `TnT2` tab publishes
+ * **2,227** for `_SHIP_2026-07-27` against a raw uncancelled tag population of **2,226**. The
+ * obvious objection — "the ceiling shrank afterwards, so 2,227 was true when written" — was
+ * MEASURED and refuted: all 18 cancellations on that cohort landed 07-20…07-27, i.e. on or
+ * before the ship Monday and weeks before the column froze at age 10. The ceiling was 2,226 at
+ * every instant the column was writable. One box that cannot exist, nine weeks on the tab.
+ *
+ * By construction this can only fire when the two counts disagree about the same instant, which
+ * is exactly the anomaly worth refusing a write over. The message names both numbers so the next
+ * reader does not have to re-derive them.
+ */
+function paAssertNotAboveRaw_(shipWeek, total) {
+  var raw = paRawCohortCount_(shipWeek);
+  if (total > raw) {
+    throw new Error('PA_ASSERT_TOTAL_ABOVE_RAW: ' + shipWeek + ' Total Shipments ' + total +
+                    ' EXCEEDS the raw tag population ' + raw + ' by ' + (total - raw) +
+                    ". Every valid basis is a subset of tag:'" + shipWeek + "' -status:cancelled, " +
+                    'so this cannot be a real cohort size — the number did not come from this ' +
+                    "cohort's tags. (The ceiling is Shopify ORDERS, never a fulfillments count: " +
+                    'those are different populations — see PA_DENOM_BASIS.)');
+  }
+  return raw;
+}
+
+/**
+ * 🔴 D41 — THE PROVENANCE TRAVELS WITH THE NUMBER, as a NOTE on the column's header cell.
+ *
+ * A note, not a row: D13 forbids the refresh writer from inserting rows (an insert shifts every
+ * rate formula below it), and this writer runs unattended on a daily trigger. A header-cell note
+ * shifts nothing, is visible on hover over the column that owns it, and is rewritten wholesale
+ * each run so it can never go stale against the cells beneath it.
+ *
+ * WHY IT EXISTS. This tab's denominator DRIFTS DOWNWARD on every recompute — reship tags and
+ * cancellations keep accruing to a cohort for weeks — so `_SHIP_2026-07-13` published 2,025 and
+ * recomputes to 1,944 today. That drift is the data. The defect was publishing a number with no
+ * record of WHEN it was true or WHICH basis produced it, which makes every later recompute read
+ * as a discrepancy instead of as the expected drift. It cost a day on 2026-09-01.
+ */
+function paWriteProvenanceNote_(sheet, col, shipWeek, total, raw, dry) {
+  var settled = paDenomSettled_(shipWeek);
+  var mon = new Date(shipWeek.replace('_SHIP_', '') + 'T12:00:00Z');
+  var wed = Utilities.formatDate(
+    new Date(mon.getTime() + PA_DENOM_SETTLES_DAY_OFFSET * 86400000), PA_TZ, 'yyyy-MM-dd');
+  var note =
+    'Basis: ' + PA_DENOM_BASIS + " — Shopify orders tag:'" + shipWeek +
+      "' -status:cancelled -tag:'Reship'.\n" +
+    'Cohort size ' + total + ' of a raw uncancelled tag population of ' + raw +
+      ' (' + (raw - total) + ' reship orders excluded).\n' +
+    'as_of ' + Utilities.formatDate(new Date(), PA_TZ, 'yyyy-MM-dd HH:mm') + ' ET · cohort age ' +
+      paCohortAgeDays_(shipWeek) + 'd · fulfilment settled: ' +
+      (settled ? 'yes' : 'NO — settles Wed ' + wed) + '.\n' +
+    'This number DRIFTS DOWNWARD on recompute (reship tags and cancellations keep accruing for ' +
+    'weeks). A later recompute that differs is expected drift, not a discrepancy — read it ' +
+    'against the as_of above. NOT comparable to a shipping.db `fulfillments` row count: ' +
+    'different population.';
+  if (dry) {
+    paLog_('  [dry] ' + sheet.getName() + '!' + sheet.getRange(1, col).getA1Notation() +
+           ' NOTE = ' + note.replace(/\n/g, ' | '));
+  } else {
+    sheet.getRange(1, col).setNote(note);
+  }
 }
 
 // ------------------------------------------------- hub-row maintenance (D19, one-shot + verifier)
