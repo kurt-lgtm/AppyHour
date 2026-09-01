@@ -70,14 +70,31 @@ def build_rows(week: str, denom: int, n_tickets: int, start_date: str, end_date:
     return rows
 
 
+def _col_letter(i: int) -> str:
+    """1 -> A, 26 -> Z, 27 -> AA."""
+    s = ""
+    while i:
+        i, r = divmod(i - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
+def _a1_block(first_row: int, last_row: int, n_cols: int) -> str | None:
+    """Full-width A1 range for rows [first_row, last_row], or None if empty."""
+    if last_row < first_row:
+        return None
+    return f"A{first_row}:{_col_letter(max(n_cols, 1))}{last_row}"
+
+
+def _a1_cols_right_of(first_col: int, last_col: int, n_rows: int) -> str | None:
+    """A1 range for the columns right of the payload across rows 1..n_rows, or None."""
+    if last_col < first_col or n_rows < 1:
+        return None
+    return f"{_col_letter(first_col)}1:{_col_letter(last_col)}{n_rows}"
+
+
 def _style(ss, ws, n_cols: int, header_rows: list[int]):
-    def col(i):
-        s = ""
-        while i:
-            i, r = divmod(i - 1, 26)
-            s = chr(65 + r) + s
-        return s
-    last = col(max(n_cols, 1))
+    last = _col_letter(max(n_cols, 1))
     # title bold
     ws.format(f"A1:{last}1", {"textFormat": {"bold": True, "fontSize": 12}})
     ws.format("A2:%s3" % last, {"textFormat": {"italic": True, "fontSize": 9}})
@@ -103,14 +120,28 @@ def push(week: str, rows: list[list], vendor_hdr_row: int, box_hdr_row: int,
         if share_with:
             ss.share(share_with, perm_type="user", role="writer", notify=False)
     title = week  # one tab per week, named by the Monday
+    n_cols = max(len(r) for r in rows) if rows else 8
     try:
         ws = ss.worksheet(title)
-        ws.clear()
+        # grow only — never shrink, `update` fails on a grid smaller than the payload
+        if ws.row_count < len(rows) or ws.col_count < n_cols:
+            ws.resize(rows=max(ws.row_count, len(rows) + 5),
+                      cols=max(ws.col_count, n_cols))
     except gspread.WorksheetNotFound:
         ws = ss.add_worksheet(title=title, rows=max(len(rows) + 5, 30),
-                              cols=max((max(len(r) for r in rows) if rows else 8), 8))
+                              cols=max(n_cols, 8))
+    # 🔴 WRITE FIRST, THEN CLEAR THE RESIDUE — never `clear()` before `update()`.
+    # These are two separate API calls. Clearing first opens a window in which a refused
+    # `update` (quota, 5xx, a dropped connection) leaves the week's tab EMPTY: the previous
+    # good numbers are gone and nothing says so, on a re-run that was supposed to be
+    # idempotent. Writing first means the worst case is a tab carrying the NEW numbers plus a
+    # few stale trailing rows — visibly wrong instead of invisibly blank.
     ws.update(rows, value_input_option="USER_ENTERED")
-    n_cols = max(len(r) for r in rows) if rows else 8
+    residue = [r for r in (_a1_block(len(rows) + 1, ws.row_count, n_cols),
+                           _a1_cols_right_of(n_cols + 1, ws.col_count, len(rows)))
+               if r]
+    if residue:
+        ws.batch_clear(residue)
     _style(ss, ws, n_cols, header_rows=[5, vendor_hdr_row, box_hdr_row])
     # newest week first: move this tab to the front
     try:

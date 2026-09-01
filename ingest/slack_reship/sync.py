@@ -189,6 +189,71 @@ def auto_denom(week: str, db: Path) -> int:
     return int(n)
 
 
+# denominator floor as a FRACTION of the trailing median, not a magic constant. Measured
+# 2026-09-01 over ten weeks 06-29..08-31: 2026 … 2554, median ~2364. The two published
+# failures were denom 0 and denom 2 — three orders of magnitude clear of this bound, so it
+# separates "the cohort never landed" from "a light week" without ever needing a tuned number.
+MIN_DENOM_FRACTION_OF_MEDIAN = 0.5
+TRAILING_WEEKS_FOR_FLOOR = 8
+
+
+class ImplausibleDenominator(RuntimeError):
+    """Refusal to publish a rate whose denominator cannot be a real completed ship week."""
+
+
+def trailing_denoms(week: str, db: Path, n: int = TRAILING_WEEKS_FOR_FLOOR) -> list[int]:
+    """auto_denom for the `n` Mondays BEFORE `week`, in chronological order (zeros kept)."""
+    monday = datetime.strptime(week, "%Y-%m-%d")
+    return [auto_denom((monday - timedelta(days=7 * k)).strftime("%Y-%m-%d"), db)
+            for k in range(n, 0, -1)]
+
+
+def assert_denom_publishable(week: str, denom: int, db: Path) -> None:
+    """🔴 A ZERO IS A CLAIM — prove it before writing it to a sheet people read.
+
+    Published evidence this exists (measured 2026-09-01 off the live tabs): the `2026-07-20`
+    tab went out with **denom 0** and the `2026-08-10` tab with **denom 2**, against true
+    cohort sizes of 2082 and 2365. Both were written by an on-schedule Tuesday run, both
+    rendered every `% denom` cell meaningless (`—`, or a rate over 2), and NOTHING objected —
+    the tab is the deliverable, so a garbage tab is a silently wrong answer, not a failure.
+
+    Two failure shapes hide behind the same `0`, and they need different words:
+      * the LIKE join itself matched nothing (tag format moved, table empty/not synced) — the
+        control probe below fails too, and no week would pass;
+      * the join is sound and THIS cohort is absent (wrong Monday, or the week has not
+        shipped yet — the defect that produced both bad tabs).
+    Raises `ImplausibleDenominator` either way: refusing to publish is the loud failure.
+    """
+    con = connect_ro(db)
+    try:
+        (control,) = con.execute(
+            "SELECT COUNT(*) FROM fulfillments WHERE tags LIKE '%_SHIP_%'").fetchone()
+    finally:
+        con.close()
+    if not control:
+        raise ImplausibleDenominator(
+            f"denom {denom} for _SHIP_{week} is UNPROVEN: the control probe "
+            "(fulfillments with ANY _SHIP_ tag) also returned 0, so the join matched nothing "
+            "for every week — fulfillments is empty, unsynced, or the tag format changed. "
+            "Refusing to publish a rate over it.")
+    if denom <= 0:
+        raise ImplausibleDenominator(
+            f"denom 0 for _SHIP_{week} while the control probe found {control} tagged "
+            "fulfillments — the join works, this cohort is simply absent. Wrong Monday, or the "
+            "week has not shipped yet. Refusing to publish a 0-denominator rate.")
+    prior = [d for d in trailing_denoms(week, db) if d > 0]
+    if len(prior) >= 3:
+        prior.sort()
+        median = prior[len(prior) // 2]
+        floor = int(median * MIN_DENOM_FRACTION_OF_MEDIAN)
+        if denom < floor:
+            raise ImplausibleDenominator(
+                f"denom {denom} for _SHIP_{week} is below the floor {floor} "
+                f"({MIN_DENOM_FRACTION_OF_MEDIAN:.0%} of the trailing median {median} over "
+                f"{len(prior)} weeks) — a partially-ingested or in-progress cohort, not a "
+                "completed ship week. Refusing to publish rates against it.")
+
+
 # ---------- box-type enrichment (Shopify line-item SKUs) ---------------------
 def enrich_box_types(rows: list[dict]) -> None:
     """Mutate rows in place, adding row['box'] (Regular Box / Medium Tray /
@@ -287,7 +352,14 @@ def build_matrix(rows: list[dict], denom: int, issues: list[str]) -> str:
     return "\n".join(lines)
 
 
-def main() -> None:
+def main() -> str | None:
+    """Returns the pushed sheet URL on the `--push` path, else None.
+
+    🔴 The return value is the CALLER'S PROOF OF PUBLICATION. `weekly_task.py` beats
+    `slack-reship` only when this returns a URL, so the heartbeat cannot mark a run healthy
+    that produced no tab (HEARTBEAT_RULES: a beat on a failed run is worse than no beat).
+    Do not make this return early on the push path without also returning the URL.
+    """
     ap = argparse.ArgumentParser()
     ap.add_argument("--week", required=True, help="ship-week Monday YYYY-MM-DD")
     ap.add_argument("--denom", type=int, default=None,
@@ -312,6 +384,13 @@ def main() -> None:
     rows = enrich_and_filter(recs, start_date, end_date, db_path())
     denom = args.denom if args.denom is not None else auto_denom(args.week, db_path())
 
+    # 🔴 Gate BEFORE any Shopify call or sheet write. Scoped to the publishing path on purpose:
+    # `--report` alone prints to stdout where a human/agent reads the number in context, while
+    # `--push` writes a durable tab nobody re-checks. `--history-sheet` keeps its own
+    # VM_ZERO_DENOM refusal in matrix_history (D39 rule 3) — this does not duplicate it.
+    if args.push:
+        assert_denom_publishable(args.week, denom, db_path())
+
     # box types needed if the flag is set OR we're pushing to the sheet
     if args.box_types or args.push:
         enrich_box_types(rows)
@@ -328,6 +407,7 @@ def main() -> None:
         for r in box_grid:
             print("| " + " | ".join(str(c) for c in r) + " |")
 
+    pushed_url: str | None = None
     if args.push:
         from ingest.slack_reship.sheet_push import build_rows, push
         vmatrix = matrix_grid(rows, denom, issues)
@@ -337,8 +417,8 @@ def main() -> None:
         # header rows (1-indexed) for styling: vendor block hdr, box block hdr
         vendor_hdr = 6                 # title(1) sub(2) note(3) blank(4) "CARRIER"(5) -> matrix hdr(6)
         box_hdr = 8 + len(vmatrix)     # matrix rows 6..5+N, blank, "BOX TYPE" label, then box hdr
-        url = push(args.week, sheet_rows, vendor_hdr, box_hdr, sheet_id=args.sheet_id)
-        print(f"\nPUSHED: {url}")
+        pushed_url = push(args.week, sheet_rows, vendor_hdr, box_hdr, sheet_id=args.sheet_id)
+        print(f"\nPUSHED: {pushed_url}")
 
     if args.history_sheet:
         # Durable HISTORY for the DM (D39). The DM still posts every week — this is the record it
@@ -365,6 +445,7 @@ def main() -> None:
     # routine actually runs (`--report --history-sheet`, no `--push`). Verified live 2026-08-31.
     if args.report and not args.push:
         beat("vendor-matrix")
+    return pushed_url
 
 
 if __name__ == "__main__":

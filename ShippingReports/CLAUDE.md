@@ -30,6 +30,16 @@ Analytics pipeline for subscription box shipping. Ingests carrier invoices (OnTr
 > row, never merged into Ground-HD; OnTrac/LaserShip are ONE carrier via `canon.normalize_carrier`.
 > Counts and costs freeze on **two independent clocks**. ⚠️ **UNOWNED — no scheduled owner yet** (D35).
 >
+> 🔴 **Weekly reship report (one tab per week)** = `ingest/slack_reship/weekly_task.py` →
+> `sync.py --report --push` → `sheet_push.py`, owner: the `weekly-reship-report` routine, beat
+> `slack-reship` (10d). Rules SSOT = [`RESHIP_REPORT_RULES.md`](RESHIP_REPORT_RULES.md) **D40**;
+> read it first. 🔴 It reports the **last COMPLETE** Mon–Sun week, never the week in progress —
+> reporting the current week put **denom 0** on the `2026-07-20` tab and **denom 2** on `2026-08-10`
+> (true cohorts 2082 / 2365). 🔴 `assert_denom_publishable()` refuses the write on a zero or
+> below-floor denominator and PROVES which zero it is with a control probe; never route around it
+> with `--denom` or a different `--week`. 🔴 The `slack-reship` beat fires only when `push()`
+> returned a URL. 🔴 Its inputs are `fulfillments` ONLY — not `shipments`, not `delivery_status`.
+>
 > 🔴 **`Vendor Matrix` tab** = the durable HISTORY of the weekly carrier×issue matrix —
 > `AppyHour/ingest/slack_reship/matrix_history.py`, written by
 > `sync.py --report --history-sheet` (owner: the `weekly-shipping-vendor-matrix` routine, beat

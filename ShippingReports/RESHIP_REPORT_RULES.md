@@ -3407,3 +3407,83 @@ count 23 → 24: one tab added, none touched.
 **Provenance caveat, stated in the tab itself:** the nine backfilled weeks were RE-DERIVED from the
 archived Slack fixtures by the same tool, not transcribed from the DMs sent at the time, so a cell
 may differ from that week's DM if a `fulfillments` carrier join has changed since.
+
+---
+
+### D40 — `weekly-reship-report`: IT REPORTED THE WEEK IN PROGRESS, AND PUBLISHED denom 0 AND denom 2 (2026-09-01)
+
+**Scope.** The weekly one-tab-per-week reship report: routine SKILL at
+`~/.claude/scheduled-tasks/weekly-reship-report/SKILL.md` → `ingest/slack_reship/weekly_task.py`
+→ `sync.py --report --push` → `sheet_push.py`, writing a Monday-named tab on the reship sheet
+(`1JgyYknIxJ3-UJxJOX-y78rf8cPNhT0uPy5FUw2zO9wE`, id cached in
+`_outputs/cache/reship_sheet_id.txt`). Beat `slack-reship`, 10d in `automation_health.EXPECTED`.
+Distinct from D39 (`Vendor Matrix`, the history tab) and from the Apps Script report above; the two
+Slack-sourced routines share `sync.main()` and must not be conflated.
+
+**The observation — the numbers were wrong on the sheet, not merely missing.** `weekly_task`
+computed `current_week_monday()`, the Monday of the CURRENT week, and the routine fires Tuesday
+around noon. So it asked how a week that began ~28 hours earlier had gone: the Mon–Sun ticket
+window was ~1.5 of 7 days old, and the `_SHIP_<Monday>` cohort had barely begun to fulfil. Two tabs
+went out and are still on the sheet:
+
+| tab | generated | denom published | true cohort (recomputed 2026-09-01) | tickets |
+|---|---|---|---|---|
+| `2026-07-20` | Tue 07-21 12:11 | **0** | 2082 | 5 |
+| `2026-08-10` | Tue 08-11 12:10 | **2** | 2365 | 1 |
+
+Every `% denom` cell on `2026-07-20` is `—`; on `2026-08-10` the rates are computed over 2. The
+tabs that look right — `2026-06-29` (denom 2554), `2026-07-13` (1987 vs 2026), `2026-08-24` (2545)
+— are precisely the ones whose run landed LATE (Wed/Fri catch-ups after the token bug), so being
+late was accidentally the only thing producing a correct number. `fulfillments` was NOT stale: the
+recomputed denominators for 08-24 and 06-29 match their tabs exactly.
+
+1. 🔴 **Report the LAST COMPLETE week, never the week in progress.** `target_week_monday()` =
+   `today − (weekday + 7) days`. Day-agnostic on purpose: `today − 8 days` assumes a Tuesday fire
+   and silently reports the wrong window on a catch-up, which is common here. Same formula and same
+   reason as the sibling `weekly-shipping-vendor-matrix` routine — they read the same Slack channel
+   and the same denominator, so they must not disagree about which week they mean.
+2. 🔴 **A zero is a claim: `assert_denom_publishable()` refuses the write, and PROVES which zero it
+   is.** `denom == 0` has two causes that render identically downstream, so the gate runs a control
+   probe (`fulfillments` carrying ANY `_SHIP_` tag) before it says anything: control 0 → the join
+   itself matched nothing (unsynced table, tag format moved); control > 0 → the join works and this
+   cohort is simply absent (wrong Monday, or the week has not shipped). A third arm catches the
+   partial cohort: below `0.5 ×` the trailing-8-week median. **The floor is a fraction of a measured
+   median, never a tuned constant** — the two real failures were 0 and 2 against a median ~2364, so
+   no constant needs defending. Scoped to `--push`: `--report` alone prints to stdout where a reader
+   sees the number in context; a tab is durable and nobody re-checks it. D39's `VM_ZERO_DENOM`
+   guards the ledger path independently — do not merge them.
+3. 🔴 **Do NOT route around a refusal.** Not with `--denom`, not by choosing a different `--week`,
+   not by re-running. The two bad tabs ARE what publishing past this gate looks like.
+4. 🔴 **The beat is gated on the PUBLISHED TAB, not on reaching the end of `main()`.**
+   `sync.main()` returns the sheet URL and `weekly_task` beats `slack-reship` only if it is truthy;
+   otherwise it exits rc=3 and writes no beat. This routine is exception-only in Slack, so the beat
+   is the sole evidence it still runs — a beat on a run that published nothing forges exactly the
+   signal the dead-man switch withholds. Never move the `beat()` above the URL check.
+5. 🔴 **Write the tab BEFORE clearing it — never `clear()` then `update()`.** They are two API
+   calls; clearing first opens a window where a refused `update` (quota, 5xx, dropped connection)
+   leaves the week's tab EMPTY, the previous good numbers gone and nothing saying so, on a re-run
+   that was supposed to be idempotent. `push()` now updates first and then `batch_clear`s only the
+   residue below and right of the payload, growing (never shrinking) the grid first. Worst case is
+   new numbers plus a few stale trailing rows — visibly wrong beats invisibly blank.
+6. **What this report does NOT touch, so do not chase these when it looks wrong:** `delivery_status`
+   and `shipments` are not in its path at all. The carrier comes from `fulfillments.tracking_company`
+   via `CARRIER_CANON`, and the denominator from `fulfillments.tags LIKE '%_SHIP_<Monday>%'`. So the
+   `shipments.hub` dirt (`''`, `HQ_IGNORE`, `Unknown`, `<hub>AHB` suffixes) and the 08-25→09-01
+   `delivery_status` outage cannot have moved a single number on any tab. `unknown` in the carrier
+   column means the fulfillment row had no `tracking_company` **or** the ticket carried no order
+   number; `unjoined` means no `fulfillments` row matched — both are rendered as their own vendor
+   rows rather than being folded into a real carrier, and that must stay true.
+7. **It runs from the DEV tree** (`Claude Projects/AppyHour`), pinned by the `cd` in the routine's
+   one invocation shape. `C:\AppyHourProd\AppyHour\ingest\slack_reship\` holds a stale copy (last
+   touched 08-29, i.e. predating even the bootstrap fix) that nothing executes. Do not repoint the
+   routine at prod, and do not treat the prod copy as the authority.
+
+**Verification (2026-09-01).** Gate replayed read-only against the live DB over both real failures
+and every good week: `2026-07-20`/denom 0 REFUSED (control probe found 121,324 tagged fulfillments,
+so the join was proven sound and the cohort proven absent), `2026-08-10`/denom 2 REFUSED (floor 1193
+= 50% of trailing median 2386), and 1987 / 2545 / 2554 / 2471 all ALLOWED. Beat gating exercised
+with `sync.main` and `heartbeat.beat` both stubbed — URL → `rc=0` + one beat; `None` and `""` →
+`rc=3` + no beat; gate refusal → exception + no beat — with the real `C:\AppyHourData\heartbeats.json`
+confirmed byte-identical before and after. Push ordering exercised against a fake worksheet: no
+`clear()` call at all, `update` strictly before `batch_clear`, and a forced `update` failure left the
+prior tab contents intact while the error propagated. `main()` was never run: it writes a live sheet.
