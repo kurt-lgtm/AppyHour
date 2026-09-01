@@ -3475,6 +3475,48 @@ recomputed denominators for 08-24 and 06-29 match their tabs exactly.
    that was supposed to be idempotent. `push()` now updates first and then `batch_clear`s only the
    residue below and right of the payload, growing (never shrinking) the grid first. Worst case is
    new numbers plus a few stale trailing rows — visibly wrong beats invisibly blank.
+5b. 🔴 **TWO WINDOWS, TWO GATES — the denominator and the numerator settle at different times.**
+   The DENOMINATOR is cohort fulfilment and settles **Wednesday morning** of the ship week
+   (`assert_denom_ready`). The NUMERATOR is Slack ticket receipt date and is genuinely
+   **Mon–Sun** (`assert_week_complete`). Publishing on Wednesday against a Mon–Sun ticket window
+   would undercount tickets while the denominator was right — the denom-0 bug mirrored. Both
+   must hold. **The Wednesday gate provably never binds on the publish path** (measured: on Wed
+   and Sun the ticket gate still refuses; the first date both pass is the following Monday), so
+   the conjunction reduces to the ticket window. It is asserted anyway so a future
+   denominator-only consumer inherits the true rule instead of re-deriving it wrongly.
+   🔴 **"Settled" ≠ "final."** Measured over seven cohorts (07-13…08-24): every cohort is
+   ≥99.66% fulfilled by end of Wednesday and **no cohort records a single Wednesday
+   fulfilment** — it all lands Mon (95.9–98.2%) + Tue. But 3 of 7 kept gaining afterwards:
+   `2026-07-20` +7 on the following Monday, `2026-08-10` +3 seven days later, `2026-08-03` +1
+   fourteen days later (≤0.34% each, all on a later Monday — boxes re-tagged into an old
+   cohort). So a weekday rule of any kind is wrong, and no moment makes the number frozen.
+5c. 🔴 **Every frozen number carries `as_of` and its BASIS.** Reship tags keep accruing to a
+   cohort for weeks, so a reship-excluded denominator **drifts downward on every recompute** —
+   `_SHIP_2026-07-13` nets 1943 today against ~2025 when its column was painted. That drift is
+   the data, not a defect; the defect is publishing a number with no record of when it was
+   true, which makes every later recompute look like a discrepancy. `build_rows` writes
+   `Denominator basis: <raw|reship_excluded> (N reship fulfillments removed) | as_of <ts>` into
+   the tab, beside the number it describes.
+5d. 🔴 **Ceiling: a published cohort size can NEVER exceed the raw tag population**
+   (`assert_denom_not_above_raw`). Every valid basis is a subset of `tags LIKE '%_SHIP_<week>%'`
+   — raw IS that population, net removes rows from it — so `denom > raw` is impossible, not
+   merely odd, and means the number came from somewhere else. Live instance this catches: the
+   `TnT2` tab publishes **2,227** for `_SHIP_2026-07-27` against a raw total of **2,225**. Nine
+   weeks of arithmetic went into finding that; one comparison would have caught it on day one.
+   The refusal names both numbers.
+5e. **The reship predicate is MEASURED, not invented.** Full-table scan 2026-09-01: every reship
+   marker on `fulfillments.tags` is a token beginning `Reship` (24 variants — `Reship`,
+   `Reship - Arrived Warm`, `Reship - Delayed in Transit`, …) plus one `JB Reship`. Hence
+   `UPPER(tags) LIKE '%RESHIP%'`. Do NOT narrow it to an enumerated list (CS hand-types the
+   tail) and do NOT substitute `_RESHIP_FAILED_<carrier>`, which marks a FAILED reship — a
+   strict subset. Gorgias tag counts remain INVALID for reship attribution (rule 81603).
+5f. **`TnT2` = raw − reships, and has no date predicate.** Measured: its `2026-08-17` and
+   `2026-08-24` columns equal the reship-excluded net **exactly** (2324, 2503); older columns
+   drift a few because reship tags accrued after they were painted. The once-suspected
+   "Monday-only filter / 742 missing boxes" does not exist — `Carrier Mix`'s four older columns
+   equal the FULL raw count (2225/2362/2365/2366), impossible under a weekday predicate. The
+   `42 vs 45` coincidence that made that story convincing: 42 is `2026-08-24`'s reship count, 45
+   is its Tuesday-leg count. Unrelated quantities that landed one apart.
 6. **What this report does NOT touch, so do not chase these when it looks wrong:** `delivery_status`
    and `shipments` are not in its path at all. The carrier comes from `fulfillments.tracking_company`
    via `CARRIER_CANON`, and the denominator from `fulfillments.tags LIKE '%_SHIP_<Monday>%'`. So the

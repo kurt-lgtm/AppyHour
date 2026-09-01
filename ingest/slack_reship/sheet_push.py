@@ -55,7 +55,8 @@ BOX_LABEL = "BOX TYPE OF RESHIPPED ORDERS  (MCUST=Medium Tray, LCUST=Large Tray,
 
 def build_rows(week: str, denom: int, n_tickets: int, start_date: str, end_date: str,
                source: str, vendor_matrix: list[list], box_summary: list[list],
-               note: str | None = None) -> list[list]:
+               note: str | None = None, denom_basis: str | None = None,
+               as_of: str | None = None, reships_removed: int | None = None) -> list[list]:
     """Assemble the tab's 2D rows: title + vendor×issue block + box-type block.
 
     `note` adds one italic line under the subtitle. Its job is RESTATEMENT PROVENANCE: when a
@@ -70,6 +71,17 @@ def build_rows(week: str, denom: int, n_tickets: int, start_date: str, end_date:
          f"{n_tickets} shipping tickets  |  source {source}  |  "
          f"generated {datetime.now():%Y-%m-%d %H:%M}"],
     ]
+    if denom_basis:
+        # 🔴 The denominator's PROVENANCE lives beside the denominator, in the tab. A cohort
+        # keeps accruing reship tags after publication, so a reship-excluded figure is only
+        # true as of an instant; a cell carrying its basis and its as_of is re-derivable, and a
+        # later recompute that differs reads as expected drift rather than as an error.
+        stamp = f"Denominator basis: {denom_basis}"
+        if reships_removed is not None:
+            stamp += f" ({reships_removed} reship fulfillments removed)"
+        if as_of:
+            stamp += f"  |  as_of {as_of}"
+        rows.append([stamp])
     if note:
         rows.append([note])
     rows += [

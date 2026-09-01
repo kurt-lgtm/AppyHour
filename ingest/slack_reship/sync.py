@@ -197,6 +197,40 @@ MIN_DENOM_FRACTION_OF_MEDIAN = 0.5
 TRAILING_WEEKS_FOR_FLOOR = 8
 
 
+# 🔴 THE RESHIP PREDICATE IS MEASURED, NOT INVENTED. Every reship marker observed on
+# `fulfillments.tags` (2026-09-01, full-table scan) is a comma-separated token beginning
+# "Reship" — "Reship", "Reship - Arrived Warm", "Reship - Delayed in Transit", … 24 variants,
+# plus one "JB Reship". A substring test on RESHIP therefore captures the whole population and
+# nothing else; there is no reship that a `_RESHIP_FAILED_<carrier>` tag alone would find (that
+# tag marks a FAILED reship, a strict subset). Do NOT narrow this to an enumerated list — the
+# tail is hand-typed by CS and grows.
+RESHIP_TAG_PREDICATE = "UPPER(tags) LIKE '%RESHIP%'"
+
+DENOM_BASIS_RAW = "raw"
+DENOM_BASIS_NET = "reship_excluded"
+
+
+def reship_excluded_denom(week: str, db: Path) -> tuple[int, int]:
+    """(net, reships_removed) for the cohort — the raw tag count minus reship fulfilments.
+
+    🔴 THIS NUMBER IS NOT STABLE OVER TIME, and that is a property of the data, not a defect.
+    Reship tags keep landing on a cohort for weeks after it ships, so the net shrinks whenever
+    you recompute it: `_SHIP_2026-07-13` nets 1943 today against ~2025 when its column was
+    painted. Any consumer that freezes a net denominator MUST stamp `as_of` beside it
+    (`build_rows(..., as_of=...)`), or a later recompute reads as a discrepancy rather than as
+    the expected drift — which is exactly the confusion that cost a day on 2026-09-01.
+    """
+    con = connect_ro(db)
+    try:
+        row = con.execute(
+            f"SELECT COUNT(*), SUM(CASE WHEN {RESHIP_TAG_PREDICATE} THEN 1 ELSE 0 END) "
+            "FROM fulfillments WHERE tags LIKE ?", (f"%_SHIP_{week}%",)).fetchone()
+    finally:
+        con.close()
+    raw, reships = int(row[0]), int(row[1] or 0)
+    return raw - reships, reships
+
+
 class NotPublishable(RuntimeError):
     """Base: this week must not be written to the sheet. Catch THIS to mean 'refused'."""
 
@@ -207,6 +241,77 @@ class ImplausibleDenominator(NotPublishable):
 
 class IncompleteWeek(NotPublishable):
     """Refusal to publish a Mon–Sun window that has not closed yet."""
+
+
+class DenominatorNotSettled(NotPublishable):
+    """Refusal to publish before the cohort's fulfilment has settled (Wed AM of the ship week)."""
+
+
+class DenominatorAboveRaw(NotPublishable):
+    """Refusal to publish a cohort size larger than the tag population can possibly support."""
+
+
+# Kurt 2026-09-01: a ship week is fully fulfilled by Wednesday morning. MEASURED over seven
+# cohorts 07-13..08-24 and it holds with room to spare — every cohort is ≥99.66% fulfilled by
+# end of Wednesday, and in fact NO cohort records a single Wednesday fulfilment: the whole
+# cohort lands Monday+Tuesday (95.9–98.2% Mon, the rest Tue).
+DENOM_SETTLES_DAY_OFFSET = 2   # Wednesday = Monday + 2
+
+
+def assert_denom_ready(week: str, today: date | None = None) -> None:
+    """The DENOMINATOR window: has the cohort finished fulfilling?
+
+    🔴 Deliberately SEPARATE from `assert_week_complete`, which guards the NUMERATOR (Slack
+    receipt date, genuinely Mon–Sun). They answer different questions about different data and
+    must not share a gate — collapsing them is how you get a run that is right about one half
+    and silently truncated on the other.
+
+    🔴 In practice this gate NEVER BINDS on the publish path, and that is the correct outcome
+    rather than dead code: publishing requires BOTH windows, and the ticket window does not
+    close until the following Monday — always ≥4 days after this one opens. So the conjunction
+    reduces to `assert_week_complete`. It is asserted anyway because it is the condition that
+    is actually true of the DATA, so a future denominator-only consumer (a cohort-size readout,
+    a mid-week sanity check) inherits the right rule instead of re-deriving it wrongly.
+
+    🔴 It does NOT mean the denominator is FINAL. 3 of 7 measured cohorts kept gaining after
+    Wednesday — `_SHIP_2026-07-20` +7 on the following Monday, `_SHIP_2026-08-10` +3 seven days
+    later, `_SHIP_2026-08-03` +1 fourteen days later (≤0.34% each, all landing on a later
+    Monday, i.e. boxes re-tagged into an old cohort). "Settled" means safe to publish, not
+    frozen; `as_of` is what makes the frozen value honest.
+    """
+    monday = datetime.strptime(week, "%Y-%m-%d").date()
+    ready = monday + timedelta(days=DENOM_SETTLES_DAY_OFFSET)
+    d = today or date.today()
+    if d < ready:
+        raise DenominatorNotSettled(
+            f"cohort _SHIP_{week} has not finished fulfilling — it settles Wednesday "
+            f"{ready.isoformat()} and today is {d.isoformat()}. Publishing now would put a "
+            "partially-fulfilled cohort size in the denominator.")
+
+
+def assert_denom_not_above_raw(week: str, denom: int, db: Path) -> None:
+    """🔴 A published cohort size can NEVER exceed the raw tag population. Not odd — impossible.
+
+    Every candidate basis is a subset of `tags LIKE '%_SHIP_<week>%'`: the raw count IS that
+    population, and the reship-excluded net removes rows from it. So `denom > raw` cannot be
+    produced by any legitimate derivation and means the number came from somewhere else.
+
+    This is the check that would have caught the live defect immediately instead of after nine
+    weeks of arithmetic: the `TnT2` tab publishes **2,227** for `_SHIP_2026-07-27` against a raw
+    total of **2,225**. Two boxes that cannot exist. Message names both numbers so the next
+    person does not have to re-derive them.
+    """
+    con = connect_ro(db)
+    try:
+        (raw,) = con.execute("SELECT COUNT(*) FROM fulfillments WHERE tags LIKE ?",
+                             (f"%_SHIP_{week}%",)).fetchone()
+    finally:
+        con.close()
+    if denom > raw:
+        raise DenominatorAboveRaw(
+            f"denominator {denom} for _SHIP_{week} EXCEEDS the raw tag population {raw} by "
+            f"{denom - raw}. Every valid basis is a subset of that population, so this cannot "
+            "be a real cohort size — the number did not come from this cohort's tags.")
 
 
 def assert_week_complete(week: str, today: date | None = None) -> None:
@@ -404,6 +509,12 @@ def main() -> str | None:
     ap.add_argument("--push", action="store_true",
                     help="write/refresh this week's tab in the reship Google Sheet")
     ap.add_argument("--sheet-id", default=None, help="override cached sheet id")
+    ap.add_argument("--denom-basis", choices=[DENOM_BASIS_RAW, DENOM_BASIS_NET],
+                    default=DENOM_BASIS_RAW,
+                    help="how the cohort size is derived. 'raw' = every fulfillment tagged "
+                         "_SHIP_<week> (stable, re-derivable). 'reship_excluded' = that minus "
+                         "reship fulfillments (matches the TnT2 tab, but DRIFTS DOWNWARD over "
+                         "time as reship tags accrue — always published with an as_of stamp).")
     ap.add_argument("--note", default=None,
                     help="one provenance line written under the tab's subtitle. Use it whenever "
                          "republishing a week whose numbers CHANGE — someone may have read the "
@@ -418,15 +529,31 @@ def main() -> str | None:
     recs = (fetch_dump(Path(args.dump_file)) if args.dump_file
             else fetch_slack_live(oldest, latest))
     rows = enrich_and_filter(recs, start_date, end_date, db_path())
-    denom = args.denom if args.denom is not None else auto_denom(args.week, db_path())
+    reships_removed = None
+    if args.denom is not None:
+        denom, basis = args.denom, "explicit --denom"
+    elif args.denom_basis == DENOM_BASIS_NET:
+        denom, reships_removed = reship_excluded_denom(args.week, db_path())
+        basis = DENOM_BASIS_NET
+    else:
+        denom, basis = auto_denom(args.week, db_path()), DENOM_BASIS_RAW
+    # 🔴 as_of is captured at COMPUTE time, not at write time, and travels with the number.
+    # A cohort keeps accruing reship tags for weeks, so any frozen denominator is only true as
+    # of an instant; without that instant recorded, every later recompute reads as a
+    # discrepancy instead of as expected drift.
+    as_of = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     # 🔴 Gate BEFORE any Shopify call or sheet write. Scoped to the publishing path on purpose:
     # `--report` alone prints to stdout where a human/agent reads the number in context, while
     # `--push` writes a durable tab nobody re-checks. `--history-sheet` keeps its own
     # VM_ZERO_DENOM refusal in matrix_history (D39 rule 3) — this does not duplicate it.
     if args.push:
-        assert_week_complete(args.week)          # numerator: is the window closed?
-        assert_denom_publishable(args.week, denom, db_path())   # denominator: is it real?
+        # Four independent questions, four refusals. Ordered cheapest-and-most-fundamental
+        # first so the message a human sees names the root problem, not a downstream symptom.
+        assert_week_complete(args.week)                          # numerator window closed?
+        assert_denom_ready(args.week)                            # cohort finished fulfilling?
+        assert_denom_not_above_raw(args.week, denom, db_path())  # ceiling: possible at all?
+        assert_denom_publishable(args.week, denom, db_path())    # floor: plausibly a real week?
 
     # box types needed if the flag is set OR we're pushing to the sheet
     if args.box_types or args.push:
@@ -450,7 +577,9 @@ def main() -> str | None:
         vmatrix = matrix_grid(rows, denom, issues)
         bgrid, _ = box_summary_grid(rows, denom)
         sheet_rows = build_rows(args.week, denom, len(rows), start_date, end_date,
-                                src, vmatrix, bgrid, note=args.note)
+                                src, vmatrix, bgrid, note=args.note,
+                                denom_basis=basis, as_of=as_of,
+                                reships_removed=reships_removed)
         # header rows are derived from the grid inside push() — never hand-counted here
         pushed_url = push(args.week, sheet_rows, sheet_id=args.sheet_id)
         print(f"\nPUSHED: {pushed_url}")
