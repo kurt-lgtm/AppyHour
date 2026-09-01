@@ -74,7 +74,12 @@ REPEAT_EXEMPT = MINI_JAMS | CURATION_FIXED
 #   MT-BSS    "don't use MT-BSS anymore"
 #   CH-MAFT   "we don't give them MAFT" -- also ASSIGNMENT_EXCLUDE in AppyHour/CLAUDE.md
 #   AC-RBOL   "that's also something we can't give"
-NO_SUBSTITUTE = {"AC-RMC", "MT-IBRES", "MT-BSS", "CH-MAFT", "AC-RBOL"}
+#   AC-BLUCAR is barred EXPLICITLY, not as a side effect. It used to inherit the bar from
+#     DRAW_DOWN; emptying DRAW_DOWN on 2026-09-01 would have silently made it eligible as
+#     a substitute again. Kurt removed it as a swap TARGET (stop swapping OUT of it), which
+#     is not the same as clearing it to be swapped IN -- availability is not permission.
+#     31 on hand against a RESERVE_FLOOR of 20 leaves 11 usable anyway.
+NO_SUBSTITUTE = {"AC-RMC", "MT-IBRES", "MT-BSS", "CH-MAFT", "AC-RBOL", "AC-BLUCAR"}
 # Never allocate a substitute below this many units remaining. Kurt 2026-08-28:
 # "don't zero out blucar ... get it to 20 have left" -- a swap plan that drains a SKU
 # to nothing leaves nothing for next week's cut or a short.
@@ -83,7 +88,11 @@ RESERVE_FLOOR = 20
 # already commits more than HAVE, so units have to come OUT of boxes. Kurt 2026-08-28:
 # "KEEP BLUCAR TO 20 HAVE" -- AC-BLUCAR is 67 have against 68 committed, so 21 units
 # must be swapped out to leave 20 on the shelf.
-DRAW_DOWN = {"AC-BLUCAR": 20}
+# EMPTY. Kurt 2026-09-01: "i'm removing blucar from the swap target" -- AC-BLUCAR is no
+# longer drawn down. The 08-28 entry was scoped to that run's 67-have/68-committed
+# squeeze; this week's HAVE says 31, so the squeeze is gone. Same dated-directive-
+# outliving-its-run class as the AC-KETT HAVE_OVERRIDE.
+DRAW_DOWN = {}
 # Cap total USAGE of a SKU this run; the excess is swapped out. Kurt 2026-08-28:
 # "i only want to use up about 400 sot today" -- CH-SOT is 501 on the sheet, so 101
 # units come out. Distinct from DRAW_DOWN, which targets units LEFT rather than used.
@@ -320,6 +329,11 @@ def run(orders, con, verbose=True, sheet=None, have_path=None):
         if BCPC_TAG in tags:
             skipped["BOX_CUSTOMIZED_POST_CHECKOUT"] += 1
             continue
+        # 🔴 SCOPED TO THIS ORDER, not ever. Kurt 2026-09-01: "customize gate is for the
+        # specific order" -- the question is whether the customer built THIS box, so the
+        # window starts at their previous order. An ever-customized test would protect
+        # every customer who ever touched the portal and empty the list; #178696 and
+        # #178706 both read customized=True lifetime and False since their last order.
         was, why = customized(con, cust, since_iso=prev[0][1] if prev else None)
         if was:
             skipped["human customized (recharge events)"] += 1
