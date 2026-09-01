@@ -72,16 +72,23 @@ def main(argv=None):
     ap.add_argument("--tag", required=True, help="production tag, e.g. RMFG_20260828 or 8_24")
     ap.add_argument("--ship", required=True)
     ap.add_argument("--sheet", required=True)
-    ap.add_argument("--have", required=True, metavar="PATH",
+    ap.add_argument("--have", metavar="PATH",
                     help="this week's declared HAVE export (.csv/.xlsx) for check 7's "
                          "swap caps -- REQUIRED, no baked-in fallback (a dated literal "
                          "silently capped swaps against LAST week's count)")
+    ap.add_argument("--no-swaps", action="store_true",
+                    help="run the CHECK half only, for when this week's HAVE export does "
+                         "not exist yet. The counts, slot checks and BOTH guardrail halves "
+                         "need no inventory. Reaching for last week's HAVE instead is "
+                         "exactly the failure --have exists to prevent.")
     ap.add_argument("--ruleset", default=DEFAULT_RULESET)
     ap.add_argument("--cache")
     ap.add_argument("--out", default=".")
     ap.add_argument("--max-per-order", type=int, default=2,
                     help="cap across the COMBINED list; passes stack (#176908 hit 3)")
     a = ap.parse_args(argv)
+    if not a.have and not a.no_swaps:
+        ap.error("--have is required (or --no-swaps to run the check half only)")
 
     os.makedirs(a.out, exist_ok=True)
     print(f"\n=== {a.tag} / {a.ship} ===")
@@ -116,6 +123,12 @@ def main(argv=None):
     prot = login_protected(orders, con)
     dump(os.path.join(a.out, f"login_protected_{a.tag}.csv"),
          [{"Order ID": k, "email": v[0], "login_at": v[1]} for k, v in prot.items()])
+
+    if a.no_swaps:
+        print("\n-- check 7 SKIPPED (--no-swaps): no HAVE export for this cohort yet --")
+        print(f"\n  DECIDE: {len(real)} real count exceptions · swaps NOT computed")
+        con.close()
+        return 0
 
     print("\n-- check 7 repeats --")
     repeats, sat, per_sku, clears, swap_rows, _ = check7_run(orders, con, sheet=sheet,
