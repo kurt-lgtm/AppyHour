@@ -51,7 +51,6 @@ from inventory_demand_report import (
     load_inventory_csv,
     load_settings,
     parse_depletion_xlsx,
-    SETTINGS_PATH,
     _get_bundle_recipe,
     PICKABLE_PREFIXES,
 )
@@ -2044,10 +2043,19 @@ def _ingest_tommy_inputs(path: str) -> None:
     monthly_recipes: dict = {}
     for r in range(1, ws.max_row + 1):
         for c in range(1, ws.max_column + 1):
-            m = _re.match(r"ahb-(med|cmed|lge)\s*\((\d{4}-\d{2})\)", _norm(ws.cell(r, c).value))
-            if not m:
-                continue
-            bt, month = "AHB-" + m.group(1).upper(), m.group(2)
+            _lbl = _norm(ws.cell(r, c).value)
+            m = _re.match(r"ahb-(med|cmed|lge)\s*\((\d{4}-\d{2})\)", _lbl)
+            if m:
+                bt, month = "AHB-" + m.group(1).upper(), m.group(2)
+            else:
+                # Range-labelled block, e.g. "AHB-MED (08-30-08-31)" from a sheet built
+                # with monthly_split_ranges. Normalise to the START date's month so the
+                # recipe still lands on the month key the default build uses.
+                m = _re.match(r"ahb-(med|cmed|lge)\s*\((\d{2})-(\d{2})\D+(\d{2})-(\d{2})\)", _lbl)
+                if not m:
+                    continue
+                bt = "AHB-" + m.group(1).upper()
+                month = f"{cut_week[:4]}-{m.group(2)}"
             rows = []
             rr = r + 1
             while rr <= ws.max_row:
@@ -2085,12 +2093,18 @@ def _ingest_tommy_inputs(path: str) -> None:
         break
     wb.close()
 
-    # -- Merge into settings (dist + APPDATA copies) --
+    # -- Merge into settings (ONE canonical copy) --
+    #
+    # 🔴 THIS USED TO WRITE TWO FILES: `SETTINGS_PATH` (the repo `dist/` copy) AND
+    # `%APPDATA%\AppyHour\...`. That is how the copies stayed plausibly in sync while
+    # silently diverging — %APPDATA%\AppyHour is MSIX-virtualized, so the second write
+    # landed in a package-private overlay when this ran packaged and in the real profile
+    # when it ran unpackaged, while `dist` always got the full picture. Measured
+    # 2026-08-31: dist held 230 inventory SKUs, the overlay 157, written the same second.
+    # Writing N copies of a settings file is not redundancy; it is N sources of truth.
     import json as _json
-    targets = [
-        SETTINGS_PATH,
-        os.path.join(os.environ.get("APPDATA", ""), "AppyHour", "inventory_reorder_settings.json"),
-    ]
+    from appyhour_lib.paths import inventory_settings_path
+    targets = [str(inventory_settings_path(for_write=True))]
     written = 0
     for tgt in targets:
         if not tgt or not os.path.exists(tgt):
@@ -2103,8 +2117,11 @@ def _ingest_tommy_inputs(path: str) -> None:
         cos = st.setdefault("cut_order_specs", {})
         for sku in seen_skus:
             rec = specs.get(sku)
-            if rec:
-                cos[sku] = rec
+            # slices_per_wheel is INTRINSIC to the SKU and has no sheet column, so the
+            # replace-semantics below would silently wipe it. Carry it across.
+            _keep = {k: v for k, v in (cos.get(sku) or {}).items() if k == "slices_per_wheel"}
+            if rec or _keep:
+                cos[sku] = {**_keep, **(rec or {})}
             else:
                 cos.pop(sku, None)
         st["bundle_add_boxes"] = bundle_adds
