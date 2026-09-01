@@ -16,7 +16,7 @@ import hashlib
 import os
 import sqlite3
 
-LIVE = (os.environ.get("APPYHOUR_DB_PATH") or (r"C:\AppyHourData\shipping.db" if os.path.exists(r"C:\AppyHourData\shipping.db") else os.path.join(os.environ["APPDATA"], "AppyHour", "shipping.db")))
+LIVE = (os.environ.get("APPYHOUR_DB_PATH") or (r"C:\AppyHourData\shipping.db" if os.path.isdir(r"C:\AppyHourData") else os.path.join(os.environ["APPDATA"], "AppyHour", "shipping.db")))  # dir-keyed 2026-07-22 (login-race split-brain guard)
 COPY = os.path.join(os.environ["APPDATA"], "AppyHour", "shipping.refactor.db")
 
 
