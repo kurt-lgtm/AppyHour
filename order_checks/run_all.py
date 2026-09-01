@@ -134,7 +134,7 @@ def main(argv=None):
 
     print("\n-- check 7 repeats --")
     repeats, sat, per_sku, clears, swap_rows, _ = check7_run(orders, con, sheet=sheet,
-                                                             have_path=a.have)
+                                                             have_path=a.have, tag=a.tag)
     print(f"    flagged {len(repeats)}   swap candidates {len(swap_rows)}")
 
     kept, per = [], collections.Counter()

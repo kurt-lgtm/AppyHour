@@ -92,7 +92,7 @@ RESERVE_FLOOR = 20
 # longer drawn down. The 08-28 entry was scoped to that run's 67-have/68-committed
 # squeeze; this week's HAVE says 31, so the squeeze is gone. Same dated-directive-
 # outliving-its-run class as the AC-KETT HAVE_OVERRIDE.
-DRAW_DOWN = {}
+DRAW_DOWN = {}          # {sku: (units_left_wanted, "RMFG_<date>")}
 # Cap total USAGE of a SKU this run; the excess is swapped out. Kurt 2026-08-28:
 # "i only want to use up about 400 sot today" -- CH-SOT is 501 on the sheet, so 101
 # units come out. Distinct from DRAW_DOWN, which targets units LEFT rather than used.
@@ -102,12 +102,13 @@ DRAW_DOWN = {}
 # customers' items to hit it is a different and unwanted action.
 USAGE_CAP = {}
 # Forced one-for-one replacements, regardless of ranking. "change the RBOL TO FCEVOO".
-FORCED_SWAP = {"AC-RBOL": "AC-FCEVOO"}
+FORCED_SWAP = {"AC-RBOL": ("AC-FCEVOO", None)}   # {sku: (new_sku, "RMFG_<date>")}
 # 🔴 A SKU being DRAWN DOWN can never be a substitute -- the repeat pass would add back
 # exactly what the draw-down removes. AC-BLUCAR is the case: 67 have, 0 left.
 # USAGE_CAP is deliberately NOT included: a cap is a target for the draw-down pass, not
 # a ban, and Kurt 2026-08-28 accepted the repeat pass pushing CH-SOT past it ("that's
 # fine on the ch-sot") -- the draw-down pass reconciles it afterwards.
+# keys only -- shape-independent, so tagging the values did not change this
 NO_SUBSTITUTE |= set(DRAW_DOWN) | set(FORCED_SWAP)
 # Declared HAVE inventory -- the cut order's own corrected_inventory_path, NOT MCP
 # get_calculated_inventory (which is wrong and must never be quoted as HAVE).
@@ -163,18 +164,39 @@ def _paid(li):
 
 
 
+# 🔴 EVERY DIRECTIVE BELOW IS SCOPED TO ONE COHORT: {sku: (value, "RMFG_<date>")}.
+# A bare value has no expiry and silently outlives the run it was stated for. Both of
+# these actually did:
+#   HAVE_OVERRIDE "AC-KETT: 21" -- Kurt 2026-08-28 against the RMFG_20260831 export
+#     (which said 19). Four days later it was still overwriting the RMFG_20260901 count.
+#   DRAW_DOWN "AC-BLUCAR: 20" -- scoped to the 08-28 squeeze, 67 have against 68
+#     committed. The next week's HAVE said 31: no squeeze, directive still armed.
+# `for_cohort()` drops any entry whose cohort is not the run's --tag and SAYS SO, so a
+# stale directive is a printed line rather than a silent number change.
+def for_cohort(directives, tag, label, verbose=True):
+    """{sku: (value, cohort)} -> {sku: value}, keeping only this cohort's entries."""
+    keep, stale = {}, []
+    for sku, entry in directives.items():
+        val, cohort = entry if isinstance(entry, tuple) else (entry, None)
+        if cohort is None:
+            stale.append(f"{sku}={val} (NO COHORT -- refusing, tag every directive)")
+        elif tag and cohort != tag:
+            stale.append(f"{sku}={val} (for {cohort}, this run is {tag})")
+        else:
+            keep[sku] = val
+    if verbose and stale:
+        print(f"  {label}: DROPPED {len(stale)} stale -> " + "; ".join(stale))
+    if verbose and keep:
+        print(f"  {label}: applying {keep}")
+    return keep
+
+
 # Corrections applied ON TOP of the declared HAVE file, when Kurt states a number that
-# the export does not carry. Each is his, never inferred.
-# 🔴 EMPTY between runs. An override is a correction to ONE export, and it silently
-# outlives it: "AC-KETT: 21" (Kurt 2026-08-28, against the RMFG_20260831 export saying
-# 19) was still being applied to the RMFG_20260901 HAVE four days later, where it
-# overwrites whatever this week's count actually says. Same silent-stale class the
-# baked-in HAVE path was removed for. Add one only for the run in front of you, dated,
-# and clear it when that run ships.
+# the export does not carry. Each is his, never inferred. Format: {sku: (qty, cohort)}.
 HAVE_OVERRIDE = {}
 
 
-def load_have(path=None):
+def load_have(path=None, tag=None):
     """SKU -> on-hand qty from the declared HAVE file (.csv or .xlsx).
 
     RED FLAG: this is the cut order's corrected_inventory_path. NEVER substitute MCP
@@ -193,7 +215,7 @@ def load_have(path=None):
     import datetime
     mt = datetime.datetime.fromtimestamp(os.path.getmtime(path))
     print(f"  HAVE: {path} (modified {mt:%Y-%m-%d %H:%M})"
-          + (f"   overrides: {sorted(HAVE_OVERRIDE)}" if HAVE_OVERRIDE else ""))
+          + (f"   overrides declared: {sorted(HAVE_OVERRIDE)}" if HAVE_OVERRIDE else ""))
     if path.lower().endswith(".csv"):
         with open(path, encoding="utf-8-sig", newline="") as fh:
             rows = [tuple(r) for r in csv.reader(fh)]
@@ -234,7 +256,7 @@ def load_have(path=None):
         sys.exit(f"check7: HAVE parsed to ZERO skus from {path}. Refusing to continue -- "
                  "an empty HAVE is not 'nothing on hand', it is a failed parse, and it "
                  "would silently make every substitute look exhausted.")
-    have.update(HAVE_OVERRIDE)
+    have.update(for_cohort(HAVE_OVERRIDE, tag, "HAVE_OVERRIDE"))
     return have
 
 
@@ -292,7 +314,7 @@ def sheet_demand(sheet):
     return tot
 
 
-def run(orders, con, verbose=True, sheet=None, have_path=None):
+def run(orders, con, verbose=True, sheet=None, have_path=None, tag=None):
     """-> (repeats, saturation, per_sku, swaps)."""
     first_seen = sku_first_seen(con)
     # candidate pool = free child SKUs circulating in this run
@@ -369,7 +391,7 @@ def run(orders, con, verbose=True, sheet=None, have_path=None):
                 clears[s] += 1
 
     swaps = build_swaps(repeats, orders, con, in_run, first_seen,
-                        *swapped_today(), have=load_have(have_path),
+                        *swapped_today(), have=load_have(have_path, tag),
                         crackers=build_cracker_set(orders), committed=committed)
     if verbose:
         print(f"  eligible orders: {n_scope}   flagged: {len(repeats)}")

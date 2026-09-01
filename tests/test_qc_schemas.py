@@ -76,8 +76,8 @@ def _good_tab5_df() -> pd.DataFrame:
         # value shapes copied from a real routing_tab5_rows.json (2026-07-02)
         ["#157864", "AL", "35007", "!UPS Ground - Dallas_AHB!", 2,
          "UPS Ground @ Dallas", "2x 48oz + 1x 24oz", "!ExtraGel24oz! + !ExtraGel48oz!"],
-        ["#156990", "MI", "48230", "!Veho Ground Plus - Indianapolis_AHB!", 1,
-         "Veho Ground @ Indianapolis", "2x 48oz", "!ExtraGel48oz!"],
+        ["#156990", "MI", "48230", "!OnTrac Ground - Chicago_AHB!", 1,
+         "OnTrac Ground @ Chicago", "2x 48oz", "!ExtraGel48oz!"],
         # leading-zero NJ zip on a last-mile carrier (legal: OnTrac @ Nashville)
         ["#157001", "NJ", "07001", "!OnTrac Ground - Nashville_AHB!", 2,
          "OnTrac Ground @ Nashville", "2x 48oz + 1x 24oz", "!ExtraGel24oz! + !ExtraGel48oz!"],
@@ -93,6 +93,21 @@ def test_good_tab5_sample_passes():
     ok, failures = validate(_good_tab5_df(), ROUTING_TAB5_SCHEMA)
     assert ok is True, failures.to_string()
     assert failures.empty
+
+
+def test_tab5_legality_tracks_current_shipping_roster():
+    rows = _tab5([
+        ["#157010", "IL", "60601", "!OnTrac Ground - Chicago_AHB!", 2, "", "", ""],
+        ["#157011", "NJ", "08085", "!OnTrac Ground - Swedesboro_AHB!", 2, "", "", ""],
+        ["#157014", "NJ", "08007", "!ANY FedEx - Swedesboro_AHB!", 2, "", "", ""],
+        ["#157012", "MI", "48230", "!Veho Ground Plus - Indianapolis_AHB!", 1, "", "", ""],
+        ["#157013", "IN", "46201", "!FedEx Home Delivery - Indianapolis_AHB!", 1, "", "", ""],
+    ])
+
+    ok, failures = validate(rows, ROUTING_TAB5_SCHEMA)
+
+    assert ok is False
+    assert set(failures["index"].dropna().astype(int)) == {3, 4}
 
 
 def test_bad_tab5_seeded_rows_surface_in_failures():
