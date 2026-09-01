@@ -29,7 +29,7 @@ import sys
 import urllib.parse
 import urllib.request
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -197,8 +197,40 @@ MIN_DENOM_FRACTION_OF_MEDIAN = 0.5
 TRAILING_WEEKS_FOR_FLOOR = 8
 
 
-class ImplausibleDenominator(RuntimeError):
+class NotPublishable(RuntimeError):
+    """Base: this week must not be written to the sheet. Catch THIS to mean 'refused'."""
+
+
+class ImplausibleDenominator(NotPublishable):
     """Refusal to publish a rate whose denominator cannot be a real completed ship week."""
+
+
+class IncompleteWeek(NotPublishable):
+    """Refusal to publish a Mon–Sun window that has not closed yet."""
+
+
+def assert_week_complete(week: str, today: date | None = None) -> None:
+    """🔴 THE DENOMINATOR GATE ONLY GUARDS THE DENOMINATOR — this guards the NUMERATOR.
+
+    Found 2026-09-01 while dry-running the backfill: week `2026-08-31` passed
+    `assert_denom_publishable` cleanly (denom 2471, a full real cohort) and would have
+    published **0 tickets / 0.00%** — because that week began the day before and its Mon–Sun
+    ticket window still had ~1.5 of 7 days in it. That is the same defect as the denom-0 tabs
+    wearing the opposite face: there, a truncated denominator under a real numerator; here, a
+    real denominator under a truncated numerator. Both render as a rate nobody can tell is
+    partial, and a denominator check cannot see it — the denominator looks perfect.
+
+    So: a week is publishable only once its Sunday has passed. Cheap, total, and it makes the
+    `--week` argument safe in a human's hands, not just on the routine's own path.
+    """
+    _, _, _, end_date = week_window(week)
+    d = today or date.today()
+    if end_date >= d.isoformat():
+        raise IncompleteWeek(
+            f"week _SHIP_{week} is still open — its Mon–Sun ticket window runs through "
+            f"{end_date} and today is {d.isoformat()}. Publishing now would put a truncated "
+            "ticket count over a full-cohort denominator and render it as a rate. Wait until "
+            "the week has closed (the routine reports the last COMPLETE week for this reason).")
 
 
 def trailing_denoms(week: str, db: Path, n: int = TRAILING_WEEKS_FOR_FLOOR) -> list[int]:
@@ -389,7 +421,8 @@ def main() -> str | None:
     # `--push` writes a durable tab nobody re-checks. `--history-sheet` keeps its own
     # VM_ZERO_DENOM refusal in matrix_history (D39 rule 3) — this does not duplicate it.
     if args.push:
-        assert_denom_publishable(args.week, denom, db_path())
+        assert_week_complete(args.week)          # numerator: is the window closed?
+        assert_denom_publishable(args.week, denom, db_path())   # denominator: is it real?
 
     # box types needed if the flag is set OR we're pushing to the sheet
     if args.box_types or args.push:

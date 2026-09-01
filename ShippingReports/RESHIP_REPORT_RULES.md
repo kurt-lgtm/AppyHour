@@ -3454,6 +3454,16 @@ recomputed denominators for 08-24 and 06-29 match their tabs exactly.
    guards the ledger path independently — do not merge them.
 3. 🔴 **Do NOT route around a refusal.** Not with `--denom`, not by choosing a different `--week`,
    not by re-running. The two bad tabs ARE what publishing past this gate looks like.
+3b. 🔴 **`assert_week_complete()` guards the NUMERATOR; the denominator gate cannot.** Found
+   2026-09-01 dry-running the backfill below: week `2026-08-31` sailed through
+   `assert_denom_publishable` (denom 2471, a full real cohort) and would have published **0
+   tickets / 0.00%**, because that week had begun the day before and its Mon–Sun ticket window
+   still had ~1.5 of 7 days to run. That is the denom-0 defect wearing the opposite face — there
+   a truncated denominator under a real numerator, here a real numerator-window under a full
+   denominator — and a denominator check is structurally blind to it, because the denominator
+   looks perfect. A week is publishable only once its Sunday has passed. This also makes a
+   hand-passed `--week` safe, not just the routine's own path. `NotPublishable` is the base of
+   both refusals; catch that to mean "refused".
 4. 🔴 **The beat is gated on the PUBLISHED TAB, not on reaching the end of `main()`.**
    `sync.main()` returns the sheet URL and `weekly_task` beats `slack-reship` only if it is truthy;
    otherwise it exits rc=3 and writes no beat. This routine is exception-only in Slack, so the beat
