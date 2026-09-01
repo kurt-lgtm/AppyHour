@@ -61,11 +61,31 @@ def check_repos() -> list[tuple[str, str]]:
 
 
 def check_data_and_creds() -> list[tuple[str, str]]:
+    # 🔴 THIS USED TO CHECK %APPDATA%\AppyHour FOR ALL FOUR FILES, which by 2026-08-31 was
+    # backwards: shipping.db moved to C:\AppyHourData on 07-08 (MSIX virtualizes %APPDATA%, and
+    # the 07-22 split-brain came from writing the Roaming copy for 9 days), and BOTH settings
+    # JSONs were merged onto C:\AppyHourData on 08-31 after three weeks of packaged-vs-unpackaged
+    # divergence. A restore audit that probes the retired location reports MISS on a correctly
+    # restored machine and OK on a wrongly restored one — worse than not checking at all.
+    # portal_creds.json was NOT part of that migration and still lives under %APPDATA%.
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    from appyhour_lib.paths import DATA_ROOT, GEL_CALC_SETTINGS_NAME, INVENTORY_SETTINGS_NAME, db_path
+
+    rows = [(OK if DATA_ROOT.exists() else MISS, f"canonical data root: {DATA_ROOT}")]
+    rows.append((OK if db_path().exists() else MISS, f"  shipping.db -> {db_path()}"))
+    for name in (GEL_CALC_SETTINGS_NAME, INVENTORY_SETTINGS_NAME):
+        canonical = DATA_ROOT / name
+        if canonical.exists():
+            rows.append((OK, f"  {name}"))
+        elif (_appdata() / "AppyHour" / name).exists():
+            # Present but at the retired path: a restore that stops here re-creates the split.
+            rows.append((WARN, f"  {name}  (LEGACY %APPDATA% copy only - move to {DATA_ROOT})"))
+        else:
+            rows.append((MISS, f"  {name}"))
     ad = _appdata() / "AppyHour"
-    rows = [(OK if ad.exists() else MISS, f"settings dir: {ad}")]
-    for name in ("shipping.db", "gel_calc_shopify_settings.json",
-                 "inventory_reorder_settings.json", "portal_creds.json"):
-        rows.append((OK if (ad / name).exists() else MISS, f"  {name}"))
+    rows.append((OK if (ad / "portal_creds.json").exists() else MISS,
+                 f"  portal_creds.json (still %APPDATA%: {ad})"))
     rows.append((OK if (Path.home() / ".knowledge").exists() else MISS, "~/.knowledge vault"))
     rows.append((OK if (Path.home() / ".claude" / "skills").exists() else MISS, "~/.claude/skills"))
     # Env-var alternative to the JSON creds

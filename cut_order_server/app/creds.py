@@ -36,15 +36,19 @@ def get_shopify() -> tuple[str, dict[str, str]]:
 
 
 def _settings_fallback_path() -> Path | None:
-    candidates = [
-        Path(os.environ.get("APPDATA", "")) / "AppyHour" / "inventory_reorder_settings.json",
-        _APPYHOUR_ROOT / "InventoryReorder" / "inventory_reorder_settings.json",
-        _APPYHOUR_ROOT / "InventoryReorder" / "dist" / "inventory_reorder_settings.json",
-    ]
-    for p in candidates:
-        if p.exists():
-            return p
-    return None
+    # 🔴 Canonical FIRST. %APPDATA%\AppyHour is MSIX-virtualized — a packaged reader and an
+    # unpackaged one resolve that same string to two different files (measured 2026-08-31,
+    # three weeks of silent divergence). The legacy entries stay for one deprecation cycle.
+    # Resolution order (canonical -> legacy %APPDATA% -> repo copies) is owned by
+    # appyhour_lib.paths.inventory_settings_path, NOT duplicated here: a second copy of the
+    # candidate list is how one consumer keeps reading a path the others already retired.
+    # Prod (App Platform / droplet) has no settings file at all and no appyhour_lib on the
+    # path, so BOTH failures degrade to None and the env-var branch takes over, as before.
+    try:
+        from appyhour_lib.paths import inventory_settings_path
+        return inventory_settings_path()
+    except (ImportError, FileNotFoundError):
+        return None
 
 
 def get_google_credentials(scopes=None):

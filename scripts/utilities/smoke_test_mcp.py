@@ -145,13 +145,23 @@ async def probes_tool_registration(session: ClientSession) -> list[dict[str, Any
 
 
 async def probes_env_auth() -> list[dict[str, Any]]:
-    settings_path = Path(os.environ.get("APPDATA", "")) / "AppyHour" / "gel_calc_shopify_settings.json"
-
     async def check(*names: str) -> None:
         env_or_skip(*names)
 
     async def check_settings_file() -> None:
-        path_or_skip(settings_path)
+        # 🔴 NOT %APPDATA% (through 2026-08-31). Probing the MSIX-virtualized path made this
+        # smoke test answer a different question depending on whether it was launched packaged
+        # or unpackaged — the one thing a smoke test must never do. Canonical: C:\AppyHourData,
+        # resolved through appyhour_lib.paths. Resolved HERE, not at module import, so a missing
+        # file surfaces as a failing probe instead of killing the whole run.
+        _root = Path(__file__).resolve().parents[2]
+        if str(_root) not in sys.path:
+            sys.path.insert(0, str(_root))
+        from appyhour_lib.paths import gel_calc_settings_path
+        try:
+            path_or_skip(gel_calc_settings_path())
+        except FileNotFoundError as exc:
+            raise SkipError(str(exc)) from None
 
     async def check_appdata() -> None:
         if not os.environ.get("APPDATA"):

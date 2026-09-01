@@ -29,14 +29,25 @@ from datetime import date, datetime, timedelta
 
 # Canonical Shopify line-item netting (shopify-line-items rule) — single source
 # of truth for "NEVER count removed/refunded items" across ALL builds.
-_MCP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "AppyHourMCP")
+_AH_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_MCP_DIR = os.path.join(_AH_ROOT, "AppyHourMCP")
 if _MCP_DIR not in sys.path:
     sys.path.insert(0, _MCP_DIR)
+if _AH_ROOT not in sys.path:
+    sys.path.insert(0, _AH_ROOT)
 from utils import active_line_items  # noqa: E402
+
+from appyhour_lib.paths import inventory_settings_path  # noqa: E402
 
 # -- Paths --
 BASE = os.path.dirname(os.path.abspath(__file__))
-SETTINGS_PATH = os.path.join(BASE, "dist", "inventory_reorder_settings.json")
+# 🔴 NOT the repo `dist/` copy, and NOT %APPDATA% (through 2026-08-31). `dist/` exists in the
+# DEV tree only, so a prod checkout read a file that was never there; and %APPDATA%\AppyHour is
+# MSIX-virtualized, so packaged and unpackaged readers resolved one string to two divergent
+# files for three weeks. Canonical copy: C:\AppyHourData, resolved by appyhour_lib.paths (which
+# still falls back to the legacy and repo copies, loudly, for one deprecation cycle).
+# Resolved LAZILY in load_settings(): the resolver raises when no copy exists anywhere, and an
+# import-time raise would break callers that import this module only for its helpers.
 # Base inventory snapshot (pre-depletion). 🔴 The dated literal is a DEFAULT only —
 # override per run with the AH_INV_CSV env var. The RESOLVED path is printed loudly
 # wherever it is read (silent-stale class: the 6/23 stale-Downloads HAVE burn), and the
@@ -339,7 +350,7 @@ def cexec_curation(line_items, box_curation):
 
 
 def load_settings():
-    with open(SETTINGS_PATH, "r") as f:
+    with open(inventory_settings_path(), "r", encoding="utf-8") as f:
         return json.load(f)
 
 

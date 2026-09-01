@@ -205,8 +205,38 @@ def _get_app_dir():
         return os.path.join(script_dir, "dist")
     return script_dir
 
+
+def _settings_path(for_write=False):
+    r"""Canonical path for the shared settings JSON.
+
+    🔴 This app used to read/write ``InventoryReorder/dist/`` (through 2026-08-31), which was
+    a THIRD live copy — `appyhour_lib` read ``%APPDATA%`` first, and ``%APPDATA%\AppyHour`` is
+    itself MSIX-virtualized into two files. Measured that day: dist held 230 inventory SKUs,
+    the %APPDATA% overlay 157 of the same SKUs. Nothing errored; the copies just answered
+    different questions. Canonical is ``C:\AppyHourData``.
+    """
+    try:
+        appyhour_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if appyhour_root not in sys.path:
+            sys.path.insert(0, appyhour_root)
+        from appyhour_lib.paths import inventory_settings_path
+        if for_write:
+            # 🔴 A WRITE NEVER FALLS BACK. Reads may still resolve to the legacy %APPDATA% copy
+            # for one deprecation cycle, but a write that followed that fallback would fork the
+            # file again — which is the exact divergence the 2026-08-31 merge just closed.
+            return str(inventory_settings_path(for_write=True))
+        try:
+            return str(inventory_settings_path())
+        except FileNotFoundError:
+            return str(inventory_settings_path(for_write=True))
+    except ImportError:
+        print("inventory_reorder: appyhour_lib unavailable — falling back to the legacy app "
+              "dir. This copy is NOT the one other AppyHour tools read.", file=sys.stderr)
+        return os.path.join(_get_app_dir(), SETTINGS_FILE)
+
+
 def load_settings():
-    path = os.path.join(_get_app_dir(), SETTINGS_FILE)
+    path = _settings_path()
     if os.path.exists(path):
         try:
             with open(path, "r") as f:
@@ -216,7 +246,7 @@ def load_settings():
     return {}
 
 def save_settings(settings):
-    path = os.path.join(_get_app_dir(), SETTINGS_FILE)
+    path = _settings_path(for_write=True)
     try:
         with open(path, "w") as f:
             json.dump(settings, f, indent=2)

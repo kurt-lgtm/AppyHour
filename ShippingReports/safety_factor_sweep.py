@@ -37,7 +37,14 @@ from gel_pack_shopify import (  # noqa: E402
 
 DB_PATH = Path(r"C:\AppyHourData\shipping.db") if Path(r"C:\AppyHourData\shipping.db").exists() else Path.home() / "AppData/Roaming/AppyHour/shipping.db"
 OUT_DIR = Path(r"C:\Users\Work\Claude Projects\_outputs\postmortems")
-SETTINGS_PATH = Path.home() / "AppData/Roaming/AppyHour/gel_calc_shopify_settings.json"
+# 🔴 NOT %APPDATA% (through 2026-08-31). `Path.home()/AppData/Roaming` is the MSIX-virtualized
+# path: a packaged reader (Claude, the MCP servers) and an unpackaged one (Kori, scheduled tasks)
+# saw TWO different files at this one string, with independent write histories, for three weeks.
+# Canonical copy now lives at C:\AppyHourData; resolve through appyhour_lib.paths, never by hand.
+# Resolved LAZILY (inside main) rather than at import: the resolver raises FileNotFoundError when
+# no copy exists, and an import-time raise would break every consumer that merely imports this
+# module for its sweep helpers.
+from appyhour_lib.paths import gel_calc_settings_path  # noqa: E402
 
 SWEEP = [5, 7, 10, 12, 15]  # safety_factor values to sweep
 
@@ -247,7 +254,7 @@ def main(snapshot_id: str | None = None) -> int:
         log.error(f"DB missing: {DB_PATH}")
         return 1
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    with open(SETTINGS_PATH, encoding="utf-8") as f:
+    with open(gel_calc_settings_path(), encoding="utf-8") as f:
         settings = json.load(f)
     db = sqlite3.connect(str(DB_PATH), timeout=30)
     db.row_factory = sqlite3.Row

@@ -42,13 +42,13 @@ sys.path.insert(0, str(_APPYHOUR_ROOT / "ShippingReports"))
 from mcp.server.fastmcp import FastMCP
 
 from utils import (
-    GELCALC_DIR,
     SHIPPING_DIR,
     format_error,
     shopify_paginate,
     to_json,
 )
 from appyhour_lib.credentials import get_openweather_key, get_shopify_auth
+from appyhour_lib.paths import gel_calc_settings_path
 
 mcp: FastMCP = FastMCP("appyhour_shipping_mcp")
 
@@ -229,10 +229,16 @@ async def apply_zip_routing_tags(dry_run: bool = True) -> str:
         # Build GraphQL URL by replacing the REST suffix.
         gql_url = rest_base.rsplit("/", 1)[0] + "/graphql.json"
 
-        gc_path = GELCALC_DIR / "gel_calc_shopify_settings.json"
-        if not gc_path.exists():
+        # 🔴 NOT the repo-local GelPackCalculator copy, and NOT %APPDATA% (through 2026-08-31).
+        # This reads `zip_routing_overrides`, which decides which LIVE orders get retagged — so a
+        # stale third copy silently tags the wrong zips. %APPDATA%\AppyHour is MSIX-virtualized
+        # (packaged vs unpackaged readers saw two divergent files for three weeks); the canonical
+        # merged copy is C:\AppyHourData. Resolve through appyhour_lib.paths, never by hand.
+        try:
+            gc_path = gel_calc_settings_path()
+        except FileNotFoundError:
             return to_json({"error": "GelPack settings not found"})
-        with open(gc_path) as f:
+        with open(gc_path, encoding="utf-8") as f:
             gc = json.load(f)
 
         overrides = gc.get("zip_routing_overrides", {})

@@ -124,8 +124,35 @@ def _get_project_dir():
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def _settings_path(for_write=False):
+    r"""Canonical path for the shared settings JSON (see settings_io._settings_path).
+
+    🔴 Was ``InventoryReorder/dist/`` through 2026-08-31 — a third live copy that no other
+    AppyHour tool read first, while ``%APPDATA%\AppyHour`` was itself split in two by MSIX
+    virtualization. Canonical is ``C:\AppyHourData``.
+    """
+    try:
+        appyhour_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        if appyhour_root not in sys.path:
+            sys.path.insert(0, appyhour_root)
+        from appyhour_lib.paths import inventory_settings_path
+        if for_write:
+            # 🔴 A WRITE NEVER FALLS BACK. Reads may still land on the legacy %APPDATA% copy
+            # for one deprecation cycle; a write that followed that fallback would re-fork the
+            # file, which is the divergence the 2026-08-31 merge closed.
+            return str(inventory_settings_path(for_write=True))
+        try:
+            return str(inventory_settings_path())
+        except FileNotFoundError:
+            return str(inventory_settings_path(for_write=True))
+    except ImportError:
+        print("fulfillment_web: appyhour_lib unavailable — falling back to the legacy app "
+              "dir. This copy is NOT the one other AppyHour tools read.", file=sys.stderr)
+        return os.path.join(_get_app_dir(), SETTINGS_FILE)
+
+
 def load_settings():
-    path = os.path.join(_get_app_dir(), SETTINGS_FILE)
+    path = _settings_path()
     if os.path.exists(path):
         try:
             with open(path, "r") as f:
@@ -136,7 +163,7 @@ def load_settings():
 
 
 def save_settings(data):
-    path = os.path.join(_get_app_dir(), SETTINGS_FILE)
+    path = _settings_path(for_write=True)
     # Safety: never overwrite with empty/tiny data if file already has content
     try:
         if os.path.exists(path) and os.path.getsize(path) > 100:

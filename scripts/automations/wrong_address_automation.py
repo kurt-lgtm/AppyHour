@@ -60,9 +60,17 @@ from utils import get_shopify_auth  # noqa: E402
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import address_learning as learn  # noqa: E402
 
-SETTINGS_PATH = os.path.join(
-    _AH, "InventoryReorder", "dist", "inventory_reorder_settings.json"
-)
+if _AH not in sys.path:
+    sys.path.insert(0, _AH)
+from appyhour_lib.paths import inventory_settings_path  # noqa: E402
+
+# 🔴 Was the repo `dist/` copy, which exists in the DEV tree ONLY — the 2026-07-27 carrier-IMAP
+# class of failure (a scheduled run raises FileNotFoundError while the parent still reports ok).
+# Resolution order now belongs to appyhour_lib.paths: canonical C:\AppyHourData first, then the
+# legacy %APPDATA% copy (MSIX-virtualized; packaged and unpackaged readers saw two divergent
+# files for three weeks) with a loud warning, then the repo copies.
+# Resolved LAZILY at the call site: the resolver raises when nothing exists anywhere, and an
+# import-time raise would take down callers that only want the address heuristics.
 OUT_DIR = r"C:\Users\Work\Claude Projects\_outputs\reports"
 SENDER = "hi@appyhourbox.com"
 # Subject variants seen in the inbox (Customer / GIFT / Specials AHB-X)
@@ -80,8 +88,24 @@ HOLD_TAGS = (HOLD_TAG, "_FLOWHOLD", "_CSHOLD", "_UNRESOLVED")
 _PO_BOX_RE = re.compile(r"\b(p\.?\s*o\.?\s*box|post office box)\b", re.I)
 _HAS_NUMBER_RE = re.compile(r"\d")
 _MILITARY = {"APO", "FPO", "DPO"}
-# address2 values that are fine bare (Kurt: "sometimes they're not apts")
-_BARE_UNIT_RE = re.compile(r"^(lot|unit|apt|#|ste|suite|trlr|rte|route|lane|box)?\s*[\w\-]+$", re.I)
+
+# 🔴 2026-08-27: _BARE_UNIT_RE's keyword group was OPTIONAL and `[\w\-]+` matches any
+# single word, so a one-word STREET NAME in address2 ("Grabowski", "MAPLEWOOD") — and an
+# EMPTY address2 — read as a bare unit. Combined with _HAS_NUMBER_RE, which only asks
+# whether address1 contains a digit, an address1 of "77" passed the "missing street
+# number" gate and the order was certified a validator false-positive and UNTAGGED.
+# Verified: 25/25 sampled SAFE_UNTAG orders have no invalid_address tag today, so the
+# untag executes. That is the mechanism behind 8 Veho $20 Address Correction charges on
+# orders that were flagged and shipped anyway. The keyword is now REQUIRED.
+_BARE_UNIT_RE = re.compile(
+    r"^(?:(?:lot|unit|apt|ste|suite|trlr|rte|route|lane|box|bldg|fl|rm)\b\.?\s*|#\s*)[\w\-]+$",
+    re.I,
+)
+
+# A bare house number with no street: "77", "3782", "12B". address1 in this shape is
+# undeliverable no matter what else is right, and must NEVER be untagged.
+_BARE_HOUSE_NUM_RE = re.compile(r"^\s*\d+\s*[A-Za-z]?\s*$")
+_HAS_STREET_RE = re.compile(r"[A-Za-z]{2,}")
 
 
 def _decode(raw: str) -> str:
@@ -93,7 +117,7 @@ def _decode(raw: str) -> str:
 
 def fetch_wrong_address_order_ids(days_back: int) -> list[str]:
     """IMAP-read the wrong-address notifications -> unique Shopify order IDs."""
-    with open(SETTINGS_PATH) as f:
+    with open(inventory_settings_path(), encoding="utf-8") as f:
         s = json.load(f)
     user, password = s["smtp_user"], s["smtp_password"]
     imap = imaplib.IMAP4_SSL("imap.gmail.com")
@@ -186,6 +210,13 @@ def triage(addr: dict, tags: list[str]) -> tuple[str, str]:
         return "HOLD", f"military/APO or already held ({why}) — leave for manual review"
     if _PO_BOX_RE.search(a1) or _PO_BOX_RE.search(a2):
         return "NEEDS_FIX", "PO box — carrier may reject; confirm with customer"
+    # 🔴 This test runs BEFORE _HAS_NUMBER_RE. "77" contains a digit, so it sails through
+    # the missing-street-number gate below; the only thing that catches it is asking
+    # whether address1 is NOTHING BUT a number. See _BARE_HOUSE_NUM_RE above.
+    if _BARE_HOUSE_NUM_RE.match(a1):
+        if _HAS_STREET_RE.search(a2):
+            return "NEEDS_FIX", "SPLIT: house number in address1, street in address2 — merge, never untag"
+        return "NEEDS_FIX", "address1 is a bare house number with no street anywhere — undeliverable"
     if not a1 or not _HAS_NUMBER_RE.search(a1):
         return "NEEDS_FIX", "address1 missing street number — likely split/typo"
     if not (city and province and zip_):
