@@ -41,7 +41,14 @@ CREATE INDEX IF NOT EXISTS ix_rc_email   ON rc_customers(email);
 
 
 def _token():
-    p = os.path.expandvars(r"%APPDATA%\AppyHour\inventory_reorder_settings.json")
+    # 🔴 NOT %APPDATA% (through 2026-08-31): %APPDATA%\AppyHour is MSIX-virtualized, so this
+    # resolved to a package-private overlay when run packaged and the real profile otherwise —
+    # two files, two write histories. Canonical is C:\AppyHourData via appyhour_lib.paths.
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # order_checks/ -> AppyHour/
+    if _root not in sys.path:
+        sys.path.insert(0, _root)
+    from appyhour_lib.paths import inventory_settings_path
+    p = inventory_settings_path()
     return json.load(open(p, encoding="utf8"))["recharge_api_token"]
 
 

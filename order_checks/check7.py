@@ -156,9 +156,13 @@ def _paid(li):
 
 # Corrections applied ON TOP of the declared HAVE file, when Kurt states a number that
 # the export does not carry. Each is his, never inferred.
-HAVE_OVERRIDE = {
-    "AC-KETT": 21,       # Kurt 2026-08-28; the RMFG_20260831 export says 19
-}
+# 🔴 EMPTY between runs. An override is a correction to ONE export, and it silently
+# outlives it: "AC-KETT: 21" (Kurt 2026-08-28, against the RMFG_20260831 export saying
+# 19) was still being applied to the RMFG_20260901 HAVE four days later, where it
+# overwrites whatever this week's count actually says. Same silent-stale class the
+# baked-in HAVE path was removed for. Add one only for the run in front of you, dated,
+# and clear it when that run ships.
+HAVE_OVERRIDE = {}
 
 
 def load_have(path=None):
@@ -193,10 +197,21 @@ def load_have(path=None):
     # the column is "Qty" in the corrected-inventory workbook and "RMFG Have <date>"
     # in the cut-order CSV -- accept either rather than pinning one label
     i_qty = next((i for i, h in enumerate(hdr) if h == "qty" or "have" in h), None)
+    body = rows[1:]
     if i_sku is None or i_qty is None:
-        return {}
+        # 🔴 HEADERLESS two-column form: `MON_cut_order_v2_<date>.xlsx - Sheet1.csv`
+        # starts straight at `CH-6COM,126`. Returning {} here was a SILENT ZERO -- the
+        # file printed fine and every substitute read 0 on hand, which reads as
+        # "nothing available" rather than "the parse failed".
+        first = [str(x or "").strip() for x in rows[0]]
+        if len(first) >= 2 and first[0].startswith(CHILD + ("PK-", "MR-", "BL-", "AHB-")) and first[1].replace(".", "").isdigit():
+            i_sku, i_qty, body = 0, 1, rows
+        else:
+            sys.exit(f"check7: cannot find SKU/qty columns in {path}. Header was {hdr!r}. "
+                     "Refusing to continue -- an empty HAVE reads every substitute as 0 "
+                     "on hand and silently proposes nothing.")
     have = {}
-    for r in rows[1:]:
+    for r in body:
         if len(r) <= max(i_sku, i_qty):
             continue
         s = str(r[i_sku] or "").strip()
@@ -206,6 +221,10 @@ def load_have(path=None):
             continue
         if s:
             have[s] = q
+    if not have:
+        sys.exit(f"check7: HAVE parsed to ZERO skus from {path}. Refusing to continue -- "
+                 "an empty HAVE is not 'nothing on hand', it is a failed parse, and it "
+                 "would silently make every substitute look exhausted.")
     have.update(HAVE_OVERRIDE)
     return have
 

@@ -356,7 +356,7 @@ def verify(fat=None, db=DB, n=400):
         "SELECT DISTINCT customer_id FROM orders WHERE customer_id LIKE 'gid://%' LIMIT 20000")]
     random.seed(7)
     samp = random.sample(gids, min(n, len(gids)))
-    bad_ever = bad_prev = bad_cust = bad_rc = bad_login = 0
+    bad_ever = bad_prev = bad_cust = bad_rc = bad_login = ahead_login = 0
     for g in samp:
         # the two guardrail halves -- the ones that actually gate a live swap
         rid = fat_rc(o, g)
@@ -366,8 +366,14 @@ def verify(fat=None, db=DB, n=400):
             bad_cust += 1
         floor = fatmod.previous_orders(o, g, "2099-01-01", 1)
         since = floor[0][1] if floor else "2026-05-01T00:00:00Z"
-        if bool(fat_login(o, g, since)) != bool(logged_in_since(d, g, since)):
+        # 🔴 DIRECTION matters. After a topup the store legitimately holds events the
+        # frozen reference does not, so store-finds-more is EXPECTED. Only the reverse --
+        # the reference seeing a login the store cannot -- is a real loss, and that is
+        # the direction that would wrongly clear a customer for swapping.
+        if bool(fat_login(o, g, since)) and not bool(logged_in_since(d, g, since)):
             bad_login += 1
+        elif bool(logged_in_since(d, g, since)) and not bool(fat_login(o, g, since)):
+            ahead_login += 1
         a = {r[0] for r in o.execute(
             """SELECT DISTINCT i.sku FROM items i JOIN orders o USING(order_gid)
                WHERE o.customer_id = ? AND i.qty > 0""", (g,))} - {"", None}
@@ -389,7 +395,8 @@ def verify(fat=None, db=DB, n=400):
                 bad_prev += 1
     print(f"  recharge_id     {len(samp) - bad_rc}/{len(samp)} identical")
     print(f"  customized      {len(samp) - bad_cust}/{len(samp)} identical   <- guardrail half 1")
-    print(f"  logged_in_since {len(samp) - bad_login}/{len(samp)} identical   <- guardrail half 2")
+    print(f"  logged_in_since {len(samp) - bad_login}/{len(samp)} no-loss   <- guardrail half 2"
+          + (f"   ({ahead_login} where the store is AHEAD of the reference)" if ahead_login else ""))
     print(f"  ever_received   {len(samp) - bad_ever}/{len(samp)} identical")
     print(f"  previous_orders {len(samp) - bad_prev}/{len(samp)} identical")
     uni_a = {r[0] for r in o.execute("SELECT DISTINCT sku FROM items WHERE qty > 0")} - {"", None}

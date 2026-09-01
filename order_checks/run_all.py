@@ -19,6 +19,7 @@ Order is deliberate and is the lesson of the wk0831 run:
 sheet, never the other way round.
 """
 from __future__ import annotations
+
 import argparse
 import collections
 import csv
@@ -30,7 +31,8 @@ from . import sheet as sheetmod
 from .categorize import categorize
 from .check7 import run as check7_run
 from .checks import bare_cex_check, cracker_check, fixed_route_check, validate_swap_list
-from .dan_checks import load_rules, run as dan_run
+from .dan_checks import load_rules
+from .dan_checks import run as dan_run
 from .fetch_gql import fetch_by_name
 from .history_compact import DB
 from .login_gate import protected as login_protected
