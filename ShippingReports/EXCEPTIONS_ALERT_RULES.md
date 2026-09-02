@@ -1505,6 +1505,27 @@ and a `freshness()` that raises when the newest `synced_at` is over 3h old.
 | event says delivered | 23/71 of the exception bucket. Kurt's "they just changed the label" case. |
 | in-network scans | "Arrived at Veho facility", "On FedEx vehicle for delivery" — normal movement. |
 | any (order, class) already alerted | dedup, constraint 3 |
+| **`DELAYED`** (record-only, Kurt 2026-09-02) | **Not actionable.** Nobody can do anything about "your package is delayed" except wait, so it is noise in a channel Dan reads for boxes that need a HUMAN. Still classified, still written to the Exceptions tab — only the Slack post is cancelled. |
+
+### 🔴 RECORD-ONLY vs SUPPRESSED — not the same thing (Kurt 2026-09-02)
+
+`EXC_RECORD_ONLY_CLASSES` (`Exceptions.gs`, next to `EXC_PING_DAYS`) is a **caller-side** gate,
+and every part of that placement is load-bearing:
+
+- **The gate is NOT in `excClassify_`.** The classifier still returns `DELAYED` with `ping: true`.
+  Muting it inside the classifier would DELETE the signal — the tab record, the self-test case at
+  `excSelfTest`, and any future consumer (the Klaviyo flow among them) all still need the
+  classification. Record-only means *the ping is cancelled*, not *the class stops existing*.
+- **It sits ABOVE the seeding and dry-run branches**, so no mode can post a record-only class.
+- **It sits ABOVE the Mon/Tue gate**, and that is the subtle one: the Wed–Sun gate *defers* a ping
+  to Wednesday by deliberately leaving `alerted` unstamped. A record-only class routed through
+  that path would accumulate all week and then post on Wednesday — the exact opposite of the
+  intent. This branch returns first.
+- **`alerted` is left untouched; tab-write dedup rides `logged`.** Nothing was alerted, so nothing
+  claims to have been. That is the same `alerted`/`logged` split the Mon/Tue branch already uses.
+
+To mute another class, add it to the map — do not touch the classifier, and do not reach for
+`ping: false`.
 
 **Measured volume (replay of the 71 real 6/29–7/20 boxes, 2026-07-30): 40 PING / 31 SUPPRESS
 across 4 ship weeks ≈ 10 pings/week.** Higher than the 6–7 first estimated, because the replay
