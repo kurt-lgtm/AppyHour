@@ -63,23 +63,29 @@ DEFAULT_GOOGLE_SCOPES: tuple[str, ...] = (
 
 
 def _read_settings_fallback() -> dict:
-    """Read InventoryReorder settings JSON directly (no module import).
+    """Read InventoryReorder settings JSON directly.
 
-    Keeps this resolver lean for the shipping MCP.
+    🔴 Resolution is delegated to :func:`appyhour_lib.paths.inventory_settings_path`, which
+    puts the canonical ``C:\\AppyHourData`` copy FIRST. Do not re-inline a ``%APPDATA%``
+    candidate list here: ``%APPDATA%\\AppyHour`` is MSIX-virtualized, so a packaged reader
+    (Claude Code, the MCP servers) and an unpackaged one (Kori, the scheduled tasks) resolved
+    the same string to two different files with two different write histories — measured
+    2026-08-31, three weeks of silent divergence. Two copies of the candidate list is exactly
+    how the two paths drift apart again.
+
+    Still returns ``{}`` rather than raising: this is the FALLBACK behind the env vars, and
+    the callers turn an empty dict into their own specific "credentials not found" error.
     """
-    candidates = [
-        Path(os.environ.get("APPDATA", "")) / "AppyHour" / "inventory_reorder_settings.json",
-        Path(__file__).resolve().parent.parent / "InventoryReorder" / "inventory_reorder_settings.json",
-        Path(__file__).resolve().parent.parent / "InventoryReorder" / "dist" / "inventory_reorder_settings.json",
-    ]
-    for p in candidates:
-        if p.exists():
-            try:
-                with p.open(encoding="utf-8") as f:
-                    return json.load(f)
-            except (OSError, json.JSONDecodeError):
-                continue
-    return {}
+    from .paths import inventory_settings_path
+    try:
+        p = inventory_settings_path()
+    except FileNotFoundError:
+        return {}
+    try:
+        with p.open(encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
 
 
 def get_shopify_credentials() -> tuple[str, str]:
