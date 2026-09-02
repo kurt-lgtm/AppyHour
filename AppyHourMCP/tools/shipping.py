@@ -15,7 +15,7 @@ from enum import Enum
 
 import requests
 
-from utils import format_error, to_json, SHIPPING_DIR, GELCALC_DIR, get_inventory_settings, shopify_paginate, get_shopify_auth
+from utils import format_error, to_json, SHIPPING_DIR, APPDATA_SETTINGS, get_inventory_settings, shopify_paginate, get_shopify_auth
 
 
 # Lazy-loaded modules
@@ -241,10 +241,12 @@ def register(mcp: object) -> None:
                 return to_json({"error": "Shopify credentials not configured"})
             gql_url = f"{rest_base}/graphql.json"
 
-            # Load zip overrides from GelPack settings
-            gc_path = GELCALC_DIR / "gel_calc_shopify_settings.json"
+            # Load zip overrides from Kori settings. 🔴 NOT GELCALC_DIR (a repo-local copy)
+            # and NOT %APPDATA% (MSIX-virtualized — packaged and unpackaged readers saw two
+            # different files for three weeks). Canonical: C:\AppyHourData, via APPDATA_SETTINGS.
+            gc_path = APPDATA_SETTINGS
             if not gc_path.exists():
-                return to_json({"error": "GelPack settings not found"})
+                return to_json({"error": f"Kori settings not found: {gc_path}"})
             with open(gc_path) as f:
                 gc = json.load(f)
             overrides = gc.get("zip_routing_overrides", {})

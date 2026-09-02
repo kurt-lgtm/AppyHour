@@ -32,11 +32,23 @@ import requests
 # (…\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\AppyHour\shipping.db), NOT the
 # real %APPDATA%\Roaming — a bare/unpackaged terminal hardcoding Path.home()/AppData/Roaming
 # opens an empty path and reports "shipping.db missing". Set APPYHOUR_DB_PATH to the
-# LocalCache path when running unpackaged. Settings (OWM key) sit beside the DB.
-from appyhour_lib.paths import db_path  # noqa: E402
+# LocalCache path when running unpackaged.
+from appyhour_lib.paths import db_path, gel_calc_settings_path  # noqa: E402
 
 DB_PATH = db_path()
-SETTINGS_PATH = DB_PATH.parent / "gel_calc_shopify_settings.json"
+# 🔴 NOT `DB_PATH.parent / "gel_calc_shopify_settings.json"` (through 2026-08-31). That
+# derivation was written when the DB and the settings JSON genuinely sat side by side in
+# %APPDATA%. The 2026-07-08 DB move to C:\AppyHourData took DB_PATH with it and left the
+# settings file behind, so this resolved to a path that did not exist and the OWM key
+# silently came back empty. The settings file has since been migrated to C:\AppyHourData
+# too — which would have made this line start working again BY ACCIDENT, off a coincidence
+# rather than a decision. Resolve it deliberately: the two files are not related by
+# adjacency, and the next move of either would re-break the derivation.
+#
+# Resolved LAZILY (in load_api_key) rather than at import: gel_calc_settings_path() raises
+# when the file is missing everywhere, and doing that at module scope would pre-empt this
+# module's own error message with a less specific one, and break `import` for a caller
+# that never needs the key.
 LOOKBACK_DAYS = 30  # how far back to backfill (covers 2 ship_weeks comfortably)
 PADDING_DAYS = 2    # extend window past delivery date for tail-end temps
 MAX_CALLS = 1000    # OWM free-tier daily cap
@@ -54,10 +66,9 @@ log = logging.getLogger("weather-sync")
 
 
 def load_api_key() -> str:
-    """Pull OWM key from Kori settings file."""
-    if not SETTINGS_PATH.exists():
-        raise FileNotFoundError(f"Kori settings not found: {SETTINGS_PATH}")
-    with open(SETTINGS_PATH, encoding="utf-8") as f:
+    """Pull OWM key from Kori settings file (canonical C:\\AppyHourData, see above)."""
+    settings_path = gel_calc_settings_path()
+    with open(settings_path, encoding="utf-8") as f:
         s = json.load(f)
     key = s.get("api_key", "").strip()
     if not key:

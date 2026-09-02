@@ -36,11 +36,14 @@ is honored only if the file exists; otherwise we fall back to canonical.
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 from pathlib import Path
 
 __all__ = ["db_path", "db_dir", "appyhour_appdata", "data_root", "invoices_dir",
-           "inventory_settings_path", "assert_canonical_db", "NonCanonicalDBPath"]
+           "inventory_settings_path", "gel_calc_settings_path", "settings_path",
+           "assert_canonical_db", "NonCanonicalDBPath",
+           "GEL_CALC_SETTINGS_NAME", "INVENTORY_SETTINGS_NAME"]
 
 # Canonical data root — deliberately OUTSIDE %APPDATA% (MSIX-virtualized; see module docstring).
 DATA_ROOT = Path(r"C:\AppyHourData")
@@ -209,7 +212,107 @@ def appyhour_appdata() -> Path:
     return p
 
 
-def inventory_settings_path() -> Path:
+# ── Shared settings JSONs ───────────────────────────────────────────────────
+#
+# 🔴 THE SPLIT THIS SOLVES (measured 2026-08-31). These two files lived at
+# `%APPDATA%\AppyHour\<name>.json`, which MSIX virtualizes. A packaged process
+# (Claude Code, the MCP servers) reads and writes a package-private overlay; an
+# unpackaged process (Kori, the real-context scheduled tasks) reads and writes the
+# real profile. Same path string, TWO FILES, two independent write histories — and
+# which one you get depends only on how the process was launched.
+#
+# It was not "one file that is sometimes stale". Both sides carried edits the other
+# never had: the real profile's 8/09 write dropped 6 zip routing overrides and
+# retuned 3 more, while the overlay separately grew `routing_levers` + 9 policy keys
+# on 8/22 from a PRE-8/09 base. `gel_calc_shopify_settings.json` feeds the
+# ShipRouting build's zip overrides, so a routing build produced 142 overrides in one
+# context and 137 in the other, silently, for three weeks.
+#
+# Merged onto `C:\AppyHourData` on 2026-08-31 (real profile = base, sandbox-only keys
+# unioned on top, real wins conflicts). Audit trail: `<name>.MERGE-AUDIT.md` beside
+# each file; pre-merge copies in `C:\AppyHourData\forensics\config\unify-20260831`.
+#
+# NEGATIVE — do NOT "fix" a stale read by pointing a caller back at %APPDATA%. That
+# is the bug. Read through these helpers; the legacy fallback below exists to make an
+# unmigrated caller ANNOUNCE itself for one cycle, not to keep the old path alive.
+
+GEL_CALC_SETTINGS_NAME = "gel_calc_shopify_settings.json"
+INVENTORY_SETTINGS_NAME = "inventory_reorder_settings.json"
+
+# One warning per (file, path) per process — a caller in a loop must not spam stderr.
+_LEGACY_SETTINGS_WARNED: set[str] = set()
+
+
+def _warn_legacy_settings(name: str, path: Path) -> None:
+    key = f"{name}|{path}".lower()
+    if key in _LEGACY_SETTINGS_WARNED:
+        return
+    _LEGACY_SETTINGS_WARNED.add(key)
+    print(
+        f"paths: LEGACY-SETTINGS FALLBACK fired for {name} -> {path}. The canonical copy "
+        f"({DATA_ROOT / name}) is missing, so this process is reading the MSIX-virtualized "
+        f"%APPDATA% path, whose contents depend on whether the reader is packaged. "
+        f"Migrate this caller to appyhour_lib.paths and restore the canonical file.",
+        file=sys.stderr,
+    )
+
+
+def settings_path(name: str, *, for_write: bool = False, extra_fallbacks=()) -> Path:
+    """Resolve a shared settings JSON to its canonical home under ``C:\\AppyHourData``.
+
+    Reads fall back to the legacy ``%APPDATA%\\AppyHour`` copy for one deprecation
+    cycle, printing loudly to stderr when they do (silent fallback is what let the
+    split run for three weeks unnoticed).
+
+    🔴 WRITES NEVER FALL BACK. ``for_write=True`` always returns the canonical path,
+    creating the directory if needed, even when the file does not exist yet. A writer
+    that fell back would re-create the divergence this migration just removed.
+
+    Args:
+        name: bare file name, e.g. :data:`GEL_CALC_SETTINGS_NAME`.
+        for_write: return the canonical path unconditionally (no fallback, no
+            existence requirement).
+        extra_fallbacks: additional read-only candidates tried after the legacy
+            %APPDATA% copy (used for the repo-local InventoryReorder copies).
+
+    Returns:
+        The path to open.
+
+    Raises:
+        FileNotFoundError: read mode, and no candidate exists — names every path tried
+            so a caller cannot half-open a missing settings file.
+    """
+    canonical = DATA_ROOT / name
+    if for_write:
+        canonical.parent.mkdir(parents=True, exist_ok=True)
+        return canonical
+    if canonical.exists():
+        return canonical
+    legacy = appyhour_appdata() / name
+    if legacy.exists():
+        _warn_legacy_settings(name, legacy)
+        return legacy
+    for extra in extra_fallbacks:
+        if Path(extra).exists():
+            _warn_legacy_settings(name, Path(extra))
+            return Path(extra)
+    tried = [canonical, legacy, *(Path(e) for e in extra_fallbacks)]
+    raise FileNotFoundError(
+        f"{name} not found. Tried: " + "; ".join(str(p) for p in tried)
+    )
+
+
+def gel_calc_settings_path(*, for_write: bool = False) -> Path:
+    """Return ``gel_calc_shopify_settings.json`` — Kori's settings store.
+
+    Carries the zip routing overrides the ShipRouting build reads, the hub policies,
+    ``routing_levers``, and live API keys. See the section header above for why this
+    must not be resolved from ``%APPDATA%`` by hand.
+    """
+    return settings_path(GEL_CALC_SETTINGS_NAME, for_write=for_write)
+
+
+def inventory_settings_path(*, for_write: bool = False) -> Path:
     """Return the live ``inventory_reorder_settings.json`` (IMAP + API creds).
 
     🔴 2026-07-27: the three carrier IMAP downloaders each hardcoded
@@ -219,26 +322,23 @@ def inventory_settings_path() -> Path:
     ``sync_logon`` still stamped ``carriers: ok``. Silent carrier-invoice lag,
     same class as the 2026-06-24 FedEx-only gap.
 
-    Resolution order (matches ``credentials._read_settings_fallback``):
-      1. %APPDATA%\\AppyHour\\inventory_reorder_settings.json  (the live master)
-      2. <repo>/InventoryReorder/inventory_reorder_settings.json
-      3. <repo>/InventoryReorder/dist/inventory_reorder_settings.json
+    Resolution order (2026-08-31 — canonical first; see the section header):
+      1. C:\\AppyHourData\\inventory_reorder_settings.json   (the live master)
+      2. %APPDATA%\\AppyHour\\inventory_reorder_settings.json (legacy, warns loudly)
+      3. <repo>/InventoryReorder/inventory_reorder_settings.json
+      4. <repo>/InventoryReorder/dist/inventory_reorder_settings.json
 
     Raises FileNotFoundError naming every path tried — never returns a path that
     does not exist, so a caller can't half-open a missing settings file.
     """
     repo = Path(__file__).resolve().parent.parent
-    candidates = [
-        appyhour_appdata() / "inventory_reorder_settings.json",
-        repo / "InventoryReorder" / "inventory_reorder_settings.json",
-        repo / "InventoryReorder" / "dist" / "inventory_reorder_settings.json",
-    ]
-    for p in candidates:
-        if p.exists():
-            return p
-    raise FileNotFoundError(
-        "inventory_reorder_settings.json not found. Tried: "
-        + "; ".join(str(p) for p in candidates)
+    return settings_path(
+        INVENTORY_SETTINGS_NAME,
+        for_write=for_write,
+        extra_fallbacks=(
+            repo / "InventoryReorder" / INVENTORY_SETTINGS_NAME,
+            repo / "InventoryReorder" / "dist" / INVENTORY_SETTINGS_NAME,
+        ),
     )
 
 
