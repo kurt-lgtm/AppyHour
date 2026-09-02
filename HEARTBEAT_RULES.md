@@ -397,6 +397,71 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
      `friday_forecast_refresh.py`, `build_prewarm_universe.py` and `prewarm_carrier_tnt.py`. Do NOT
      flip them to exception-only before then.
 
+17. **An ingest leg whose cost tracks the SIZE OF THE DATASET rather than the SIZE OF THE CHANGE
+   will eventually outgrow any ceiling — fix the window, never the ceiling.** 🔴 2026-08-01 →
+   2026-09-02: `sync_logon`'s `fulfillments` stage hit its 600s watchdog on **every** run for a
+   month and had become a daily page (`fail:Timeout:600s:cancelled-clean` — which is the rule-14
+   cancellation working exactly as designed; the alarm was correct, the workload was not).
+   `backfill_sync.sync_fulfillments` re-fetched a **fixed 30-day window every run** — the whole
+   active subscriber base — to gain ~2,500 changed rows. Measured in isolation against a scratch
+   DB: **696.3s / 12,573 rows on 2026-08-31**, and **142.4s / 12,748 rows on 2026-09-02** — the
+   same code and the same window, 4.9× apart, because the cost is Shopify's page latency times a
+   page count that only grows. 🔴 **Neither number is "the" cost — on the slow day leg 1 alone blew
+   the ceiling, on the fast day it fit and leg 2 blew it.** RESOLVED by an `updated_at` watermark
+   (`appyhour_lib/sync_watermark.py`, `WATERMARK_OVERLAP_HOURS`): same-day, same method, leg 1 went
+   **142.4s/12,748 rows → 21.3s/1,730 rows** at the 12h throttle interval and **10.4s/825 rows**
+   back-to-back, with the cold-start fallback measured at **136.5s/12,734 rows** (i.e. unchanged).
+   NEGATIVES:
+   - **🔴 Do NOT raise `STAGE_TIMEOUT_S`.** At these volumes no plausible ceiling helps, the
+     ceiling is what stops an abandoned stage becoming an untracked writer (rule 14), and a leg
+     whose runtime is a function of the subscriber base outgrows the next ceiling too.
+   - **🔴 A watermark advanced past unfetched rows loses them SILENTLY AND FOREVER — that failure
+     is strictly worse than the timeout it replaces.** A timeout re-fetches the window next run
+     and loses nothing; nothing errors when a mark over-advances, no count looks wrong, and the
+     gap surfaces months later as an order with no tracking. So the mark advances **only** over a
+     chunk that BOTH paged cleanly AND committed, and only after the write connection CLOSED (the
+     rule-14 boundary, for a sharper reason: a checkpoint mid-transaction abandons work the next
+     run redoes; a watermark mid-transaction tells the next run there is nothing to redo).
+   - **🔴 The pagination loop treats a non-200 and an exhausted retry as END OF PAGES** (it sets
+     `url = None` and moves on). That was harmless while the whole window was re-fetched every
+     run and is the exact hole a watermark would paper over, so `sync_fulfillments` carries a
+     `fetch_ok` flag per chunk. And because a watermark is a LOW-water mark, the first incomplete
+     chunk stops advancement for every LATER chunk too — jumping a hole is indistinguishable from
+     never having had one.
+   - **Overlap deliberately, and subtract it on READ.** Shopify `updated_at` is not strictly
+     monotonic across a paginated read (an order touched mid-pagination can be re-sorted past the
+     pages already walked) and the index lags the write. `WATERMARK_OVERLAP_HOURS = 2` is ~10× the
+     longest single-chunk paging interval measured, costs ~7 re-fetched orders (~3.5 orders/hour),
+     and `store_fulfillments` upserts on `tracking_number` so a duplicate is a no-op. Baking the
+     margin into the STORED value instead would compound it every run and walk the mark backwards.
+   - **Cold start is the FIXED WINDOW, never an empty one.** Missing, corrupt, unparseable, or a
+     mark from the future (clock skew, a restored file) all degrade to `since` / a clamped
+     non-empty window. An empty window looks exactly like a healthy quiet day while the gap it
+     leaves is permanent. `sync_watermark.clear()` is the sanctioned repair — there is no
+     "rewind N hours" API, because a hole of unknown depth is not repaired by a guess.
+   - **The watermark file lives at `C:\AppyHourData\sync_watermarks.json`, for the third time and
+     the same reason** (`heartbeats.json` 08-31, `sync_heartbeat.json` 09-01). A `%APPDATA%` fork
+     costs a heartbeat a false alarm; it costs a watermark **missing data** — one context banks
+     progress the other cannot see, so the next run derives its window from a value that does not
+     describe what was fetched. Access ONLY via `appyhour_lib.sync_watermark`.
+   - **Timestamps here are aware-UTC (`...Z`), unlike `sync_heartbeat.json`'s naive local.** They
+     are a value copied out of Shopify's domain and handed straight back as `updated_at_min`, not
+     a clock reading. Harmonising them would shift every window by the UTC offset, and a window
+     shifted FORWARD skips rows.
+   - **A watermark is NOT a heartbeat and must not be graded as one.** It records how far a feed
+     got, not when it last ran; `automation_health` keeps grading `sync_heartbeat.json`. A mark
+     that stops advancing because the feed is genuinely quiet is healthy.
+   - **🔴 This fixes leg 1 only — THE STAGE STILL TIMES OUT, and reporting otherwise on the
+     strength of leg 1 would be the win-claimed-from-the-improvement trap.** Leg 2
+     (`sync_parcel_panel`) is bounded by ParcelPanel's ~27.3 orders/min, not by a window; measured
+     read-only on 2026-09-02 its work list is **2,607 of 12,287 orders in the 30-day window ≈ 95
+     min**, which no 600s ceiling contains. What the watermark buys leg 2 is BUDGET: it now gets
+     ~579s of the 600s instead of ~458s, i.e. ~263 orders banked per run instead of ~208 (+26%),
+     and its 200-row flush (rule 14) means every one of those is committed. The backlog drains
+     monotonically (the `_skip_delivered` predicate never re-selects a delivered order), so the
+     pair fits only once it is worked down — expect `fail:Timeout:600s:cancelled-clean` to keep
+     stamping until then, and do NOT read its disappearance as the only success signal.
+
 ## Wired beats (update when adding/removing)
 
 | name | writer | max age |
