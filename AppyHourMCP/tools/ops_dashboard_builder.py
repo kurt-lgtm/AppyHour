@@ -15,7 +15,6 @@ from __future__ import annotations
 import argparse
 import io
 import re
-import sqlite3
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -28,7 +27,7 @@ sys.path.insert(0, str(HERE.parents[2]))      # repo root
 
 from googleapiclient.discovery import build  # noqa: E402
 from appyhour_lib.credentials import get_google_credentials  # noqa: E402
-from appyhour_lib.paths import db_path  # noqa: E402
+from appyhour_lib.db import connect_ro  # noqa: E402
 from ops_summary_builder import RESOLUTION_COSTS  # noqa: E402
 
 SID = "190AmXF8hy-M8lmt8q9uhOkyOMi7AmU0jJAd1KOpjWdA"
@@ -121,7 +120,9 @@ def main() -> None:
         wk = monday(rd).isoformat()
         reship_by_week.setdefault(wk, set()).add(rr[0].strip() or f"anon{len(rrows)}")
 
-    con = sqlite3.connect(f"file:{db_path()}?mode=ro", uri=True)
+    # connect_ro applies PRAGMA busy_timeout; a raw connect aborts the whole
+    # build if a checkpoint holds the DB during the denominator query.
+    con = connect_ro()
     fresh = con.execute("SELECT MAX(fulfilled_at) FROM fulfillments").fetchone()[0] or ""
     stale = (datetime.now() - datetime.fromisoformat(fresh[:19])) > timedelta(days=3) if fresh else True
 

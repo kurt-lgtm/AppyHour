@@ -1352,13 +1352,16 @@ def _local_carrier_state(order_num: str) -> tuple[str, str] | None:
     Read-only; never blocks the enrich on a locked/stale DB.
     """
     import re as _re
-    import sqlite3 as _sq
     digits = _re.sub(r"\D", "", order_num or "")
     if not digits:
         return None
     try:
-        from appyhour_lib.paths import db_path as _dbp
-        con = _sq.connect(f"file:{_dbp()}?mode=ro", uri=True)
+        # connect_ro (not a raw sqlite3.connect) — it applies
+        # PRAGMA busy_timeout, so a transient lock/checkpoint waits instead of
+        # raising into the bare except below, which would silently push the
+        # enrich back onto the slow Shopify path this function exists to avoid.
+        from appyhour_lib.db import connect_ro as _connect_ro
+        con = _connect_ro()
         try:
             hit = con.execute(
                 "SELECT tracking_company, dest_state FROM fulfillments WHERE order_number=? LIMIT 1",
