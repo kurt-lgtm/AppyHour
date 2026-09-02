@@ -8,11 +8,9 @@ then appends them to the UPDATE_Operational Issues tab.
 
 import json
 import logging
-import os
 import re
 import time
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import requests
 
@@ -190,6 +188,11 @@ VALID_ISSUE_PREFIXES = (
     "Order::Missing item",
     "Order::Missing tasting guide",
     "Order::Substitute complaint",
+    # Rotation served the same curation/tray in consecutive orders (NOT a
+    # substitution — nothing was swapped; the rotation repeated). Kurt
+    # 2026-08-20, ticket 288642988. Keyword inference must NOT map "change my
+    # selections / different options" to Substitute complaint.
+    "Order::Rotation::Duplicate curation",
     "Order::Wrong Order",
     "Order::Wrong item",
 )
@@ -794,9 +797,9 @@ def sync_gorgias_to_sheet(days_back: int = 14, dry_run: bool = False) -> dict[st
 
     settings = _load_settings()
     creds_path = settings.get("google_credentials_path", "")
-    if not creds_path or not os.path.exists(creds_path):
-        creds_path = str(Path(__file__).resolve().parent.parent.parent / "shipping-perfomance-review-accd39ac4b78.json")
-    gclient = GoogleIntegration(creds_path)
+    # No settings path -> GoogleIntegration resolves via appyhour_lib.credentials
+    # (GOOGLE_SVC_ACCOUNT_JSON_CONTENT on App Platform, key file locally).
+    gclient = GoogleIntegration(creds_path or None)
 
     # Read FULL rows (A:J) so we can upsert in place when a ticket already
     # exists. Sheet model: one row per ticket (key = gorgias_link). When a
@@ -1229,11 +1232,29 @@ def _shopify_order_by_email(email: str) -> dict | None:
 
 
 def _extract_carrier_from_shopify(order: dict) -> str:
-    """Extract carrier name from Shopify order fulfillments."""
+    """Extract carrier from Shopify fulfillments.
+
+    tracking_company is often null even on fulfilled orders (Kurt 2026-08-25:
+    "if it's fulfilled it has a carrier") — fall back to tracking-number prefix
+    and tracking-URL host across ALL fulfillment entries. Only service="manual"
+    fulfillments with zero tracking legitimately have no carrier.
+    """
     for ful in order.get("fulfillments", []):
-        company = ful.get("tracking_company", "")
+        company = (ful.get("tracking_company") or "").strip()
         if company:
             return company
+    for ful in order.get("fulfillments", []):
+        tn = (ful.get("tracking_numbers") or [""])[0] or (ful.get("tracking_number") or "")
+        url = (ful.get("tracking_urls") or [""])[0] or (ful.get("tracking_url") or "")
+        s = f"{tn} {url}".lower()
+        if tn.startswith("1Z"):
+            return "UPS"
+        if tn.startswith("1LS") or "lasership" in s or "ontrac" in s:
+            return "OnTrac"
+        if tn.upper().startswith("VH") or "veho" in s:
+            return "veho"
+        if "fedex" in s or re.match(r"^\d{12,15}$", tn or ""):
+            return "FedEx"
     return ""
 
 
@@ -1309,6 +1330,55 @@ def _extract_state_from_shopify(order: dict) -> str:
     return ""
 
 
+_STATE_FULL = {
+    "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas", "CA": "California",
+    "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware", "FL": "Florida", "GA": "Georgia",
+    "HI": "Hawaii", "ID": "Idaho", "IL": "Illinois", "IN": "Indiana", "IA": "Iowa",
+    "KS": "Kansas", "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine", "MD": "Maryland",
+    "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi",
+    "MO": "Missouri", "MT": "Montana", "NE": "Nebraska", "NV": "Nevada", "NH": "New Hampshire",
+    "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York", "NC": "North Carolina",
+    "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma", "OR": "Oregon", "PA": "Pennsylvania",
+    "RI": "Rhode Island", "SC": "South Carolina", "SD": "South Dakota", "TN": "Tennessee",
+    "TX": "Texas", "UT": "Utah", "VT": "Vermont", "VA": "Virginia", "WA": "Washington",
+    "WV": "West Virginia", "WI": "Wisconsin", "WY": "Wyoming", "DC": "District of Columbia",
+}
+
+
+def _local_carrier_state(order_num: str) -> tuple[str, str] | None:
+    """Carrier + full-name state for an order from the local fulfillments cache.
+
+    Returns None on any miss/error — caller falls back to the Shopify API.
+    Read-only; never blocks the enrich on a locked/stale DB.
+    """
+    import re as _re
+    import sqlite3 as _sq
+    digits = _re.sub(r"\D", "", order_num or "")
+    if not digits:
+        return None
+    try:
+        from appyhour_lib.paths import db_path as _dbp
+        con = _sq.connect(f"file:{_dbp()}?mode=ro", uri=True)
+        try:
+            hit = con.execute(
+                "SELECT tracking_company, dest_state FROM fulfillments WHERE order_number=? LIMIT 1",
+                (int(digits),),
+            ).fetchone()
+        finally:
+            con.close()
+    except Exception:
+        return None
+    if not hit or not (hit[0] or "").strip():
+        return None
+    u = hit[0].upper()
+    carrier = ("FedEx" if u.startswith(("FEDEX", "FED EX")) else
+               "OnTrac" if u.startswith("ONTRAC") or "LASER" in u else
+               "veho" if u.startswith("VEHO") else
+               "UPS" if u.startswith("UPS") else "")
+    state = _STATE_FULL.get((hit[1] or "").strip().upper(), "")
+    return (carrier, state) if (carrier or state) else None
+
+
 def enrich_incomplete_rows(dry_run: bool = False) -> dict[str, object]:
     """Enrich rows in UPDATE_Operational Issues that have order numbers but
     missing fields (Gorgias Link, Carrier, State, FC Tag, Issue Type, Resolution).
@@ -1331,15 +1401,16 @@ def enrich_incomplete_rows(dry_run: bool = False) -> dict[str, object]:
 
     settings = _load_settings()
     creds_path = settings.get("google_credentials_path", "")
-    if not creds_path or not os.path.exists(creds_path):
-        creds_path = str(Path(__file__).resolve().parent.parent.parent / "shipping-perfomance-review-accd39ac4b78.json")
-    gclient = GoogleIntegration(creds_path)
+    # No settings path -> GoogleIntegration resolves via appyhour_lib.credentials
+    # (GOOGLE_SVC_ACCOUNT_JSON_CONTENT on App Platform, key file locally).
+    gclient = GoogleIntegration(creds_path or None)
 
     all_rows = gclient.read_sheet(SPREADSHEET_ID, f"'{TAB_NAME}'!A:J")
     if not all_rows:
         return {"error": "No data found"}
 
     enriched = []
+    failures = []  # rows that stay incomplete, with the reason — surfaced weekly
     updates = []  # (range, values) for batch update
 
     for row_idx, row in enumerate(all_rows):
@@ -1369,16 +1440,55 @@ def enrich_incomplete_rows(dry_run: bool = False) -> dict[str, object]:
         if not missing_fields:
             continue
 
+        # Rows audited as having NO source signal anywhere (ticket text empty/
+        # image-only, no Slack post, 2026-07-25 audit) are permanently
+        # unfillable — marked in the Comment col; skip instead of re-attempting
+        # (and re-failing) every week. That retry loop was the enrich plateau.
+        if "NO_SOURCE_SIGNAL" in (comment or ""):
+            continue
+
         has_order = bool(order_num and order_num.strip())
         has_link = bool(gorgias_link and gorgias_link.strip())
 
-        # Skip rows with neither order number nor Gorgias link
+        # LOCAL-FIRST (2026-07-27): carrier/state come from the fulfillments
+        # cache in one indexed read — the Shopify-API path is slow and dies
+        # silently after idle (TimeoutError class). API remains the fallback
+        # for rows the cache hasn't ingested yet.
+        if has_order and ("carrier" in missing_fields or "state" in missing_fields):
+            local = _local_carrier_state(order_num)
+            if local:
+                l_car, l_state = local
+                if "carrier" in missing_fields and l_car:
+                    row[4] = l_car
+                    missing_fields.remove("carrier")
+                if "state" in missing_fields and l_state:
+                    row[5] = l_state
+                    missing_fields.remove("state")
+                if not missing_fields:
+                    # everything this row needed came from the local cache
+                    sheet_row = row_idx + 1
+                    enriched.append({"row": sheet_row, "order": order_num,
+                                     "filled": ["carrier/state:local"], "values": list(row[:10])})
+                    updates.append({"range": f"'{TAB_NAME}'!A{sheet_row}:J{sheet_row}",
+                                    "values": [list(row[:10])]})
+                    continue
+
+        # Rows with neither order number nor Gorgias link are unfixable — record, don't hide
         if not has_order and not has_link:
+            failures.append(
+                {
+                    "row": row_idx + 1,
+                    "order": "",
+                    "missing": missing_fields,
+                    "reason": "no order# and no gorgias link — nothing to look up",
+                }
+            )
             continue
 
         shopify_order = None
         customer_email = ""
         ticket = None
+        fail_reason = ""
 
         if has_order:
             # Look up from Shopify first (need email for Gorgias search)
@@ -1400,7 +1510,9 @@ def enrich_incomplete_rows(dry_run: bool = False) -> dict[str, object]:
         if has_link and not has_order:
             # Extract ticket ID from Gorgias link and fetch directly
             tid_match = re.search(r"/(\d+)(?:[?#]|\s*$)", gorgias_link.strip())
-            if tid_match:
+            if not tid_match:
+                fail_reason = "gorgias link has no ticket id"
+            else:
                 try:
                     resp = _gorgias_get(
                         f"{base_url}/tickets/{tid_match.group(1)}",
@@ -1411,12 +1523,27 @@ def enrich_incomplete_rows(dry_run: bool = False) -> dict[str, object]:
                         # Get customer email from ticket
                         customer_email = ticket.get("customer", {}).get("email", "")
                         _time.sleep(0.3)
-                except Exception:
-                    pass
+                    else:
+                        fail_reason = f"gorgias ticket fetch HTTP {resp.status_code}"
+                except Exception as e:  # keep the reason, not a silent pass
+                    fail_reason = f"gorgias ticket fetch error: {type(e).__name__}"
+                    logger.warning("enrich row %d: %s", row_idx + 1, fail_reason)
+            # Order# fallback: pull from the ticket itself (integrations/subject/body)
+            if ticket and not has_order:
+                order_from_ticket = _extract_order_number(ticket, gorgias_auth=auth, gorgias_base=base_url)
+                if order_from_ticket:
+                    shopify_order = _shopify_order_by_name(order_from_ticket)
+                    _time.sleep(0.3)
+                    if not shopify_order:
+                        fail_reason = f"order {order_from_ticket} from ticket not found in Shopify"
             # Use email to find Shopify order
             if customer_email and not shopify_order:
                 shopify_order = _shopify_order_by_email(customer_email)
                 _time.sleep(0.3)
+                if not shopify_order:
+                    fail_reason = fail_reason or f"no Shopify order for email {customer_email}"
+            elif ticket and not customer_email and not shopify_order:
+                fail_reason = fail_reason or "ticket has no customer email"
         elif any(f in missing_fields for f in ("gorgias_link", "issue_type", "resolution", "state", "fc_tag")):
             ticket = _search_gorgias_by_order(
                 order_num,
@@ -1505,6 +1632,27 @@ def enrich_incomplete_rows(dry_run: bool = False) -> dict[str, object]:
                 new_values[8] = res
                 fields_filled.append("resolution")
 
+        # Record what is STILL missing after this pass, with the best reason we have
+        col_idx = {"gorgias_link": 3, "carrier": 4, "state": 5, "fc_tag": 6, "issue_type": 7, "resolution": 8}
+        still_missing = [f for f in missing_fields if not new_values[col_idx[f]].strip()]
+        if not new_values[2].strip():
+            still_missing.insert(0, "order_num")
+        if still_missing:
+            if "issue_type" in still_missing and ticket and not fail_reason:
+                cf_val = (ticket.get("custom_fields", {}) or {}).get(FIELD_ISSUE_TYPE, {}).get("value", "")
+                fail_reason = (
+                    f"ticket Issue Type field invalid: {cf_val!r}" if cf_val
+                    else "ticket has no Issue Type / Contact Reason set (CS categorization gap)"
+                )
+            failures.append(
+                {
+                    "row": row_idx + 1,
+                    "order": new_values[2].strip(),
+                    "missing": still_missing,
+                    "reason": fail_reason or "lookups returned nothing",
+                }
+            )
+
         if fields_filled:
             sheet_row = row_idx + 1  # 1-indexed
             enriched.append(
@@ -1533,9 +1681,18 @@ def enrich_incomplete_rows(dry_run: bool = False) -> dict[str, object]:
             },
         ).execute()
 
+    # Aggregate failure reasons so the weekly summary can lead with them
+    reason_counts: dict[str, int] = {}
+    for f in failures:
+        key = f["reason"].split(":")[0]
+        reason_counts[key] = reason_counts.get(key, 0) + 1
+
     return {
         "total_rows": len(all_rows) - 1,
         "rows_enriched": len(enriched),
+        "rows_failed": len(failures),
+        "failure_reasons": dict(sorted(reason_counts.items(), key=lambda kv: -kv[1])),
+        "failures": failures[:40],
         "dry_run": dry_run,
         "enriched": [{"row": e["row"], "order": e["order"], "filled": e["filled"]} for e in enriched[:20]],
     }
@@ -1711,9 +1868,9 @@ def sync_food_safety_to_sheet(days_back: int = 14, dry_run: bool = False) -> dic
 
     settings = _load_settings()
     creds_path = settings.get("google_credentials_path", "")
-    if not creds_path or not os.path.exists(creds_path):
-        creds_path = str(Path(__file__).resolve().parent.parent.parent / "shipping-perfomance-review-accd39ac4b78.json")
-    gclient = GoogleIntegration(creds_path)
+    # No settings path -> GoogleIntegration resolves via appyhour_lib.credentials
+    # (GOOGLE_SVC_ACCOUNT_JSON_CONTENT on App Platform, key file locally).
+    gclient = GoogleIntegration(creds_path or None)
 
     existing_rows = gclient.read_sheet(SPREADSHEET_ID, f"'{FOOD_SAFETY_TAB}'!A:J")
     # Deduplicate by order number (col B) and Gorgias link (col J)
