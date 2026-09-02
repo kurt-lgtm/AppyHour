@@ -1497,6 +1497,45 @@ and a `freshness()` that raises when the newest `synced_at` is over 3h old.
 | `ATTEMPT_FAILED` | attempted delivery, unable to complete delivery, recipient/business closed, **or PP `status = FAILED_ATTEMPT`** (display: "delivery attempt failed") | 1 |
 | `ADDRESS_ISSUE` (widened 8/17) | + "incorrect address", "address is invalid", "delivery exception … address" | — |
 | `DELAYED` (new 8/17) | Shopify `displayStatus = DELAYED`, ≥ `EXC_DELAYED_MIN_DAYS` (3) since fulfillment (display: "delayed / stuck in transit") | — |
+| **`REFUSED`** (new 9/02) | "refused by the recipient", "delivery was refused", "package refused", "recipient refused" (display: "refused by recipient") | — |
+
+### 🔴 REFUSED WAS INVISIBLE FOR THE WHOLE LIFE OF THIS FILE (2026-09-02)
+
+The taxonomy had **no refused pattern at all**. Order **#167725** (FedEx, Fort Davis TX) scanned
+`Delivery exception, Delivery was refused by the recipient, FORT STOCKTON TX 79735` on 2026-08-26
+and classified **IN_NETWORK / no ping**. PP's top-level status was `Exception_006`, not
+`FAILED_ATTEMPT`, so the structured-field rescue at `excClassify_` did not catch it either. Nine
+days, never delivered, never alerted — found only by dumping `pp_webhook_events` by hand.
+
+**The lesson is the one already written above, and it repeated anyway:** a class that no regex
+names is not "rare", it is *invisible*, and nothing in the pipeline reports its own blindness. The
+suppression looked correct from the outside because a suppressed box and an unclassifiable box
+produce the identical output — silence.
+
+Two smaller phrasings widened in the same pass, both of which had been returning NONE and were
+being caught only by luck (PP's `FAILED_ATTEMPT` field still happening to be set at sweep time —
+when that field moves on first, the box goes silent):
+
+| phrasing | was | now | seen on |
+|---|---|---|---|
+| `Location security restrictions - Delivery will be reattempted` | NONE | `ADDRESS_ISSUE` | #172302, #175678 |
+| `Local delivery restriction - Delivery not attempted` | NONE | `ATTEMPT_FAILED` | #171945 |
+
+The `ATTEMPT_FAILED` pattern knew FedEx's slashed `Package not delivered/not attempted` but not
+the bare `Delivery not attempted`. One carrier's punctuation is never the class.
+
+### `Exception_001` is delay-noise — do NOT treat the PP substatus as actionable
+
+All **10** `Exception_001` events in `pp_webhook_events` (2026-08-20 → 09-02, the whole table) are
+one FedEx sort-facility text: `Shipment exception, Barcode label unreadable and replaced, <city>`.
+Seven delivered **10–20 hours later**, three were still in normal network motion, **zero failed**.
+It is the largest exception substatus and it is entirely benign.
+
+🔴 **`excMatchFailure_` returns NONE on all of them — which is right, for the wrong reason.** The
+suppression comes from the later DELIVERED scan or the IN_NETWORK fall-through, not from any rule
+that knows a barcode rescan is benign. There is no positive "this is noise" assertion anywhere in
+the taxonomy, so a *new* benign carrier phrasing is suppressed by accident, exactly as a new
+*failure* phrasing is missed by accident. Same blind spot, both directions.
 
 **SUPPRESS** — never ping:
 
