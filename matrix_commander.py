@@ -205,7 +205,6 @@ SUBSTITUTION_FAMILIES: dict[str, list[str]] = {
     "Farmstead Misc": [
         "CH-MAFT",
         "CH-BRZ",
-        "CH-PRBZ",
         "CH-AJACK",
         "CH-MARGOT",
         "CH-MOSES",
@@ -341,8 +340,17 @@ for _fam, _skus in SUBSTITUTION_FAMILIES.items():
 # Non-pickable prefixes — not food, skip in demand counts
 SKIP_PREFIXES = ("AHB-", "BL-", "PK-", "TR-", "EX-", "PR-CJAM", "CEX-E")
 
-# Settings JSON path (inventory + curation config)
-SETTINGS_PATH = Path(__file__).parent / "InventoryReorder" / "dist" / "inventory_reorder_settings.json"
+# Settings JSON path (inventory + curation config).
+# 🔴 NOT the repo `dist/` copy (through 2026-08-31) — that was one of THREE live copies, and
+# the one no other tool read first. Canonical is C:\AppyHourData; appyhour_lib.paths keeps a
+# loud legacy fallback for one deprecation cycle. Falls back to the old literal only if
+# appyhour_lib is unimportable, so a trimmed/frozen tree still resolves something.
+try:
+    from appyhour_lib.paths import inventory_settings_path as _inv_settings_path
+
+    SETTINGS_PATH = _inv_settings_path(for_write=True)
+except ImportError:  # pragma: no cover — frozen/trimmed tree
+    SETTINGS_PATH = Path(__file__).parent / "InventoryReorder" / "dist" / "inventory_reorder_settings.json"
 
 # MFG translations CSV (exported from RMFG Translator portal)
 MFG_TRANSLATIONS_PATH = Path(__file__).parent / "mfg_translations.csv"
@@ -1153,10 +1161,18 @@ def check_routing_and_ice(orders: list[OrderRow], fixed_ids: set | None = None) 
     details += [f"(info) {k}: {v}" for k, v in rep.info.items()]
     if not rep.passed:
         n_bad = sum(len(v) for v in rep.hard_fails.values())
-        return CheckResult("Routing & Ice (col L)", False,
-                           f"{n_bad} routing/ice defect(s) in col L — DO NOT SUBMIT", details[:20])
-    return CheckResult("Routing & Ice (col L)", True,
-                       f"All {len(orders)} orders routed + iced per policy", details[:6])
+        res = CheckResult("Routing & Ice (col L)", False,
+                          f"{n_bad} routing/ice defect(s) in col L — DO NOT SUBMIT", details[:20])
+    else:
+        res = CheckResult("Routing & Ice (col L)", True,
+                          f"All {len(orders)} orders routed + iced per policy", details[:6])
+    # 🔴 The STRUCTURED report rides along (2026-09-03): `details` is a capped display list
+    # ("untagged: [8 names]…"), useless for acting per order. gen_rmfg_sheet drops row-level
+    # defects (untagged / PO box / malformed / leaky fence) from the sheet instead of refusing
+    # the whole cohort (Kurt: "if one is untagged, we just don't put it in the sheet") and needs
+    # the FULL per-check name lists to do it.
+    res.qc_report = rep          # type: ignore[attr-defined]
+    return res
 
 
 # ═══════════════════════════════════════════════════════════════════════════

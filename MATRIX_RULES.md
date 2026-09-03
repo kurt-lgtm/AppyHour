@@ -103,6 +103,13 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
     hand-roll a tag regex), untagged, HD pins, leaky fences, ice policy (`MAX_ICE_NONTRAY` env),
     Indy pin count (info-only here — the CAP is enforced apply-side where box data lives). A missing/
     unimportable qc_gate = the check FAILS loud, never skips. Trays = any TR-/TRAY SKU in assignments.
+    🔴 **ROW-LEVEL defects DROP THE ROW, never the sheet (Kurt 2026-09-03, 28h before ship, after a
+    72-untagged and then a 1,976-untagged whole-sheet refusal: "if one is untagged, we just don't put
+    it in the sheet. that simple. no need to halt the whole goddamn thing").** `gen_rmfg_sheet`
+    removes the rows for `untagged` / `po_box` / `grammar` / `leaky_fence` (`DROP_CLASSES`), re-runs
+    this check on the rest, and NAMES every drop in the log, in `<sheet>.dropped.json` and in the
+    job result — a drop nobody sees is a lost box. `ice` / `tray_gel_24` stay col-L fixes; cap
+    breaches stay cohort-level. `check_routing_and_ice` attaches the structured `qc_report` for it.
 
 15. **Col L must PRESERVE `Gift_Redemption` and `Reship - <reason>` tags alongside route+gel**
     (Kurt 2026-07-10). The wk0713 export's col-L filter kept ONLY routing+gel tags (correct fix for
@@ -129,14 +136,15 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
     emitted `Walnut, Honey & Extra Virgin Olive Oil Crackers` (Shopify title, comma) but RMFG's
     translator maps `Walnut Honey & …` (no comma) — 545 units would have failed their import mapping.
     The translator export (`meal-type-export-appy-hour-*.csv`, latest in Downloads) is the authority
-    for header spelling; also mind its trailing-dot pairs (`Prairie Breeze.`=CH-PRBZ≠CH-BRZ,
-    `…Sharp Cheddar.`=CH-V5CH≠CH-ACAC) — a period is a different product.
+    for header spelling. Prairie Breeze maps to CH-BRZ with or without a trailing period. Still mind
+    the Sharp Cheddar trailing-dot pair (`…Sharp Cheddar.`=CH-V5CH≠CH-ACAC), where the period
+    identifies a different product.
     ✅ Implemented 2026-07-17 (wk0720 walnut-header pair): (a) `merge_gift_xlsx` now merges by
     HEADER (column union), normalizing both sheets to the no-comma walnut form first
     (`_normalize_rule15b_header`) — comma vs no-comma no longer splits AC-FCWALN demand across
     two columns; (b) `constants.NAME_TO_SKU` maps BOTH walnut forms → AC-FCWALN so the
     rule-15b-correct submitted sheet passes `check_sku_mappings` (was false-failing weekly).
-    Do NOT strip punctuation generally — the trailing-dot pairs above are DIFFERENT products;
+    Do NOT strip punctuation generally — the Sharp Cheddar trailing-dot pair above represents DIFFERENT products;
     only the walnut comma is normalized. Residual: `mfg_translations.csv` AC-FCWALN row still
     carries the comma form, so generated sheets still EMIT the comma header (resolver + merge
     normalize it downstream). Tests: `tests/test_gift_merge_walnut.py`.
