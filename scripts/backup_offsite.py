@@ -29,6 +29,15 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+# 🔴 Pin THIS tree's appyhour_lib before any import of it (HEARTBEAT_RULES rule 19, 2026-09-03).
+# appyhour_lib is a pip editable install mapped to the DEV tree, so without this line the prod copy
+# (C:\AppyHourProd, run by the Weekly Offsite Backup schtask) imported DEV heartbeat/notify — the
+# file was byte-identical in both trees and still ran the wrong library. The lib imports below are
+# function-level (:525/:599/:678); a module-level pin covers them all. Caught by
+# automation_health.check_prod_entry_points on its first run.
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 
 def app_dir() -> Path:
     base = Path(os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming")))
