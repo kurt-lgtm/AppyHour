@@ -29,6 +29,7 @@ from appyhour_lib.bootstrap import init  # noqa: E402
 from appyhour_lib.heartbeat import read_ledger, age_hours, beat  # noqa: E402
 from appyhour_lib.notify import notify  # noqa: E402
 from appyhour_lib.sync_heartbeat import read as read_sync_heartbeat  # noqa: E402
+from appyhour_lib.sync_heartbeat import stamp_time as sync_stamp_time  # noqa: E402
 
 # Expectations live HERE, not in the ledger (rule 4): name -> max age in hours.
 EXPECTED = {
@@ -70,6 +71,11 @@ EXPECTED = {
     "slack-reship": 10 * 24,
 }
 SYNC_HEARTBEAT_MAX_H = 48
+# HEARTBEAT_RULES rule 18: a `partial:` ingest stamp (cancelled at the ceiling AFTER banking rows)
+# is info while the leg's last `ok` is within this window, CRITICAL once it is not. 36h = three
+# 12h throttle windows: two consecutive partials (Tue+Wed backlog) are the measured normal; a
+# third with no `ok` means the backlog is not draining — the dead-cadence class.
+SYNC_PARTIAL_ESCALATE_H = 36
 
 # --- Windows scheduled tasks ------------------------------------------------------------
 # 🔴 Why this is a REGISTRY and not a prefix (2026-08-31): the audit filtered on
@@ -226,9 +232,39 @@ def check_sync_heartbeat(findings: list[str]) -> None:
     # which rule 4 bans. This key was invisible while the checker read the frozen overlay — the move
     # is what surfaced it, and it must NOT be reported as a new breakage.
     bad = [k for k, v in data.items() if k.endswith("_status")
-           and not str(v).lower().startswith(("ok", "success", "retired"))]
+           and not str(v).lower().startswith(("ok", "success", "retired", "partial:"))]
     if bad:
         findings.append(f"ingest legs not ok: {', '.join(bad)}")
+    _grade_partial_legs(data, findings)
+
+
+def _grade_partial_legs(data: dict, findings: list[str], now: datetime | None = None) -> None:
+    """`partial:` = cancelled at the ceiling AFTER banking rows (rule 18). 🟡 info while the leg
+    has an `ok` inside SYNC_PARTIAL_ESCALATE_H; 🔴 CRITICAL once it does not.
+
+    🔴 Recency is the LAST SUCCESS (`<name>`), never the last attempt. A leg stamping a fresh
+    `partial:` every run without ever finishing is exactly the leg that must escalate, and the
+    attempt timestamp would keep it green forever (rule 3b(c), same trap). A leg that has NEVER
+    succeeded (no bare key) is graded from its attempt stamp instead — otherwise it would be
+    CRITICAL on its very first partial, before any backlog could possibly have drained.
+    """
+    now = now or datetime.now()
+    for key, val in data.items():
+        if not key.endswith("_status") or not str(val).lower().startswith("partial:"):
+            continue
+        name = key[: -len("_status")]
+        last_ok = data.get(name)
+        try:
+            ref = datetime.fromisoformat(str(last_ok)) if last_ok else sync_stamp_time(data, name)
+        except ValueError:
+            ref = sync_stamp_time(data, name)
+        age_h = (now - ref).total_seconds() / 3600
+        if age_h > SYNC_PARTIAL_ESCALATE_H:
+            findings.append(f"ingest leg {name} PARTIAL with no ok for {age_h:.0f}h "
+                            f"(max {SYNC_PARTIAL_ESCALATE_H}h) — backlog not draining: {val}")
+        else:
+            print(f"  info: {key} = {val} (last ok {age_h:.0f}h ago; "
+                  f"escalates at {SYNC_PARTIAL_ESCALATE_H}h)")
 
 
 _SCHTASKS_CSV: str | None = None
@@ -1095,6 +1131,9 @@ def finding_key(text: str) -> str:
         return "ingest-heartbeat-stale"
     if text.startswith("ingest legs not ok"):
         return "ingest-legs-not-ok"
+    m = re.match(r"ingest leg (\S+) PARTIAL", text)
+    if m:
+        return "ingest-partial-" + m.group(1)   # per leg; the age is variable and must not reach it
     # 🔴 Quoted form FIRST. Three audited task names contain spaces ("AppyHour Carrier Invoice
     # Sync", "AppyHour Weekly Offsite Backup", "AppyHour Zone Floor Rebuild"), and the bare
     # `(\S+)` pattern below captures only "AppyHour" — collapsing all three onto ONE key, so

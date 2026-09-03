@@ -229,7 +229,8 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
        factory down, so the lock is taken per committed batch and released across the HTTP calls.
        NEGATIVE: do not reintroduce a single `conn` "for efficiency" — the time is in the HTTP.
      - **A cancel is NOT a failure.** Stages stamp `cancelled:Timeout` and re-raise; `_run_stage`
-       stamps `fail:Timeout:<n>s:cancelled-clean`. Never fold `StageCancelled` into
+       stamps `partial:Timeout:<n>s:…` when rows were committed and `fail:Timeout:<n>s:cancelled-clean`
+       when none were (rule 18). Never fold `StageCancelled` into
        `sync_all_carriers`' `failures` list — that would fire rule 8's partial-run alarm for legs
        that were never attempted.
      - **🔴 STILL OPEN (smaller, named):** `auto_import` is cancellable but frees no lock, because
@@ -459,8 +460,78 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
      ~579s of the 600s instead of ~458s, i.e. ~263 orders banked per run instead of ~208 (+26%),
      and its 200-row flush (rule 14) means every one of those is committed. The backlog drains
      monotonically (the `_skip_delivered` predicate never re-selects a delivered order), so the
-     pair fits only once it is worked down — expect `fail:Timeout:600s:cancelled-clean` to keep
-     stamping until then, and do NOT read its disappearance as the only success signal.
+     pair fits only once it is worked down — expect the timeout stamp (now
+     `partial:Timeout:600s:…` when rows were banked, rule 18) to keep appearing until then, and
+     do NOT read its disappearance as the only success signal.
+
+18. **A cancel that BANKED progress is `partial:`, not `fail:` — and `partial:` NEVER advances
+   last-success. A cancel that banked NOTHING is still `fail:`.** 🔴 2026-09-03: the rule-17
+   watermark fixed leg 1, and the stage kept stamping `fail:Timeout:600s:cancelled-clean` with an
+   `error` Slack every run anyway — "third day running". Measured, not inferred: leg 2
+   (`sync_parcel_panel`) re-polls every fulfillment in the last 30 days that is not yet delivered;
+   on Wednesday 09:20 that list was ~1,300 (the Monday cohort still in transit), and at ParcelPanel's
+   ~100/min a 600s ceiling covers ~1,000 — so Tue/Wed cancel and the other days fit. Every one of
+   those cancels landed on a committed `PP_FLUSH_EVERY=200` boundary (`_flush` → `commit` →
+   `checkpoint`), so the progress WAS banked and the remainder IS re-selected next run. The stamp
+   said `fail:` because `_run_stage` could not tell a stall from a bounded run that did its share.
+   The heartbeat now carries THREE stamp classes, and every reader must know all three:
+   - **`ok`** — the stage finished. The ONLY class that advances the bare `<name>` key.
+   - **`partial:Timeout:<N>s:<rows> rows committed; remainder re-selected next run`** — cancelled at
+     the ceiling AFTER at least one commit. Written to `<name>_status` + `<name>_last_attempt`. Log
+     line only; **no Slack**. Silence is EARNED here (rule 16), not assumed: the checker below
+     watches for a partial that never becomes an `ok`.
+   - **`fail:Timeout:<N>s:cancelled-clean`** — cancelled at the ceiling with ZERO commits. Same
+     `error` Slack as before. Zero rows in 600s is a real stall (dead feed, lock starvation, a hung
+     socket), not a big backlog, and it must page.
+   NEGATIVES:
+   - **🔴 `partial:` must NOT advance `<name>`'s last-success timestamp.** The bare key gates the
+     12h throttle (`_should_run`), and a stale last-success is exactly what lets the NEXT logon run
+     drain the remainder instead of sleeping 12h. Advancing it on `partial:` would turn "banked
+     263 rows, 1,000 to go" into "done for 12h" — the 2026-07-27 bug (`_stamp` docstring) wearing
+     a new prefix. `_stamp` advances `<name>` on `ok` only; a test proves both directions.
+   - **🔴 Progress is counted ONLY after a commit succeeds** (`CancelToken.note_progress`, called in
+     `backfill_sync._flush` and after each chunk commit in `sync_fulfillments`, both AFTER the
+     writer context exits). Never at a "nothing written" checkpoint, never before `commit()`, never
+     for rows merely fetched — a `partial:` that counts un-committed rows claims durability the
+     next run will not find, the rule-17 over-advanced-watermark class in a different file.
+   - **Zero progress stays `fail:` with the error page, exactly as before.** Do not soften it to
+     `partial:0` "for consistency": the whole point of the split is that the two mean opposite
+     things and demand opposite actions (wait vs. investigate).
+   - **The checker grades `partial:` as info ONLY while it is recent, and escalates to a CRITICAL
+     finding when a leg has been `partial:` with no `ok` for > 36h** (`automation_health.
+     check_sync_heartbeat`, `SYNC_PARTIAL_ESCALATE_H`). Measured recency = the leg's last SUCCESS
+     (`<name>`), not its last attempt — a leg that stamps a fresh `partial:` every run without ever
+     finishing is the dead-cadence class, and counting attempts would hold it green forever (rule 3b
+     (c), same trap). 36h = three 12h throttle windows: two consecutive partials on Tue+Wed are the
+     measured normal; a third with no `ok` means the backlog is not draining.
+   - **`sync_heartbeat.merge` needs no special case** — `partial:` writes `_last_attempt`, so
+     `stamp_time` already carries it newest-wins over an older `ok` (tested).
+   - **The Slack silence on `partial:` is deliberate and is NOT "exception-only without a watcher".**
+     Rule 16's order is honoured: the stamp lands, the checker reads it and escalates, and only then
+     is the per-run page removed. Re-adding an `info` notify on every partial re-creates the daily
+     page this rule exists to remove.
+   **Single-instance guard, same commit.** 🔴 2026-09-03 09:03: three `sync_logon` invocations
+   overlapped — `appyhour_sync_on_logon` at 09:20 and 09:40 (two logons) and
+   `appyhour_sync_daily_noon` at 09:30 — with NO guard between them; the 09:30 one exited
+   `0x40010004` (process terminated). Both tasks run the same script; the DB writelock serialises
+   their WRITES, but the polls between writes are not serialised, so they double-polled ParcelPanel
+   for nothing and each one's 600s ceiling was spent partly waiting on the other. `sync_logon.main`
+   now takes `C:\AppyHourData\sync_logon.lock` (`{pid, started_at}`, `O_CREAT|O_EXCL`) first:
+   - **Live holder → print `sync_logon already running (pid N since T) — exiting`, exit 0, stamp
+     NOTHING.** Exit 0, not 1: a refused duplicate is not a failure, and a non-zero exit would light
+     up `check_schtasks` for the task that correctly stood down.
+   - **Dead holder → stale lock, take over, log it.** Liveness is `appyhour_lib.db.pid_alive`
+     (Windows `OpenProcess` + `GetExitCodeProcess == STILL_ACTIVE`, ctypes). 🔴 NEVER
+     `os.kill(pid, 0)` on Windows: there it is `TerminateProcess(pid, 0)` — it KILLS the process it
+     was asked to probe. A test proves the probe is true for a live PID and false for an exited one.
+   - **Released in a `finally`, only if it still holds OUR pid** — a successor that took over a
+     stale lock must not have its lock deleted by the corpse's unwinding.
+   - **The two schtasks are NOT touched.** The guard is the fix; the triggers stay. Do not "fix"
+     the overlap by deleting the noon task or staggering the logon delay (rule 15's last bullet:
+     scheduling narrows windows, it removes nothing).
+   - The lock lives beside the canonical DB at `C:\AppyHourData`, for the same MSIX reason as every
+     file above (rules 3, 3b, 17): both tasks run real-context today, but a `%APPDATA%` lock would
+     be invisible to any packaged caller and silently un-guard the pair.
 
 ## Wired beats (update when adding/removing)
 

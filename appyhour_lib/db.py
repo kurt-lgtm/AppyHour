@@ -97,7 +97,7 @@ from .paths import NonCanonicalDBPath, assert_canonical_db, db_path
 __all__ = [
     "connect", "connect_ro", "integrity_ok", "BUSY_TIMEOUT_MS",
     "DBWriterBusy", "LockedConnection", "NonCanonicalDBPath",
-    "write_lock_holder", "assert_write_lock_free",
+    "write_lock_holder", "assert_write_lock_free", "pid_alive",
 ]
 
 BUSY_TIMEOUT_MS = 10_000
@@ -191,6 +191,16 @@ else:  # POSIX fallback (no create_time reuse guard; MAX_AGE covers staleness)
 
     def _self_create_time() -> int | None:
         return None
+
+
+def pid_alive(pid: int) -> bool:
+    """Public liveness probe for other lock files (sync_logon's single-instance guard, rule 18).
+
+    🔴 Windows: this is ``OpenProcess`` + ``GetExitCodeProcess == STILL_ACTIVE``. It is NOT
+    ``os.kill(pid, 0)`` — on Windows that call is ``TerminateProcess(pid, 0)`` and KILLS the
+    process it was asked to probe. Tested in ``tests/test_sync_logon_partial_and_lock.py``.
+    """
+    return _pid_alive(pid)
 
 
 # ── Advisory single-writer lock ───────────────────────────────────────────────

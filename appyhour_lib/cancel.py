@@ -41,7 +41,7 @@ from __future__ import annotations
 
 import threading
 
-__all__ = ["CancelToken", "StageCancelled", "checkpoint"]
+__all__ = ["CancelToken", "StageCancelled", "checkpoint", "note_progress"]
 
 
 class StageCancelled(RuntimeError):
@@ -66,12 +66,29 @@ class CancelToken:
     the stage thread reads it. Never reset — a cancelled stage stays cancelled for the run.
     """
 
-    __slots__ = ("_event", "_reason", "stage")
+    __slots__ = ("_event", "_progress", "_reason", "stage")
 
     def __init__(self, stage: str = "stage") -> None:
         self.stage = stage
         self._event = threading.Event()
         self._reason = ""
+        self._progress = 0
+
+    # ── progress (HEARTBEAT_RULES rule 18) ───────────────────────────────────
+    def note_progress(self, n: int) -> None:
+        """Record ``n`` rows COMMITTED. 🔴 Call ONLY after ``commit()`` succeeded (and after the
+        writer connection closed) — never at a "nothing written" checkpoint, never for rows
+        merely fetched. The watchdog splits a cancelled stage on this: ``progress > 0`` stamps
+        ``partial:`` (banked, remainder re-selected next run); ``0`` stays ``fail:`` (a stall).
+        A count that includes uncommitted rows claims durability the next run will not find.
+        """
+        if n > 0:
+            self._progress += int(n)
+
+    @property
+    def progress(self) -> int:
+        """Rows committed so far this stage (0 until the first successful commit)."""
+        return self._progress
 
     # ── watchdog side ────────────────────────────────────────────────────────
     def cancel(self, reason: str = "") -> None:
@@ -116,3 +133,14 @@ def checkpoint(token: "CancelToken | None", where: str) -> None:
         stage = getattr(token, "stage", "stage")
         reason = getattr(token, "reason", "")
         raise StageCancelled(stage, where, reason)
+
+
+def note_progress(token: "CancelToken | None", n: int) -> None:
+    """``token.note_progress(n)`` tolerant of ``None`` and of a bare ``threading.Event``.
+
+    Same shape as :func:`checkpoint`: the shared loops call it unconditionally, and a caller
+    with no watchdog (``pipeline_run``, the CLI ``main``) simply has nothing to count into.
+    """
+    fn = getattr(token, "note_progress", None)
+    if fn is not None:
+        fn(n)
