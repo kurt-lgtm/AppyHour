@@ -278,3 +278,49 @@ def test_for_cohort_refuses_an_untagged_directive(capsys):
     from order_checks.check7 import for_cohort
     assert for_cohort({"AC-KETT": 21}, "RMFG_20260901", "T") == {}
     assert "NO COHORT" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------- freshness gate
+# 🔴 A store 4 days behind silently cleared 157 customers on RMFG_20260901: the login read
+# for each was '' and '' reads as "did not log in". "Fresh" is not an age -- it is the
+# store being at or past the newest order in the cohort it is checking.
+
+def _orders_at(iso):
+    return {"1": {"createdAt": iso}}
+
+
+def test_freshness_gate_refuses_when_orders_behind(store, capsys):
+    from order_checks.run_all import freshness_gate
+    path, d = store
+    add_ev(d, 1, "2026-12-31T00:00:00Z", login=1)           # events are fine
+    con = sqlite3.connect(path)                              # newest order is 2026-08-10
+    assert freshness_gate(con, _orders_at("2026-09-01T00:00:00Z")) is True
+    out = capsys.readouterr().out
+    assert "BEHIND" in out and "topup --orders" in out
+
+
+def test_freshness_gate_refuses_when_events_behind_and_names_the_export(store, capsys):
+    from order_checks.run_all import freshness_gate
+    path, d = store
+    d.execute("INSERT INTO ord(id, cust, name, ts, tags) VALUES (99, 1, '#9', ?, NULL)",
+              (ts("2026-12-31T00:00:00Z"),)); d.commit()    # orders are fine
+    add_ev(d, 1, "2026-06-01T00:00:00Z", login=1)           # events stop in June
+    con = sqlite3.connect(path)
+    assert freshness_gate(con, _orders_at("2026-09-01T00:00:00Z")) is True
+    out = capsys.readouterr().out
+    assert "events-csv" in out and "export REQUIRED" in out   # 92d gap > 7d API cap
+
+
+def test_freshness_gate_passes_when_store_is_at_or_past_cohort(store):
+    from order_checks.run_all import freshness_gate
+    path, d = store
+    add_ev(d, 1, "2026-08-10T12:00:00Z", login=1)
+    assert freshness_gate(sqlite3.connect(path), _orders_at("2026-08-10T12:00:00Z")) is False
+
+
+def test_freshness_gate_allow_stale_continues_but_says_floor(store, capsys):
+    from order_checks.run_all import freshness_gate
+    path, _ = store
+    assert freshness_gate(sqlite3.connect(path), _orders_at("2026-09-01T00:00:00Z"),
+                          allow_stale=True) is False
+    assert "FLOOR" in capsys.readouterr().out

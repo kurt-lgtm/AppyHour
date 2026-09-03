@@ -59,6 +59,54 @@ def _rest_shape(node):
                          else ((node.get("customer") or {}).get("tags") or "")}}
 
 
+def freshness_gate(con, orders, allow_stale=False):
+    """Refuse to gate swaps against a store that is BEHIND the cohort it is checking.
+
+    🔴 "Fresh" is not an age. It is: the store's newest order and newest event are at or
+    past the newest order in THIS cohort. A store 4 days behind silently cleared 157
+    customers on RMFG_20260901 -- the login read for each was '' and '' reads as "did not
+    log in". It was outside swap scope that week by cohort mix, not by design.
+
+    Prints the events coverage window every run: the store knows logins from ev_floor
+    forward and nothing before it, and Recharge's retention is not known to be complete.
+    "No login on record" is a floor, never clearance.
+
+    Returns True when stale (and not overridden). The message names the exact top-up.
+    """
+    import calendar
+    import time as _t
+    newest = max(o["createdAt"] for o in orders.values()) if orders else None
+    if not newest:
+        return False
+    newest_ts = calendar.timegm(_t.strptime(newest, "%Y-%m-%dT%H:%M:%SZ"))
+    ord_wm = con.execute("SELECT MAX(ts) FROM ord").fetchone()[0] or 0
+    ev_wm = con.execute("SELECT MAX(ts) FROM ev").fetchone()[0] or 0
+    ev_lo = con.execute("SELECT MIN(ts) FROM ev").fetchone()[0] or 0
+    iso = lambda t: _t.strftime("%Y-%m-%d %H:%M", _t.gmtime(t)) if t else "none"  # noqa: E731
+    print(f"    cohort newest order  {iso(newest_ts)}")
+    print(f"    store  orders  <=   {iso(ord_wm)}   {'OK' if ord_wm >= newest_ts else '🔴 BEHIND'}")
+    print(f"    store  events  {iso(ev_lo)} .. {iso(ev_wm)}   "
+          f"{'OK' if ev_wm >= newest_ts else '🔴 BEHIND'}   (logins before the floor are invisible)")
+    behind = []
+    if ord_wm < newest_ts:
+        behind.append("orders + recharge map:  python -m order_checks.topup --orders")
+    if ev_wm < newest_ts:
+        gap_d = (newest_ts - ev_wm) / 86400
+        behind.append("events:  python -m order_checks.topup --events-csv <Recharge events export>"
+                      + ("" if gap_d <= 7 else f"   (gap {gap_d:.0f}d > 7d API cap: export REQUIRED)"))
+    if not behind:
+        return False
+    print("\n  🔴 STORE IS BEHIND THE COHORT. The login/customize gate would read a customer it")
+    print("     has never seen as 'did not log in'. Top up first:")
+    for b in behind:
+        print(f"       {b}")
+    if allow_stale:
+        print("     --allow-stale given: continuing. Guardrail output is a FLOOR.")
+        return False
+    print("     (or --allow-stale to run anyway, with the guardrail labelled as a floor)")
+    return True
+
+
 def dump(path, rows, cols=None):
     if not rows:
         return
@@ -83,6 +131,9 @@ def main(argv=None):
                          "not exist yet. The counts, slot checks and BOTH guardrail halves "
                          "need no inventory. Reaching for last week's HAVE instead is "
                          "exactly the failure --have exists to prevent.")
+    ap.add_argument("--allow-stale", action="store_true",
+                    help="run even though the store is behind the cohort. The guardrail "
+                         "output is then a FLOOR and must be labelled as such.")
     ap.add_argument("--ruleset", default=DEFAULT_RULESET)
     ap.add_argument("--cache")
     ap.add_argument("--out", default=".")
@@ -120,6 +171,13 @@ def main(argv=None):
         dump(os.path.join(a.out, f"{name.split()[0].lower()}_{a.tag}.csv"), hits)
 
     # 🔴 BOTH halves of the guardrail, BEFORE the swap list exists
+    print("\n-- store freshness --")
+    con_fresh = sqlite3.connect(DB)
+    stale = freshness_gate(con_fresh, orders, allow_stale=a.allow_stale)
+    con_fresh.close()
+    if stale:
+        return 2
+
     print("\n-- guardrail (login OR customize) --")
     con = sqlite3.connect(DB)
     prot = login_protected(orders, con)

@@ -227,8 +227,14 @@ def events(con, verbose=True):
 def events_csv(con, path, verbose=True):
     """Append login + contents-touching events from a Recharge events EXPORT.
 
-    Preferred over the API path whenever an export exists: no 7-day cap, and it is the
-    same file recharge_gate.build consumes.
+    The API is the DEFAULT path and is proven comprehensive for logins: on the window
+    2026-08-28..09-01, /events?verb=login returned 5,386 events against 5,386 in the
+    Recharge export, with exact event_id overlap and 0 either-only (probe 2026-09-03).
+    So a topup run at least every 7 days needs no export at all. The export is for
+    closing a gap WIDER than the 7-day created_at_min cap, nothing else.
+
+    Not yet proven via API: the contents-touching events the CUSTOMIZE half reads. The
+    probe checked verb=login only.
 
     🔴 The export is a DELTA, not a superset -- the 2026-09-01 one starts at 08-28, four
     months after the store's floor. Rebuilding `ev` from it would DESTROY the history the
