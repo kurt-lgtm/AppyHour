@@ -90,6 +90,17 @@ var EXC_SEEDING = false;
 var EXC_PING_DAYS = { Wed: 1, Thu: 1, Fri: 1, Sat: 1, Sun: 1 };
 var EXC_TZ = 'America/New_York';
 
+// 🔴 RECORD-ONLY CLASSES (Kurt 2026-09-02): classes that still CLASSIFY and still land on the
+// Exceptions tab, but never post to Slack. DELAYED is not actionable — nobody can do anything
+// about "your package is delayed" except wait, so it is noise in a channel Dan reads for boxes
+// that need a HUMAN (attempted delivery, access/address, damaged, returned).
+// 🔴 Gate lives at the CALLER, not in excClassify_. The classifier keeps returning
+// DELAYED/ping:true so the tab record, the self-tests, and any future consumer are unchanged —
+// suppressing it inside the classifier would delete the signal instead of just muting the ping.
+// 🔴 `alerted` is deliberately NOT stamped for these: nothing was alerted. Tab-write dedup rides
+// `logged`, the same split the Mon/Tue branch already uses.
+var EXC_RECORD_ONLY_CLASSES = { DELAYED: 1 };
+
 function excPingDayET_() {
   return !!EXC_PING_DAYS[Utilities.formatDate(new Date(), EXC_TZ, 'EEE')];
 }
@@ -784,15 +795,30 @@ function excMatchFailure_(e) {
     return 'RETURNED';
   }
   if (/lost by driver|will be discarded|unable to locate your package/.test(e)) return 'LOST';
+  // 🔴 ADDED 2026-09-02: the taxonomy had NO refused pattern at all. Order #167725 (FedEx, Fort
+  // Davis TX) scanned "Delivery exception, Delivery was refused by the recipient" on 08-26 and
+  // classified IN_NETWORK / no ping — nine days, never delivered, never alerted. PP's top-level
+  // status was EXCEPTION (Exception_006), not FAILED_ATTEMPT, so the structured-field rescue below
+  // did not catch it either. Refused is on Kurt's keep list; it was simply invisible.
+  if (/refused by the recipient|delivery was refused|package refused|recipient refused/.test(e)) {
+    return 'REFUSED';
+  }
   // Real OnTrac wording observed 2026-08-13: access-code requests are address/actionability
   // failures. 🔴 WIDENED 2026-08-17: the predicate only knew OnTrac's "need additional information
   // to complete" phrasing, so FedEx's "Delivery exception, Incorrect address, HERNDON VA 20171"
   // (#170893) fell straight through to IN_NETWORK. One carrier's wording is never the class.
-  if (/need additional information to complete|lack of an access code|access code|incorrect address|address (is )?(incorrect|invalid)|delivery exception.*address/.test(e)) {
+  // 🔴 WIDENED 2026-09-02 with two real FedEx phrasings that returned NONE: "Location security
+  // restrictions - Delivery will be reattempted" (#172302, #175678) is a gated-community/access
+  // failure, and both were caught only by luck — PP's top-level FAILED_ATTEMPT still happened to be
+  // set at sweep time. When that field moves on first, the box goes silent.
+  if (/need additional information to complete|lack of an access code|access code|incorrect address|address (is )?(incorrect|invalid)|delivery exception.*address|location security restriction/.test(e)) {
     return 'ADDRESS_ISSUE';
   }
   // A closed recipient/business or an incomplete delivery is an attempted-delivery failure.
-  if (/was attempted but could not be completed|delivery attempt failed|unable to complete (your )?delivery|driver tried to deliver|business (was )?closed|recipient business closed|package not delivered\/?not attempted/.test(e)) {
+  // 🔴 "delivery not attempted" ADDED 2026-09-02: the pattern knew FedEx's slashed
+  // "Package not delivered/not attempted" but not the bare "Local delivery restriction - Delivery
+  // not attempted" (#171945). One carrier's punctuation is never the class.
+  if (/was attempted but could not be completed|delivery attempt failed|unable to complete (your )?delivery|driver tried to deliver|business (was )?closed|recipient business closed|package not delivered\/?not attempted|delivery not attempted/.test(e)) {
     return 'ATTEMPT_FAILED';
   }
   return '';
@@ -1307,6 +1333,7 @@ var EXC_EMOJI_ = {
   UNDELIVERABLE: ':x:', DAMAGED: ':boom:', RETURNED: ':leftwards_arrow_with_hook:',
   NEVER_PICKED_UP: ':no_entry:', LOST: ':question:', ADDRESS_ISSUE: ':house:',
   ATTEMPT_FAILED: ':warning:', DELAYED: ':hourglass_flowing_sand:',
+  REFUSED: ':raised_hand:',
 };
 
 /**
@@ -1331,6 +1358,7 @@ var EXC_DISPLAY_ = {
   // look new and re-spam the channel.
   ATTEMPT_FAILED: 'delivery attempt failed',
   DELAYED: 'delayed / stuck in transit',
+  REFUSED: 'refused by recipient',
   // 🔴 Directive P9. Deliberately NOT phrased as a carrier condition — it is a statement about our
   // own monitoring: we gave up. It reads as an action item because it is one.
   PP_NO_RECORD: 'NOT BEING CHECKED — ParcelPanel has no record of this order',
@@ -1891,6 +1919,18 @@ function hourlyExceptionSweep() {
       if (v.cls === 'DELIVERED') { rec.open = false; return; }
       if (!v.ping) return;
       if (rec.alerted.indexOf(v.cls) >= 0) return;   // dedup on (order, class)
+      // 🔴 Record-only classes (DELAYED): tab yes, Slack never. Placed ABOVE the seeding/dry-run
+      // branches so no mode can post them, and above the Mon/Tue gate so they never "accumulate
+      // and post on Wednesday" — that gate DEFERS a ping, this one cancels it.
+      if (EXC_RECORD_ONLY_CLASSES[v.cls]) {
+        if (!rec.logged) rec.logged = [];
+        if (rec.logged.indexOf(v.cls) < 0) {
+          excLog_(stamp, rec, v.cls, v.detail, v.eventAt);
+          rec.logged.push(v.cls);
+          recorded++;
+        }
+        return;                                      // `alerted` untouched — nothing was alerted
+      }
       if (EXC_SEEDING) {                             // record as already-handled, emit nothing
         if (!rec.logged) rec.logged = [];
         if (rec.logged.indexOf(v.cls) < 0) { rec.logged.push(v.cls); recorded++; }
