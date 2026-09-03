@@ -1911,6 +1911,72 @@ top-level globals; all new symbols resolve (`Exceptions.gs` → `Code.gs`, the e
 `shopifyGql_` dependency shape — **both files must deploy together**). Cost/byte figures above are
 live measurements, not estimates.
 
+### P17 — KLAVIYO IS A SECOND CONSUMER OF THE SAME DECISION, NEVER A SECOND DETECTOR (Kurt GO, 2026-09-03)
+
+Kurt wants the customer told, not just Dan: *"help me figure out how to do that in klaviyo."*
+Decision (Kurt, verbatim): **"let's go with one metric plus class property."**
+
+**Why not a Klaviyo flow on the ParcelPanel Event metric.** It would work for the FedEx subset
+and miss the majority. Measured 2026-09-02/03: OnTrac is **68 %** of PP webhook volume and produced
+**3** PP exception events in 13 days, while #exceptions posted **6 OnTrac address/access/attempt
+pings in one day** — those come from carrier checkpoint *text*, which PP never lifts into a
+substatus. `NEVER_PICKED_UP` is not a PP event at all; it is computed from absence. And PP's raw
+`EXCEPTION` bucket is 57 % boxes that then deliver. The classification that is already right for
+Slack is the one the customer email must ride.
+
+**Shape.**
+
+| | |
+|---|---|
+| Metric | **`Shipping Exception`** — one metric, every class |
+| Property `exception_class` | the class TOKEN (`ADDRESS_ISSUE`, `ATTEMPT_FAILED`, …) — the flow's trigger split keys on this |
+| Property `exception_label` | the display string (`address issue`, …) — for copy only, never for logic |
+| Other properties | `order_number`, `carrier`, `state`, `carrier_event` (verbatim scan text), `carrier_scan_at`, `cohort`, `source: exceptions-sweep` |
+| `unique_id` | `<order>:<class>` — Klaviyo dedups on it, so a re-send after a crash cannot double-email |
+| `time` | detection time (now). The carrier scan time is a property; its zone is the scan site's and is not safe to present as the event time |
+| Profile | `email` from Shopify — order `email`, falling back to `customer.email` |
+
+**Gates — identical to the Slack ping, plus two of its own.**
+
+1. Called ONLY from the live-post path, after `excSlackPost_` — so `EXC_DRY_RUN`, the Wed–Sun
+   rhythm, the `(order, class)` `alerted` dedup, and `EXC_RECORD_ONLY_CLASSES` all apply by
+   construction. DELAYED, weather, restriction, barcode rescans: never reach Klaviyo, same as Slack.
+2. **`KLAVIYO_EXC_ENABLED` Script Property must be `'1'`.** Default absent = OFF. The code ships
+   dark; Kurt flips it in the Apps Script UI after the key is in place and the flow is built.
+3. **`KLAVIYO_API_KEY` Script Property** — a PRIVATE key (`pk_…`) with `events:write`. Never in
+   code, never in git, never in a log line.
+4. 🔴 **A P15 hub collapse sends NOTHING to Klaviyo.** A dock miss is one ops event, not N
+   customer emails — the per-box `NEVER_PICKED_UP` path below the collapse threshold still sends.
+
+**Failure semantics — the Slack post has ALREADY happened when this runs.**
+
+- 🔴 **Never throws into the sweep.** A throw after `excSlackPost_` and before `excSaveState_`
+  would abort the run with `alerted` unstamped → the same box re-pings Slack every hour. Every
+  Klaviyo failure is caught, counted, and reported ONCE per run via `excSlackOps_` (the ops DM,
+  never #exceptions — P8).
+- **No email on the order** → counted as `skipped_no_email`, reported in the same ops line. Not a
+  failure of the sweep; a box with no email cannot be emailed.
+- **Non-2xx from Klaviyo** → counted, response body head logged (never the key).
+- **Email lookup is one targeted `orders(first:1)` per ping** (~10/day), never a field on the
+  hourly seed — P16's byte-budget rule. Adding `customer{email}` to the 5,186-order seed would have
+  been ~3.7 MB/day for a field read ten times.
+
+**Kurt's side (Klaviyo UI), once the code is live:**
+
+1. Settings → API keys → confirm a private key with `events:write`; paste it into the Apps Script
+   project as Script Property `KLAVIYO_API_KEY`. Set `KLAVIYO_EXC_ENABLED` = `1`.
+2. The metric `Shipping Exception` appears in Klaviyo on the first event — no pre-creation.
+3. Flows → Create → trigger **Metric: Shipping Exception**. Add a **Trigger split** on
+   `exception_class` for per-class copy (`ADDRESS_ISSUE` / `ATTEMPT_FAILED` / `NEVER_PICKED_UP` /
+   `DAMAGED` / `UNDELIVERABLE` / `RETURNED` / `LOST` / `REFUSED`). Set "trigger once per profile"
+   OFF — one customer can genuinely have two orders in trouble.
+4. 🔴 Do NOT build a flow on the ParcelPanel Event `Exception` status (see above). The four
+   ParcelWILL delay metrics stay unused for this.
+
+**Verification:** payload built by a PURE function (`excKlaviyoPayload_`) replayed under node
+with the real classes; `node --check`; no live Klaviyo call made from a dev machine — the first
+real event is the enable flip, and it is Kurt's.
+
 ## Known gaps (v1)
 
 - **Returned-to-origin reads as delivered.** Order 154810 (FedEx, dest AL) shows

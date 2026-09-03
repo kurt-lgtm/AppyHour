@@ -101,6 +101,20 @@ var EXC_TZ = 'America/New_York';
 // `logged`, the same split the Mon/Tue branch already uses.
 var EXC_RECORD_ONLY_CLASSES = { DELAYED: 1 };
 
+// 🔴 KLAVIYO — SECOND CONSUMER OF THE SAME DECISION (directive P17, Kurt GO 2026-09-03: "one metric
+// plus class property"). One metric, `exception_class` property, fired ONLY from the live-post path
+// after excSlackPost_, so every Slack gate (dry-run, Wed–Sun, alerted dedup, record-only classes)
+// applies by construction. Ships DARK: KLAVIYO_EXC_ENABLED Script Property must be '1', and the
+// PRIVATE key lives in Script Property KLAVIYO_API_KEY — never here, never in a log.
+// 🔴 NEVER THROWS INTO THE SWEEP. It runs after the Slack post and before excSaveState_; a throw
+// there leaves `alerted` unstamped and the same box re-pings Slack every hour. Failures are counted
+// and reported once per run to the ops DM (excSlackOps_, P8), never to #exceptions.
+var KLAVIYO_METRIC = 'Shipping Exception';
+var KLAVIYO_ENABLED_PROP = 'KLAVIYO_EXC_ENABLED';
+var KLAVIYO_KEY_PROP = 'KLAVIYO_API_KEY';
+var KLAVIYO_REVISION = '2024-10-15';
+var EXC_KLAVIYO_RUN_ = { sent: 0, failed: 0, skipped_no_email: 0, disabled: 0, errors: [] };
+
 function excPingDayET_() {
   return !!EXC_PING_DAYS[Utilities.formatDate(new Date(), EXC_TZ, 'EEE')];
 }
@@ -1336,6 +1350,107 @@ function excSlackHealth_(text) {
   excSlackOps_(text);
 }
 
+// ---------------------------------------------------------------- Klaviyo (P17)
+
+/**
+ * PURE. The Klaviyo Events API body for one (order, class). Kept free of I/O so the shape is
+ * replayable under node. `unique_id` = order:class — Klaviyo dedups on it, so a resend after a
+ * crash cannot double-email. `time` is DETECTION time: the carrier scan stamp is in the scan
+ * site's local zone and is not safe to present as the event time; it rides as a property.
+ */
+function excKlaviyoPayload_(rec, cls, detail, eventAt, email, nowIso) {
+  return {
+    data: {
+      type: 'event',
+      attributes: {
+        properties: {
+          exception_class: cls,
+          exception_label: excDisplay_(cls),
+          order_number: String(rec.order || ''),
+          carrier: String(rec.carrier || ''),
+          state: String(rec.state || ''),
+          carrier_event: String(detail || ''),
+          carrier_scan_at: String(eventAt || ''),
+          cohort: String(rec.cohort || ''),
+          source: 'exceptions-sweep',
+        },
+        time: nowIso,
+        unique_id: String(rec.order || '') + ':' + cls,
+        metric: { data: { type: 'metric', attributes: { name: KLAVIYO_METRIC } } },
+        profile: { data: { type: 'profile', attributes: { email: email } } },
+      },
+    },
+  };
+}
+
+/**
+ * One targeted lookup per PING (~10/day), never a field on the hourly seed — P16: a field list on
+ * a paginated hourly job is a byte budget, and `email` on 5,186 orders/hour for ten reads a day
+ * is ~3.7 MB/day. Order `email` first (checkout email), then customer.email. '' when neither.
+ */
+function excEmailForOrder_(order) {
+  var d = shopifyGql_('query($q:String!){orders(first:1, query:$q){edges{node{ name email customer{ email } }}}}',
+                      { q: 'name:' + String(order).replace(/^#/, '') });
+  var e = d && d.orders && d.orders.edges && d.orders.edges[0] && d.orders.edges[0].node;
+  if (!e) return '';
+  return String(e.email || (e.customer && e.customer.email) || '').trim();
+}
+
+/**
+ * Fire the Klaviyo event for a box that was JUST pinged to #exceptions. Call ONLY from the live
+ * post path, right after excSlackPost_ — never from the record-only, dry-run, Mon/Tue, or P15
+ * collapse branches (a dock miss is one ops event, not N customer emails).
+ * 🔴 NEVER THROWS. See the header note by KLAVIYO_METRIC.
+ */
+function excKlaviyoTrack_(rec, cls, detail, eventAt) {
+  var run = EXC_KLAVIYO_RUN_;
+  try {
+    if (EXC_DRY_RUN) return;                        // belt and braces — callers already gate
+    var props = PropertiesService.getScriptProperties();
+    if (props.getProperty(KLAVIYO_ENABLED_PROP) !== '1') { run.disabled++; return; }
+    var key = props.getProperty(KLAVIYO_KEY_PROP);
+    if (!key) { run.failed++; run.errors.push('#' + rec.order + ' ' + cls + ': ' + KLAVIYO_KEY_PROP + ' missing while enabled'); return; }
+    var email = excEmailForOrder_(rec.order);
+    if (!email) { run.skipped_no_email++; run.errors.push('#' + rec.order + ' ' + cls + ': no email on order'); return; }
+    var body = excKlaviyoPayload_(rec, cls, detail, eventAt, email, new Date().toISOString());
+    var r = netFetch_('https://a.klaviyo.com/api/events', {
+      method: 'post', contentType: 'application/json',
+      headers: { Authorization: 'Klaviyo-API-Key ' + key, revision: KLAVIYO_REVISION, accept: 'application/vnd.api+json' },
+      payload: JSON.stringify(body),
+      muteHttpExceptions: true,
+    }, 'klaviyo events');
+    var code = r.getResponseCode();
+    if (code < 200 || code >= 300) {
+      run.failed++;
+      run.errors.push('#' + rec.order + ' ' + cls + ': HTTP ' + code + ' ' + String(r.getContentText() || '').slice(0, 160));
+      return;
+    }
+    run.sent++;
+  } catch (e) {
+    run.failed++;
+    run.errors.push('#' + rec.order + ' ' + cls + ': ' + String(e).slice(0, 160));
+  }
+}
+
+/**
+ * Once per run, after the loop: one ops line if anything did not reach Klaviyo. Goes to the ops DM
+ * (P8), never #exceptions. Silent when disabled or when every event landed.
+ */
+function excKlaviyoFlush_() {
+  var run = EXC_KLAVIYO_RUN_;
+  if (run.sent || run.failed || run.skipped_no_email) {
+    Logger.log('  klaviyo: sent ' + run.sent + ', failed ' + run.failed + ', no-email ' + run.skipped_no_email);
+  }
+  if (!run.failed && !run.skipped_no_email) return;
+  try {
+    excSlackOps_(':warning: exceptions → Klaviyo: ' + run.sent + ' sent · ' + run.failed + ' failed · ' +
+                 run.skipped_no_email + ' no email\n' + run.errors.slice(0, 8).join('\n') +
+                 (run.errors.length > 8 ? '\n(+' + (run.errors.length - 8) + ' more)' : ''));
+  } catch (e) {
+    Logger.log('  klaviyo ops alarm itself failed: ' + e);   // never let the alarm abort the run
+  }
+}
+
 var EXC_EMOJI_ = {
   UNDELIVERABLE: ':x:', DAMAGED: ':boom:', RETURNED: ':leftwards_arrow_with_hook:',
   NEVER_PICKED_UP: ':no_entry:', LOST: ':question:', ADDRESS_ISSUE: ':house:',
@@ -1503,6 +1618,7 @@ function excNpuFlush_(pending, stamp) {
           return;                                    // `alerted` untouched -> posts on Wednesday
         }
         excSlackPost_(excMessage_(p.rec, p.v.cls, p.v.detail, p.v.eventAt));
+        excKlaviyoTrack_(p.rec, p.v.cls, p.v.detail, p.v.eventAt);   // P17 — per-box only; the collapse below sends nothing
         excLog_(stamp, p.rec, p.v.cls, p.v.detail, p.v.eventAt);
         p.rec.alerted.push(p.v.cls);
         p.rec.open = false;
@@ -1979,6 +2095,7 @@ function hourlyExceptionSweep() {
         return;                                      // `alerted` untouched -> posts on Wednesday
       }
       excSlackPost_(excMessage_(rec, v.cls, v.detail, v.eventAt));
+      excKlaviyoTrack_(rec, v.cls, v.detail, v.eventAt);   // P17 — same decision, second consumer; never throws
       excLog_(stamp, rec, v.cls, v.detail, v.eventAt);
       rec.alerted.push(v.cls);
       rec.open = false;                              // notified once; a human owns it now
@@ -1995,6 +2112,8 @@ function hourlyExceptionSweep() {
                  npu.alarms + ' hub alarm(s) [' + npu.hubs.join(', ') + '] — no per-box pings, ' +
                  'no per-box tab rows; every box stamped in _exc_state.');
     }
+
+    excKlaviyoFlush_();   // P17 — one ops line if anything missed Klaviyo; never throws
 
     // Persist when recording, so the tab-write dedup (`rec.logged`) survives the next sweep and the
     // same exception is not appended hourly. `alerted` is still untouched while dry.
