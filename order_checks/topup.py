@@ -36,7 +36,7 @@ from datetime import datetime, timedelta, timezone
 from .customer_map import _get as rc_get
 from .fetch_gql import _auth
 from .history_compact import DB
-from .recharge_gate import classify, touches_contents
+from .recharge_gate import api_event_to_row, classify, touches_contents
 
 PAGE = """query($q:String!,$after:String){orders(first:100, query:$q, after:$after){
   pageInfo{hasNextPage endCursor}
@@ -220,19 +220,20 @@ def events(con, verbose=True):
         batch = d.get("events", [])
         if not batch:
             break
-        for e in batch:
+        for raw in batch:
             n += 1
-            verb = e.get("verb") or ""
-            touch = touches_contents(verb, e.get("changes"), e.get("description"))
+            e = api_event_to_row(raw)        # 🔴 API shape != CSV shape; see recharge_gate
+            verb = e["verb"]
+            touch = touches_contents(verb, e["changes"], e["description"])
             if verb != "login" and not touch:
                 continue
             cid = con.execute("SELECT id FROM cust WHERE rc = ?",
-                              (str(e.get("customer_id")),)).fetchone()
+                              (e["customer_id"],)).fetchone()
             if not cid:
                 continue                     # no Shopify order here -> cannot gate a swap
-            ts = int(datetime.strptime(e["created_at"][:19], "%Y-%m-%dT%H:%M:%S")
+            ts = int(datetime.strptime(e["created_at"], "%Y-%m-%d %H:%M:%S")
                      .replace(tzinfo=timezone.utc).timestamp())
-            kind = {"human": 0, "api": 1, "automated": 2}[classify(e.get("source"))]
+            kind = {"human": 0, "api": 1, "automated": 2}[classify(e["source"])]
             con.execute(
                 "INSERT INTO ev(cust, ts, login, touch, kind, verb, src, nearhuman) "
                 "VALUES (?,?,?,?,?,NULL,NULL,0)",

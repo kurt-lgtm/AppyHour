@@ -58,7 +58,47 @@ CREATE INDEX IF NOT EXISTS ix_ev_touch ON rc_events(touches, customer_id);
 """
 
 
-def classify(source: str) -> str:
+def api_event_to_row(e: dict) -> dict:
+    """Normalise a Recharge /events API event to the CSV export's row shape.
+
+    🔴 The API and the CSV export disagree on TWO fields, and both crashed or blinded the
+    customize gate on 2026-09-03 before this existed:
+      * `source` is a STRING in the CSV ("CUSTOMER", "[API] support@…", "Recharge Admin")
+        and a DICT in the API ({origin, user_type, api_token_name, account_email, …}).
+        classify() on the dict raised `'dict' object has no attribute 'strip'`.
+      * `changes` (CSV) is `updated_attributes` (API): a list of {attribute, previous_value,
+        new_value}. The API has NO `changes` key at all, so touches_contents() saw "" and
+        9,532 of 11,168 touch events in the probe window became invisible -- the customize
+        half was 85% blind through the API while the login half was 100% covered.
+    Map the dict to the CSV vocabulary classify() already knows, and serialise
+    updated_attributes so the CONTENT_KEYS substring test works unchanged.
+    """
+    import json as _json
+    src = e.get("source")
+    if isinstance(src, dict):
+        ut, origin = (src.get("user_type") or ""), (src.get("origin") or "")
+        if src.get("api_token_name") or origin == "api":
+            src = f"[API] {src.get('api_token_name') or ''}".strip()
+        elif ut == "customer":
+            src = "CUSTOMER"
+        elif ut in ("recharge_admin", "store_admin"):
+            src = "Recharge Admin" if ut == "recharge_admin" else "Store Admin"
+        elif "recharge_process" in (ut, origin):
+            src = "Recharge Charge Processing"
+        else:
+            src = ""                                   # classify() -> automated
+    ua = e.get("updated_attributes")
+    changes = e.get("changes") or (_json.dumps(ua) if ua else "")
+    return {"event_id": str(e.get("id")), "customer_id": str(e.get("customer_id")),
+            "object_class": e.get("object_type"), "verb": e.get("verb") or "",
+            "source": src or "", "changes": changes,
+            "description": e.get("description") or "",
+            "created_at": (e.get("created_at") or "").replace("T", " ")[:19]}
+
+
+def classify(source) -> str:
+    if isinstance(source, dict):                       # API shape -- normalise first
+        source = api_event_to_row({"source": source})["source"]
     s = (source or "").strip().lower()
     if s.startswith("[api]") or s == "api":
         return "api"
