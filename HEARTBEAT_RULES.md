@@ -537,6 +537,52 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
    - The lock lives beside the canonical DB at `C:\AppyHourData`, for the same MSIX reason as every
      file above (rules 3, 3b, 17): both tasks run real-context today, but a `%APPDATA%` lock would
      be invisible to any packaged caller and silently un-guard the pair.
+19. **A prod script that imports `appyhour_lib` without first putting `C:\AppyHourProd\AppyHour` on
+   `sys.path` runs the DEV library — byte-identical to dev, and rule 9's parity check calls it
+   "in sync".** 🔴 The mechanism (measured 2026-09-03): `appyhour_lib` is a pip EDITABLE install.
+   `site-packages\__editable___appyhour_1_0_0_finder.py` carries
+   `MAPPING = {'appyhour_lib': 'C:\Users\Work\Claude Projects\AppyHour\appyhour_lib'}`, and its
+   `_EditableFinder` sits AFTER `PathFinder` on `sys.meta_path` — so the prod package wins ONLY when
+   some `sys.path` entry already holds an `appyhour_lib/`. A script under
+   `C:\AppyHourProd\AppyHour\<subdir>\` has only its own subdir on `sys.path[0]`; unless it (or a
+   module it imports first) inserts the parent BEFORE the first `import appyhour_lib`, every
+   `appyhour_lib.*` call it makes — `paths.db_path`, `db.connect`, `heartbeat.beat`, `notify` —
+   executes whatever the dev tree holds at that moment, mid-edit included. Found while repointing the
+   ShippingReports `.bat`s (three schtasks had been `cd`-ing into the dev tree outright);
+   `weather_sync_cron.py` (retired) demonstrates it; the first real run of the check found
+   `scripts/backup_offsite.py` (`AppyHour Weekly Offsite Backup`) doing it live: its only insert is
+   its own dir, its `appyhour_lib.heartbeat`/`notify` imports are inside functions, nothing pins
+   the parent.
+   **The check:** `automation_health.check_prod_entry_points` enumerates every schtask whose
+   `Task To Run` is under `C:\AppyHourProd` (a `.bat` action is parsed for the `.py` it launches —
+   `%~dp0`/`set VAR=`/`cd /d` tracked), then simulates each script's `sys.path` edits against its
+   FIRST `appyhour_lib` import in execution order, following sibling imports two levels deep with
+   the same path state. CRITICAL per SCRIPT (`prod-libpath-<file>`), tasks listed in the finding.
+   `check_editable_mapping` reads the finder's `MAPPING` and WARNs if it no longer points at the
+   dev tree (dev-side only: tests and MCP servers would then run that tree's code) or is missing.
+   NEGATIVES:
+   - **Do NOT "fix" this by repointing the editable install, adding a prod `.pth`, or a
+     `sitecustomize`.** Repointing breaks dev; a `.pth` in the shared interpreter is a system change
+     that alters what EVERY Python process on this machine imports — Kurt decision. The check
+     detects; the fix per script is the `postmortem_runner.py:27` shape:
+     `sys.path.insert(0, str(Path(__file__).resolve().parents[N]))` before the import.
+   - **A pin is judged by WHERE it points, not by its presence.** `sys.path.insert(0, HERE)` is the
+     commonest shape in this tree and pins nothing — the library is one level up. A literal
+     `C:\Users\Work\Claude Projects\…` insert is a pin to the DEV tree, the trap made explicit
+     (`AppyHourMCP/tools/gorgias_sheets_sync.py` carries one inside a function — harmless there only
+     because `utils` imported the prod package first; do not copy it).
+   - **The FIRST import decides.** `sys.modules` caches the package, so a later pin changes nothing;
+     the simulation stops grading at the first import and a fix must land BEFORE it.
+   - **Static AST, never an import of the target.** Every target is a live action (ingest, backup,
+     Gorgias sync). "Prove the deploy" the same way: assert `appyhour_lib.__file__` starts with
+     `C:\AppyHourProd` AND no `sys.path` entry contains `Claude Projects` — an `import` with rc 0 is
+     not proof.
+   - **An unresolvable pin is trusted, never guessed** (a function result, an env var). Bounded:
+     every live entry point's pin is a `Path(__file__)`/`.parent`/`.parents[N]`/`/` shape the
+     evaluator resolves, so the lenient branch is not the one grading the live set.
+   - **Rule 9 and this rule fail independently and neither implies the other.** Parity says the
+     BYTES match; this says the bytes that RUN are the ones that matched. Both green is the only
+     "prod runs prod".
 
 ## Wired beats (update when adding/removing)
 
@@ -572,7 +618,9 @@ Checker also probes (no beat needed): `C:\AppyHourData\sync_heartbeat.json` age 
 `appyhour_lib.sync_heartbeat.read()` — moved off `%APPDATA%` 2026-09-01, rule 3b), `schtasks` AppyHour* Last
 Result ≠ 0, shipping.db `PRAGMA quick_check` (read-only immutable), **dev↔prod tree parity on
 DB-relevant `*.py` (rule 9)**, **cloud-replica freshness — `shopify_orders`/`weather_history` data
-age + `C:\AppyHourData\replica_pull_stamp.json` ingest stamp (rule 11)**.
+age + `C:\AppyHourData\replica_pull_stamp.json` ingest stamp (rule 11)**, **prod entry-point library
+path — every schtask action under `C:\AppyHourProd` statically checked for a prod pin before its first
+`appyhour_lib` import, plus the editable-install `MAPPING` itself (rule 19)**.
 
 Ledger file: **`C:\AppyHourData\heartbeats.json`** (moved off `%APPDATA%` 2026-08-31, rule 3).
 Access it ONLY through `appyhour_lib.heartbeat.beat()` / `read_ledger()` — a hand-rolled

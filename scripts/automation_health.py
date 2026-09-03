@@ -1119,6 +1119,393 @@ def check_task_set(findings: list[str], snapshot: Path | None = None) -> None:
                 "schedule's longest legal gap) or stop writing the beat")
 
 
+# --- PROD ENTRY-POINT LIBRARY PATH (2026-09-03, HEARTBEAT_RULES rule 19) -----------------
+# 🔴 THE TRAP: `appyhour_lib` is a pip EDITABLE install whose finder maps the package to the DEV
+# tree — `site-packages/__editable___appyhour_1_0_0_finder.py` carries
+# `MAPPING = {'appyhour_lib': 'C:\Users\Work\Claude Projects\AppyHour\appyhour_lib'}`. That
+# `_EditableFinder` sits AFTER `PathFinder` on sys.meta_path (measured 2026-09-03), so a script
+# gets the PROD library only when some sys.path entry already holds an `appyhour_lib/`. For a
+# script under C:\AppyHourProd\AppyHour\<subdir>\ that means the script — or a module it imports
+# first — must put C:\AppyHourProd\AppyHour on sys.path BEFORE the first `import appyhour_lib`.
+# Without that, a file that is byte-identical in prod still executes DEV library code, and
+# check_prod_parity (rule 9) reports the two trees in sync. Found while repointing the
+# ShippingReports .bats: `weather_sync_cron.py` resolves dev `appyhour_lib` from the prod tree.
+#
+# NEGATIVES that shaped this:
+#   - **Static AST, never run the target.** Every target is a live schtask action (ingest, backup,
+#     Gorgias sync); importing one to read `appyhour_lib.__file__` would execute it.
+#   - **The editable install itself is NOT touched here** (no `.pth`, no `sitecustomize`).
+#     Repointing it breaks dev; a prod-side `.pth` is a system change and a Kurt decision. This
+#     is DETECTION that fails loud, the only half an agent may do alone.
+#   - **A pin is judged by WHERE it points, not by its presence.** `sys.path.insert(0, HERE)`
+#     (the script's own dir) is the commonest shape and pins nothing — `appyhour_lib` lives one
+#     level up. And a literal `C:\Users\Work\Claude Projects\...` insert is a pin to the DEV
+#     tree, i.e. the trap made explicit (`AppyHourMCP/tools/gorgias_sheets_sync.py` carries one
+#     inside a function; harmless there only because `utils` imported the prod package first).
+#   - **The FIRST `appyhour_lib` import decides.** Python caches the package in sys.modules, so
+#     every later import — pinned or not — reuses whichever tree won the first one. The
+#     simulation walks imports in execution order and stops grading at the first.
+#   - **An unresolvable pin is trusted, never guessed.** A target this evaluator cannot compute
+#     (a function result, an env var) counts as a pin: a wrong guess in either direction is
+#     worse than a lenient pass, and the lenient pass is bounded — every live entry point's pin
+#     is a `Path(__file__)`/`parent`/`parents[N]`/`/` shape this evaluator DOES resolve.
+#   - **Sibling imports are followed (depth ≤ 2, shared sys.path state).** `run_gorgias_update.py`
+#     imports `tools.gorgias_sheets_sync`, which imports `utils`, which does the pin — an
+#     entry-only read would report a working script broken. Imports inside functions run after
+#     the module body, so they are graded last, with the final path state.
+PROD_TREE = Path(r"C:\AppyHourProd")
+PROD_LIB_PKG = "appyhour_lib"
+PROD_LIBPATH_MAX_DEPTH = 2
+EDITABLE_FINDER_GLOB = "__editable___appyhour_*_finder.py"
+
+
+def _script_paths(text: str, cwd: Path | None, exts: tuple[str, ...] = ("py", "bat")) -> list[Path]:
+    """Script paths in one command line. Same walk-back as _targets_from_text (find the
+    extension, walk back to the last drive marker) because these paths carry spaces; a script
+    written RELATIVE to the interpreter (`python.exe sync_carrier_invoices.py`) resolves against
+    `cwd` — the .bat's `cd` or the task's Start In — and is skipped when there is none."""
+    import re as _re
+    out: list[Path] = []
+    for m in _re.finditer(r"\.(?:%s)(?![A-Za-z0-9_])" % "|".join(exts), text, _re.IGNORECASE):
+        seg = text[:m.end()]
+        starts = [s.start() for s in _re.finditer(r"[A-Za-z]:[\\/]", seg)]
+        raw = seg[starts[-1]:] if starts else seg
+        if starts and not _re.search(r"\.exe[\"'\s]", raw, _re.IGNORECASE):
+            out.append(Path(raw.strip("\"'")))
+            continue
+        tok = _re.split(r"[\s\"']+", raw.strip())[-1]
+        if tok and cwd is not None:
+            out.append(cwd / tok)
+    return out
+
+
+def _scripts_in_bat(bat: Path) -> list[Path]:
+    """The .py files a .bat launches. Tracks `set VAR=`, `%~dp0` and `cd /d` so both live shapes
+    resolve: `"%SCRIPT_DIR%run_gorgias_update.py"` and `cd /d "<dir>"` + a bare script name."""
+    import re as _re
+    try:
+        lines = bat.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    env: dict[str, str] = {}
+    cwd = bat.parent
+    out: list[Path] = []
+    for raw in lines:
+        line = raw.strip().replace("%~dp0", str(bat.parent) + "\\")
+        if not line or _re.match(r"(?i)(@?rem\b|::)", line):
+            continue
+        line = _re.sub(r"%([^%\s]+)%", lambda m: env.get(m.group(1).lower(), m.group(0)), line)
+        m = _re.match(r"(?i)@?set\s+\"?([^=\"]+)=([^\"]*)\"?", line)
+        if m:
+            env[m.group(1).strip().lower()] = m.group(2)
+            continue
+        m = _re.match(r"(?i)@?(?:cd|pushd)\s+(?:/d\s+)?\"?([^\"]+?)\"?\s*$", line)
+        if m:
+            cwd = Path(m.group(1))
+            continue
+        out.extend(_script_paths(line, cwd, exts=("py",)))
+    return out
+
+
+def _prod_entry_targets(prod_tree: Path) -> dict[str, tuple[Path, list[str]]]:
+    """{normalised path: (prod .py, [task names])} for every schtask action under `prod_tree`.
+    A .bat action contributes the .py files it launches. Not name-scoped: the question is which
+    files the scheduler executes from the prod tree, whatever the task is called."""
+    import csv
+    import io
+    root = os.path.normcase(str(prod_tree)).rstrip("\\/") + "\\"
+
+    def under(p: Path) -> bool:
+        return os.path.normcase(str(p)).startswith(root)
+
+    targets: dict[str, tuple[Path, list[str]]] = {}
+    seen: set[str] = set()
+    for row in csv.DictReader(io.StringIO(_schtasks_csv())):
+        name = (row.get("TaskName") or "").lstrip("\\")
+        if not name or name.lower() in seen:
+            continue  # one row per trigger
+        seen.add(name.lower())
+        start_in = (row.get("Start In") or "").strip().strip('"')
+        cwd = Path(start_in) if start_in and start_in.upper() != "N/A" else None
+        for p in _script_paths(row.get("Task To Run") or "", cwd):
+            if not under(p):
+                continue
+            for py in (_scripts_in_bat(p) if p.suffix.lower() == ".bat" else [p]):
+                if under(py) and py.suffix.lower() == ".py" and py.is_file():
+                    targets.setdefault(os.path.normcase(str(py)), (py, []))[1].append(name)
+    return targets
+
+
+class _LibPathSim:
+    """Execution-order simulation of sys.path edits against the first `appyhour_lib` import.
+
+    `lib_dirs` is the ordered list of sys.path entries that hold an `appyhour_lib/` — front wins,
+    the way PathFinder walks sys.path. Empty at the first import = the editable finder answers =
+    DEV code. Entries are ("prod"|"dev"|"unresolved", where)."""
+
+    def __init__(self, dev_root: Path):
+        self.dev_lib = os.path.normcase(str(dev_root / PROD_LIB_PKG))
+        self.lib_dirs: list[tuple[str, str]] = []
+        self.search_dirs: list[Path] = []
+        self.first_import: tuple[Path, int] | None = None
+        self.deferred: list[tuple[Path, list, dict, int]] = []
+        self.visited: set[str] = set()
+
+    def run(self, entry: Path) -> None:
+        self.search_dirs = [entry.parent]           # sys.path[0] is the script's own dir
+        if (entry.parent / PROD_LIB_PKG).is_dir():
+            self._add_dir(entry.parent, front=True)
+        self._module(entry, 0)
+        for path, body, env, depth in self.deferred:   # function bodies: after every module body
+            if self.first_import:
+                break
+            self._stmts(path, body, env, depth)
+
+    def verdict(self) -> str | None:
+        if self.first_import is None:
+            return None                              # never imports the library — not affected
+        where = f"{self.first_import[0]}:{self.first_import[1]}"
+        if not self.lib_dirs:
+            return (f"imports {PROD_LIB_PKG} without pinning the prod tree (first import at "
+                    f"{where}) — will run DEV library code via the editable install")
+        kind, at = self.lib_dirs[0]
+        if kind == "dev":
+            return (f"imports {PROD_LIB_PKG} with the DEV tree pinned on sys.path ({at}; first "
+                    f"import at {where}) — will run DEV library code")
+        return None
+
+    # -- statements ------------------------------------------------------------------
+    def _module(self, path: Path, depth: int) -> None:
+        key = os.path.normcase(str(path))
+        if key in self.visited or depth > PROD_LIBPATH_MAX_DEPTH:
+            return
+        self.visited.add(key)
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), str(path))
+        except (SyntaxError, ValueError, OSError):
+            return  # unparseable: grade nothing rather than guess
+        self._stmts(path, tree.body, {"__file__": path, "__sys__": {"sys"}}, depth)
+
+    def _stmts(self, path: Path, stmts: list, env: dict, depth: int) -> None:
+        for st in stmts:
+            if self.first_import:
+                return
+            if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                self.deferred.append((path, st.body, env, depth))
+            elif isinstance(st, ast.Assign) and len(st.targets) == 1 \
+                    and isinstance(st.targets[0], ast.Name):
+                env[st.targets[0].id] = st.value
+            elif isinstance(st, ast.AnnAssign) and isinstance(st.target, ast.Name) and st.value:
+                env[st.target.id] = st.value
+            elif isinstance(st, ast.For) and isinstance(st.iter, (ast.Tuple, ast.List)) \
+                    and isinstance(st.target, ast.Name):
+                for elt in st.iter.elts:
+                    self._stmts(path, st.body, {**env, st.target.id: elt}, depth)
+            elif isinstance(st, (ast.Import, ast.ImportFrom)):
+                self._import(path, st, env, depth)
+            elif isinstance(st, ast.Expr) and isinstance(st.value, ast.Call):
+                self._call(st.value, env)
+            elif isinstance(st, (ast.If, ast.While)):
+                if isinstance(st, ast.If) and _is_type_checking(st.test):
+                    continue  # never executes
+                self._stmts(path, st.body + st.orelse, env, depth)
+            elif isinstance(st, (ast.Try, getattr(ast, "TryStar", ast.Try))):
+                self._stmts(path, st.body, env, depth)
+                for h in st.handlers:
+                    self._stmts(path, h.body, env, depth)
+                self._stmts(path, st.orelse + st.finalbody, env, depth)
+            elif isinstance(st, (ast.With, ast.AsyncWith)):
+                self._stmts(path, st.body, env, depth)
+
+    def _import(self, path: Path, st: ast.stmt, env: dict, depth: int) -> None:
+        names: list[str] = []
+        if isinstance(st, ast.Import):
+            for a in st.names:
+                if a.name == "sys":
+                    env["__sys__"] = env.get("__sys__", set()) | {a.asname or "sys"}
+                names.append(a.name)
+        elif isinstance(st, ast.ImportFrom) and not st.level and st.module:
+            names.append(st.module)   # relative imports stay inside one package: skipped
+        for mod in names:
+            if mod.split(".")[0] == PROD_LIB_PKG:
+                self.first_import = (path, st.lineno)
+                return
+            for sib in self._sibling_files(mod):
+                self._module(sib, depth + 1)
+                if self.first_import:
+                    return
+
+    def _sibling_files(self, mod: str) -> list[Path]:
+        """`a.b.c` -> [a/__init__.py, a/b/__init__.py, a/b/c.py | a/b/c/__init__.py] under the
+        first search dir that has it — package __init__s execute before the module."""
+        parts = mod.split(".")
+        for d in self.search_dirs:
+            leaf = d.joinpath(*parts)
+            target = leaf.with_suffix(".py") if leaf.with_suffix(".py").is_file() \
+                else (leaf / "__init__.py" if (leaf / "__init__.py").is_file() else None)
+            if target is None:
+                continue
+            inits = [d.joinpath(*parts[:i]) / "__init__.py" for i in range(1, len(parts))]
+            return [p for p in inits if p.is_file()] + [target]
+        return []
+
+    # -- sys.path edits ------------------------------------------------------------------
+    def _call(self, call: ast.Call, env: dict) -> None:
+        f = call.func
+        if not (isinstance(f, ast.Attribute) and f.attr in ("insert", "append", "extend")
+                and isinstance(f.value, ast.Attribute) and f.value.attr == "path"
+                and isinstance(f.value.value, ast.Name)
+                and f.value.value.id in env.get("__sys__", {"sys"})):
+            return
+        args = call.args
+        if f.attr == "insert" and len(args) == 2:
+            front = isinstance(args[0], ast.Constant) and args[0].value == 0
+            targets = [args[1]]
+        elif f.attr == "append" and len(args) == 1:
+            front, targets = False, [args[0]]
+        elif f.attr == "extend" and len(args) == 1 and isinstance(args[0], (ast.List, ast.Tuple)):
+            front, targets = False, list(args[0].elts)
+        else:
+            return
+        for t in targets:
+            p = _path_expr(t, env)
+            if p is None:
+                entry = ("unresolved", ast.unparse(t))
+                self.lib_dirs.insert(0, entry) if front else self.lib_dirs.append(entry)
+            else:
+                self._add_dir(p, front)
+
+    def _add_dir(self, p: Path, front: bool) -> None:
+        self.search_dirs.append(p)
+        if not (p / PROD_LIB_PKG).is_dir():
+            return  # a real dir with no library in it pins nothing (the `insert(0, HERE)` shape)
+        kind = "dev" if os.path.normcase(str(p / PROD_LIB_PKG)) == self.dev_lib else "prod"
+        entry = (kind, str(p))
+        self.lib_dirs.insert(0, entry) if front else self.lib_dirs.append(entry)
+
+
+def _is_type_checking(test: ast.expr) -> bool:
+    return (isinstance(test, ast.Name) and test.id == "TYPE_CHECKING") or \
+        (isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING")
+
+
+def _path_expr(node, env: dict, _n: int = 0) -> Path | None:
+    """Evaluate the path shapes entry points actually write: `Path(__file__)`, `.resolve()`,
+    `.parent`, `.parents[N]`, `/ "lit"`, `str(...)`, `os.path.dirname/abspath/join`, a module-level
+    name bound to one of those, a string literal. Anything else -> None (unresolvable)."""
+    if node is None or _n > 16:
+        return None
+    if isinstance(node, ast.Constant):
+        return Path(node.value) if isinstance(node.value, str) else None
+    if isinstance(node, ast.Name):
+        v = env.get(node.id)
+        return v if isinstance(v, Path) else _path_expr(v, env, _n + 1)
+    if isinstance(node, ast.Attribute):
+        base = _path_expr(node.value, env, _n + 1)
+        return base.parent if base is not None and node.attr == "parent" else None
+    if isinstance(node, ast.Subscript):
+        if isinstance(node.value, ast.Attribute) and node.value.attr == "parents" \
+                and isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, int):
+            base = _path_expr(node.value.value, env, _n + 1)
+            with contextlib.suppress(IndexError):
+                return base.parents[node.slice.value] if base is not None else None
+        return None
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        left, right = _path_expr(node.left, env, _n + 1), _path_expr(node.right, env, _n + 1)
+        return left / right if left is not None and right is not None else None
+    if isinstance(node, ast.Call):
+        fn = node.func
+        name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else ""
+        if name in ("Path", "str", "abspath", "realpath", "normpath", "fspath") and len(node.args) == 1:
+            return _path_expr(node.args[0], env, _n + 1)
+        if name == "dirname" and len(node.args) == 1:
+            base = _path_expr(node.args[0], env, _n + 1)
+            return base.parent if base is not None else None
+        if name == "join" and node.args:
+            parts = [_path_expr(a, env, _n + 1) for a in node.args]
+            return None if any(p is None for p in parts) else Path(*parts)
+        if name in ("resolve", "absolute", "expanduser") and isinstance(fn, ast.Attribute) \
+                and not node.args:
+            return _path_expr(fn.value, env, _n + 1)
+    return None
+
+
+def check_prod_entry_points(findings: list[str], prod_tree: Path | None = None,
+                            dev_root: Path | None = None) -> None:
+    """CRITICAL when a scheduled prod script's first `appyhour_lib` import would resolve to the
+    DEV tree (rule 19). One finding per script, however many tasks run it."""
+    prod_tree, dev_root = prod_tree or PROD_TREE, dev_root or DEV_ROOT
+    if not prod_tree.exists():
+        return  # not this machine's layout
+    try:
+        targets = _prod_entry_targets(prod_tree)
+    except Exception as e:
+        findings.append(f"prod entry-point check failed ({type(e).__name__}: {e}) — library-path "
+                        "state of the scheduled tree UNKNOWN, not green")
+        return
+    for _key, (py, tasks) in sorted(targets.items()):
+        sim = _LibPathSim(dev_root)
+        try:
+            sim.run(py)
+        except Exception as e:  # RecursionError and friends: loud, per file, never a skip
+            findings.append(f"prod entry-point check failed ({type(e).__name__}: {e} on {py}) — "
+                            "library-path state of that script UNKNOWN, not green")
+            continue
+        verdict = sim.verdict()
+        if verdict:
+            findings.append(f"prod entry point '{py}' {verdict} (tasks: {', '.join(tasks)})")
+
+
+def _editable_finders() -> list[Path]:
+    import site
+    dirs = [Path(d) for d in (*site.getsitepackages(), site.getusersitepackages())]
+    return [f for d in dirs if d.is_dir() for f in sorted(d.glob(EDITABLE_FINDER_GLOB))]
+
+
+def _finder_mapping(finder: Path) -> dict | None:
+    """The `MAPPING = {...}` literal from a setuptools editable finder; None if unreadable."""
+    try:
+        tree = ast.parse(finder.read_text(encoding="utf-8", errors="replace"), str(finder))
+    except (SyntaxError, ValueError, OSError):
+        return None
+    for st in tree.body:
+        tgt = st.targets[0] if isinstance(st, ast.Assign) and len(st.targets) == 1 else \
+            st.target if isinstance(st, ast.AnnAssign) else None
+        if isinstance(tgt, ast.Name) and tgt.id == "MAPPING" and getattr(st, "value", None):
+            with contextlib.suppress(ValueError, SyntaxError):
+                val = ast.literal_eval(st.value)
+                return val if isinstance(val, dict) else None
+    return None
+
+
+def check_editable_mapping(findings: list[str], finders: list[Path] | None = None,
+                           dev_root: Path | None = None) -> None:
+    """WARN when the editable install no longer maps `appyhour_lib` to the DEV tree (rule 19).
+    Dev-side only — prod is unaffected — but every dev import, test and MCP server would then
+    run whichever tree it points at, and the premise of check_prod_entry_points changes."""
+    dev_root = dev_root or DEV_ROOT
+    want = os.path.normcase(str(dev_root / PROD_LIB_PKG))
+    finders = _editable_finders() if finders is None else list(finders)
+    if not finders:
+        findings.append(
+            f"editable install finder for {PROD_LIB_PKG} NOT FOUND in site-packages (WARN — "
+            "dev-side) — dev imports now resolve by sys.path alone and an unpinned prod script "
+            "fails with ImportError instead of silently running dev code; either re-run "
+            "`pip install -e .` in the dev tree or retire this check with the install")
+        return
+    for f in finders:
+        mapping = _finder_mapping(f)
+        target = (mapping or {}).get(PROD_LIB_PKG)
+        if mapping is None or target is None:
+            findings.append(f"editable install finder {f} has no readable MAPPING for "
+                            f"{PROD_LIB_PKG} (WARN — dev-side) — what dev imports is unknown")
+        elif os.path.normcase(str(Path(target))) != want:
+            findings.append(
+                f"editable install MAPPING for {PROD_LIB_PKG} points at '{target}', not the dev "
+                f"tree '{dev_root / PROD_LIB_PKG}' (WARN — dev-side: every dev import, test and "
+                f"MCP server runs THAT tree's library code; finder {f})")
+
+
 # --- findings -> dispatch loop (2026-08-29, HEARTBEAT_RULES rule 12) --------------------
 # Evidence (_outputs/reports/harness-efficiency-review-2026-08-29.md, "The one systemic
 # finding"): this checker re-reported identical findings daily for a month (ingest
@@ -1169,6 +1556,13 @@ def finding_key(text: str) -> str:
         return "replica-" + m.group(1)
     if text.startswith("prod tree STALE"):
         return "prod-tree-drift"
+    # Per SCRIPT, not per task: four `appyhour_daily_*` tasks run one daily_shipping_sync.py and
+    # one fix clears them all. Quoted, for the same reason as the schtask form above.
+    m = re.match(r"prod entry point '([^']+)'", text)
+    if m:
+        return "prod-libpath-" + Path(m.group(1)).name
+    if text.startswith("editable install"):
+        return "editable-install-" + PROD_LIB_PKG
     # 🔴 Set-level findings are keyed by the PAIR/SET, not by the class. Every pair line ends in
     # `[<8-hex>]`, a hash of the sorted member names (see _pair_hash) — the member names are the
     # only stable identity a pair has, and slugging them directly lets distinct pairs collapse
@@ -1237,6 +1631,8 @@ def main(argv: list[str]) -> int:
         check_shipping_db(findings)
         check_replica_freshness(findings)
         check_prod_parity(findings)
+        check_prod_entry_points(findings)  # rule 19: prod script importing DEV appyhour_lib
+        check_editable_mapping(findings)
     except Exception as e:
         findings.append(f"CHECKER CRASHED mid-run ({type(e).__name__}: {e})")
         notify("🔴 automation-health checker crashed: " + findings[-1], level="error")
@@ -1250,7 +1646,7 @@ def main(argv: list[str]) -> int:
         return 1
     if verbose:
         print("automation-health: all green (beats, ingest, schtasks, task-set, db, replicas, "
-              "prod-parity)")
+              "prod-parity, prod-libpath, editable-mapping)")
     return 0
 
 
