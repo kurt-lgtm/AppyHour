@@ -817,6 +817,23 @@ var EXC_DELAYED_MIN_DAYS = 3;
  * to DELIVER" not to be delivered, "unable to LOCATE your package"). When adding a carrier,
  * replay before trusting the buckets.
  */
+/**
+ * PURE. Delay-shaped carrier text that must NEVER ping, whatever the structured status says.
+ * The positive noise list (Kurt 2026-09-03: "I don't want to see regular delays and weather
+ * delays" · "I also don't want to see delivery failed by ontrac. that's like a regular delay"):
+ *   - weather delay / local delivery restriction / delivery not attempted — the carrier did not try
+ *   - OnTrac's generic "unable to complete your delivery. Please continue to check your tracking"
+ *     — no reason given, OnTrac re-attempts on its own; reads as a delay, not an action item.
+ * 🔴 Consulted in TWO places on purpose: by excMatchFailure_ (text path) AND before the
+ * FAILED_ATTEMPT structured-field rescue in excClassify_ — PP stamps these OnTrac boxes
+ * FAILED_ATTEMPT, so muting the text alone would leave the structured path pinging them anyway.
+ * The specific phrasings that DO stay actionable are the ones naming a cause: "business was
+ * closed", "customer not available", FedEx's "Package not delivered/not attempted".
+ */
+function excIsNoise_(e) {
+  return /weather delay|local delivery restriction|delivery not attempted|please continue to check your tracking/.test(String(e || ''));
+}
+
 function excMatchFailure_(e) {
   if (/unable to (be )?deliver(ed)?|cannot be delivered|undeliverable/.test(e)) return 'UNDELIVERABLE';
   if (/\bdamaged\b|merchandise has been discarded/.test(e)) return 'DAMAGED';
@@ -852,7 +869,7 @@ function excMatchFailure_(e) {
   // the matcher; it sits below every real failure class so a text that also says damaged/returned/
   // refused/address still classifies, and above ATTEMPT_FAILED so the generic attempt phrasings
   // cannot re-catch it.
-  if (/weather delay|local delivery restriction|delivery not attempted/.test(e)) return '';
+  if (excIsNoise_(e)) return '';
   // A closed recipient/business or an incomplete delivery is an attempted-delivery failure.
   if (/was attempted but could not be completed|delivery attempt failed|unable to complete (your )?delivery|driver tried to deliver|business (was )?closed|recipient business closed|package not delivered\/?not attempted/.test(e)) {
     return 'ATTEMPT_FAILED';
@@ -924,7 +941,10 @@ function excClassify_(ship, movedElsewhere, delayedElsewhere) {
   // lost) still refines it and so a genuine delivery still suppresses — the directive means a
   // structured failure must never be outranked by BENIGN narrative, which is exactly what a
   // position above the in-network fallback guarantees.
-  if (status === 'FAILED_ATTEMPT') return r('ATTEMPT_FAILED', true);
+  // 🔴 …unless the newest text is on the noise list (Kurt 2026-09-03): PP stamps OnTrac's generic
+  // "unable to complete your delivery / continue to check your tracking" as FAILED_ATTEMPT, and
+  // without this guard the structured rescue re-pings exactly what excIsNoise_ just muted.
+  if (status === 'FAILED_ATTEMPT' && !excIsNoise_(e)) return r('ATTEMPT_FAILED', true);
 
   // 🔴 DELAYED / STUCK (Kurt 2026-08-17). Signal is Shopify's fulfillment displayStatus, which
   // rides the call excResolveDelivered_ already makes — ZERO extra ParcelPanel budget, same

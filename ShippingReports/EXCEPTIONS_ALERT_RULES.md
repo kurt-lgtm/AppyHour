@@ -1544,6 +1544,21 @@ Keep list as stated by Kurt 09-03, for anyone extending this: **address issue, a
 never picked up, delivery attempted, damaged** — and explicitly NOT "regular delays", "weather
 delays", or "stuck in transit".
 
+**Added the same day — OnTrac's generic "delivery failed" is a delay too.** Kurt: *"I also don't
+want to see delivery failed by ontrac. that's like a regular delay."* The phrasing is
+`We're sorry but we were unable to complete your delivery. Please continue to check your tracking
+for real time updates` — no cause named, OnTrac re-attempts on its own. It pinged three times on
+09-03 (#176784, #176521, #175751-class). Now on the noise list via `please continue to check your
+tracking`. The OnTrac phrasings that **name a cause stay actionable**: "the business was closed"
+(→ `ATTEMPT_FAILED`), "lack of an access code" / "need additional information" (→ `ADDRESS_ISSUE`).
+
+🔴 **The noise list lives in ONE function, `excIsNoise_`, consulted in TWO places.** ParcelPanel
+stamps these OnTrac boxes `FAILED_ATTEMPT` at the top level, so muting the *text* alone would have
+left the structured-field rescue (`status === 'FAILED_ATTEMPT'` → `ATTEMPT_FAILED`) re-pinging the
+exact boxes just muted. The rescue now checks `excIsNoise_` on the newest text first. Replayed:
+noisy text + `FAILED_ATTEMPT` → no ping; "customer not available" + `FAILED_ATTEMPT` → pings;
+non-noise text with no regex match + `FAILED_ATTEMPT` → still rescued.
+
 ### `Exception_001` is delay-noise — do NOT treat the PP substatus as actionable
 
 All **10** `Exception_001` events in `pp_webhook_events` (2026-08-20 → 09-02, the whole table) are
