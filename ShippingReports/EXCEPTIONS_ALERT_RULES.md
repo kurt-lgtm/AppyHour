@@ -1655,8 +1655,19 @@ not a class filter.
 ## Message shape
 
 One Slack message per (order, class). Must carry: order #, customer name, carrier, destination
-state, the class, the **verbatim PP `detail` text**, and a Shopify order link. Verbatim text is
-non-negotiable — it's what lets Dan judge in 2 seconds whether it's real without opening anything.
+state, the class, the **verbatim PP `detail` text**, a **carrier tracking link** (Kurt
+2026-09-03), and a Shopify order link. Verbatim text is non-negotiable — it's what lets Dan judge
+in 2 seconds whether it's real without opening anything.
+
+**Tracking link (`excTrackingUrl_`, pure).** The URL shapes are the ones Shopify itself writes into
+`fulfillments.tracking_url` for these carriers — measured 2026-09-03, not invented: FedEx
+`fedextrack/?trknbr=`, OnTrac `tracking/?number=`, UPS `WebTracking?loc=en_US&requester=ST&trackNums=`.
+Every other carrier (Veho, `Lasership`, `Other`, unknown) gets the storefront ParcelPanel page
+`appyhourbox.com/apps/parcelpanel?nums=`, which Shopify writes for ~99 % of fulfillments and
+resolves any carrier. 🔴 Never add a carrier URL pattern from memory — take it from a
+`tracking_url` Shopify wrote for that carrier. The tracking number rides on the in-run record
+(`rec.tracking`, run-scoped, NOT persisted to `_exc_state` — the state schema is untouched).
+No tracking number (common on `NEVER_PICKED_UP`) → no link line, nothing else changes.
 
 ## Verification
 

@@ -1667,15 +1667,37 @@ function excDisplay_(cls) {
   });
 }
 
+/**
+ * PURE. Carrier tracking page for a (carrier, tracking number). URL shapes are the ones Shopify
+ * itself writes into `fulfillments.tracking_url` for these carriers (measured 2026-09-03: FedEx
+ * `fedextrack/?trknbr=`, OnTrac `tracking/?number=`, UPS `WebTracking?...trackNums=`) — not
+ * invented. Anything else (Veho, LaserShip-as-Lasership, unknown) gets the storefront ParcelPanel
+ * page, which is what Shopify writes for ~99% of our fulfillments and resolves every carrier.
+ * '' when there is no tracking number at all (never-picked-up boxes often have none).
+ */
+function excTrackingUrl_(carrier, tracking) {
+  var t = String(tracking || '').trim();
+  if (!t) return '';
+  var c = String(carrier || '').toLowerCase();
+  var enc = encodeURIComponent(t);
+  if (/fedex/.test(c)) return 'https://www.fedex.com/fedextrack/?trknbr=' + enc;
+  if (/ontrac/.test(c)) return 'https://www.ontrac.com/tracking/?number=' + enc;
+  if (/\bups\b/.test(c)) return 'https://www.ups.com/WebTracking?loc=en_US&requester=ST&trackNums=' + enc;
+  return 'https://appyhourbox.com/apps/parcelpanel?nums=' + enc;
+}
+
 function excMessage_(rec, cls, detail, eventAt) {
   // Verbatim carrier text is non-negotiable — it's what lets Dan judge in 2s without opening
-  // anything. Order link last so Slack doesn't unfurl over the detail.
+  // anything. Links last so Slack doesn't unfurl over the detail: carrier tracking (Kurt
+  // 2026-09-03) then the Shopify order. Slack link syntax <url|label> keeps them one line each.
+  var trk = excTrackingUrl_(rec.carrier, rec.tracking);
   return (EXC_EMOJI_[cls] || ':warning:') + ' *' + excDisplay_(cls) + '* — #' + rec.order +
          (rec.customer ? ' · ' + rec.customer : '') +
          (rec.carrier ? ' · ' + rec.carrier : '') +
          (rec.state ? ' · ' + rec.state : '') +
          (eventAt ? '\n_carrier scan: ' + eventAt + '_' : '') +
          '\n> ' + (detail || '(no carrier text)') +
+         (trk ? '\n<' + trk + '|Track ' + rec.tracking + '>' : '') +
          '\nhttps://admin.shopify.com/store/' +
          PropertiesService.getScriptProperties().getProperty('SHOPIFY_STORE') +
          '/orders?query=' + encodeURIComponent(rec.order);
@@ -2208,6 +2230,9 @@ function hourlyExceptionSweep() {
       var c = ship.carrier;
       rec.carrier = excCarrier_((c && (c.name || c.code)) || rec.carrier || '');
       var v = excClassify_(ship, !!EXC_SHOPIFY_MOVED_[on], !!EXC_SHOPIFY_DELAYED_[on]);
+      // Run-scoped, NOT persisted (state schema untouched, same as hub): the tracking number rides
+      // on the record so the ping can carry a carrier tracking link (Kurt 2026-09-03).
+      rec.tracking = String((ship && ship.tracking_number) || '');
       if (v.cls === 'DELIVERED') { rec.open = false; return; }
       if (!v.ping) return;
       if (rec.alerted.indexOf(v.cls) >= 0) return;   // dedup on (order, class)
