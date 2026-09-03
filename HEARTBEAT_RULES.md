@@ -396,7 +396,12 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
      beat targets is a `ShipRouting/scripts/*.py` file, off-limits to the session that wired the
      rest. They keep posting on success until someone with that repo lands `beat()` in
      `friday_forecast_refresh.py`, `build_prewarm_universe.py` and `prewarm_carrier_tnt.py`. Do NOT
-     flip them to exception-only before then.
+     flip them to exception-only before then. (Update 2026-09-02: `friday-forecast-refresh` was
+     DELETED by Kurt — the Friday ice re-size is manual from the DO app — so it no longer needs a
+     beat. 2026-09-03: the live-write business routines `truffle-watch-christine-farley`,
+     `wrong-address-handler-daily`, `sku-lifecycle-scan-weekly` and `carrier-sla-monitor-weekly`
+     are now wired — see the table below; `ops-issues-weekly-update` and
+     `evo-transfer-monday-reminder` remain LOUD for the reasons recorded there.)
 
 17. **An ingest leg whose cost tracks the SIZE OF THE DATASET rather than the SIZE OF THE CHANGE
    will eventually outgrow any ceiling — fix the window, never the ceiling.** 🔴 2026-08-01 →
@@ -548,6 +553,20 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
 | `shipping-cost-sheet` | `_outputs/scripts/shipping_cost_report.py` INSIDE the `--push` branch, after `push()` returns a URL (routine `shipping-cost-sheet`, Mon ~13:09) | 10 days |
 | `vendor-matrix` | `ingest/slack_reship/sync.py` end of `main()` when `--report` and NOT `--push` (routine `weekly-shipping-vendor-matrix`, Tue ~12:00) | 10 days |
 | `slack-reship` | `ingest/slack_reship/weekly_task.py` (routine `weekly-reship-report`, Tue ~12:00) — pre-existing beat, promoted into `EXPECTED` 2026-08-31 | 10 days |
+| `truffle-watch` | `InventoryReorder/Errors/truffle_autoswap.py` `_beat_if_completed()` — every completed action (`none`/`swap`/`missed_window`/`no_candidate`), NEVER on `error` (routine `truffle-watch-christine-farley`, Mon–Fri 12:11; edits a live Shopify order) | 4 days |
+| `wrong-address-handler` | `scripts/automations/wrong_address_automation.py` `__main__`, only when `main()` returned 0 (routine `wrong-address-handler-daily`, Mon–Fri 12:36; `--apply-untag` removes live order tags) | 4 days |
+| `sku-lifecycle-scan` | `InventoryReorder/Errors/sku_lifecycle_scan.py` end of script, after the dated report CSV is written (routine `sku-lifecycle-scan-weekly`, Mon ~14:20) | 10 days |
+| `carrier-sla-monitor` | `_outputs/scripts/coldchain_health_brief.py` end of script, after `coldchain_health_brief_latest.md` is written (routine `carrier-sla-monitor-weekly`, Mon ~14:35; posts to Slack ONLY on anomaly, so the beat is its sole liveness evidence) | 10 days |
+
+**Still LOUD, deliberately (2026-09-03, from the Migration Triage coverage audit):**
+`ops-issues-weekly-update` — its target `AppyHourMCP/run_gorgias_update.py` was another session's
+mid-flight (dirty) file the day the rest were wired, so rule 10 applied; wire `beat("ops-issues")`
+at the end of its `main()` after the enrich+linkify succeed, add the `EXPECTED` row (10d), and only
+then may its Slack step go exception-only. `evo-transfer-monday-reminder` — no script; it is one
+pinned `appyhour_lib.notify --file` command, and the routine allowlist matches that command
+byte-for-byte, so a beat there means a Kurt-approved command change, not a code edit. The three
+`prewarm-carrier-tnt-*` routines are covered by their receipt+coverage gate
+(`prewarm_receipt_<SHIP_DATE>.json`) rather than a beat — stronger than a beat, no row wanted.
 
 Checker also probes (no beat needed): `C:\AppyHourData\sync_heartbeat.json` age (>48h, via
 `appyhour_lib.sync_heartbeat.read()` — moved off `%APPDATA%` 2026-09-01, rule 3b), `schtasks` AppyHour* Last

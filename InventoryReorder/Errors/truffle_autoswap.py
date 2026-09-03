@@ -56,12 +56,33 @@ def rest(path, params=None):
     return r.json()
 
 
+def _beat_if_completed(d):
+    """Dead-man heartbeat for routine `truffle-watch-christine-farley` (HEARTBEAT_RULES rule 16).
+
+    Beats on every COMPLETED run — `none`, `swap`, `missed_window`, `no_candidate` are all the
+    routine doing its job (detection ran to the end). `error` is NOT a completed run (the order
+    edit failed mid-flight), so it does not beat: a beat placed where the work did not happen is
+    worse than no beat. Graded by scripts/automation_health.py EXPECTED["truffle-watch"] (4d:
+    Mon-Fri routine, weekend + one missed weekday). Never raises into the host — the JSON line
+    on stdout is the contract the routine parses, and a ledger hiccup must not break it.
+    """
+    if d.get("action") == "error":
+        return
+    try:
+        sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[2]))
+        from appyhour_lib.heartbeat import beat
+        beat("truffle-watch")
+    except Exception:
+        pass
+
+
 def out(d):
     # Always surface cross-cutting flags if they've been computed.
     for k in ("archived_seen", "truffle_cheese"):
         v = globals().get(k)
         if v and k not in d:
             d[k] = v
+    _beat_if_completed(d)
     print(json.dumps(d))
     sys.exit(0)
 

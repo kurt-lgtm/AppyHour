@@ -18,6 +18,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -69,6 +70,20 @@ EXPECTED = {
     # redundant with the rule-13 beat-or-fail loop and is the sweep owner's to retire (it also
     # still hand-rolls the deprecated %APPDATA% ledger path, which rule 3 bans).
     "slack-reship": 10 * 24,
+    # --- LIVE-WRITE / business routines wired 2026-09-03 (Migration Triage finding: the routines
+    # that edit live Shopify orders were exactly the ones with no dead-man coverage). Same
+    # thresholds and the same reasoning as above: Mon-Fri daily -> 4d, weekly -> 10d, never 7d.
+    # 🔴 Each beat sits AFTER the work (rule 16 negative): truffle beats on every completed
+    # action EXCEPT `error`; wrong-address beats only on exit 0; sku-lifecycle + carrier-sla beat
+    # after their report file is written. The two remaining uncovered business routines are
+    # `ops-issues-weekly-update` (its target AppyHourMCP/run_gorgias_update.py was another
+    # session's mid-flight file on 09-03 — rule 10 — so it stays LOUD) and
+    # `evo-transfer-monday-reminder` (no script at all; a beat would mean changing its pinned
+    # notify command, which the permission allowlist matches byte-for-byte).
+    "truffle-watch": 4 * 24,          # InventoryReorder/Errors/truffle_autoswap.py (Mon-Fri 12:11)
+    "wrong-address-handler": 4 * 24,  # scripts/automations/wrong_address_automation.py (Mon-Fri 12:36)
+    "sku-lifecycle-scan": 10 * 24,    # InventoryReorder/Errors/sku_lifecycle_scan.py (Mon ~14:20)
+    "carrier-sla-monitor": 10 * 24,   # _outputs/scripts/coldchain_health_brief.py (Mon ~14:35)
 }
 SYNC_HEARTBEAT_MAX_H = 48
 # HEARTBEAT_RULES rule 18: a `partial:` ingest stamp (cancelled at the ceiling AFTER banking rows)

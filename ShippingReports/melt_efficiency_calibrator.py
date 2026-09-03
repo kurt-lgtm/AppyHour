@@ -24,6 +24,25 @@ Output: _outputs/postmortems/melt_efficiency_calibration.md
   - "Insufficient data" note with N currently available
 
 Currently expected: insufficient data until late-July 2026 cohort #4+.
+
+🔴 READ-ONLY, BY CONSTRUCTION (2026-09-03). This is a pure-analytics weekly report
+(schtask `AppyHour\\MeltEfficiencyCalibrator`, Mon 09:15, runs the C:\\AppyHourProd copy), and
+until today it held a WRITE-CAPABLE shipping.db handle: a raw ``sqlite3.connect(DB_PATH)`` plus
+``db_snapshots.init_schema(DB_PATH, force=True)`` — a schema migration (``executescript(DDL)`` +
+``ALTER TABLE``) issued from a report, through a raw connection that bypassed BOTH the advisory
+single-writer lock and the canonical-path guard in ``appyhour_lib.db.connect``. That is the class
+behind the three WAL corruptions ("surplus write-capable connections", the same class
+``postmortem_runner`` was fixed away from). It also resolved the DB path by hand, with a
+``%APPDATA%`` fallback — the virtualized second name the canonical-path guard exists to refuse.
+NEGATIVES this file must keep honoring:
+  - NEVER ``sqlite3.connect()`` shipping.db here. ``appyhour_lib.db.connect_ro`` only (``mode=ro``
+    cannot take a write lock or trigger a checkpoint, so it cannot join the write race).
+  - NEVER call ``init_schema`` / any DDL from this report. The thermal columns it wanted
+    (``kori_snapshot_orders.effective_btu/margin_btu/transit_type``) are owned by Kori's snapshot
+    writer; if they are absent the SELECT below raises ``sqlite3.OperationalError`` and the
+    schtask goes red — loud, which is correct. A reader that "auto-migrates" is a writer.
+  - NEVER resolve the DB path by hand. ``appyhour_lib.paths.db_path()`` is the single authority.
+Test: tests/test_melt_calibrator_readonly.py (scratch DB only — never the live file).
 """
 
 from __future__ import annotations
@@ -37,9 +56,10 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(PROJECT_ROOT))
-sys.path.insert(0, str(PROJECT_ROOT / "GelPackCalculator/kori"))
 
-DB_PATH = Path(r"C:\AppyHourData\shipping.db") if Path(r"C:\AppyHourData\shipping.db").exists() else Path.home() / "AppData/Roaming/AppyHour/shipping.db"
+from appyhour_lib.db import connect_ro  # noqa: E402  — the ONLY sanctioned shipping.db opener
+from appyhour_lib.paths import db_path  # noqa: E402
+
 OUT_PATH = (
     Path(r"C:\Users\Work\Claude Projects\_outputs\postmortems")
     / "melt_efficiency_calibration.md"
@@ -183,17 +203,15 @@ def build_report(rows: list[dict], n_cohorts: int) -> str:
 
 
 def main() -> int:
-    if not DB_PATH.exists():
-        log.error(f"DB missing: {DB_PATH}")
+    target = db_path()
+    if not target.exists():
+        log.error(f"DB missing: {target}")
         return 1
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    # Ensure schema has the new thermal columns (auto-migrates if missing)
-    try:
-        from db_snapshots import init_schema
-        init_schema(DB_PATH, force=True)
-    except Exception as e:
-        log.warning(f"init_schema failed: {e}")
-    db = sqlite3.connect(str(DB_PATH), timeout=30)
+    # READ-ONLY handle (mode=ro). No schema bootstrap here — see the module docstring: a
+    # report that migrates the schema is a second writer, and that class corrupted the WAL
+    # three times. Missing thermal columns fail LOUDLY in collect_dataset() instead.
+    db = connect_ro(target, timeout=30)
     db.row_factory = sqlite3.Row
     try:
         rows, n_cohorts = collect_dataset(db)

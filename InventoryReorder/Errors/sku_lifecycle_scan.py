@@ -87,3 +87,15 @@ print(f"FLAGGED line items: {len(flags)} across {len(bysku)} SKUs")
 for s, c in bysku.most_common():
     a = watch[s]; print(f"  {s:<12} {c:<4} {a['lifecycle']:<13} -> {a.get('swap_to') or '(no target)'}")
 print(f"\nreport: {out}")
+
+# Dead-man heartbeat for routine `sku-lifecycle-scan-weekly` (HEARTBEAT_RULES rule 16): beats only
+# here, AFTER the report CSV is written — the report IS the work. Graded by
+# scripts/automation_health.py EXPECTED["sku-lifecycle-scan"] (10d, weekly). Never raises into
+# the host (a ledger hiccup must not fail a scan that already wrote its report).
+try:
+    import pathlib as _pl
+    sys.path.insert(0, str(_pl.Path(__file__).resolve().parents[2]))
+    from appyhour_lib.heartbeat import beat
+    beat("sku-lifecycle-scan")
+except Exception:
+    pass

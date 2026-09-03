@@ -403,4 +403,15 @@ def _write_digest(path, autofix, safe, needs, hold, gone, fixed, untagged,
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    _rc = main()
+    if _rc == 0:
+        # Dead-man heartbeat for routine `wrong-address-handler-daily` (HEARTBEAT_RULES rule 16).
+        # Beats only on a clean exit — a 0-order day still ran detect+learn and IS the routine;
+        # a non-zero exit did not do the work and must not beat. Graded by
+        # scripts/automation_health.py EXPECTED["wrong-address-handler"] (4d: Mon-Fri 12:36).
+        try:
+            from appyhour_lib.heartbeat import beat
+            beat("wrong-address-handler")
+        except Exception:
+            pass
+    sys.exit(_rc)
