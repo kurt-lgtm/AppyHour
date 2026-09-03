@@ -137,30 +137,61 @@ def orders(con, since_iso=None, verbose=True):
 
 
 def recharge_customers(con, verbose=True):
-    """Map any customer we hold with no Recharge id. Only the gaps, not a full re-pull."""
-    gaps = [r[0] for r in con.execute(
-        "SELECT shop FROM cust WHERE rc IS NULL AND shop IS NOT NULL AND shop <> ''")]
+    """Map every customer we hold with no Recharge id, by sweeping the Recharge roster.
+
+    🔴 NOT a per-customer lookup. `/customers?external_customer_id=<shopify id>` is NOT a
+    server-side filter -- it returns the unfiltered first page and mapped 1 of 1,150 on
+    2026-09-01 while exiting 0. A full cursor sweep (48,386 records, ~3 min) matched on
+    each record's OWN external_customer_id mapped 408 in one pass. The per-customer path
+    is gone so it cannot be reached by accident.
+
+    🔴 FAILS LOUD when the sweep maps ~nothing against a real gap list. A run that maps
+    1 of 1,000 is broken, not "1 new customer" -- and must never exit 0 quietly.
+
+    Customers still unmapped after a full sweep have NO Recharge account (48,386-roster
+    check). For them "no portal login" is TRUE, not unknown -- a first-order or one-time
+    buyer cannot log into a portal they have no account on. Print that split, since a
+    bare "N unmapped" reads as N blind spots.
+    """
+    gaps = {r[0] for r in con.execute(
+        "SELECT shop FROM cust WHERE rc IS NULL AND shop IS NOT NULL AND shop <> ''")}
     if verbose:
-        print(f"  Recharge map: {len(gaps)} customers with no recharge id")
-    found = 0
-    for i, shop in enumerate(gaps, 1):
-        try:
-            d = rc_get("/customers", {"external_customer_id": shop, "limit": 1})
-        except Exception:                                          # noqa: BLE001
-            continue
-        for c in d.get("customers", []):
-            con.execute("UPDATE cust SET rc = ?, email = COALESCE(NULLIF(email,''), ?) "
-                        "WHERE shop = ?",
-                        (str(c["id"]), (c.get("email") or "").lower(), shop))
-            found += 1
-        if i % 50 == 0:
-            con.commit()
-            if verbose:
-                print(f"    {i}/{len(gaps)}, {found} mapped", flush=True)
-        time.sleep(0.25)
-    con.commit()
-    print(f"  Recharge map: {found} of {len(gaps)} resolved"
-          + (f"   🔴 {len(gaps) - found} still UNKNOWN (not clear)" if found < len(gaps) else ""))
+        print(f"  Recharge map: {len(gaps):,} customers with no recharge id; sweeping roster")
+    if not gaps:
+        return 0
+    cursor, seen, found, page = None, 0, 0, 0
+    while True:
+        page += 1
+        params = {"cursor": cursor, "limit": 250} if cursor else {"limit": 250}
+        d = rc_get("/customers", params)
+        batch = d.get("customers", [])
+        if not batch:
+            break
+        for c in batch:
+            ext = c.get("external_customer_id") or {}
+            shop = str(ext.get("ecommerce") if isinstance(ext, dict) else ext or "")
+            seen += 1
+            if shop in gaps:
+                con.execute("UPDATE cust SET rc = ?, email = COALESCE(NULLIF(email,''), ?) "
+                            "WHERE shop = ? AND rc IS NULL",
+                            (str(c["id"]), (c.get("email") or "").lower(), shop))
+                found += 1
+        con.commit()
+        if verbose and page % 40 == 0:
+            print(f"    page {page}: {seen:,} seen, {found} mapped", flush=True)
+        cursor = d.get("next_cursor")
+        if not cursor:                    # absent cursor, NOT a short page
+            break
+        time.sleep(0.3)
+    left = len(gaps) - found
+    print(f"  Recharge map: roster {seen:,} · newly mapped {found} · "
+          f"{left:,} have NO Recharge account (login impossible, not unknown)")
+    # 🔴 a full sweep that saw the roster but mapped nothing against a big gap list means
+    # the join key changed shape, not that nobody is a subscriber
+    if seen > 1000 and len(gaps) > 100 and found == 0:
+        raise SystemExit("recharge_customers: swept the whole roster and mapped 0 of "
+                         f"{len(gaps):,} -- the external_customer_id join is broken, "
+                         "refusing to report this as success")
     return found
 
 
