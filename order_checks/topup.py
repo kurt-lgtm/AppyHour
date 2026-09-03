@@ -44,6 +44,10 @@ PAGE = """query($q:String!,$after:String){orders(first:100, query:$q, after:$aft
     lineItems(first:200){edges{node{sku currentQuantity}}}}}}}"""
 
 EVENT_WINDOW_DAYS = 7          # Recharge's server-side cap on created_at_min
+# 🔴 Kurt 2026-09-03: "if any one are failed, that means we don't swap." Kept in `ev` with
+# failed=1 even though neither is a login nor a contents touch. 'failed' is the charge
+# object's verb; 'failed-internal-only' is the subscription-side echo of the same failure.
+FAILED_VERBS = ("failed", "failed-internal-only")
 
 
 def _iso(ts):
@@ -225,7 +229,8 @@ def events(con, verbose=True):
             e = api_event_to_row(raw)        # 🔴 API shape != CSV shape; see recharge_gate
             verb = e["verb"]
             touch = touches_contents(verb, e["changes"], e["description"])
-            if verb != "login" and not touch:
+            failed = verb in FAILED_VERBS
+            if verb != "login" and not touch and not failed:
                 continue
             cid = con.execute("SELECT id FROM cust WHERE rc = ?",
                               (e["customer_id"],)).fetchone()
@@ -235,9 +240,10 @@ def events(con, verbose=True):
                      .replace(tzinfo=timezone.utc).timestamp())
             kind = {"human": 0, "api": 1, "automated": 2}[classify(e["source"])]
             con.execute(
-                "INSERT INTO ev(cust, ts, login, touch, kind, verb, src, nearhuman) "
-                "VALUES (?,?,?,?,?,NULL,NULL,0)",
-                (cid[0], ts, 1 if verb == "login" else 0, 1 if touch else 0, kind))
+                "INSERT INTO ev(cust, ts, login, touch, kind, verb, src, nearhuman, failed) "
+                "VALUES (?,?,?,?,?,NULL,NULL,0,?)",
+                (cid[0], ts, 1 if verb == "login" else 0, 1 if touch else 0, kind,
+                 1 if failed else 0))
             kept += 1
         con.commit()
         if verbose and page % 10 == 0:
@@ -285,7 +291,8 @@ def events_csv(con, path, verbose=True):
             n += 1
             verb = r.get("verb") or ""
             touch = touches_contents(verb, r.get("changes"), r.get("description"))
-            if verb != "login" and not touch:
+            failed = verb in FAILED_VERBS
+            if verb != "login" and not touch and not failed:
                 continue
             ts = int(datetime.strptime(r["created_at"][:19], "%Y-%m-%d %H:%M:%S")
                      .replace(tzinfo=timezone.utc).timestamp())
@@ -299,9 +306,10 @@ def events_csv(con, path, verbose=True):
                 continue
             kind = {"human": 0, "api": 1, "automated": 2}[classify(r.get("source"))]
             con.execute(
-                "INSERT INTO ev(cust, ts, login, touch, kind, verb, src, nearhuman) "
-                "VALUES (?,?,?,?,?,NULL,NULL,0)",
-                (cid[0], ts, 1 if verb == "login" else 0, 1 if touch else 0, kind))
+                "INSERT INTO ev(cust, ts, login, touch, kind, verb, src, nearhuman, failed) "
+                "VALUES (?,?,?,?,?,NULL,NULL,0,?)",
+                (cid[0], ts, 1 if verb == "login" else 0, 1 if touch else 0, kind,
+                 1 if failed else 0))
             kept += 1
     con.execute("""UPDATE ev SET nearhuman = 1
                    WHERE kind = 1 AND nearhuman = 0 AND EXISTS (

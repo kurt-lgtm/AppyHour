@@ -69,8 +69,12 @@ CREATE TABLE oi  (ord INTEGER, sku INTEGER, qty INTEGER);
 -- 🔴 Computed at seed against ALL rc_events, not just the rows kept here -- the human
 -- event that qualifies an api-origin change is often neither a login nor a contents
 -- touch, so it is absent from `ev` and the lookup cannot be done at read time.
+-- failed: a charge FAILED event (verb 'failed' on a charge, or 'failed-internal-only' on a
+-- subscription). Kurt 2026-09-03: "if any one are failed, that means we don't swap" -- a
+-- customer whose charge failed since their previous order is excluded from rotation swaps.
 CREATE TABLE ev  (cust INTEGER, ts INTEGER, login INTEGER, touch INTEGER,
-                  kind INTEGER, verb INTEGER, src INTEGER, nearhuman INTEGER);
+                  kind INTEGER, verb INTEGER, src INTEGER, nearhuman INTEGER,
+                  failed INTEGER DEFAULT 0);
 CREATE TABLE verb(id INTEGER PRIMARY KEY, name TEXT UNIQUE);
 CREATE TABLE src (id INTEGER PRIMARY KEY, name TEXT UNIQUE);
 CREATE TABLE meta(k TEXT PRIMARY KEY, v TEXT);
@@ -270,6 +274,23 @@ def logged_in_since(con, shopify_customer_gid, since_iso):
     if cid is None:
         return ""
     r = con.execute("""SELECT ts FROM ev WHERE cust = ? AND login = 1 AND ts >= ?
+                       ORDER BY ts LIMIT 1""", (cid, _ts(con, since_iso))).fetchone()
+    return _iso(r[0]) if r else ""
+
+
+def charge_failed_since(con, shopify_customer_gid, since_iso):
+    """-> ISO of the first charge-FAILED event since `since_iso`, or ''.
+
+    🔴 Kurt 2026-09-03: "if any one are failed, that means we don't swap." A failed charge
+    since the customer's previous order means this order's footing is not settled -- the
+    box may be retried, re-cut, or not ship at all -- so it is excluded from rotation swaps
+    outright. Same shape as logged_in_since: '' is "no failure on record", and an unknown
+    customer also returns '' -- check known() first.
+    """
+    cid = _cid(con, shopify_customer_gid)
+    if cid is None:
+        return ""
+    r = con.execute("""SELECT ts FROM ev WHERE cust = ? AND failed = 1 AND ts >= ?
                        ORDER BY ts LIMIT 1""", (cid, _ts(con, since_iso))).fetchone()
     return _iso(r[0]) if r else ""
 

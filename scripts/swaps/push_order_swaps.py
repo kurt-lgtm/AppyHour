@@ -174,17 +174,35 @@ def main(argv=None):
         if not ok:
             print("\n  nothing left after the fence-drop check")
             return 1
-    results = []
+    # 🔴 ONE call per ORDER carrying every leg, not one call per leg. order_edit runs
+    # beginEdit -> setQuantity/addVariant -> commitEdit inside a single call, so a failure
+    # before commit leaves the order untouched. Leg-by-leg, the first leg commits before
+    # the second is tried, which is how RMFG_20260901 got CH-MONT still in the box after
+    # AC-MISS had already been swapped out. Kurt 2026-09-03: "if any one are failed, that
+    # means we don't swap" -- the order either gets all its legs or none of them.
+    by_order = {}
     for r in ok:
+        by_order.setdefault((r["order"], r["order_gid"]), []).append(r)
+    results = []
+    for (oid, gid), legs in by_order.items():
+        swaps = {leg["old"]: leg["new"] for leg in legs}
+        limits = {leg["old"]: 1 for leg in legs}
         try:
             sw = order_edit._swap_order_skus(
-                base, headers, r["order_gid"], {r["old"]: r["new"]}, gids,
-                rc_bundle_only=not a.allow_no_rc_bundle, qty_limits={r["old"]: 1})
-            results.append({**r, "swapped": sw, "ok": bool(sw)})
+                base, headers, gid, swaps, gids,
+                rc_bundle_only=not a.allow_no_rc_bundle, qty_limits=limits)
+            # a partial return is a failure of the whole order, not a partial success
+            done = len(sw or []) >= len(legs)
+            for leg in legs:
+                results.append({**leg, "swapped": sw, "ok": done,
+                                **({} if done else {"error": f"partial: {len(sw or [])} of {len(legs)} legs"})})
         except Exception as e:                                   # noqa: BLE001
-            results.append({**r, "error": str(e), "ok": False})
-        print(f"  {'OK  ' if results[-1]['ok'] else 'FAIL'} #{r['order']} {r['old']} -> {r['new']}"
-              + (f"  [{results[-1].get('error', '')}]" if not results[-1]["ok"] else ""))
+            for leg in legs:
+                results.append({**leg, "error": str(e), "ok": False})
+        for leg in legs:
+            rr = next(x for x in results if x["order"] == leg["order"] and x["old"] == leg["old"])
+            print(f"  {'OK  ' if rr['ok'] else 'FAIL'} #{oid} {leg['old']} -> {leg['new']}"
+                  + (f"  [{rr.get('error', '')}]" if not rr["ok"] else ""))
 
     print("\n[verify] re-fetching and re-counting -- success is never call-count")
     time.sleep(3)

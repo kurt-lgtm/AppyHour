@@ -51,7 +51,7 @@ from .fetch_gql import fetch_by_name
 # The compact store answers every history question these checks ask, at 1/8th the size,
 # and carries the customer map + the guardrail reads -- so recharge_id/customized no
 # longer come from two other modules keyed on two different ids.
-from .history_compact import DB, customized, ever_received, previous_orders, sku_first_seen
+from .history_compact import DB, charge_failed_since, customized, ever_received, previous_orders, sku_first_seen
 
 CHILD = ("AC-", "MT-", "CH-", "TR-")
 TYPES = ("AC-", "MT-", "CH-")
@@ -359,6 +359,12 @@ def run(orders, con, verbose=True, sheet=None, have_path=None, tag=None):
         was, why = customized(con, cust, since_iso=prev[0][1] if prev else None)
         if was:
             skipped["human customized (recharge events)"] += 1
+            continue
+        # 🔴 Kurt 2026-09-03: "if any one are failed, that means we don't swap." A charge
+        # that failed since the previous order means this box's footing is unsettled --
+        # retry, re-cut, or no ship -- so it is out of the swap pool entirely.
+        if charge_failed_since(con, cust, prev[0][1]):
+            skipped["charge FAILED since previous order - do not swap"] += 1
             continue
 
         prev_skus = {s for _, _, skus in prev for s in skus}

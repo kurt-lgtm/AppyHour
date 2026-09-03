@@ -263,3 +263,22 @@ truth and it reproduced 818/543 exactly.
 Sheet first, Shopify last. Once the vF is sent, the sheet is canon and Shopify must be made
 to match it — a vF/Shopify mismatch is an apply defect, fixed on the Shopify side, never by
 editing a sent sheet.
+
+### Charge-failed exclusion (Kurt 2026-09-03: "if any one are failed, that means we don't swap")
+
+🔴 A customer with a charge-FAILED event since their previous order is OUT of the swap pool.
+Two event shapes carry it -- verb `failed` on the charge object and `failed-internal-only` on
+the subscription -- and both land in `ev` with `failed=1` (`topup.FAILED_VERBS`). check7 tests
+`charge_failed_since(cust, previous_order)` right after the customize gate and reports the
+count as "charge FAILED since previous order - do not swap". A failed charge means the box's
+footing is unsettled -- retry, re-cut, or no ship -- and a rotation swap on top of that is
+noise at best. Fired on RMFG_20260901: 1 order.
+
+### Per-order atomic apply (same directive, second reading)
+
+🔴 `push_order_swaps` sends ALL of an order's legs in ONE `_swap_order_skus` call. order_edit
+runs beginEdit -> mutations -> commitEdit inside that call, so a failure before commit leaves
+the order untouched; leg-by-leg, the first leg commits before the second is tried. That is
+exactly how RMFG_20260901 ended up with CH-MONT still in the box after AC-MISS was already
+swapped out. A partial return (fewer legs applied than requested) is recorded as a FAILURE of
+the whole order, never as a partial success -- the 27-partials-logged-as-OK class.
