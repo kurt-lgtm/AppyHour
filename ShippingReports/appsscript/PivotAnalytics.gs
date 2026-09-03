@@ -319,7 +319,9 @@ function paFetchCohort_(shipWeek) {
     ' fulfillments(first:10){ displayStatus trackingInfo{ company number }' +
     ' events(first:50, sortKey:HAPPENED_AT){ edges{ node{ status happenedAt } } } } } } } }';
   // 🔴 -tag:'Reship' — reships are a different population and must never enter cohort analytics.
-  var qs = "tag:'" + shipWeek + "' -status:cancelled -tag:'Reship'";
+  // 🔴 D42 — the query string comes from paCohortQuery_ and NOWHERE else, so the partition assert
+  // recounts the EXACT population this paginated (an inline copy here would drift silently).
+  var qs = paCohortQuery_(shipWeek);
   var out = [], cursor = null, lanes = {};
   while (true) {
     var conn = shopifyGql_(q, { q: qs, cursor: cursor }).orders;
@@ -1250,8 +1252,15 @@ function paRefreshOne_(shipWeek, dry, budget, allowAppend) {
   // `TnT2` tab has carried 2,227 for `_SHIP_2026-07-27` against a raw population of 2,226 since
   // July; one comparison catches it, and nine weeks of arithmetic went into finding it by eye.
   var raw = paAssertNotAboveRaw_(shipWeek, total);
+  // 🔴 D42 PARTITION — the ceiling is one-sided and the raw population includes the reships this
+  // basis excludes, so on 07-27 it left 57 orders of slack above and nothing at all below. This
+  // closes both: recs + reships == raw, and recs == a recount of the exact query paginated.
+  // Costs 2 ordersCount_ calls per leg — stated in RESHIP_REPORT_RULES D42; do not add a third.
+  var part = paAssertPartition_(shipWeek, recs, raw);
   paLog_('  basis ' + PA_DENOM_BASIS + ': ' + total + ' of raw uncancelled tag population ' + raw +
-         ' (' + (raw - total) + ' reship orders excluded) · fulfilment settled: ' +
+         ' (' + part.reship + ' reship orders excluded; partition identity holds, net recount ' +
+         part.net + ') · orders carrying >=2 _SHIP_ tags: ' + part.multiTag +
+         ' · fulfilment settled: ' +
          (paDenomSettled_(shipWeek) ? 'yes' : 'NO (age ' + age + 'd < ' +
           PA_DENOM_SETTLES_DAY_OFFSET + 'd)'));
 
@@ -1327,7 +1336,7 @@ function paRefreshOne_(shipWeek, dry, budget, allowAppend) {
     // 🔴 D41 — basis + as_of onto the column's own header cell, every run. AFTER the values, so
     // a note can never claim provenance for numbers that failed to land; a NOTE and not a row,
     // because D13 forbids this writer from inserting rows.
-    paWriteProvenanceNote_(sh, col, shipWeek, total, raw, dry);
+    paWriteProvenanceNote_(sh, col, shipWeek, total, raw, dry, part.multiTag);
     if (!dry) {
       SpreadsheetApp.flush();
       paAssertColumns_(sh);                             // post-write: still exactly one, still headed
@@ -1614,6 +1623,82 @@ function paAssertNotAboveRaw_(shipWeek, total) {
 }
 
 /**
+ * 🔴 D42 — THE ONE query string this tab's population is built from. `paFetchCohort_` paginates
+ * it and `paAssertPartition_` recounts it; a second inline copy anywhere lets the two drift and
+ * turns the recount into a comparison of two different populations, which is the exact failure
+ * D41 documents between this tab and `Carrier Mix`.
+ */
+function paCohortQuery_(shipWeek) {
+  return "tag:'" + shipWeek + "' -status:cancelled -tag:'Reship'";
+}
+/** The complement of paCohortQuery_ inside the raw population: the reships this tab excludes. */
+function paReshipQuery_(shipWeek) {
+  return "tag:'" + shipWeek + "' -status:cancelled tag:'Reship'";
+}
+
+/**
+ * 🔴 D42 PARTITION IDENTITY — the D41 ceiling is ONE-SIDED, and the raw population it compares
+ * against INCLUDES the reships this basis EXCLUDES. On `_SHIP_2026-07-27` that is 2,226 raw vs
+ * 2,169 published: **57 orders of slack** (42–83 on the other cohorts). Any over-count up to +57
+ * — a date-window basis (which is exactly what produced the 2,227: every label cut Mon–Sat that
+ * week, `#166740` and `#160075` swept in from the Tuesday leg, `#164878A` invisible because it
+ * has no tracking) on a week with a few never-cut orders, a duplicated page, a neighbouring
+ * cohort's tag — passes `total > raw` untouched. An UNDER-count (a dropped page, a throttled
+ * fetch returning early) is never checked at all. 07-27 fired only because +2 beat −1 by one.
+ *
+ * So, at the same instant and from the same source, with ZERO tolerance:
+ *   (1) recs.length + ordersCount(<reship query>) === ordersCount(<raw query>)   — bounded both ways
+ *   (2) recs.length === ordersCount(<the exact query paFetchCohort_ paginated>) — pagination/throttle
+ *   (3) in memory, no calls: no duplicate order; every rec carries `shipWeek`; none carries `Reship`
+ * A mismatch throws with the week and every number, and the paint refuses.
+ *
+ * Cost: TWO extra `ordersCount_` calls per leg (net, reship) — `raw` is the ceiling's existing
+ * call, passed in rather than re-fetched. Stated in RESHIP_REPORT_RULES D42 (P16 byte budget).
+ *
+ * Returns { net, reship, multiTag } — `multiTag` is the count of records carrying >=2 `_SHIP_`
+ * tags, stamped into the provenance note: 7 orders (`#163680 #163719 #163720 #163722 #163723
+ * #163724 #163735`) are triple-tagged 07-20/07-24/07-27 today and therefore counted in TWO
+ * columns. A per-column assert cannot refuse that; the fix is a Shopify tag cleanup (Kurt-gated
+ * live writes), never a sheet edit.
+ */
+function paAssertPartition_(shipWeek, recs, raw) {
+  var total = recs.length;
+  var net = ordersCount_(paCohortQuery_(shipWeek));
+  var reship = ordersCount_(paReshipQuery_(shipWeek));
+  var seen = {}, dups = [], foreign = [], leaked = [], multiTag = 0;
+  recs.forEach(function (r) {
+    if (seen[r.order]) dups.push('#' + r.order);
+    seen[r.order] = 1;
+    var tags = (r.tags || []).map(function (t) { return String(t).trim(); });
+    if (tags.indexOf(shipWeek) < 0) foreign.push('#' + r.order);
+    if (tags.indexOf('Reship') >= 0) leaked.push('#' + r.order);
+    var ship = 0;
+    tags.forEach(function (t) { if (/^_SHIP_\d{4}-\d{2}-\d{2}$/.test(t)) ship++; });
+    if (ship >= 2) multiTag++;
+  });
+  var why = [];
+  if (total + reship !== raw) {
+    why.push('recs ' + total + ' + reship ' + reship + ' = ' + (total + reship) +
+             ' != raw ' + raw + ' (off by ' + (total + reship - raw) + ')');
+  }
+  if (total !== net) {
+    why.push('recs ' + total + ' != net recount ' + net + ' of the exact query paginated (off by ' +
+             (total - net) + ' — a dropped/duplicated page or an early-terminated fetch)');
+  }
+  if (dups.length) why.push(dups.length + ' duplicate order(s): ' + dups.slice(0, 10).join(', '));
+  if (foreign.length) why.push(foreign.length + ' record(s) not tagged ' + shipWeek + ': ' + foreign.slice(0, 10).join(', '));
+  if (leaked.length) why.push(leaked.length + ' Reship record(s) leaked in: ' + leaked.slice(0, 10).join(', '));
+  if (why.length) {
+    throw new Error('TNT2_PARTITION_MISMATCH: ' + shipWeek + ' — recs ' + total + ' · reship ' + reship +
+                    ' · raw ' + raw + ' · net ' + net + '. ' + why.join('; ') +
+                    '. Refusing to write: the published basis must be EXACTLY raw minus reships ' +
+                    'and EXACTLY the population paFetchCohort_ paginated (tolerance zero — the ' +
+                    "D41 ceiling alone left " + (raw - net) + ' orders of slack on this week).');
+  }
+  return { net: net, reship: reship, multiTag: multiTag };
+}
+
+/**
  * 🔴 D41 — THE PROVENANCE TRAVELS WITH THE NUMBER, as a NOTE on the column's header cell.
  *
  * A note, not a row: D13 forbids the refresh writer from inserting rows (an insert shifts every
@@ -1627,7 +1712,7 @@ function paAssertNotAboveRaw_(shipWeek, total) {
  * record of WHEN it was true or WHICH basis produced it, which makes every later recompute read
  * as a discrepancy instead of as the expected drift. It cost a day on 2026-09-01.
  */
-function paWriteProvenanceNote_(sheet, col, shipWeek, total, raw, dry) {
+function paWriteProvenanceNote_(sheet, col, shipWeek, total, raw, dry, multiTag) {
   var settled = paDenomSettled_(shipWeek);
   var mon = new Date(shipWeek.replace('_SHIP_', '') + 'T12:00:00Z');
   var wed = Utilities.formatDate(
@@ -1640,6 +1725,10 @@ function paWriteProvenanceNote_(sheet, col, shipWeek, total, raw, dry) {
     'as_of ' + Utilities.formatDate(new Date(), PA_TZ, 'yyyy-MM-dd HH:mm') + ' ET · cohort age ' +
       paCohortAgeDays_(shipWeek) + 'd · fulfilment settled: ' +
       (settled ? 'yes' : 'NO — settles Wed ' + wed) + '.\n' +
+    // 🔴 D42 — a cross-column double count is invisible to any per-column assert; make it visible.
+    'Partition identity asserted (recs + reships == raw, recs == recount; D42). ' +
+    'Orders carrying >=2 _SHIP_ tags: ' + (multiTag === undefined ? 'n/a' : multiTag) +
+      ' — each is counted in another cohort column too; fix is a Shopify tag cleanup, not a sheet edit.\n' +
     'This number DRIFTS DOWNWARD on recompute (reship tags and cancellations keep accruing for ' +
     'weeks). A later recompute that differs is expected drift, not a discrepancy — read it ' +
     'against the as_of above. NOT comparable to a shipping.db `fulfillments` row count: ' +

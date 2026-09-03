@@ -124,6 +124,12 @@ still in transit."*
 - **Columns freeze at age 10** (`PA_MATURITY_DAYS`, D15) — a matured column is history, and the
   07-27 column carries Kurt's deliberate even haircut (105, D4): a recompute "fixing" it to 126
   is the exact thing A1/D4 forbid.
+- 🔴 **The frozen `_SHIP_2026-07-27` `Total Shipments` (2,227) is a DATE-WINDOW count, not a tag
+  population** (D42): every label cut Mon–Sat 07-27…08-01, reships in, two Tuesday drift-ins from
+  other cohorts swept in. Left as-is by Kurt's order. New paints assert the partition identity
+  `recs + reships == raw` and `recs == recount` to zero tolerance (`TNT2_PARTITION_MISMATCH`);
+  the D41 ceiling alone left 57 orders of slack. Seven 07-27 orders are triple-tagged and
+  counted in the 07-20 column too — a Shopify tag cleanup (Kurt-gated), never a sheet edit.
 
 ## Notifications
 

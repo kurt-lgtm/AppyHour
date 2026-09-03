@@ -3648,3 +3648,74 @@ paint gate evaluated over the live six-week window allows the five settled cohor
 checked with `node --check` and its guards EXECUTED under node against stubbed Apps Script globals:
 the ceiling fires on 2,227-vs-2,226 naming both numbers, passes at exactly 2,226, and passes on all
 six other published columns. `main()`/`refreshCurrentColumn` were never run: they write live.
+
+### D42 — THE D41 CEILING IS ONE-SIDED AND LEAVES 42–83 ORDERS OF SLACK; `TnT2` NOW ASSERTS THE PARTITION IDENTITY TO ZERO TOLERANCE (2026-09-03)
+
+**Scope.** `TnT2` / `Lost in Transit` / `Routing Match` (`appsscript/PivotAnalytics.gs`,
+`paRefreshOne_`). Follows the read-only triage
+`_outputs/reports/2026-09-03-tnt2-0727-triage.md`. No sheet, Apps Script, or DB was written; the
+07-27 column stays exactly as it is (Kurt: "don't touch 7/27 anymore").
+
+**1. 🔴 HOW 2,227 HAPPENED — IT WAS NEVER A TAG POPULATION.** The frozen `_SHIP_2026-07-27`
+column was painted ~2026-08-06 by the retired local `build_dan_tabs.py`, and its 2,227 is
+reproduced exactly by one basis only: `fulfillments WHERE date(fulfilled_at) BETWEEN '2026-07-27'
+AND '2026-08-01'` — every label cut Mon–Sat of that week, **regardless of `_SHIP_` tag, reships
+included**. The arithmetic against the 2,226 ceiling is **+2 − 1**: `#164878A` is tagged,
+uncancelled, marked `FULFILLED` on 07-24 with **no tracking number**, so it is inside the ceiling
+but has no `fulfillments` row (−1); `#166740` (tagged `_SHIP_2026-08-03` / `PR box`, never carried
+`_SHIP_2026-07-27`) and `#160075` (no `_SHIP_` tag at all) were both fulfilled Tue 07-28 17:01 ET
+on the Dallas leg and swept in by the date window (+2). A tag query cannot produce either extra;
+a date window cannot see `#164878A`. Ruled out by measurement: duplicate `fulfillments` rows (0),
+duplicate tracking (0), pagination duplicates in the GAS query (9 pages, 2,169 edges, 2,169
+distinct names), post-paint cancellations (all 18 landed 07-20…07-27).
+
+**2. 🔴 WHY THE D41 CEILING ALONE IS NOT ENOUGH.** `paAssertNotAboveRaw_` fires only on
+`total > raw`, where `raw` = `tag:'<wk>' -status:cancelled` (reships IN) and `total` is the
+reship-EXCLUDED basis. On 07-27 that is 2,226 vs 2,169 — **57 orders of slack** (42–83 on the
+other cohorts). Any over-count ≤ +57 (a window basis on a week with several never-cut orders, a
+duplicated page, a neighbouring cohort's tag pulling orders in) passes untouched, and an
+**under-count is never checked at all** (a dropped page, a throttled fetch returning early). The
+07-27 case fired only because +2 happened to beat −1 by one box.
+
+**3. 🔴 THE IDENTITY (`paAssertPartition_`, error `TNT2_PARTITION_MISMATCH`).** For each ship-week
+column, at the same instant and from the same source as the number it bounds:
+
+- `recs.length + ordersCount(tag:'<wk>' -status:cancelled tag:'Reship') === ordersCount(tag:'<wk>' -status:cancelled)`
+  — the reship-excluded basis plus the reship population is exactly the raw population. Bounded
+  above AND below; the 57-order slack is gone.
+- `recs.length === ordersCount(<the exact query paFetchCohort_ paginated>)` — the query string is
+  built by ONE function (`paCohortQuery_`) used by both the fetch and the assert, so they cannot
+  drift. Catches a dropped or duplicated page and an early-terminated fetch.
+- In memory, zero calls: no duplicate `rec.order`; every `rec.tags` contains `<wk>`; no `rec.tags`
+  contains `Reship`. A foreign-basis record cannot pass these even if the counts happen to.
+
+**Tolerance is ZERO.** A mismatch throws naming the week and every number (`recs`, reship, raw,
+and the net recount) and the paint refuses. The D41 ceiling stays as the cheap first line — it
+needs one call and its message is the one a reader already knows.
+
+**4. Byte/call budget (P16 in `EXCEPTIONS_ALERT_RULES.md` binds here too).** `ordersCount_` is
+one Shopify GraphQL call per query, ~200 bytes each. The partition assert adds **exactly 2 calls
+per ship-week column** (`net`, `reship`); the ceiling's `raw` call already existed. A daily paint
+refreshes at most two legs (current + previous inside the D15 window), so the ceiling is **+4
+calls per paint**, against a fetch that pages ~2,300 orders at 25 per page (~92 calls, ~all the
+bytes). Do not add a third.
+
+**5. 🔴 THE 7 TRIPLE-TAGGED ORDERS ARE A SHOPIFY TAG CLEANUP, NEVER A SHEET EDIT.**
+`#163680 #163719 #163720 #163722 #163723 #163724 #163735` still carry `_SHIP_2026-07-20`,
+`_SHIP_2026-07-24` AND `_SHIP_2026-07-27` today. They sit inside 07-27's 2,226 ceiling and inside
+its 2,227, so they do not move that column — but they are ALSO inside `_SHIP_2026-07-20`'s tag
+basis (2,082 = 2,075 published + 7), i.e. seven boxes are counted in **two `TnT2` columns**. No
+per-column assert can see a cross-column double count. The provenance note (D41) now stamps
+`orders carrying >=2 _SHIP_ tags: N` so it is visible on hover; the fix is removing the stale tags
+on Shopify — **Kurt-gated live order writes** — and not restating either frozen column.
+
+**Verification (2026-09-03, node 24).** `PivotAnalytics.gs` passes `node --check` on a `.js`
+copy. The guards were EXECUTED under a vm context with stubbed Apps Script globals and a stubbed
+`ordersCount_` keyed by query string: identity holds (2,169 + 57 = 2,226, net 2,169) → no throw;
++1 over (2,170 recs against the same counts) → `TNT2_PARTITION_MISMATCH` naming all numbers,
+while the old ceiling PASSES it (2,170 ≤ 2,226 — the slack); −1 under (2,168) → throws, where the
+old ceiling never checks; a dropped page (net 2,169 vs recs 2,144) → throws; a duplicate order
+and a foreign-tag record → throw with the order named. Global-collision sweep over
+`Code.gs` / `Exceptions.gs` / `Notifications.gs` / `PivotAnalytics.gs` (`^(function|var)\s+name`):
+no top-level name defined in more than one file. `main()` / `refreshCurrentColumn` were never run.
+Not pushed to Apps Script — `gas_swap.py push PivotAnalytics` is Kurt's.
