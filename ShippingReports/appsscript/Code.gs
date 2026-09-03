@@ -1311,9 +1311,11 @@ function writeProductMix_(mondays, denoms, stamp) {
     ['REFRESHED ' + stamp,
      'sizes = live Shopify; Reship = COUNTIFS over Raw Data; Unresolved = COUNTIFS over Triage (open, no reship entered); blank box-type = Regular. Triage rows resolved as no action / cs error are NOT counted here (see Triage col J tally)'],
     ['Cohort', 'Cohort size',
-     'Regular Box', 'Regular Box Reship', 'Regular Box Reship %', 'Regular Box Unresolved', 'Regular Box Unresolved %',
-     'Medium Tray', 'Medium Tray Reship', 'Medium Tray Reship %', 'Medium Tray Unresolved', 'Medium Tray Unresolved %',
-     'Large Tray', 'Large Tray Reship', 'Large Tray Reship %', 'Large Tray Unresolved', 'Large Tray Unresolved %',
+     // "Unresolved Issue" not "Unresolved" (Kurt 2026-09-03): the bare word read as a reship state on
+     // the Reship tab. DISPLAY ONLY - formulas address these columns by letter (F/K/P), never by header.
+     'Regular Box', 'Regular Box Reship', 'Regular Box Reship %', 'Regular Box Unresolved Issue', 'Regular Box Unresolved Issue %',
+     'Medium Tray', 'Medium Tray Reship', 'Medium Tray Reship %', 'Medium Tray Unresolved Issue', 'Medium Tray Unresolved Issue %',
+     'Large Tray', 'Large Tray Reship', 'Large Tray Reship %', 'Large Tray Unresolved Issue', 'Large Tray Unresolved Issue %',
      'Potential Reship', 'Potential %',
      'Actual Reship', 'Actual %']];  // Potential = reships + open Unresolved; Actual = reships only (D+I+N); % over cohort size
   var RD = "'Raw Data'";  // E=incoming, I=box type

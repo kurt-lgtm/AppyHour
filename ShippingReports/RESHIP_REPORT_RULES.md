@@ -1287,7 +1287,8 @@ unresolved count — an under-count with no signal anywhere.
    a Slack `:warning:` naming the key and the text. Never silently suppress.
 3. **Counting.** Every reship/refund figure reaches Triage only through the UNRESOLVED path, and a
    recognized decision removes the row from the tab, hence from all of it:
-   - `Product Mix` `Regular/Medium/Large Box Unresolved` (F/K/P) = COUNTIFS over `Triage`!E/F
+   - `Product Mix` `Regular/Medium/Large Box Unresolved Issue` (F/K/P) = COUNTIFS over `Triage`!E/F
+     (labelled "Unresolved Issue", Kurt 2026-09-03 — display only; formulas address F/K/P by letter)
    - `Product Mix` `Potential Reship` (R) = reships + those unresolved
    - `Reship` tab (ex-`Product Mix (T)`) = transpose of `Product Mix` — inherits both
    - `Triage` col J/K "Unresolved reships by ship week" = the active entries only
