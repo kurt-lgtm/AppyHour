@@ -28,8 +28,30 @@ GELCALC_DIR = APPYHOUR_ROOT / "GelPackCalculator"
 INVENTORY_DIR = APPYHOUR_ROOT / "InventoryReorder"
 SHIPPING_DIR = APPYHOUR_ROOT / "ShippingReports"
 
-# Shared settings path — used by google_sheets, gorgias, gorgias_sheets_sync, ops_summary_builder
-APPDATA_SETTINGS = Path(os.environ.get("APPDATA", "")) / "AppyHour" / "gel_calc_shopify_settings.json"
+# Shared settings path — used by google_sheets, gorgias, gorgias_sheets_sync, ops_summary_builder.
+#
+# 🔴 NOT %APPDATA% (through 2026-08-31). %APPDATA%\AppyHour is MSIX-virtualized: this server
+# runs packaged, so it read a package-private overlay while Kori and the scheduled tasks read
+# the real profile — two files, one path string, three weeks of silent divergence. Canonical
+# home is now C:\AppyHourData; resolve through appyhour_lib.paths, never rebuild the path here.
+#
+# Stays a plain Path (consumers call .exists() and pass it to open()). Resolved eagerly, but
+# a missing file degrades to the canonical path object instead of raising — an import-time
+# raise here would take the whole MCP server down at load, and the consumers already handle
+# a non-existent path with their own "settings not found" error.
+def _resolve_gelcalc_settings() -> Path:
+    # setup_paths() has not run yet at module scope, so put APPYHOUR_ROOT on sys.path
+    # ourselves rather than depending on import order.
+    if str(APPYHOUR_ROOT) not in sys.path:
+        sys.path.insert(0, str(APPYHOUR_ROOT))
+    from appyhour_lib.paths import DATA_ROOT, GEL_CALC_SETTINGS_NAME, gel_calc_settings_path
+    try:
+        return gel_calc_settings_path()
+    except FileNotFoundError:
+        return DATA_ROOT / GEL_CALC_SETTINGS_NAME
+
+
+APPDATA_SETTINGS = _resolve_gelcalc_settings()
 
 # Shared Google Sheet IDs
 OPS_SHEET_ID = "190AmXF8hy-M8lmt8q9uhOkyOMi7AmU0jJAd1KOpjWdA"
