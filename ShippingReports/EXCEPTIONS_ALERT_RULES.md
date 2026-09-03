@@ -1977,6 +1977,62 @@ Slack is the one the customer email must ride.
 with the real classes; `node --check`; no live Klaviyo call made from a dev machine — the first
 real event is the enable flip, and it is Kurt's.
 
+### P18 — GORGIAS DRAFT TICKETS: THE PO-BOX BOT SHAPE, FOR EVERY SLACK CLASS (Kurt GO, 2026-09-03)
+
+Jess, in DM with Kurt 2026-09-03: skip Klaviyo for now — do what the PO-box bot does. Kurt:
+*"OK … its probably 10 orders a week"*, then *"just the same ones as slack."*
+
+**The shape being mirrored** — ticket 290838321, read via the MCP: subject
+`Action Required: Alternate Address`, channel `email`, customer attached, **one message of
+`source_type: internal-note`** holding a drafted customer email, status open, no tags. CS verifies
+the situation and sends the email themselves. Jess: *"draft lang, kami mag ssend."*
+
+**What this consumer does, per pinged box:** `POST /api/tickets` with the customer (email + name
+from the same targeted Shopify lookup P17 uses — cached per run, so Klaviyo + Gorgias cost one
+call, not two), a subject per class, tags `exception-sweep` + `exc:<class>`, and exactly one
+message: `channel: internal-note`, `public: false`, `from_agent: true`, body = a CS header line
+(order · carrier · state · class · scan time) + the draft.
+
+🔴 **Nothing is sent to the customer by this code.** The only message is an internal note. No
+outbound email, no public reply, no macro. The 2026-09-02 rule (a customer message is never sent
+without Kurt's explicit go) is satisfied by construction: the send is a human's click in Gorgias.
+
+**Subjects.** `Action Required:` prefix only where the CUSTOMER must act:
+
+| class | subject |
+|---|---|
+| `ADDRESS_ISSUE` | Action Required: Address Issue |
+| `ATTEMPT_FAILED` | Action Required: Delivery Attempted |
+| `UNDELIVERABLE` | Action Required: Unable to Deliver |
+| `NEVER_PICKED_UP` · `DAMAGED` · `RETURNED` · `LOST` · `REFUSED` | Update on your AppyHour box |
+
+**Draft copy** lives in `excGorgiasDraft_` — one place, the PO-box note's voice, carrier text
+quoted verbatim so CS sees exactly what the customer would read. 🔴 Customer-facing wording is
+Kurt's; edit it in that function, never inline at a call site, and never let a call site compose
+its own.
+
+**Gates — identical to Slack and Klaviyo, by construction.** Live-post path only (after
+`excSlackPost_`), so dry-run, Wed–Sun, `(order, class)` dedup and record-only classes all apply;
+a P15 hub collapse creates nothing (a dock miss is not ten customer tickets). Ships DARK:
+`GORGIAS_EXC_ENABLED` Script Property must be `'1'`; creds are Script Properties `GORGIAS_USER`
++ `GORGIAS_API_KEY` (Basic auth, same pair `AppyHour/.env` holds for the Python side) — never in
+code, git, or a log line.
+
+**Failure semantics — same as P17.** Never throws into the sweep (a throw before `excSaveState_`
+re-pings Slack hourly). Missing creds while enabled, no email on the order, non-2xx: counted and
+reported once per run to the ops DM (P8), never #exceptions.
+
+⚠️ **Untested until enabled:** Cloudflare in front of the Gorgias API rejects some default
+user-agents (the Python side needed an explicit UA — error 1010). Apps Script's `UrlFetchApp`
+sends its own UA and does not let the script override it. If the first enabled sweep reports
+`HTTP 403` on every create, that is the cause, and the fallback is a local Python creator reading
+the Exceptions tab — not a workaround inside Apps Script.
+
+**Dedup:** one ticket per `(order, class)`, guaranteed by the same `alerted` stamp that makes
+Slack post once. A Gorgias-side merge rule is NOT needed and should not be added.
+
+**Klaviyo (P17) stays dark** unless Kurt flips it; if the drafts cover the need, it stays off.
+
 ## Known gaps (v1)
 
 - **Returned-to-origin reads as delivered.** Order 154810 (FedEx, dest AL) shows

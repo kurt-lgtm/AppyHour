@@ -115,6 +115,21 @@ var KLAVIYO_KEY_PROP = 'KLAVIYO_API_KEY';
 var KLAVIYO_REVISION = '2024-10-15';
 var EXC_KLAVIYO_RUN_ = { sent: 0, failed: 0, skipped_no_email: 0, disabled: 0, errors: [] };
 
+// 🔴 GORGIAS — THIRD CONSUMER OF THE SAME DECISION (directive P18, Kurt GO 2026-09-03: "just the same
+// ones as slack"). Mirrors the PO-box bot Jess pointed at (ticket 290838321): a ticket on the
+// customer, subject "Action Required: …", ONE internal note holding a DRAFTED email. CS verifies and
+// sends. 🔴 NOTHING IS SENT TO THE CUSTOMER BY THIS CODE — the note is not public and no outbound
+// message is created. Same gates as Slack/Klaviyo by construction (live-post path only), ships
+// DARK behind GORGIAS_EXC_ENABLED, creds in Script Properties GORGIAS_USER / GORGIAS_API_KEY.
+// 🔴 NEVER THROWS INTO THE SWEEP — same reason as Klaviyo (a throw before excSaveState_ re-pings).
+var GORGIAS_BASE = 'https://appyhour.gorgias.com/api';
+var GORGIAS_ENABLED_PROP = 'GORGIAS_EXC_ENABLED';
+var GORGIAS_USER_PROP = 'GORGIAS_USER';
+var GORGIAS_KEY_PROP = 'GORGIAS_API_KEY';
+var GORGIAS_TAG = 'exception-sweep';
+var EXC_GORGIAS_RUN_ = { created: 0, failed: 0, skipped_no_email: 0, disabled: 0, errors: [] };
+var EXC_CUSTOMER_CACHE_ = {};   // order -> {email, name, first} — one Shopify lookup per pinged box per run
+
 function excPingDayET_() {
   return !!EXC_PING_DAYS[Utilities.formatDate(new Date(), EXC_TZ, 'EEE')];
 }
@@ -1388,12 +1403,24 @@ function excKlaviyoPayload_(rec, cls, detail, eventAt, email, nowIso) {
  * a paginated hourly job is a byte budget, and `email` on 5,186 orders/hour for ten reads a day
  * is ~3.7 MB/day. Order `email` first (checkout email), then customer.email. '' when neither.
  */
-function excEmailForOrder_(order) {
-  var d = shopifyGql_('query($q:String!){orders(first:1, query:$q){edges{node{ name email customer{ email } }}}}',
-                      { q: 'name:' + String(order).replace(/^#/, '') });
+function excCustomerForOrder_(order) {
+  var key = String(order).replace(/^#/, '');
+  if (EXC_CUSTOMER_CACHE_[key]) return EXC_CUSTOMER_CACHE_[key];
+  var d = shopifyGql_('query($q:String!){orders(first:1, query:$q){edges{node{ name email customer{ email firstName displayName } }}}}',
+                      { q: 'name:' + key });
   var e = d && d.orders && d.orders.edges && d.orders.edges[0] && d.orders.edges[0].node;
-  if (!e) return '';
-  return String(e.email || (e.customer && e.customer.email) || '').trim();
+  var c = (e && e.customer) || {};
+  var out = {
+    email: String((e && e.email) || c.email || '').trim(),
+    name: String(c.displayName || '').trim(),
+    first: String(c.firstName || '').trim(),
+  };
+  EXC_CUSTOMER_CACHE_[key] = out;
+  return out;
+}
+
+function excEmailForOrder_(order) {
+  return excCustomerForOrder_(order).email;
 }
 
 /**
@@ -1448,6 +1475,147 @@ function excKlaviyoFlush_() {
                  (run.errors.length > 8 ? '\n(+' + (run.errors.length - 8) + ' more)' : ''));
   } catch (e) {
     Logger.log('  klaviyo ops alarm itself failed: ' + e);   // never let the alarm abort the run
+  }
+}
+
+// ---------------------------------------------------------------- Gorgias (P18)
+
+/**
+ * PURE. Subject per class — the "Action Required:" prefix marks the ones where the CUSTOMER must
+ * act (address / access / attempt), matching the PO-box bot's "Action Required: Alternate
+ * Address". The rest are updates CS sends with a resolution attached.
+ */
+function excGorgiasSubject_(cls) {
+  return ({
+    ADDRESS_ISSUE:   'Action Required: Address Issue',
+    ATTEMPT_FAILED:  'Action Required: Delivery Attempted',
+    UNDELIVERABLE:   'Action Required: Unable to Deliver',
+    NEVER_PICKED_UP: 'Update on your AppyHour box',
+    DAMAGED:         'Update on your AppyHour box',
+    RETURNED:        'Update on your AppyHour box',
+    LOST:            'Update on your AppyHour box',
+    REFUSED:         'Update on your AppyHour box',
+  })[cls] || ('Update on your AppyHour box');
+}
+
+/**
+ * PURE. The drafted customer email, in the PO-box note's voice. 🔴 A DRAFT FOR CS TO VERIFY AND
+ * SEND — it is written into an internal note, never to the customer. Carrier text is quoted
+ * verbatim so CS sees exactly what the customer would be told. Copy is Kurt-approved 2026-09-03
+ * (ADDRESS_ISSUE shape shown to him; the others follow it); edit here, never inline at a call site.
+ */
+function excGorgiasDraft_(rec, cls, detail, first) {
+  var hi = 'Hi ' + (first || 'there') + ',\n\n';
+  var q = detail ? ' Here is what the carrier reported: "' + String(detail).trim() + '".' : '';
+  var bye = '\n\nThank you,\nThe AppyHour Team';
+  var body = {
+    ADDRESS_ISSUE:
+      'We tried to deliver your AppyHour box but the carrier flagged a problem with the address.' + q +
+      ' Since the box is perishable, could you confirm the full shipping address (and any gate or ' +
+      'access code) so we can get it to you?',
+    ATTEMPT_FAILED:
+      'The carrier attempted to deliver your AppyHour box but was not able to complete the delivery.' + q +
+      ' Could you let us know the best way to reach your door — a gate or access code, a safe place ' +
+      'to leave it, or a time someone can receive it? The box is perishable, so we want to get it to you quickly.',
+    UNDELIVERABLE:
+      'The carrier was unable to deliver your AppyHour box.' + q +
+      ' Since the box is perishable, could you confirm the full shipping address so we can make it right?',
+    NEVER_PICKED_UP:
+      'We created the shipping label for your AppyHour box, but the carrier has not scanned it into ' +
+      'their network yet. We are looking into it on our end and will follow up. If the box has ' +
+      'already arrived, just let us know.',
+    DAMAGED:
+      'The carrier reported that your AppyHour box was damaged in transit.' + q +
+      ' We are sorry about that and want to make it right — please reply to this email and we will take care of it.',
+    RETURNED:
+      'The carrier reported that your AppyHour box is being returned to us rather than delivered.' + q +
+      ' Could you confirm the full shipping address so we can get a fresh box to you?',
+    LOST:
+      'The carrier has reported that they are unable to locate your AppyHour box.' + q +
+      ' We are sorry about that and want to make it right — please reply to this email and we will take care of it.',
+    REFUSED:
+      'The carrier reported that delivery of your AppyHour box was refused at the address.' + q +
+      ' If that was a mistake or was not you, please reply and let us know how you would like us to proceed.',
+  }[cls] || ('There is an update on your AppyHour box.' + q + ' Please reply to this email and we will help.');
+  return hi + body + bye;
+}
+
+/**
+ * PURE. The POST /api/tickets body. One ticket, customer attached, ONE internal note (channel
+ * internal-note, public false, from_agent true) carrying a CS header line + the draft. Tagged so
+ * the tickets are findable and never confused with customer-originated ones.
+ */
+function excGorgiasPayload_(rec, cls, detail, eventAt, cust) {
+  var header = 'AUTO-DRAFT from the exceptions sweep — verify, then send to the customer.\n' +
+               'Order #' + String(rec.order || '') + ' · ' + String(rec.carrier || '') +
+               (rec.state ? ' · ' + rec.state : '') + ' · ' + excDisplay_(cls) +
+               (eventAt ? ' · carrier scan ' + eventAt : '') + '\n' +
+               '----------------------------------------\n\n';
+  return {
+    channel: 'email',
+    via: 'api',
+    status: 'open',
+    subject: excGorgiasSubject_(cls),
+    customer: { email: cust.email, name: cust.name || undefined },
+    tags: [{ name: GORGIAS_TAG }, { name: 'exc:' + String(cls).toLowerCase() }],
+    messages: [{
+      channel: 'internal-note',
+      via: 'api',
+      from_agent: true,
+      public: false,
+      source: { type: 'internal-note' },
+      body_text: header + excGorgiasDraft_(rec, cls, detail, cust.first),
+    }],
+  };
+}
+
+/**
+ * Create the draft ticket for a box that was JUST pinged. Live-post path only, after
+ * excSlackPost_ — never from record-only, dry-run, Mon/Tue, or the P15 collapse.
+ * 🔴 NEVER THROWS. Basic auth from Script Properties; the key never reaches a log line.
+ */
+function excGorgiasCreate_(rec, cls, detail, eventAt) {
+  var run = EXC_GORGIAS_RUN_;
+  try {
+    if (EXC_DRY_RUN) return;
+    var props = PropertiesService.getScriptProperties();
+    if (props.getProperty(GORGIAS_ENABLED_PROP) !== '1') { run.disabled++; return; }
+    var user = props.getProperty(GORGIAS_USER_PROP), key = props.getProperty(GORGIAS_KEY_PROP);
+    if (!user || !key) { run.failed++; run.errors.push('#' + rec.order + ' ' + cls + ': ' + GORGIAS_USER_PROP + '/' + GORGIAS_KEY_PROP + ' missing while enabled'); return; }
+    var cust = excCustomerForOrder_(rec.order);
+    if (!cust.email) { run.skipped_no_email++; run.errors.push('#' + rec.order + ' ' + cls + ': no email on order'); return; }
+    var body = excGorgiasPayload_(rec, cls, detail, eventAt, cust);
+    var r = netFetch_(GORGIAS_BASE + '/tickets', {
+      method: 'post', contentType: 'application/json',
+      headers: { Authorization: 'Basic ' + Utilities.base64Encode(user + ':' + key), Accept: 'application/json' },
+      payload: JSON.stringify(body),
+      muteHttpExceptions: true,
+    }, 'gorgias create ticket');
+    var code = r.getResponseCode();
+    if (code < 200 || code >= 300) {
+      run.failed++;
+      run.errors.push('#' + rec.order + ' ' + cls + ': HTTP ' + code + ' ' + String(r.getContentText() || '').slice(0, 160));
+      return;
+    }
+    run.created++;
+  } catch (e) {
+    run.failed++;
+    run.errors.push('#' + rec.order + ' ' + cls + ': ' + String(e).slice(0, 160));
+  }
+}
+
+function excGorgiasFlush_() {
+  var run = EXC_GORGIAS_RUN_;
+  if (run.created || run.failed || run.skipped_no_email) {
+    Logger.log('  gorgias: created ' + run.created + ', failed ' + run.failed + ', no-email ' + run.skipped_no_email);
+  }
+  if (!run.failed && !run.skipped_no_email) return;
+  try {
+    excSlackOps_(':warning: exceptions → Gorgias drafts: ' + run.created + ' created · ' + run.failed + ' failed · ' +
+                 run.skipped_no_email + ' no email\n' + run.errors.slice(0, 8).join('\n') +
+                 (run.errors.length > 8 ? '\n(+' + (run.errors.length - 8) + ' more)' : ''));
+  } catch (e) {
+    Logger.log('  gorgias ops alarm itself failed: ' + e);
   }
 }
 
@@ -1619,6 +1787,7 @@ function excNpuFlush_(pending, stamp) {
         }
         excSlackPost_(excMessage_(p.rec, p.v.cls, p.v.detail, p.v.eventAt));
         excKlaviyoTrack_(p.rec, p.v.cls, p.v.detail, p.v.eventAt);   // P17 — per-box only; the collapse below sends nothing
+        excGorgiasCreate_(p.rec, p.v.cls, p.v.detail, p.v.eventAt);  // P18 — same
         excLog_(stamp, p.rec, p.v.cls, p.v.detail, p.v.eventAt);
         p.rec.alerted.push(p.v.cls);
         p.rec.open = false;
@@ -2096,6 +2265,7 @@ function hourlyExceptionSweep() {
       }
       excSlackPost_(excMessage_(rec, v.cls, v.detail, v.eventAt));
       excKlaviyoTrack_(rec, v.cls, v.detail, v.eventAt);   // P17 — same decision, second consumer; never throws
+      excGorgiasCreate_(rec, v.cls, v.detail, v.eventAt);  // P18 — draft ticket for CS; never sends; never throws
       excLog_(stamp, rec, v.cls, v.detail, v.eventAt);
       rec.alerted.push(v.cls);
       rec.open = false;                              // notified once; a human owns it now
@@ -2114,6 +2284,7 @@ function hourlyExceptionSweep() {
     }
 
     excKlaviyoFlush_();   // P17 — one ops line if anything missed Klaviyo; never throws
+    excGorgiasFlush_();   // P18 — same, for the draft tickets
 
     // Persist when recording, so the tab-write dedup (`rec.logged`) survives the next sweep and the
     // same exception is not appended hourly. `alerted` is still untouched while dry.
