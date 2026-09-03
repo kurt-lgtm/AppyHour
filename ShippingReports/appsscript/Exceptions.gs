@@ -814,11 +814,18 @@ function excMatchFailure_(e) {
   if (/need additional information to complete|lack of an access code|access code|incorrect address|address (is )?(incorrect|invalid)|delivery exception.*address|location security restriction/.test(e)) {
     return 'ADDRESS_ISSUE';
   }
+  // 🔴 DELAY-SHAPED NON-ATTEMPTS ARE NOISE, NOT FAILURES (Kurt 2026-09-03: "I don't want to see
+  // regular delays and weather delays"). "Local weather delay - Delivery not attempted" (#176846)
+  // and "Local delivery restriction - Delivery not attempted" (#171945) are the carrier saying it
+  // did NOT try — nothing for a human to fix, the box moves when the weather/road clears. Both had
+  // been classified ATTEMPT_FAILED for one day via a 2026-09-02 widening on the bare phrase
+  // "delivery not attempted", which is now REMOVED. This is the first POSITIVE noise assertion in
+  // the matcher; it sits below every real failure class so a text that also says damaged/returned/
+  // refused/address still classifies, and above ATTEMPT_FAILED so the generic attempt phrasings
+  // cannot re-catch it.
+  if (/weather delay|local delivery restriction|delivery not attempted/.test(e)) return '';
   // A closed recipient/business or an incomplete delivery is an attempted-delivery failure.
-  // 🔴 "delivery not attempted" ADDED 2026-09-02: the pattern knew FedEx's slashed
-  // "Package not delivered/not attempted" but not the bare "Local delivery restriction - Delivery
-  // not attempted" (#171945). One carrier's punctuation is never the class.
-  if (/was attempted but could not be completed|delivery attempt failed|unable to complete (your )?delivery|driver tried to deliver|business (was )?closed|recipient business closed|package not delivered\/?not attempted|delivery not attempted/.test(e)) {
+  if (/was attempted but could not be completed|delivery attempt failed|unable to complete (your )?delivery|driver tried to deliver|business (was )?closed|recipient business closed|package not delivered\/?not attempted/.test(e)) {
     return 'ATTEMPT_FAILED';
   }
   return '';

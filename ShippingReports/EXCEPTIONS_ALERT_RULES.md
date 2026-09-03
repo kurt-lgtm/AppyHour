@@ -1519,10 +1519,30 @@ when that field moves on first, the box goes silent):
 | phrasing | was | now | seen on |
 |---|---|---|---|
 | `Location security restrictions - Delivery will be reattempted` | NONE | `ADDRESS_ISSUE` | #172302, #175678 |
-| `Local delivery restriction - Delivery not attempted` | NONE | `ATTEMPT_FAILED` | #171945 |
+| ~~`Local delivery restriction - Delivery not attempted`~~ | NONE | ~~`ATTEMPT_FAILED`~~ **NONE (reverted 09-03)** | #171945 |
 
-The `ATTEMPT_FAILED` pattern knew FedEx's slashed `Package not delivered/not attempted` but not
-the bare `Delivery not attempted`. One carrier's punctuation is never the class.
+### 🔴 DELAY-SHAPED NON-ATTEMPTS ARE NOISE — the 09-02 "not attempted" widening lasted one day
+
+Kurt 2026-09-03: *"I don't want to see regular delays and weather delays."* The bare
+`delivery not attempted` pattern added on 09-02 caught **#176846** — `Delivery updated, Local
+weather delay - Delivery not attempted, OLATHE KS` — and pinged #exceptions as *delivery attempt
+failed* at 10:24 ET on 09-03. Nobody attempted anything; the carrier said it was NOT trying
+because of weather. That is a delay, and delays are exactly the class Kurt muted the day before.
+
+The widening is **removed**, and the matcher now carries its first **positive noise assertion**:
+
+```
+/weather delay|local delivery restriction|delivery not attempted/  →  ''   (no class)
+```
+
+placed **below every real failure class** (a text that also says damaged / returned / refused /
+address still classifies) and **above `ATTEMPT_FAILED`** (so the generic attempt phrasings cannot
+re-catch it). FedEx's slashed `Package not delivered/not attempted` still classifies — that one is
+a real failed attempt at the local facility, not a weather/road hold.
+
+Keep list as stated by Kurt 09-03, for anyone extending this: **address issue, access issue,
+never picked up, delivery attempted, damaged** — and explicitly NOT "regular delays", "weather
+delays", or "stuck in transit".
 
 ### `Exception_001` is delay-noise — do NOT treat the PP substatus as actionable
 
