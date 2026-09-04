@@ -8,6 +8,7 @@ config.yaml
 # Data files
 *.csv
 !mfg_translations.csv
+!tests/fixtures/resolve_dupes/*.csv
 *.xlsx
 *.pdf
 RMFG_*/

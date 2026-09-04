@@ -1,0 +1,12 @@
+Line: Product ID,Line: Product Handle,Line: Command,Line: Quantity,Line: Type,Command,Name,ID,product_id,product_name,child_sku,parent_sku
+1001,rosemary-cracker,MERGE,1,Line Item,MERGE,#200001,900001,1001,Rosemary Cracker,AC-FCROSE,CEX-CR
+1002,quince-paste,MERGE,1,Line Item,MERGE,#200001,900001,1002,Quince,AC-QUIC,EX-EA
+2001,capocollo,MERGE,1,Line Item,MERGE,#200002,900002,2001,Capocollo,MT-CAPO,CEX-EM
+2001,capocollo,MERGE,1,Line Item,MERGE,#200002,900002,2001,Capocollo,MT-CAPO,CEX-EM
+3001,fontina,MERGE,1,Line Item,MERGE,#200003,900003,3001,Fontina,CH-FONT,CEX-EC
+3002,roasted-cashews,MERGE,1,Line Item,MERGE,#200003,900003,3002,Cashews,AC-RMC,CEX-CR
+4001,sottocenere,MERGE,1,Line Item,MERGE,#200004,900004,4001,Sottocenere,CH-SOT,PR-CJAM-GEN
+4002,fig-jam,MERGE,1,Line Item,MERGE,#200004,900004,4002,Mini Fig Jam,AC-MFJ,PR-CJAM-GEN
+5001,og-kristal,MERGE,1,Line Item,MERGE,#200005,900005,5001,OG Kristal,CH-OGK,CEX-EC
+5001,og-kristal,MERGE,1,Line Item,MERGE,#200006,900006,5001,OG Kristal,CH-OGK,CEX-EC
+5001,og-kristal,MERGE,1,Line Item,MERGE,#200007,900007,5001,OG Kristal,CH-OGK,CEX-EC

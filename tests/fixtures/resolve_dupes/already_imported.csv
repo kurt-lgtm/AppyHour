@@ -1,0 +1,5 @@
+Line: Product ID,Line: Product Handle,Line: Command,Line: Quantity,Line: Type,Command,Name,ID,product_id,product_name,child_sku,parent_sku
+1001,rosemary-cracker,MERGE,1,Line Item,MERGE,#300001,900001,1001,Rosemary Cracker,AC-FCROSE,CEX-CR
+3001,fontina,MERGE,1,Line Item,MERGE,#300001,900001,3001,Fontina,CH-FONT,CEX-EC
+2001,capocollo,MERGE,1,Line Item,MERGE,#300002,900002,2001,Capocollo,MT-CAPO,CEX-EM
+3001,fontina,MERGE,1,Line Item,MERGE,#300002,900002,3001,Fontina,CH-FONT,CEX-EC
