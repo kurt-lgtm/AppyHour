@@ -2733,11 +2733,14 @@ def merge_gift_xlsx(
         replaced += 1
 
     if missing:
-        main_wb.close()
-        raise GiftMergeError(
-            f"vFGR OrderID(s) NOT in the matrix (e.g. _HOLD): {sorted(missing)} — "
-            "release into the cohort + re-run, or exclude explicitly with --gift-drop. "
-            "Never silently included/excluded (rule 20c).")
+        # 🔴 Rule 20c (revised Kurt 2026-09-04 17:35 EDT: "next behavior should just drop it"): a vFGR
+        # OrderID that is not in the matrix (a `_CSHOLD` / `_HOLD` order, e.g. #181305 wk0907) is
+        # DROPPED and REPORTED — never merged, never a refusal of the whole sheet. The order is out of
+        # the cohort for a reason upstream; the vFGR row is the stale artifact. Same shape as the
+        # untagged-row drop ("if one is untagged, we just don't put it in the sheet", 2026-09-03):
+        # loud, per-order, WHOLE-FOR-ONE retired. `--gift-drop` stays as the explicit form.
+        print(f"  {_YELLOW}vFGR OrderID(s) NOT in the matrix — DROPPED (rule 20c): {sorted(missing)} "
+              f"(held/removed upstream; fix the vFGR if this is wrong){_RESET}")
     unknown_drops = drop_oids - set(dropped)
     if unknown_drops:
         print(f"  {_YELLOW}--gift-drop OID(s) not in the vFGR (no-op): "

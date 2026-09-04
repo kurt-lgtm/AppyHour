@@ -243,11 +243,14 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
         same defect class as rule 0's original burn (TR/PK quantities missing from the total, hand-
         fixed 2026-07-10). Locate the column **by header, never by index** — a positional write put
         an item count into Zip on the first attempt. Rows the vFGR does not name are untouched.
-    (c) **vFGR OrderID missing from the matrix = LOUD `GiftMergeError`** (e.g. a `_HOLD` order —
-        wk0727 #165505), listing the OIDs — surface for Kurt's release/drop decision, NEVER
-        silently include or exclude. Release = retag into the cohort + re-run; drop = the explicit
-        `--gift-drop OID[,OID]` flag (generate/finalize/weekly_flow), which excludes the row and
-        prints it. No silent-append of unknown orders.
+    (c) **vFGR OrderID missing from the matrix = DROPPED and REPORTED, never merged, never a
+        whole-sheet refusal** (revised Kurt 2026-09-04 17:35 EDT — *"next behavior should just
+        drop it"*; was a LOUD `GiftMergeError` since wk0727 #165505). Motivating case wk0907
+        #181305: `_CSHOLD` + Gift Redemption, out of the cohort upstream, still on the vFGR — the
+        refusal blocked the Friday sheet for an order that was never going to ship. The drop is
+        printed per OID (`vFGR OrderID(s) NOT in the matrix — DROPPED`) and the upload survey lists
+        them under `orders_not_in_run`; NEVER silently included. Release = retag into the cohort +
+        re-run; `--gift-drop OID[,OID]` remains the explicit form. No silent-append of unknown orders.
     (d) **Items map only by registered MFG name** — header-based with rule-15b normalization, never
         positional. A known gift-only MFG column may be appended once. Unknown names (including
         literal `remove`) are omitted at merge — the merge never guesses — but the omission is
@@ -405,7 +408,7 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
         edit touches items — the mirror of vf_tags §7.4 (a routing edit touches routing only).
     (g) **Gift rows go through `merge_gift_xlsx`, never a second path** (rule 20): ONE vFGR per
         sub-cohort, REPLACE-by-OrderID (wipe-then-refill, not additive), quantities exactly as the
-        vFGR states, `GiftMergeError` on an OID missing from the matrix. `vf_items gift` is a
+        vFGR states, an OID missing from the matrix is dropped + reported (20c). `vf_items gift` is a
         dry-run-default, revisioned, ledgered wrapper around that chokepoint — it copies the source
         first and never lets the merge write next to a sent file.
     (h) **Selection may not be inferred.** Curation is NOT on the sheet (the box SKU never lands

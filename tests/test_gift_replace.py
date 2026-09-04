@@ -220,15 +220,19 @@ def test_orphan_twin_row_is_loud_error(tmp_path):
         mc.merge_gift_xlsx(_main(tmp_path), gift)
 
 
-def test_missing_cohort_oid_is_loud_error(tmp_path):
-    # wk0727 #165505: _HOLD order in the vFGR but not the cohort — never silent
+def test_missing_cohort_oid_is_dropped_and_reported(tmp_path, capsys):
+    # wk0727 #165505: _HOLD order in the vFGR but not the cohort — never silent.
+    # Revised Kurt 2026-09-04 (wk0907 #181305, _CSHOLD): DROP + report, never refuse the sheet.
     gift = _write_xlsx(
         tmp_path / "gift.xlsx",
         META + [P1],
         [[164878, "P", 0, "92026", "", None, "SAT", 1], [165505, "Held", 0, "91915", "", None, "SAT", 1]],
     )
-    with pytest.raises(GiftMergeError, match="165505"):
-        mc.merge_gift_xlsx(_main(tmp_path), gift)
+    headers, rows = _load(mc.merge_gift_xlsx(_main(tmp_path), gift))
+    assert "165505" not in rows                                      # dropped, never appended
+    assert rows["164878"][headers.index(P1)] == 1                    # the rest still merged
+    out = capsys.readouterr().out
+    assert "165505" in out and "DROPPED" in out                      # loud, per-OID
 
 
 def test_explicit_gift_drop_excludes_and_reports(tmp_path, capsys):
