@@ -1,6 +1,8 @@
 """RULE SET loader. 🔴 Read ORDER_CHECKS_RULES.md before changing anything here."""
 from __future__ import annotations
-import re, os, functools
+
+import functools
+import re
 
 # EX-PS "Party Size Upgrade" — absent from the RULE SET xlsx. Kurt 2026-08-25.
 PARTY = {"CH-": 2, "MT-": 2, "AC-": 2}
@@ -99,8 +101,12 @@ MILITARY_TAG = "military"
 # touched them, and it was the approved fill for the five orders whose AC-FCROSE re-add
 # Matrixify bounced. Absent from Dan's set, so his run reports all seven as non-cracker
 # fills - tell him when this changes.
+# 🔴 AC-PCRISP (Artisan Spiced Pumpkin Crisps) and AC-FCCRAN / AC-FCFIGO are crackers too
+# -- the set was Dan's original and has not tracked new cracker SKUs. A cracker missing
+# from here reads as "CEX-CR slot filled with a non-cracker" on every box carrying it.
 CRACKERS = {"AC-FCROSE", "AC-FCEVOO", "AC-ACRISP", "AC-TCRISP",
-            "AC-EFLAT", "AC-FCWALN", "AC-PFLAT", "AC-TOK"}
+            "AC-EFLAT", "AC-FCWALN", "AC-PFLAT", "AC-TOK",
+            "AC-PCRISP", "AC-FCCRAN", "AC-FCFIGO"}
 # CEX-/EX- parents -> the child type each contributes.
 SLOT_TYPE = {"EX-EM": "MT-", "EX-EC": "CH-", "EX-EA": "AC-",
              "CEX-EM": "MT-", "CEX-EC": "CH-", "CEX-EA": "AC-", "CEX-CR": "AC-"}
@@ -117,7 +123,7 @@ def load_rule_set(path: str) -> dict:
     # 🔴 Header row is NOT always row 0 - Dan ships the file both ways (the 08-18 backup
     # has a blank leading row). Find it, never assume.
     h_i = next(i for i, r in enumerate(rows)
-               if str((r[0] or "")).strip().lower() == "prefix")
+               if str(r[0] or "").strip().lower() == "prefix")
     hdr = [str(h or "").strip() for h in rows[h_i]]
     for r in rows[h_i + 1:]:
         pre = str(r[0] or "").strip()
@@ -136,7 +142,7 @@ def load_rule_set(path: str) -> dict:
             code = str(r[0] or "").strip().lower()
             if not code or code in ("discount code", "none", "sku addition"):
                 continue
-            adds = {k: int(v) for k, v in zip(("MT-", "CH-", "AC-"), r[1:4])
+            adds = {k: int(v) for k, v in zip(("MT-", "CH-", "AC-"), r[1:4], strict=False)
                     if isinstance(v, (int, float))}
             if adds:
                 out["disc"][code] = adds

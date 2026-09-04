@@ -232,7 +232,13 @@ def load_have(path=None, tag=None):
     i_sku = next((i for i, h in enumerate(hdr) if h == "sku"), None)
     # the column is "Qty" in the corrected-inventory workbook and "RMFG Have <date>"
     # in the cut-order CSV -- accept either rather than pinning one label
-    i_qty = next((i for i, h in enumerate(hdr) if h == "qty" or "have" in h), None)
+    # "Qty" in the corrected-inventory workbook, "RMFG Have <date>" in the cut-order CSV,
+    # "On Hand" in the processed_on_hand export. 🔴 ON HAND IS NOT AVAILABLE (Kurt
+    # 2026-09-04: "it doesn't mean available. I'm sure a number of them have been
+    # committed") -- the caller must subtract this run's own committed demand before
+    # treating any of it as headroom.
+    i_qty = next((i for i, h in enumerate(hdr)
+                  if h == "qty" or "have" in h or "on hand" in h or h == "onhand"), None)
     body = rows[1:]
     if i_sku is None or i_qty is None:
         # 🔴 HEADERLESS two-column form: `MON_cut_order_v2_<date>.xlsx - Sheet1.csv`

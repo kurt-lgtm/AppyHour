@@ -33,7 +33,7 @@ from .check7 import run as check7_run
 from .checks import bare_cex_check, cracker_check, fixed_route_check, fixed_route_roster, validate_swap_list
 from .dan_checks import load_rules
 from .dan_checks import run as dan_run
-from .fetch_gql import fetch_by_name
+from .fetch_gql import fetch_by_name, fetch_by_tag
 from .history_compact import DB
 from .login_gate import protected as login_protected
 
@@ -121,7 +121,10 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="order_checks.run_all")
     ap.add_argument("--tag", required=True, help="production tag, e.g. RMFG_20260828 or 8_24")
     ap.add_argument("--ship", required=True)
-    ap.add_argument("--sheet", required=True)
+    ap.add_argument("--sheet",
+                    help="the vF. OPTIONAL: only check 2 (sheet vs Shopify) and the swap "
+                         "caps read it. Without it every order-side check still runs, "
+                         "fetching the cohort BY TAG.")
     ap.add_argument("--have", metavar="PATH",
                     help="this week's declared HAVE export (.csv/.xlsx) for check 7's "
                          "swap caps -- REQUIRED, no baked-in fallback (a dated literal "
@@ -140,16 +143,29 @@ def main(argv=None):
     ap.add_argument("--max-per-order", type=int, default=2,
                     help="cap across the COMBINED list; passes stack (#176908 hit 3)")
     a = ap.parse_args(argv)
+    if not a.sheet:
+        a.no_swaps = True                     # swap caps need the sheet's committed demand
     if not a.have and not a.no_swaps:
         ap.error("--have is required (or --no-swaps to run the check half only)")
 
     os.makedirs(a.out, exist_ok=True)
     print(f"\n=== {a.tag} / {a.ship} ===")
-    sheet = sheetmod.load_sheet(a.sheet)
-    orders = fetch_by_name(list(sheet), cache=a.cache)
-    cs, unmatched = sheetmod.resolve_columns(sheet, orders)
-    print(f"  sheet {len(sheet)} rows · {len(cs)} columns resolved"
-          + (f" · 🔴 UNMATCHED {unmatched}" if unmatched else ""))
+    # 🔴 THE TAG IS THE COHORT, NOT THE SHEET. Fetching by sheet made every order-side
+    # check wait on a file none of them reads (Kurt 2026-09-04). With no sheet the checks
+    # still run in full; only c2 and the swap caps are skipped.
+    if a.sheet:
+        sheet = sheetmod.load_sheet(a.sheet)
+        orders = fetch_by_name(list(sheet), cache=a.cache)
+        cs, unmatched = sheetmod.resolve_columns(sheet, orders)
+        print(f"  sheet {len(sheet)} rows · {len(cs)} columns resolved"
+              + (f" · 🔴 UNMATCHED {unmatched}" if unmatched else ""))
+        drift = sorted(set(orders) - set(sheet))
+        if drift:
+            print(f"  🔴 DRIFT-IN: {len(drift)} tagged but NOT on the sheet: {drift[:8]}")
+    else:
+        sheet = {}
+        orders = fetch_by_tag(a.tag, cache=a.cache)
+        print("  no sheet given -- cohort by tag. c2 and the swap caps are SKIPPED.")
 
     print("\n-- counts (checks 1/2/3/5/6/8) --")
     R = dan_run(orders, sheet, load_rules(a.ruleset), a.tag, a.ship)
