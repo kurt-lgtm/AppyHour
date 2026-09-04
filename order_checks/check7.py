@@ -122,6 +122,11 @@ HIST_N = 4                      # swap candidates check the FULL history; 4 is t
 AUDIT_LOG = r"C:\Users\Work\Claude Projects\_outputs\logs\swap_audit.jsonl"
 RECUR_TAG = "Subscription Recurring Order"
 BCPC_TAG = "BOX_CUSTOMIZED_POST_CHECKOUT"
+# 🔴 ONLY these box types are swap-eligible (Kurt 2026-09-04). Matched on the box parent's
+# LAST hyphen SEGMENT, never a suffix string -- AHB-LCUST-NMS also ends in "MS", so an
+# endswith() test would pull every NMS box in under the MS rule. Curation boxes (HHIGH,
+# MONG, SPN, MDT), BYO, TRAY and limited releases are OUT of the rotation pool entirely.
+ELIGIBLE_BOX_SUFFIX = {"MED", "LGE", "CMED", "MS", "NMS"}
 
 
 # A CRACKER is its own type, not an interchangeable AC-. Kurt 2026-08-28: AC-FCFIGO was
@@ -332,6 +337,17 @@ def run(orders, con, verbose=True, sheet=None, have_path=None, tag=None):
         tags = o.get("tags") or []
         if RECUR_TAG not in tags:
             skipped["not a recurring subscription order"] += 1
+            continue
+        # 🔴 ELIGIBLE BOX TYPES ONLY (Kurt 2026-09-04): the box parent SKU must end in one
+        # of MED / LGE / CMED / MS / NMS. Everything else -- curation boxes (HHIGH, MONG,
+        # SPN, MDT), BYO, TRAY, limited releases -- is OUT of the rotation swap pool.
+        # Matched on the LAST hyphen SEGMENT, never a suffix string: AHB-LCUST-NMS ends
+        # with "MS" too, so endswith() would let every NMS box in under the MS rule.
+        box = next((s for s in ((li.get("sku") or "").strip() for li in _live(o))
+                    if s.startswith("AHB-")), "")
+        suffix = box.rsplit("-", 1)[-1] if box else ""
+        if suffix not in ELIGIBLE_BOX_SUFFIX:
+            skipped[f"box type not swap-eligible ({suffix or 'no AHB- parent'})"] += 1
             continue
         if any("reship" in t.lower() for t in tags):
             skipped["reship"] += 1
