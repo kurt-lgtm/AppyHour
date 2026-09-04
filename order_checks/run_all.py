@@ -30,7 +30,7 @@ import sys
 from . import sheet as sheetmod
 from .categorize import categorize
 from .check7 import run as check7_run
-from .checks import bare_cex_check, cracker_check, fixed_route_check, validate_swap_list
+from .checks import bare_cex_check, cracker_check, fixed_route_check, fixed_route_roster, validate_swap_list
 from .dan_checks import load_rules
 from .dan_checks import run as dan_run
 from .fetch_gql import fetch_by_name
@@ -169,6 +169,19 @@ def main(argv=None):
         hits = [{"order": k, "issue": fn(o)} for k, o in rest.items() if fn(o)]
         print(f"    {name:<14}{len(hits)}")
         dump(os.path.join(a.out, f"{name.split()[0].lower()}_{a.tag}.csv"), hits)
+
+    # Fixed_Route: the PROFILE pin next to the ORDER's routing tag, for EVERY pinned
+    # customer -- not only the mismatches. A clean cohort otherwise shows nothing, so you
+    # cannot see who is pinned or to what (Kurt 2026-09-04).
+    roster = fixed_route_roster(rest)
+    if roster:
+        bad = [r for r in roster if r["state"] != "ok"]
+        print(f"    Fixed_Route/Military  {len(roster)} pinned"
+              + (f"   🔴 {len(bad)} need the pin applied to the order" if bad else "   all match"))
+        for r in bad:
+            print(f"      #{r['Order ID']}  profile {r['profile_route']}  ->  order {r['order_route']}"
+                  f"   {r['state']}")
+        dump(os.path.join(a.out, f"fixed_route_{a.tag}.csv"), roster)
 
     # 🔴 BOTH halves of the guardrail, BEFORE the swap list exists
     print("\n-- store freshness --")

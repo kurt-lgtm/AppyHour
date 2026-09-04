@@ -1,9 +1,22 @@
 """Count checks against RULE SET. 🔴 Read ORDER_CHECKS_RULES.md before changing anything."""
 from __future__ import annotations
+
 import collections
-from .rules import (CHILD, SLOT_TYPE, PARTY, BOARD, CRACKERS, route_tags,
-                    FIXED_ROUTE_TAG, MILITARY_TAG, net, resolve_box, box_expect,
-                    paid_pack_items)
+
+from .rules import (
+    BOARD,
+    CHILD,
+    CRACKERS,
+    FIXED_ROUTE_TAG,
+    MILITARY_TAG,
+    PARTY,
+    SLOT_TYPE,
+    box_expect,
+    net,
+    paid_pack_items,
+    resolve_box,
+    route_tags,
+)
 
 EXCLUDED_TAGS = ("gift redemption", "pr box")
 
@@ -297,3 +310,50 @@ def duplicate_check(o):
         if m:
             out.append((s, ",".join(m)))
     return out
+
+
+def fixed_route_roster(orders):
+    """Every Fixed_Route-pinned order: the PROFILE pin next to the ORDER's routing tag.
+
+    `fixed_route_check` returns "" when an order is fine, so a clean cohort shows nothing
+    and you cannot see WHICH customers are pinned or what they are pinned to. Kurt
+    2026-09-04: "find those customers with that tag on shopify, and when we do the check,
+    I want to see the routing tag on their order next to whats on their profile."
+
+    🔴 The profile is AUTHORITATIVE and the order takes the customer's pin, appended never
+    overwritten ([[fixed-route-apply-customer-and-open-orders]]). The "Customer Specific
+    Routing" Flow fires only on order_created, so an order that already existed when the
+    pin was set never re-triggers -- 3 of 4 pinned customers in _SHIP_2026-08-31 were
+    pinned on the profile with NO route tag on the order at all.
+
+    Military profiles must never land on OnTrac (Kurt 2026-08-13) -- surfaced here too,
+    since a military customer is not always Fixed_Route-pinned.
+    """
+    rows = []
+    for oid, o in sorted(orders.items()):
+        cust = (o.get("customer") or {}).get("tags") or ""
+        ot = o.get("tags") or ""
+        pinned = FIXED_ROUTE_TAG in cust.lower()
+        military = MILITARY_TAG in cust.lower()
+        if not (pinned or military):
+            continue
+        prof, order_r = route_tags(cust), route_tags(ot)
+        if pinned and not prof:
+            state = "🔴 pinned, no route on profile"
+        elif pinned and not order_r:
+            state = "🔴 profile pin NOT on the order"
+        elif pinned and set(prof) != set(order_r):
+            state = "🔴 MISMATCH"
+        elif military and any("ontrac" in r.lower() for r in order_r):
+            state = "🔴 MILITARY on OnTrac"
+        else:
+            state = "ok"
+        rows.append({"Order ID": oid,
+                     "email": (o.get("customer") or {}).get("email", ""),
+                     "pinned": "Fixed_Route" if pinned else "",
+                     "military": "Military" if military else "",
+                     "profile_route": ", ".join(prof) or "(none)",
+                     "order_route": ", ".join(order_r) or "(none)",
+                     "state": state,
+                     "fulfillment": o.get("displayFulfillmentStatus", "")})
+    return rows
