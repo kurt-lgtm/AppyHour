@@ -495,3 +495,43 @@ alone).
 - **`revert` is OP-AWARE, and that is a choice**: a routing op reverts the routing span, an `ice` op
   reverts the gel span, a `replace` reverts the whole token list. Reverting an op that a LATER op
   overwrote restores that op's span only — the ledger is append-only and read newest-first.
+
+## 8. Sheet membership + sheet-stage gates — DROP or FIX, never re-solve (Kurt 2026-09-04)
+
+🔴 **Sheet membership = live cohort tag present AND no hold tag AND this cohort's `_SHIP_` week
+(when the order carries any `_SHIP_` tag) — evaluated at BUILD time, against live Shopify, one read.**
+The SOLVE decides lanes once; the sheet stage handles every per-order problem by dropping the row
+or fixing it in place. SSOT for the mechanism: `ShipRouting/ROUTING_RULES.md` §0-J; code
+`ShipRouting/server/sheet_gates.py`. Kurt, verbatim: *"at sheet generation, if there's ANY order
+with a removed cohort or subcohort tag … we just drop it"* · *"I don't want any errors to make me
+re-deploy and re-solve every time."*
+
+**The burns (negatives-first):**
+- **#180731 `_CSHOLD` still on the built sheet** (2026-09-04 17:38), and #181414 — the cohort tag
+  was still on the order so the matrix carried it; the hold tag was in the live pull and nothing
+  read it. Dropped by hand (`vf_edit drop`) minutes before send.
+- **#179314 `MT-FS-JAMS`** (17:32) — the matrix refused the WHOLE sheet naming only the SKU. The
+  operator had to find the order himself, fix Shopify, and re-solve — for one line item.
+- **Matrix reuse hid Shopify edits** — `run_vf._matrix_src` reused the solve's matrix, so an item /
+  address / gel edit made after the run never reached the sheet without a re-solve.
+
+**Rules (the drop classes join `gen_rmfg_sheet.DROP_CLASSES`; every drop is named in the log, in
+`<sheet>.dropped.json` — MERGED, one sidecar per sheet — and in the job result):**
+- `tag_removed` — cohort tag gone (order absent from the live cohort pull), or the order carries
+  `_SHIP_` tags but not this cohort's week. 🔴 An order with NO `_SHIP_` tag at all is NOT dropped
+  (drift-ins pre-date week tagging; ROUTING_RULES §0-I surfaces those, never filters).
+- `held` — any of `vf_checks.HOLD_TAGS` (`_HOLD`, `_FLOWHOLD`, `_CSHOLD`, `_UNRESOLVED`; ONE
+  definition, imported — a substring test on `_HOLD` misses `_FLOWHOLD`).
+- `cancelled` — `cancelledAt` set on the read-only lookup of an order missing from the live pull.
+- **Un-onboarded SKU → the refusal STAYS** (rule 19/21: a phantom column never ships) **but names
+  the ORDER**: `MfgOnboardingError.orders` = `{sku: [{"order": "#179314", "title": "…"}]}` filled at
+  the raise site in `generate_matrix_xlsx` from the cohort pull; the console says *fix the order in
+  Shopify, then Build sheet again — no re-solve*. Titles are the Shopify line-item title, printed
+  only when present; the MFG name is never derived from it (§2).
+- **The matrix is regenerated on every Build** — items/address/gel from live, routing from the run.
+- **Serviceability re-check on the sheet**: an OnTrac lane whose zip is no longer in the CURRENT
+  coverage authority (§7.2 nonblank-cell rule) is rewritten to `!ANY FedEx - <same hub>_AHB!` and
+  reported (`stages.vf.rerouted`). Bare `!ANY` rows are never rewritten (§7.2 / burn 11).
+- **Safe-fix class inside the build** (`vf_checks` 2/4/5/8, `fix=True`) → `stages.vf.auto_fixed`;
+  FLAG classes (ice, routing, Shopify cross-check) are never written by the build.
+- `vf_checks` check 7 stays as the backstop after hand edits; the gate does not replace it.

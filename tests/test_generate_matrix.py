@@ -152,6 +152,32 @@ def test_fill_reject_carries_typed_skus_not_just_a_message(tmp_path):
     assert list(tmp_path.glob("*.xlsx")) == []
 
 
+def test_fill_reject_names_the_orders_carrying_each_sku(tmp_path):
+    """Rule 19 (c), Kurt 2026-09-04 (#179314 `MT-FS-JAMS`: "if it's just a SKU issue, I can fix it
+    but it shouldn't re-solve"): the reject carries `.orders` = {sku: [{order, title}]} so the
+    console names WHICH order to fix in Shopify before "Build sheet" again. Removed lines (fq 0)
+    are not carriers; the title is the line item's own, for recognition only."""
+    import pytest as _pytest
+    o1 = _order("179314", {"CH-BLR": 1, "MT-FS-JAMS": 1})
+    o1["lineItems"]["edges"][1]["node"]["title"] = "Jamón Serrano FOOD SERVICE"
+    o2 = _order("179400", {"MT-FS-JAMS": 1})
+    o3 = _order("179500", {"CH-BLR": 1, "MT-FS-JAMS": 0})            # removed line: not a carrier
+    with (
+        patch.object(mc, "_get_shopify_auth", return_value=("https://shop", {})),
+        patch.object(mc, "_fetch_orders_graphql", return_value=[o1, o2, o3]),
+        patch.object(mc, "load_mfg_translations", return_value=_TRANSLATIONS),
+        patch.object(mc, "load_mfg_names", return_value=_TRANSLATIONS),   # rule-21 gate, DB-backed
+        _pytest.raises(mc.MfgOnboardingError) as e,
+    ):
+        mc.generate_matrix_xlsx("RMFG_20260717", ship_date="2026-07-20", output_dir=str(tmp_path))
+    assert e.value.orders == {"MT-FS-JAMS": [
+        {"order": "#179314", "title": "Jamón Serrano FOOD SERVICE"},
+        {"order": "#179400", "title": ""}]}
+    assert "#179314" in str(e.value) and "#179500" not in str(e.value)
+    assert mc.MfgOnboardingError(["X"]).orders == {}          # optional, additive
+    assert list(tmp_path.glob("*.xlsx")) == []
+
+
 def test_parent_line_never_false_rejects_nor_becomes_a_column(tmp_path):
     """A PR-CJAM / CEX-EC PARENT line item is not a pickable child — it must neither trip the
     onboarding reject nor render as a phantom column.

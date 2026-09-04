@@ -395,11 +395,24 @@ class MfgOnboardingError(ValueError):
 
     URL = "https://translator.robbinsmfginc.com/"
 
-    def __init__(self, skus, reason="have no MFG name"):
+    def __init__(self, skus, reason="have no MFG name", orders=None):
         self.skus = list(skus)
+        # 🔴 NAME THE ORDER, NOT JUST THE SKU (Kurt 2026-09-04, #179314 `MT-FS-JAMS`: "if it's just
+        # a SKU issue, I can fix it but it shouldn't re-solve"). `orders` = {sku: [{"order": "#179314",
+        # "title": "<Shopify line-item title>"}]}, filled at the raise site from the cohort pull so the
+        # console can say WHICH order to fix in Shopify before "Build sheet" again (VF_SHEET_RULES §8,
+        # ROUTING_RULES §0-J rule 2). The title is the line item's own title, shown for recognition
+        # ONLY — it is never a source for an MFG name (§2: never derive a name from a Shopify title).
+        # Optional and additive: every existing raise site / `except ValueError` is unchanged.
+        self.orders = {str(k): list(v) for k, v in (orders or {}).items()}
+        where = ""
+        if self.orders:
+            where = " Orders carrying them: " + "; ".join(
+                f"{sku}: " + ", ".join(str(o.get("order")) for o in self.orders.get(sku, []))
+                for sku in self.skus if self.orders.get(sku)) + "."
         super().__init__(
             f"MFG onboarding REJECT: {len(self.skus)} SKU(s) {reason} and would render "
-            f"as phantom columns: {self.skus}. Onboard them at {self.URL}, re-export "
+            f"as phantom columns: {self.skus}.{where} Onboard them at {self.URL}, re-export "
             f"mfg_translations.csv, then re-run. Never hand-edit a column header to get past this."
         )
 
@@ -1670,7 +1683,7 @@ query($cursor: String, $q: String!) {
     edges { node {
       id name tags note email phone
       shippingAddress { firstName lastName address1 address2 city provinceCode zip phone }
-      lineItems(first: 50) { pageInfo { hasNextPage } edges { node { sku quantity currentQuantity fulfillableQuantity } } }
+      lineItems(first: 50) { pageInfo { hasNextPage } edges { node { sku title quantity currentQuantity fulfillableQuantity } } }
     } }
   }
 }
@@ -1681,7 +1694,7 @@ query($id: ID!, $cursor: String) {
   order(id: $id) {
     lineItems(first: 250, after: $cursor) {
       pageInfo { hasNextPage endCursor }
-      edges { node { sku quantity currentQuantity fulfillableQuantity } }
+      edges { node { sku title quantity currentQuantity fulfillableQuantity } }
     }
   }
 }
@@ -2374,7 +2387,20 @@ def generate_matrix_xlsx(
         # the type and read `.skus` — never match on the message text. The console degrades the
         # SHEET stages on this error while still running routing (ROUTING_RULES §13.5), and a
         # message-prefix check would silently stop degrading the day someone rewords the string.
-        raise MfgOnboardingError(unmapped_skus)
+        # Which ORDERS carry each un-onboarded SKU (Kurt 2026-09-04: name the order so the operator
+        # fixes it in Shopify and rebuilds the SHEET — no re-solve). Same fulfillable-line filter as
+        # `all_skus` above; the title is the Shopify line-item title, for recognition only.
+        _carriers: dict[str, list[dict]] = {}
+        for od in order_data:
+            for li in od["line_items"]:
+                sku = (li.get("sku") or "").strip()
+                fq = li.get("fulfillableQuantity")
+                if fq is None:
+                    fq = li.get("currentQuantity", li.get("quantity", 0))
+                if sku in unmapped_skus and fq > 0:
+                    _carriers.setdefault(sku, []).append(
+                        {"order": f"#{od['name']}", "title": (li.get("title") or li.get("name") or "")})
+        raise MfgOnboardingError(unmapped_skus, orders=_carriers)
 
     # Build the workbook
     wb = openpyxl.Workbook()

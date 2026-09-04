@@ -200,6 +200,14 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
     `SKIP_PREFIXES`) is never a pickable child: it is excluded from the column set, so it can neither
     trip this reject nor render as a column — a parent can never be the SOURCE that names a child's
     column (the wrong-source class, Kurt 2026-07-28 "you filled both in from CEX-EC not PR-CJAM").
+    **(c) The reject NAMES THE ORDER, not just the SKU (Kurt 2026-09-04, #179314 `MT-FS-JAMS`: "if
+    it's just a SKU issue, I can fix it but it shouldn't re-solve").** `MfgOnboardingError.orders` =
+    `{sku: [{"order": "#179314", "title": "<Shopify line-item title>"}]}`, filled at the raise site
+    in `generate_matrix_xlsx` from the cohort pull (fulfillable lines only); the message lists them.
+    ShipRouting's "Build sheet" turns that into `#order · SKU · title` + *fix the order in Shopify,
+    then Build sheet again — no re-solve* (ROUTING_RULES §0-J rule 2, VF_SHEET_RULES §8). The title
+    is for RECOGNITION only — never a source for an MFG name (rule 21 / VF_SHEET_RULES §2). Optional
+    and additive: `orders` defaults to `{}`; every `except ValueError` and `.skus` reader is unchanged.
 
 20. **Gift redemption vFGR = REPLACE, never skip-as-duplicate** (Kurt 2026-07-24, wk0727 done by
     hand — this rule automates it). **Failure mode:** gift redemption orders are UNEDITABLE in
