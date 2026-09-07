@@ -13,6 +13,13 @@
 > measurement. Serves AppyHour's north star: fast, autonomous, **loud failures, never silent
 > ones**.
 
+> 🔴 **CUSTOMER SENDS (Kurt 2026-09-02).** Anything that posts a PUBLIC message to a Gorgias
+> ticket (API `POST /tickets/{id}/messages` with `public: true`, or any reply/email to a
+> customer) waits for Kurt's EXPLICIT "send" / "post". Draft tweaks ("yes", "say X") are
+> feedback on the draft, not a go — re-show and wait. Burn: ticket 290607848, reply posted off
+> "yes, say rest assured…" and Kurt said it was not a go. Sent messages cannot be recalled.
+> Global rule: `~/.claude/rules/live-writes.md` §"Customer-facing messages".
+
 ## What it is
 
 `sync_gorgias_to_sheet()` (and its sibling `sync_food_safety_to_sheet()`) pull tickets from
@@ -75,10 +82,50 @@ Repairing history requires `_outputs/scripts/backfill_feedback_order_numbers.py`
 **Consequence to weigh before any change: whatever the sync gets wrong on first contact is
 what the analytics see forever.**
 
-### 7. `date_reported` carries TWO formats. Parse both.
-`'2026-06-10'` (older rows) and `'08/19/2026'` (current). A parser handling one silently
-empties the recent window — which reads as "no rows", not as a bug. See
+### 7. `date_reported` carries TWO formats. Parse both. 🔴 NEVER `MAX()` it in SQL.
+`'2026-06-10'` (older rows) and `'08/19/2026'` (the 2026-06-19..2026-09-07 band). A parser
+handling one silently empties the recent window — which reads as "no rows", not as a bug. See
 `parse_report_date()`; `test_both_production_date_formats_parse` pins it.
+
+**🔴 The eleven-week burn this rule used to under-state (2026-09-07).** Dual format is not merely
+a parsing inconvenience — it makes **`MAX(date_reported)` and `ORDER BY date_reported` LIE**, because
+SQLite compares TEXT lexically and `'2026-06-19' > '09/04/2026'` (the `'2'` beats the `'0'`). One
+ISO row therefore MASKS every newer US-format row. From 2026-06-19 to 2026-09-04 `MAX(date_reported)`
+read **2026-06-19** while `MAX(synced_at)` read **2026-09-04** and the tee ran every week: the
+synced-but-frozen shape (`ENGINEERING_GOTCHAS` A4/C4). **692 rows, 223 of them `Arrived Warm`**, sat
+behind that mask, and warm arrival is one of the two floors never for sale in the north star.
+
+Root cause: `SHIPPING_PIPELINE.md`'s 2026-06-18 entry claims the chokepoint was hardened so the tee
+"now `_normalize_date_reported()`s every insert to ISO". **That fix was never landed** — no commit
+touched `gorgias_sheets_sync.py` between 2026-06-12 and 2026-06-27, and the symbol existed nowhere in
+the codebase. Only the ONE-TIME backfill ran, which rewrote history and made the table look fixed for
+exactly one day. **Repairing the data instead of the writer bought three days of green.**
+
+Rules now in force:
+- **The tee writes ISO.** `_normalize_date_reported()` in `gorgias_sheets_sync.py` canonicalises the
+  DB value; **the SHEET keeps `%m/%d/%Y`** (Ops Summary formulas compare column A against date cells).
+  Never "simplify" this by changing `date_str` at its construction site — that breaks the sheet.
+- **Never guess.** An unparseable value is written verbatim, never dropped and never year-inferred;
+  year inference is what made 2025 tickets masquerade as 2026 in the original 2026-06-18 incident.
+- **Consumers still parse BOTH** — the pre-cutover legacy band is untouched (see rule 7b).
+- **Never `MAX(date_reported)`/`ORDER BY date_reported` in SQL.** Parse, then take the max
+  (`max_event_date()`). `test_lexical_max_masks_newer_rows_but_the_assert_does_not` pins the burn.
+
+### 7b. The 692-row legacy `%m/%d/%Y` band is NOT repaired. A backfill is Kurt's decision.
+Rows synced 2026-06-19..2026-09-07 remain US-format on purpose. Eleven weeks of warm data touches
+published reports and the reship/warm-cohort numbers, so normalising them is a business decision, not
+a repair a monitor or an agent makes. `ISO_CUTOVER` in `appyhour_lib/feedback_completeness.py` marks
+the boundary; only rows synced **on or after** it are format-graded. Do not advance that date to
+silence a flag — a flag there means the writer stopped canonicalising.
+
+### 7c. Recency-of-EVENT is a THIRD independent assert. Do not collapse it into the other two.
+This table has now failed in three ways that no single check can see:
+`synced_at` recency (did the task run) · field completeness (rule 8 — it ran and wrote blanks) ·
+**event recency (it ran, wrote good rows, and the newest EVENT still went nowhere)**.
+`check_feedback_event_freshness()` grades the newest **parsed** `date_reported` at a 12-day limit
+(weekly writer + `StartWhenAvailable` catch-up; HEARTBEAT_RULES rule 4 — a weekly writer gets ~10
+days, never 7). It **fails closed** on zero rows, zero parseable rows, or a read error: absence of a
+row is not absence of an event, and a zero is a claim.
 
 ### 8. Recency freshness cannot see this class of failure.
 The `feedback.synced_at` 14-day row in the sweep was **green throughout** the outage. A writer

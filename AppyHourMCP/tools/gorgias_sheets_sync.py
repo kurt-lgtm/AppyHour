@@ -18,6 +18,50 @@ from utils import OPS_SHEET_ID
 from tools._gorgias_internal import get_auth, _load_settings
 
 
+# ── date_reported canonicalisation (DB side only) ───────────────────────
+# 🔴 WHY THIS EXISTS (2026-09-07). SHIPPING_PIPELINE.md's 2026-06-18 entry claims the
+# recurring chokepoint was hardened so `_tee_to_shipping_db` "now `_normalize_date_reported()`s
+# every insert to ISO". THAT FIX WAS NEVER LANDED — no commit touched this file between
+# 2026-06-12 and 2026-06-27, and the symbol existed nowhere in the codebase. Only the ONE-TIME
+# backfill (`scripts/incident-fixes/normalize_feedback_dates.py`, 2,742 rows) ran. It rewrote
+# history to ISO and made the table LOOK fixed for exactly one day; the writer kept emitting the
+# sheet's `%m/%d/%Y` string. Fixing the data instead of the writer bought 3 days of green.
+#
+# The damage was invisible for ELEVEN WEEKS because `MAX(date_reported)` is a LEXICAL max over
+# TEXT: '2026-06-19' > '09/04/2026' (the '2' beats the '0'), so the newest ISO row masks every
+# newer US-format row. `MAX(date_reported)` read 2026-06-19 while the tee was writing daily and
+# `MAX(synced_at)` read 2026-09-04 — the synced-but-frozen shape (ENGINEERING_GOTCHAS A4/C4).
+# 692 rows, 223 of them `Arrived Warm`, sat behind that mask. Warm arrival is one of the two
+# floors never for sale in the north star.
+#
+# 🔴 THE SHEET IS NOT TOUCHED. Ops Summary formulas compare column A against date cells and need
+# `%m/%d/%Y`; only the value teed to `shipping.db` is canonicalised. Do not "simplify" this by
+# changing `date_str` at its construction site (~L936 / ~L1967) — that would break the sheet.
+#
+# 🔴 A parse failure returns the value UNCHANGED, never None and never a guessed date. Losing an
+# event date to make a format tidy is strictly worse than an odd-looking string, and a guessed
+# year is the 2026-06-18 burn that started this (year-less dates made 2025 tickets masquerade as
+# 2026). Unparseable input is preserved for a human to see.
+def _normalize_date_reported(value: str | None) -> str | None:
+    """Canonicalise a sheet-shaped date to ISO `YYYY-MM-DD` for the DB tee.
+
+    Accepts the sheet's `%m/%d/%Y`, an already-ISO value, or a full ISO
+    timestamp. Anything else is returned verbatim — never dropped, never
+    guessed (no year inference: that is what made 2025 tickets read as 2026).
+    """
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(s[:10], fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return s
+
+
 # ── Universal-DB tee: mirror Gorgias rows into shipping.db feedback ─────
 def _tee_to_shipping_db(rows: list[list[str]]) -> int:
     """Mirror new Gorgias rows into the canonical shipping.db `feedback` table.
@@ -90,7 +134,9 @@ def _tee_to_shipping_db(rows: list[list[str]]) -> int:
                         (
                             (order_num or "").strip() or None,
                             it,
-                            date_str or None,
+                            # ISO for the DB; the SHEET keeps %m/%d/%Y (Ops formulas).
+                            # See _normalize_date_reported's header for the 11-week burn.
+                            _normalize_date_reported(date_str),
                             (contact_reason or comment or None),
                             carrier or None,
                             state or None,

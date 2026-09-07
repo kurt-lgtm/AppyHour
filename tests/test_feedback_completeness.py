@@ -38,6 +38,8 @@ from appyhour_lib.feedback_completeness import (  # noqa: E402
     MIN_ROWS,
     ORPHAN_RATE_MAX,
     check_feedback_completeness,
+    check_feedback_event_freshness,
+    max_event_date,
     parse_report_date,
     week_start,
     weekly_orphan_stats,
@@ -189,3 +191,95 @@ def test_runs_against_the_live_table_without_error():
     flags, ok = check_feedback_completeness(now=AFTER_WK0817)
     assert flags or ok
     assert not any("query failed" in f for f in flags), flags
+
+
+# --------------------------------------------------------------------------
+# EVENT-date freshness + ISO format (2026-09-07 eleven-week masked-column burn)
+# --------------------------------------------------------------------------
+
+def _event_db(rows, name):
+    """rows = [(date_reported, synced_at)] -> path to a temp sqlite file."""
+    path = Path(os.environ.get("TEMP", ".")) / name
+    path.unlink(missing_ok=True)
+    con = sqlite3.connect(str(path))
+    con.execute(
+        "CREATE TABLE feedback (date_reported TEXT, order_number TEXT, "
+        "gorgias_link TEXT, synced_at TEXT)"
+    )
+    con.executemany(
+        "INSERT INTO feedback VALUES (?,?,?,?)",
+        [(d, "#1", f"https://x/{i}", s) for i, (d, s) in enumerate(rows)],
+    )
+    con.commit()
+    con.close()
+    return path
+
+
+def test_lexical_max_masks_newer_rows_but_the_assert_does_not():
+    """THE BURN, pinned. '2026-06-19' > '09/04/2026' lexically, so SQL MAX() reports
+    the June row and reads eleven weeks stale. max_event_date PARSES, so it sees
+    September. If this ever fails, someone reintroduced MAX(date_reported)."""
+    rows = [("2026-06-19",), ("09/04/2026",)]
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE feedback (date_reported TEXT)")
+    con.executemany("INSERT INTO feedback VALUES (?)", rows)
+    assert con.execute("SELECT MAX(date_reported) FROM feedback").fetchone()[0] == "2026-06-19"
+    con.close()
+    newest, parsed, bad = max_event_date(rows)
+    assert newest == date(2026, 9, 4), newest
+    assert (parsed, bad) == (2, 0)
+
+
+def test_event_freshness_flags_a_genuinely_frozen_table():
+    path = _event_db([("2026-06-19", "2026-09-04T10:00:00")], "fb_event_stale.sqlite")
+    flags, _ = check_feedback_event_freshness(str(path), now=datetime(2026, 9, 7, 12, 0))
+    path.unlink(missing_ok=True)
+    assert any("EVENT freshness" in f for f in flags), flags
+
+
+def test_event_freshness_is_green_when_only_the_FORMAT_was_masking():
+    """The live 2026-09-07 shape: US-format rows are recent EVENTS. The event
+    assert must not cry stale just because MAX() was lying."""
+    path = _event_db([("2026-06-19", "2026-06-19T16:05:17"),
+                      ("09/04/2026", "2026-09-04T16:06:45")], "fb_event_fresh.sqlite")
+    flags, ok = check_feedback_event_freshness(str(path), now=datetime(2026, 9, 7, 12, 0))
+    path.unlink(missing_ok=True)
+    assert not any("EVENT freshness" in f for f in flags), flags
+    assert any("EVENT freshness" in line for line in ok), ok
+
+
+def test_empty_and_unparseable_tables_fail_CLOSED():
+    """C4: a monitor's zero branch defaults to RED, never a quiet pass."""
+    for rows, name in (([], "fb_event_empty.sqlite"),
+                       ([("not-a-date", "2026-09-04T10:00:00")], "fb_event_junk.sqlite")):
+        path = _event_db(rows, name)
+        flags, _ = check_feedback_event_freshness(str(path), now=datetime(2026, 9, 7, 12, 0))
+        path.unlink(missing_ok=True)
+        assert any("no parseable" in f for f in flags), (name, flags)
+
+
+def test_non_iso_row_synced_after_the_cutover_is_LOUD():
+    """A writer regression must not be invisible for another eleven weeks."""
+    path = _event_db([("09/08/2026", "2026-09-08T10:00:00")], "fb_fmt_bad.sqlite")
+    flags, _ = check_feedback_event_freshness(str(path), now=datetime(2026, 9, 9, 12, 0))
+    path.unlink(missing_ok=True)
+    assert any("FORMAT" in f for f in flags), flags
+
+
+def test_legacy_pre_cutover_us_rows_are_NOT_flagged():
+    """The 692-row legacy band is a Kurt backfill decision, not a monitor's."""
+    path = _event_db([("09/04/2026", "2026-09-04T16:06:45")], "fb_fmt_legacy.sqlite")
+    flags, _ = check_feedback_event_freshness(str(path), now=datetime(2026, 9, 7, 12, 0))
+    path.unlink(missing_ok=True)
+    assert not any("FORMAT" in f for f in flags), flags
+
+
+def test_normalizer_writes_iso_and_never_guesses():
+    """The writer-side fix. Sheet format in, ISO out; junk preserved verbatim."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "AppyHourMCP"))
+    from tools.gorgias_sheets_sync import _normalize_date_reported as n
+    assert n("09/04/2026") == "2026-09-04"
+    assert n("2026-09-04") == "2026-09-04"
+    assert n("2026-09-04T16:06:45") == "2026-09-04"
+    assert n("June-11") == "June-11"      # never year-guessed (the 2026-06-18 burn)
+    assert n("") is None and n(None) is None

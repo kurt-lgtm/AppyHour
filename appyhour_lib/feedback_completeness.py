@@ -66,9 +66,13 @@ from datetime import date, datetime, timedelta
 __all__ = [
     "ORPHAN_RATE_MAX",
     "MIN_ROWS",
+    "EVENT_STALE_DAYS",
+    "ISO_CUTOVER",
     "parse_report_date",
     "week_start",
     "weekly_orphan_stats",
+    "max_event_date",
+    "check_feedback_event_freshness",
     "check_feedback_completeness",
 ]
 
@@ -98,6 +102,163 @@ def parse_report_date(raw: object) -> date | None:
         except ValueError:
             continue
     return None
+
+
+# ── EVENT-date freshness (2026-09-07) ───────────────────────────────────────
+# 🔴 WHY THIS EXISTS, and why it is NOT the sweep's `feedback.synced_at` row.
+# For ELEVEN WEEKS (2026-06-19 -> 2026-09-04) `MAX(date_reported)` read 2026-06-19 while the tee
+# wrote every week and `MAX(synced_at)` read 2026-09-04. Nothing was frozen: the writer emitted
+# the sheet's '%m/%d/%Y' string, and `MAX()` over TEXT is LEXICAL — '2026-06-19' > '09/04/2026'
+# because '2' > '0'. The newest ISO row MASKED 692 newer rows, 223 of them `Arrived Warm`.
+#
+# Three separate lessons are encoded below, and each one is load-bearing:
+#
+# 1. 🔴 NEVER `MAX(date_reported)` IN SQL. Grade the max PARSED date. A lexical max over a
+#    mixed-format TEXT column is not a maximum; it is whichever format sorts highest. This is
+#    the entire eleven-week failure and it is one function call away from returning.
+# 2. 🔴 The freshness question is about the EVENT, not the INGEST. `synced_at` answers "did the
+#    task run"; only `date_reported` answers "is a new issue being recorded". Substituting the
+#    ingest stamp is what let a masked column read green (CLAUDE.md "Data discipline":
+#    metadata is not an event date). The sweep keeps BOTH rows — they fail independently.
+# 3. 🔴 FAIL CLOSED on zero/unparseable (ENGINEERING_GOTCHAS C4). No rows, no parseable rows, or
+#    a read error is UNKNOWN and flags. "Nothing to check yet" is never inferred from absence.
+#
+# Cadence: the scheduled owner is `\AppyHour\GorgiasUpdate` — WEEKLY, Wed 09:00,
+# `StartWhenAvailable`. Per HEARTBEAT_RULES rule 4 a weekly writer gets ~10 days, never 7: a
+# catch-up run after a slept-through slot legally lands >7d after the last one. 12 = 10 + slack
+# for a ticket arriving late in a quiet week; it still fires ~4 weeks before a quarter of blind
+# warm data accumulates.
+EVENT_STALE_DAYS = 12
+
+# 🔴 The tee writes ISO from this date (the `_normalize_date_reported` fix in
+# `AppyHourMCP/tools/gorgias_sheets_sync.py`). Rows synced BEFORE it are the 692-row legacy
+# '%m/%d/%Y' band plus the pre-2026-06-19 ISO history; they are NOT graded, because repairing
+# them is a backfill and a backfill is Kurt's decision, not a monitor's. Rows synced ON OR AFTER
+# it MUST be ISO — that is what makes a silent re-regression of the writer LOUD instead of
+# invisible for another eleven weeks. Do not advance this date to silence the flag: a flag here
+# means the writer stopped canonicalising and `MAX`/`ORDER BY` are lying again.
+ISO_CUTOVER = date(2026, 9, 7)
+
+
+def max_event_date(rows) -> tuple[date | None, int, int]:
+    """(newest parsed date_reported, parsed_count, unparseable_count).
+
+    🔴 Computed by PARSING every value, never by SQL `MAX()` — see the header.
+    `rows` is an iterable of 1-tuples/sequences whose first element is date_reported.
+    """
+    newest: date | None = None
+    parsed = 0
+    bad = 0
+    for r in rows:
+        raw = r[0] if isinstance(r, tuple | list) else r
+        if raw is None or not str(raw).strip():
+            continue
+        d = parse_report_date(raw)
+        if d is None:
+            bad += 1
+            continue
+        parsed += 1
+        if newest is None or d > newest:
+            newest = d
+    return newest, parsed, bad
+
+
+def check_feedback_event_freshness(db_path: str | None = None, now: datetime | None = None):
+    """Assert a NEW ISSUE has been recorded recently, and that the tee writes ISO.
+
+    Returns (flags, ok). Read-only by construction (mode=ro URI).
+    """
+    now = now or datetime.now()
+    today = now.date()
+    path = db_path or _default_db_path()
+    flags: list[str] = []
+    ok: list[str] = []
+
+    if not os.path.exists(path):
+        return [f"FLAG feedback event freshness: db missing at {path} — UNKNOWN"], []
+
+    uri = "file:" + str(path).replace("\\", "/") + "?mode=ro"
+    try:
+        con = sqlite3.connect(uri, uri=True)
+        try:
+            rows = con.execute("SELECT date_reported FROM feedback").fetchall()
+            # 🔴 The format check needs `synced_at` to know which rows are POST-fix. Reduced
+            # test fixtures carry only the three completeness columns. A missing column is a
+            # SCHEMA fact, not a writer failure, so it must not masquerade as either a flag or
+            # a verified green — it is reported as explicitly NOT VERIFIED below. Production
+            # has the column; if it ever vanished there, the completeness read fails loudly.
+            has_synced = any(
+                r[1] == "synced_at" for r in con.execute("PRAGMA table_info(feedback)").fetchall()
+            )
+            post = con.execute(
+                "SELECT date_reported FROM feedback WHERE substr(synced_at,1,10) >= ?",
+                (ISO_CUTOVER.isoformat(),),
+            ).fetchall() if has_synced else None
+        finally:
+            con.close()
+    except sqlite3.Error as e:
+        return [f"FLAG feedback event freshness: query failed ({e}) — UNKNOWN"], []
+
+    newest, parsed, bad = max_event_date(rows)
+
+    # (1) EVENT recency. Fails closed on an empty/unparseable table.
+    if newest is None:
+        flags.append(
+            f"FLAG feedback EVENT freshness: no parseable `date_reported` in {len(rows):,} rows "
+            f"({bad:,} unparseable) — UNKNOWN, not clean. A zero here is a claim, never a quiet week."
+        )
+    else:
+        age = (today - newest).days
+        if age > EVENT_STALE_DAYS:
+            flags.append(
+                f"FLAG feedback EVENT freshness: newest date_reported {newest:%Y-%m-%d} is {age}d "
+                f"old, limit {EVENT_STALE_DAYS}d ({parsed:,} parsed rows). 🔴 `synced_at` recency "
+                f"CANNOT see this — 2026-06-19..2026-09-04 the tee ran weekly and this column sat "
+                f"masked. Zero warm rows is NOT zero warm boxes. Check the Gorgias tee "
+                f"(AppyHourMCP/tools/gorgias_sheets_sync.py) and its scheduled owner "
+                f"\\AppyHour\\GorgiasUpdate."
+            )
+        else:
+            ok.append(
+                f"ok feedback EVENT freshness: newest date_reported {newest:%Y-%m-%d} "
+                f"({age}d, limit {EVENT_STALE_DAYS}d, {parsed:,} parsed)"
+            )
+
+    # (2) The tee must write ISO from ISO_CUTOVER on. A non-ISO row synced after the fix means
+    # the normaliser regressed and every MAX/ORDER BY over this column is lying again.
+    if post is None:
+        return flags, ok + ["-- feedback date_reported format: no `synced_at` column — NOT verified"]
+    non_iso = [r[0] for r in post if r[0] and not _is_iso(r[0])]
+    if non_iso:
+        sample = ", ".join(sorted({str(v) for v in non_iso})[:3])
+        flags.append(
+            f"FLAG feedback date_reported FORMAT: {len(non_iso):,} of {len(post):,} rows synced on/after "
+            f"{ISO_CUTOVER:%Y-%m-%d} are not ISO YYYY-MM-DD (e.g. {sample}). The tee's "
+            f"`_normalize_date_reported` has regressed — `MAX(date_reported)` is a LEXICAL max and "
+            f"will silently mask every newer row (the 2026-06-19 eleven-week burn)."
+        )
+    elif post:
+        ok.append(f"ok feedback date_reported format: {len(post):,} post-cutover rows all ISO")
+    else:
+        # No post-cutover rows yet is legitimate only right after the fix ships; say so out loud
+        # rather than passing silently, so it cannot read as a verified green.
+        ok.append(
+            f"-- feedback date_reported format: no rows synced on/after {ISO_CUTOVER:%Y-%m-%d} yet "
+            f"— format NOT yet verified in production"
+        )
+
+    return flags, ok
+
+
+def _is_iso(raw: object) -> bool:
+    s = str(raw).strip()
+    if len(s) != 10:
+        return False
+    try:
+        datetime.strptime(s, "%Y-%m-%d")
+        return True
+    except ValueError:
+        return False
 
 
 def week_start(d: date) -> date:
@@ -143,8 +304,18 @@ def check_feedback_completeness(db_path: str | None = None, now: datetime | None
     flags: list[str] = []
     ok: list[str] = []
 
+    # 🔴 EVENT-date freshness rides the SAME wiring (freshness_sweep already calls this function
+    # and already fails closed on an exception here). It is a SEPARATE failure from the orphan
+    # rate and from the sweep's `synced_at` row: recency-of-ingest, completeness-of-field, and
+    # recency-of-EVENT all failed independently in this table's history, and all three must flag
+    # independently. Do not collapse them.
+    ef_flags, ef_ok = check_feedback_event_freshness(path, now=now)
+    flags.extend(ef_flags)
+    ok.extend(ef_ok)
+
     if not os.path.exists(path):
-        return [f"FLAG feedback completeness: db missing at {path}"], []
+        # Keep ef_flags: dropping them would lose a flag we already raised.
+        return flags + [f"FLAG feedback completeness: db missing at {path}"], ok
 
     uri = "file:" + str(path).replace("\\", "/") + "?mode=ro"
     con = sqlite3.connect(uri, uri=True)
@@ -153,7 +324,7 @@ def check_feedback_completeness(db_path: str | None = None, now: datetime | None
             "SELECT date_reported, order_number, gorgias_link FROM feedback"
         ).fetchall()
     except sqlite3.Error as e:
-        return [f"FLAG feedback completeness: query failed ({e})"], []
+        return flags + [f"FLAG feedback completeness: query failed ({e})"], ok
     finally:
         con.close()
 
