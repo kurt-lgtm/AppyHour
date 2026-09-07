@@ -526,5 +526,135 @@ class ProdEntryPointTest(unittest.TestCase):
         self.assertEqual(ah.finding_key(f[0]), "editable-install-appyhour_lib")
 
 
+class ProdParitySplitTest(unittest.TestCase):
+    """HEARTBEAT_RULES rule 9b: prod-vs-dev drift is graded by whether prod EXECUTES the file.
+
+    🔴 The regression this pins: one blanket "prod tree STALE on N files" finding fired every
+    day (21 -> 15 -> 36) while the ownership sweep of 2026-09-03 showed prod runs almost none
+    of them (the MCP server and the Claude routines run the DEV tree). Unactionable daily
+    alarms train alarm-deafness, so an unreachable stale file must produce ZERO findings — and
+    a reachable one must still be CRITICAL, keyed per file, naming its entry point.
+    """
+
+    # A DB-relevant file (PARITY_KEYWORDS) so the parity filter keeps it at all.
+    BODY = 'DB = "shipping.db"\n'
+    ENTRY = 'import helper\nDB = "shipping.db"\n'
+
+    def setUp(self):
+        import tempfile
+        self.tmp = Path(tempfile.mkdtemp(prefix="ah-parity-"))
+        self.tree = self.tmp / "AppyHourProd"
+        self.prod = self.tree / "AppyHour"
+        self.dev = self.tmp / "Claude Projects" / "AppyHour"
+        (self.prod / "scripts").mkdir(parents=True)
+        (self.dev / "scripts").mkdir(parents=True)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _pair(self, rel: str, body: str, stale: bool) -> Path:
+        """Write the file to both trees. `stale` => dev copy differs AND is newer (the exact
+        condition check_prod_parity grades; equal bytes or a newer prod copy are both passes)."""
+        import os as _os
+        prod_p, dev_p = self.prod / rel, self.dev / rel
+        for p in (prod_p, dev_p):
+            p.parent.mkdir(parents=True, exist_ok=True)
+        prod_p.write_text(body, encoding="utf-8")
+        dev_p.write_text(body + ("# fix not deployed\n" if stale else ""), encoding="utf-8")
+        _os.utime(prod_p, (1_700_000_000, 1_700_000_000))
+        _os.utime(dev_p, (1_700_009_999, 1_700_009_999))
+        return dev_p
+
+    def _run(self, entry_rel: str = "scripts/sync_logon.py") -> tuple[list[str], str]:
+        """Register `entry_rel` as the one scheduled prod action; returns (findings, stdout)."""
+        import contextlib as _c
+        import io as _io
+        import subprocess as _sp
+        entry = self.prod / entry_rel
+        ah._SCHTASKS_CSV = None
+        real = _sp.run
+        _sp.run = lambda *a, **k: types.SimpleNamespace(
+            stdout=_csv_v(("AppyHour Logon Sync", f'"{PY}" "{entry}"', "N/A")))
+        findings: list[str] = []
+        out = _io.StringIO()
+        try:
+            with _c.redirect_stdout(out):
+                ah.check_prod_parity(findings, dev_root=self.dev, prod_root=self.prod,
+                                     prod_tree=self.tree)
+        finally:
+            _sp.run = real
+            ah._SCHTASKS_CSV = None
+        return findings, out.getvalue()
+
+    def test_reachable_stale_file_is_one_critical_naming_its_entry_point(self):
+        self._pair("scripts/sync_logon.py", self.ENTRY, stale=False)
+        self._pair("scripts/helper.py", self.BODY, stale=True)   # imported by the entry point
+        findings, out = self._run()
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("STALE-EXECUTED", findings[0])
+        self.assertIn("helper.py", findings[0])
+        self.assertIn("sync_logon", findings[0])   # 🔴 the actionable half: WHO reaches it
+        self.assertEqual(ah.finding_key(findings[0]), "prod-drift-executed-helper.py")
+        self.assertNotIn("other DB-relevant file", out)
+
+    def test_entry_point_itself_stale_is_critical(self):
+        self._pair("scripts/sync_logon.py", self.ENTRY, stale=True)
+        self._pair("scripts/helper.py", self.BODY, stale=False)
+        findings, _ = self._run()
+        self.assertEqual(len(findings), 1, findings)
+        self.assertEqual(ah.finding_key(findings[0]), "prod-drift-executed-sync_logon.py")
+
+    def test_unreachable_stale_file_is_zero_findings_and_a_body_count(self):
+        self._pair("scripts/sync_logon.py", self.ENTRY, stale=False)
+        self._pair("scripts/helper.py", self.BODY, stale=False)
+        self._pair("scripts/orphan.py", self.BODY, stale=True)   # nothing imports it
+        findings, out = self._run()
+        self.assertEqual(findings, [])
+        self.assertIn("1 other DB-relevant file(s) differ", out)
+        self.assertIn("prod does not execute them", out)
+
+    def test_both_yields_one_critical_and_the_right_count(self):
+        self._pair("scripts/sync_logon.py", self.ENTRY, stale=False)
+        self._pair("scripts/helper.py", self.BODY, stale=True)
+        for n in ("orphan_a", "orphan_b", "orphan_c"):
+            self._pair(f"scripts/{n}.py", self.BODY, stale=True)
+        findings, out = self._run()
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("helper.py", findings[0])
+        self.assertIn("3 other DB-relevant file(s) differ", out)
+
+    def test_no_drift_at_all_is_silent(self):
+        self._pair("scripts/sync_logon.py", self.ENTRY, stale=False)
+        findings, out = self._run()
+        self.assertEqual(findings, [])
+        self.assertNotIn("other DB-relevant file", out)
+
+    def test_executed_keys_are_per_file_never_collapsed(self):
+        """🔴 Two executed-drift files must hold two streaks. The legacy blanket key
+        `prod-tree-drift` is a PREFIX of these lines; keying by prefix would cap N at one."""
+        a = "prod tree STALE-EXECUTED: 'scripts\\a.py' is stale in prod AND prod runs it (x)"
+        b = "prod tree STALE-EXECUTED: 'GelPackCalculator\\b.py' is stale in prod AND prod runs it"
+        self.assertEqual(ah.finding_key(a), "prod-drift-executed-a.py")
+        self.assertEqual(ah.finding_key(b), "prod-drift-executed-b.py")
+        self.assertNotEqual(ah.finding_key(a), ah.finding_key(b))
+        self.assertEqual(ah.finding_key("prod tree STALE vs dev on 9 files"), "prod-tree-drift")
+
+    def test_reachability_failure_is_loud_not_a_silent_downgrade(self):
+        """If the entry-point enumeration dies, "nothing is executed" is the WRONG default."""
+        self._pair("scripts/sync_logon.py", self.ENTRY, stale=True)
+        real = ah._prod_entry_targets
+        ah._prod_entry_targets = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("schtasks"))
+        try:
+            findings: list[str] = []
+            ah.check_prod_parity(findings, dev_root=self.dev, prod_root=self.prod,
+                                 prod_tree=self.tree)
+        finally:
+            ah._prod_entry_targets = real
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("reachability UNKNOWN", findings[0])
+        self.assertEqual(ah.finding_key(findings[0]), "prod-drift-reach-unknown")
+
+
 if __name__ == "__main__":
     unittest.main()

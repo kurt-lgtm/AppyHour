@@ -10,7 +10,10 @@ two owners on one script, two writers on one heartbeat key (which defeats this v
 expectations/beats with no counterpart. See its block comment for what it deliberately lets
 through and why.
 
-Run:  python scripts/automation_health.py [--verbose]   (bootstrap.init handles UTF-8 stdio)
+Run:  python scripts/automation_health.py [--verbose] [--no-notify]
+      --no-notify = audit mode: same checks, same report, same exit code, but NO Slack post,
+      NO heartbeat beat and NO dispatch. Use it for ANY read-only run of this file.
+      (bootstrap.init handles UTF-8 stdio)
 Exit: 0 green, 1 findings, 2 checker-broken (treat as red).
 """
 from __future__ import annotations
@@ -502,9 +505,84 @@ PARITY_SKIP_DIRS = {".git", "__pycache__", "node_modules", "_archive", ".venv", 
 PARITY_KEYWORDS = ("shipping.db", "db_path", "db_dir", "init_db", "DATA_ROOT",
                    "AppyHourData", "inventory_settings_path")
 PARITY_MAX_LISTED = 6
+# Reachability depth from a prod entry point, matching PROD_LIBPATH_MAX_DEPTH: the entry
+# script plus the modules it imports, two levels deep. Same shape, same reason (below).
+PARITY_REACH_MAX_DEPTH = 2
 
 
-def check_prod_parity(findings: list[str]) -> None:
+def _module_imports(path: Path) -> set[str]:
+    """Every absolute module name `path` imports, anywhere in the file (module body, function
+    bodies, `try:` blocks). Unlike _LibPathSim this does NOT care about execution order — the
+    question here is "could this file's code run that module", and a lazily-imported module is
+    still executed by the entry point. Relative imports stay inside one package: skipped, the
+    package's own files are reached through their `__init__`/sibling anyway."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), str(path))
+    except (SyntaxError, ValueError, OSError):
+        return set()  # unparseable: reach nothing rather than guess
+    out: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            out.update(a.name for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+            out.add(node.module)
+            out.update(f"{node.module}.{a.name}" for a in node.names)
+    return out
+
+
+def _resolve_module(mod: str, search_dirs: list[Path]) -> list[Path]:
+    """`a.b.c` -> the .py files under the first search dir that has it (package `__init__`s
+    included — they execute too). Directory-anchored on purpose: a bare basename match would
+    resolve `utils` to any of the eight `utils.py` in the tree and invent reachability."""
+    parts = mod.split(".")
+    for d in search_dirs:
+        leaf = d.joinpath(*parts)
+        target = leaf.with_suffix(".py") if leaf.with_suffix(".py").is_file() \
+            else (leaf / "__init__.py" if (leaf / "__init__.py").is_file() else None)
+        if target is None:
+            continue
+        inits = [d.joinpath(*parts[:i]) / "__init__.py" for i in range(1, len(parts))]
+        return [p for p in inits if p.is_file()] + [target]
+    return []
+
+
+def _prod_reachable(prod_tree: Path, prod_root: Path) -> dict[str, list[str]]:
+    """{normcased prod .py path: [entry points that reach it]} — the entry points the SCHEDULER
+    actually runs, plus what they import (depth <= PARITY_REACH_MAX_DEPTH).
+
+    🔴 Static AST only, never executes a target: every entry point is a live schtask action
+    (ingest, backup, Gorgias sync) and importing one to observe its imports would run it. Same
+    negative as rule 19's simulator.
+
+    Search dirs are the module's own directory and the prod repo root (`sys.path[0]` plus the
+    `parents[1]` insert every one of these scripts does) — never a bare-basename match.
+    """
+    reachable: dict[str, list[str]] = {}
+    for _key, (entry, _tasks) in sorted(_prod_entry_targets(prod_tree).items()):
+        label = entry.stem
+        seen: set[str] = set()
+        stack: list[tuple[Path, int]] = [(entry, 0)]
+        while stack:
+            cur, depth = stack.pop()
+            ckey = os.path.normcase(str(cur))
+            if ckey in seen:
+                continue
+            seen.add(ckey)
+            entries = reachable.setdefault(ckey, [])
+            if label not in entries:
+                entries.append(label)
+            if depth >= PARITY_REACH_MAX_DEPTH:
+                continue
+            dirs = [cur.parent, prod_root]
+            for mod in _module_imports(cur):
+                for hit in _resolve_module(mod, dirs):
+                    if os.path.normcase(str(hit)) not in seen:
+                        stack.append((hit, depth + 1))
+    return reachable
+
+
+def check_prod_parity(findings: list[str], dev_root: Path | None = None,
+                      prod_root: Path | None = None, prod_tree: Path | None = None) -> None:
     """Flag DB-relevant scripts where the DEV tree is newer than the PROD copy.
 
     🔴 Why this exists (2026-07-27): the scheduled tasks run from C:\\AppyHourProd,
@@ -518,15 +596,34 @@ def check_prod_parity(findings: list[str]) -> None:
     Only reports dev-NEWER drift. Some prod files are legitimately newer (local
     hotfixes) — blanket-copying dev over prod would clobber them, so this never
     suggests a sweep, it names the files to review.
+
+    🔴 SPLIT BY REACHABILITY (2026-09-06, rule 9b). Until today this emitted ONE finding
+    counting every drifted file — 21, then 15, then 36 — and fired every single day. An
+    ownership sweep (2026-09-03) proved most of those files are NEVER executed by prod: the
+    MCP server runs from the DEV tree (`.mcp.json`) and every Claude scheduled routine runs
+    dev paths too, so the only prod consumers are the schtask actions under C:\\AppyHourProd.
+    A daily alarm on files prod does not run is unactionable, and rule 4 bans an expectation
+    nobody can satisfy — it trains everyone to ignore the whole health post, which is how a
+    REAL undeployed fix would get skimmed past. So: a stale file reachable from a prod entry
+    point is CRITICAL and names its entry point ("X.py is stale in prod and sync_logon
+    imports it" is the sentence someone can act on); everything else is a COUNT in the report
+    body, with no finding key, no dispatch, and no page.
+
+    NEGATIVE: the count is not deleted. Dropping it entirely would hide the day an
+    unreachable file becomes reachable (a new import), and the number is the context that
+    makes the CRITICAL list readable as "3 of 36", not "3 of nothing".
     """
-    if not PROD_ROOT.exists() or not DEV_ROOT.exists():
+    dev_root = dev_root or DEV_ROOT
+    prod_root = prod_root or PROD_ROOT
+    prod_tree = prod_tree or PROD_TREE
+    if not prod_root.exists() or not dev_root.exists():
         return  # not this machine's layout — nothing to compare
     stale: list[str] = []
     try:
-        for dev_file in DEV_ROOT.rglob("*.py"):
-            if PARITY_SKIP_DIRS & set(dev_file.relative_to(DEV_ROOT).parts):
+        for dev_file in dev_root.rglob("*.py"):
+            if PARITY_SKIP_DIRS & set(dev_file.relative_to(dev_root).parts):
                 continue
-            prod_file = PROD_ROOT / dev_file.relative_to(DEV_ROOT)
+            prod_file = prod_root / dev_file.relative_to(dev_root)
             if not prod_file.exists():
                 continue
             dev_bytes = dev_file.read_bytes()
@@ -536,19 +633,43 @@ def check_prod_parity(findings: list[str]) -> None:
                 continue  # prod newer — a local hotfix, not a missed deploy
             text = dev_bytes.decode("utf-8", errors="replace")
             if any(k in text for k in PARITY_KEYWORDS):
-                stale.append(str(dev_file.relative_to(DEV_ROOT)))
+                stale.append(str(dev_file.relative_to(dev_root)))
     except Exception as e:
         findings.append(f"prod parity check failed ({type(e).__name__}: {e}) — deploy state unknown")
         return
-    if stale:
-        stale.sort()
+    if not stale:
+        return
+    stale.sort()
+    try:
+        reachable = _prod_reachable(prod_tree, prod_root)
+    except Exception as e:
+        # 🔴 Reachability unknown is NOT "nothing is executed". Fail loud with the whole list
+        # rather than silently downgrade every drifted file to an INFO count.
         shown = ", ".join(stale[:PARITY_MAX_LISTED])
         more = f" (+{len(stale) - PARITY_MAX_LISTED} more)" if len(stale) > PARITY_MAX_LISTED else ""
         findings.append(
-            f"prod tree STALE vs dev on {len(stale)} DB-relevant file(s): {shown}{more} "
-            "— C:\\AppyHourProd runs the scheduled tasks; an undeployed fix is not a fix. "
-            "Review: python scripts/deploy_prod.py (dry-run); deploy is Kurt's --apply call"
+            f"prod parity reachability UNKNOWN ({type(e).__name__}: {e}) — cannot tell which of "
+            f"{len(stale)} drifted file(s) prod executes, so ALL are unreviewed: {shown}{more}"
         )
+        return
+    executed: list[tuple[str, list[str]]] = []
+    for rel in stale:
+        entries = reachable.get(os.path.normcase(str(prod_root / rel)))
+        if entries:
+            executed.append((rel, entries))
+    for rel, entries in executed:
+        via = ", ".join(sorted(entries))
+        findings.append(
+            f"prod tree STALE-EXECUTED: '{rel}' is stale in prod AND prod runs it "
+            f"(reached from scheduled entry point(s): {via}) — C:\\AppyHourProd runs the "
+            "scheduled tasks; an undeployed fix is not a fix. Review: "
+            "python scripts/deploy_prod.py (dry-run); deploy is Kurt's --apply call"
+        )
+    others = len(stale) - len(executed)
+    if others:
+        print(f"  info: {others} other DB-relevant file(s) differ dev->prod; prod does not "
+              "execute them (the MCP server and the Claude routines run the DEV tree) — "
+              "not a finding, no dispatch")
 
 
 # --- SET-LEVEL check (2026-08-31) -------------------------------------------------------
@@ -1554,8 +1675,16 @@ def finding_key(text: str) -> str:
     m = re.match(r"replica (\S+) (stale|EMPTY)", text)
     if m:
         return "replica-" + m.group(1)
+    # 🔴 Per FILE, and BEFORE the bare `prod tree STALE` prefix below — "prod tree STALE-EXECUTED"
+    # also starts with it, and a prefix match would collapse every executed-drift file onto the
+    # old blanket key, capping N findings at one streak (the collapse trap the pair keys hit).
+    m = re.match(r"prod tree STALE-EXECUTED: '([^']+)'", text)
+    if m:
+        return "prod-drift-executed-" + Path(m.group(1)).name
+    if text.startswith("prod parity reachability UNKNOWN"):
+        return "prod-drift-reach-unknown"
     if text.startswith("prod tree STALE"):
-        return "prod-tree-drift"
+        return "prod-tree-drift"   # legacy blanket finding (pre-2026-09-06); no longer emitted
     # Per SCRIPT, not per task: four `appyhour_daily_*` tasks run one daily_shipping_sync.py and
     # one fix clears them all. Quoted, for the same reason as the schtask form above.
     m = re.match(r"prod entry point '([^']+)'", text)
@@ -1622,6 +1751,15 @@ def dispatch_findings(findings: list[str]) -> None:
 def main(argv: list[str]) -> int:
     init()  # UTF-8 stdio (the 🔴 findings line crashed cp1252 without PYTHONIOENCODING) + .env for notify
     verbose = "--verbose" in argv
+    # 🔴 --no-notify makes an AUDIT of this checker safe (2026-09-06). Every check here is
+    # read-only (shipping.db opens mode=ro&immutable=1, the AST walks never execute a target),
+    # but main() itself has three side effects on a red run: a #kurt-ops post, the heartbeat
+    # ledger write, and the dispatch streak advance that files a handoff at 3. Auditing the
+    # checker therefore meant hand-writing a scratchpad harness that calls the check_* functions
+    # one at a time — done twice now, and each copy silently goes stale as checks are added
+    # (a harness missing a check reports a green that the real run would not).
+    # It suppresses ONLY those three. Findings, report text and exit codes are identical.
+    no_notify = "--no-notify" in argv
     findings: list[str] = []
     try:
         check_beats(findings)
@@ -1635,14 +1773,18 @@ def main(argv: list[str]) -> int:
         check_editable_mapping(findings)
     except Exception as e:
         findings.append(f"CHECKER CRASHED mid-run ({type(e).__name__}: {e})")
-        notify("🔴 automation-health checker crashed: " + findings[-1], level="error")
+        print("🔴 automation-health checker crashed: " + findings[-1])
+        if not no_notify:
+            notify("🔴 automation-health checker crashed: " + findings[-1], level="error")
         return 2
-    beat("automation-health")  # self-beat LAST (rule 7)
-    dispatch_findings(findings)  # rule 12: repeat-findings -> handoff row; additive, isolated
+    if not no_notify:
+        beat("automation-health")  # self-beat LAST (rule 7)
+        dispatch_findings(findings)  # rule 12: repeat-findings -> handoff row; additive, isolated
     if findings:
         msg = "🔴 automation-health: " + str(len(findings)) + " finding(s)\n• " + "\n• ".join(findings)
         print(msg)
-        notify(msg, level="error")
+        if not no_notify:
+            notify(msg, level="error")
         return 1
     if verbose:
         print("automation-health: all green (beats, ingest, schtasks, task-set, db, replicas, "

@@ -110,6 +110,45 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
    dry-run default, same tracked set as the check, REFUSES while any file is newer in prod —
    `--apply` is Kurt's call; the old git-pull deploy in that file is dead, origin/main is
    hundreds of commits behind dev).
+9b. **Prod drift is graded by whether prod EXECUTES the file — a stale file nobody runs is a
+   COUNT, never a finding** (2026-09-06). 🔴 The burn is the alarm itself: rule 9 emitted one
+   blanket `prod tree STALE on N DB-relevant file(s)` line that fired *every single day* (21,
+   then 15, then 36) and named files nobody could act on. The ownership sweep of 2026-09-03
+   proved why: the MCP server runs from the DEV tree (`.mcp.json`) and every Claude scheduled
+   routine runs dev paths too, so prod's only consumers are the **schtask actions under
+   `C:\AppyHourProd`**. A recurring alarm nobody can act on is worse than no alarm — it is the
+   rule-4 failure (an expectation nobody can satisfy) applied to the daily health post, and it
+   trains everyone to skim past the day a REAL undeployed fix appears. So `check_prod_parity`
+   splits its output:
+   - 🔴 **CRITICAL, `prod-drift-executed-<file>`** — the stale file is reachable from a prod
+     entry point (the entry script itself, or a module it imports, depth ≤ 2 =
+     `PARITY_REACH_MAX_DEPTH`). The finding **names the entry point**, because that is the only
+     form anyone can act on: "`helper.py` is stale in prod AND `sync_logon` imports it."
+     Keyed **per file** — one fix does not clear another file's drift.
+   - 🔵 **INFO, body-only** — everything else: `N other DB-relevant file(s) differ; prod does not
+     execute them`. No finding, no `finding_key`, no dispatch, no page.
+   NEGATIVES: (a) the count is **not** deleted — dropping it hides the day an unreachable file
+   becomes reachable (someone adds an import), and it is the context that makes the critical list
+   read as "3 of 36". (b) Entry points are **enumerated, never hardcoded** — the same
+   `_prod_entry_targets()` rule 19 uses (schtask actions under the prod tree, `.bat` wrappers
+   parsed); a hand-kept roster silently goes stale the first time Kurt adds a task. (c) The reach
+   walk is **static AST and never executes a target** (every one is a live ingest/backup/Gorgias
+   action) and resolves imports **by directory** (own dir + prod root), never by bare basename —
+   eight `utils.py` exist in the tree and a name match would invent reachability. (d) If the walk
+   or the schtask enumeration **fails, that is a CRITICAL** (`prod-drift-reach-unknown`) listing
+   every drifted file. "Reachability unknown" must never silently mean "nothing is executed" —
+   that turns a broken check into a green board. (e) Rule 9's deploy discipline is unchanged:
+   `--apply` is still Kurt's call, and a CRITICAL here names the file, it does not deploy it.
+9c. **`automation_health.py --no-notify` is the ONLY sanctioned way to run this checker
+   read-only** (2026-09-06). The checks are all read-only (`shipping.db` opens
+   `mode=ro&immutable=1`, the AST walks never execute a target), but `main()` itself has three
+   side effects on a red run: the `#kurt-ops` post, the heartbeat ledger write, and the dispatch
+   streak advance that files a handoff at 3. `--no-notify` suppresses exactly those three;
+   findings, printed report and exit codes are byte-identical (still non-zero on findings).
+   🔴 NEGATIVE: do NOT hand-write another scratchpad harness that calls the `check_*` functions
+   one at a time. Two were written (`ah_readonly_run.py`, `prod_reach.py`) and each is a
+   hardcoded list of checks that silently goes stale the moment a check is added — a harness
+   missing a check reports a green the real run would not.
 10. **Don't wire `beat()` into files another agent has mid-flight** — coordinate first (2026-07-02:
    daily_shipping_sync deferred while the writelock migration owns those files; checker covers it via
    `sync_heartbeat.json` age instead).
@@ -617,7 +656,8 @@ byte-for-byte, so a beat there means a Kurt-approved command change, not a code 
 Checker also probes (no beat needed): `C:\AppyHourData\sync_heartbeat.json` age (>48h, via
 `appyhour_lib.sync_heartbeat.read()` — moved off `%APPDATA%` 2026-09-01, rule 3b), `schtasks` AppyHour* Last
 Result ≠ 0, shipping.db `PRAGMA quick_check` (read-only immutable), **dev↔prod tree parity on
-DB-relevant `*.py` (rule 9)**, **cloud-replica freshness — `shopify_orders`/`weather_history` data
+DB-relevant `*.py` — CRITICAL only when the file is reachable from a prod entry point, otherwise a
+body-only count (rules 9 + 9b)**, **cloud-replica freshness — `shopify_orders`/`weather_history` data
 age + `C:\AppyHourData\replica_pull_stamp.json` ingest stamp (rule 11)**, **prod entry-point library
 path — every schtask action under `C:\AppyHourProd` statically checked for a prod pin before its first
 `appyhour_lib` import, plus the editable-install `MAPPING` itself (rule 19)**.
