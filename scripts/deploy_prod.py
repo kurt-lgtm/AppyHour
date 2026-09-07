@@ -78,7 +78,14 @@ def _mt(path: Path) -> str:
 def classify(dev_root: Path, prod_root: Path) -> dict[str, list[dict]]:
     """Enumerate the tracked set the same way automation_health.check_prod_parity does."""
     out: dict[str, list[dict]] = {"stale": [], "prod_newer": [], "dev_only": []}
-    for dev_file in sorted(dev_root.rglob("*.py")):
+    # 🔴 `*_RULES.md` rides along with the code (2026-09-07). A guard whose constraints doc
+    # cannot reach prod is the split the constraints-first gate exists to stop: prod ran
+    # write_preflight.py while WRITE_PREFLIGHT_RULES.md stayed dev-side, so the deployed
+    # refusal had no deployed statement of what it refuses or why it is not overridable.
+    # Deliberately NOT all `*.md`: 147 dev docs, 16 already drifted and 31 dev-only, would
+    # bury real code drift under README noise. Constraints docs are the class that governs
+    # runtime behaviour — the rest are prose.
+    for dev_file in sorted([*dev_root.rglob("*.py"), *dev_root.rglob("*_RULES.md")]):
         rel = dev_file.relative_to(dev_root)
         if ah.PARITY_SKIP_DIRS & set(rel.parts):
             continue
