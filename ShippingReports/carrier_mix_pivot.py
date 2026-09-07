@@ -26,6 +26,7 @@ Run::
     python carrier_mix_pivot.py --verify-gate   # the structural reproduce-gate (D35d)
     python carrier_mix_pivot.py --self-test     # exercise the branches a normal week never hits
     python carrier_mix_pivot.py --no-ledger     # render only, touch nothing
+    python carrier_mix_pivot.py --dry-run-sheet # the cell-by-cell diff a paint WOULD make (D44)
     python carrier_mix_pivot.py --write-sheet   # …and repaint the `Carrier Mix` sheet tab (D35c)
 
 🔴 THE GATE IS KEYED TO LOGIC, NEVER TO A VOLUME (D35d). It used to pin five literals to the
@@ -148,6 +149,19 @@ STALE_AFTER_DAYS = 3
 # tab is `reship_excluded` and over Shopify ORDERS, so the two tabs' totals for one week are
 # SUPPOSED to differ and a reader comparing them needs both bases on screen.
 COUNTS_BASIS = "raw"
+
+# 🔴 D44 — THE COST HALF NAMES ITS STORE, NOT JUST ITS DATE. D41 gave the COUNT clock `basis` +
+# `as_of` and left the cost clock with neither, so a published dollar carried no record of WHERE
+# it came from. That gap cost a full audit on 2026-09-06: the cloud `shipments` table was deduped
+# (22,693 rows / $301,596 removed) and nothing on the tab could answer "were these dollars
+# computed against the local store or the cloud one?" without reading the source. The answer was
+# in a docstring; it belongs on the artifact. The two clocks are independent (D35) so the cost
+# stamp is its OWN row and is never merged into `Counts as_of`.
+# The value names the store because that is the fact that was missing, not merely the table:
+# cloud `shipments` is BLOCKED for cost (DO_READ_CONTRACT B2/B2b) and `connect_reporting` raises
+# on it, so a cost cell can only ever be local — and the row is what makes that checkable
+# without re-reading `cloud_reads._CLOUD_OK`.
+COST_BASIS = "shipments@local (carrier invoices)"
 
 # 🔴 Kurt's rule: a ship week is fully fulfilled by WEDNESDAY morning. MEASURED over the seven
 # cohorts 07-13…08-24 on `fulfilled_at` (2026-09-01): every cohort is a Monday bulk plus a
@@ -609,6 +623,7 @@ def reconcile_ledger(led, col):
 
     # --- COST clock: per LANE, independent of the counts ----------------------
     e["cost"] = e["cost"] or {}
+    e.setdefault("cost_as_of", {})
     for lane in LANES:
         cov = col["coverage"][lane]
         if e["cost_frozen"].get(lane):
@@ -617,7 +632,15 @@ def reconcile_ledger(led, col):
         if cov is None or col["invoiced"][lane] == 0:
             e["cost"][lane] = None          # 🔴 None renders as "—". NEVER 0.0: a zero claims
             events.append(f"cost[{lane}]: not invoiced yet")   # the lane cost nothing.
+            # 🔴 D44 — NO STAMP on the un-invoiced path. `—` is the absence of a dollar figure;
+            # stamping it would claim a cost was computed today when none exists, which is the
+            # blank-≠-zero failure (D35 #7) wearing a provenance row.
             continue
+        # 🔴 D44 — stamped where the lane's dollars are ASSIGNED, never on the frozen-skipped
+        # path above: a frozen cost cell keeps the as_of it was frozen at, exactly as D41 does
+        # for counts. Re-stamping it would claim a recompute that the freeze prevented.
+        e["cost_as_of"][lane] = now
+        e["cost_basis"] = COST_BASIS
         e["cost"][lane] = {"spend": round(col["spend"][lane], 2),
                            "invoiced": col["invoiced"][lane], "boxes": col["counts"][lane],
                            "coverage": round(cov, 4),
@@ -695,6 +718,44 @@ def _cell_as_of(e):
     return f"{ts[:16].replace('T', ' ')}{' (frozen)' if e.get('counts_frozen') else ''}"
 
 
+def _cell_cost_as_of(e):
+    """🔴 D44 — when this column's DOLLARS were last computed, and how much of it is settled.
+
+    The cost clock is per LANE (D35) but the grid has one cell per column, so this reports the
+    NEWEST lane stamp plus `k/n frozen`. Newest, not oldest: the cell answers "how current can
+    these dollars be", and a `k/n` short of `n/n` is the standing warning that the rest is still
+    moving. A column reporting `3/4 frozen` is not stale — it is partially invoiced, which the
+    lane cells already say in their own coverage prefix.
+
+    🔴 Lanes that are un-invoiced (`—`) carry no stamp and are excluded from BOTH halves of the
+    ratio — counting a lane with no dollars as "not yet frozen" would make a fully-settled week
+    read as perpetually partial whenever one lane never bills.
+
+    Entries written BEFORE this field existed are read back from their own event log
+    (`cost[<lane>]: FROZEN at <ts>`), never back-dated to now — the same rule `_cell_as_of` uses
+    for counts. Reading the ledger's own record is not restating anything.
+    """
+    if not e:
+        return "—"
+    priced = [ln for ln in LANES if (e.get("cost") or {}).get(ln)]
+    if not priced:
+        return "—"
+    stamps = [e["cost_as_of"][ln] for ln in priced if (e.get("cost_as_of") or {}).get(ln)]
+    if not stamps:
+        for entry in reversed(e.get("log") or []):
+            hit = [ev for ev in entry.get("events", [])
+                   if ev.startswith("cost[") and "frozen, skipped" not in ev
+                   and "not invoiced yet" not in ev]
+            if hit:
+                stamps = [entry.get("at")]
+                break
+    frozen = sum(1 for ln in priced if e.get("cost_frozen", {}).get(ln))
+    ratio = f" ({frozen}/{len(priced)} frozen)"
+    if not stamps:
+        return "unrecorded" + ratio
+    return f"{max(stamps)[:16].replace('T', ' ')}{ratio}"
+
+
 def grid(cols, ledger):
     """The pivot as a plain 2-D grid of cell STRINGS — header row first, label in column 0.
 
@@ -733,6 +794,15 @@ def grid(cols, ledger):
     rows.append(["Counts basis"] + [
         (ledger["columns"].get(c["tag"], {}).get("counts_basis") or COUNTS_BASIS) for c in cols])
     rows.append(["Counts as_of"] + [_cell_as_of(ledger["columns"].get(c["tag"], {})) for c in cols])
+    # 🔴 D44 — the COST half gets its own basis + as_of, because it runs on its own clock (D35)
+    # and its store is the thing a reader cannot otherwise check. `Cost basis` names WHERE the
+    # dollars came from; without it a reader auditing a cloud-side data incident has no way to
+    # tell whether a painted cost cell was affected, which is exactly the question that had to
+    # be answered by source-reading on 2026-09-06. It is deliberately NOT folded into the
+    # `Counts` rows — the two clocks freeze independently and one date cannot describe both.
+    rows.append(["Cost basis"] + [
+        (ledger["columns"].get(c["tag"], {}).get("cost_basis") or COST_BASIS) for c in cols])
+    rows.append(["Cost as_of"] + [_cell_cost_as_of(ledger["columns"].get(c["tag"], {})) for c in cols])
     return rows
 
 
@@ -766,6 +836,102 @@ def _foreign_tab(a1_value, tab_is_empty):
     return str(a1_value or "").strip() != SHEET_TITLE
 
 
+def _sheet_payload(cols, ledger, notes, con):
+    """The paint gate and the exact cell block, with NO network and NO credentials.
+
+    🔴 D44 — SPLIT OUT SO THE PREVIEW AND THE PAINT CANNOT DISAGREE. `--dry-run-sheet` and
+    `--write-sheet` both call this, so a dry run exercises the real per-column refusals
+    (`assert_cohort_settled`, `assert_counts_not_above_raw`) and renders the real `grid()`. A
+    preview that rebuilt the block on its own would be a second renderer, which is the exact
+    drift `grid()`'s docstring forbids between the terminal table and the tab.
+
+    Returns ``(paintable_cols, notes_with_refusals, block)``. Raises the same exceptions the
+    paint raises, at the same point — before anything irreversible could have happened.
+    """
+    paintable, refusals = [], []
+    for c in cols:
+        entry = ledger["columns"].get(c["tag"], {})
+        # The ceiling is an IMPOSSIBILITY, not a timing problem: it takes the whole paint down
+        # rather than quietly dropping one column, because a number that cannot exist means the
+        # ledger and the cohort have come apart and nothing on the tab is trustworthy.
+        assert_counts_not_above_raw(c, entry)
+        try:
+            assert_cohort_settled(con, c["tag"])
+        except CohortNotSettled as exc:
+            refusals.append(str(exc))
+            continue
+        paintable.append(c)
+    if not paintable:
+        raise CohortNotSettled(
+            "CM_NOTHING_PUBLISHABLE: every column in the window was refused — "
+            + " | ".join(refusals))
+    notes = list(notes) + [f"CM_COLUMN_NOT_PAINTED: {r}" for r in refusals]
+    g = grid(paintable, ledger)
+    block = [[SHEET_TITLE], [""]] + g + [[""]] + [[
+        "Rules SSOT: AppyHour/ShippingReports/RESHIP_REPORT_RULES.md D35/D35c · the ledger "
+        "(_outputs/reports/carrier_mix_ledger.json) is the write-once MEMORY, this tab is a VIEW "
+        "repainted whole each run — do not add per-cell write-once here · '—' = not invoiced yet, "
+        "NEVER $0 · if the 'Last refreshed' row below the run notes is missing, the paint is "
+        "INCOMPLETE — rerun --write-sheet."]] \
+        + [[ln] for ln in ([f"- {n}" for n in notes] or ["- run notes: none"])] \
+        + [[""]]
+    return paintable, notes, block
+
+
+def dry_run_sheet(cols, ledger, notes, con):
+    """🔴 D44 — print what `--write-sheet` WOULD paint, cell by cell, and write NOTHING.
+
+    A tool that can only write is why every repaint of this tab needed a human to reason about
+    the diff from the source. The gate and the block come from `_sheet_payload`, so this is the
+    real payload rather than a description of it.
+
+    The live tab is read with the READ-ONLY Sheets scope (`spreadsheets.readonly`) — the write
+    scope is never requested on this path, so the credential itself cannot paint. If creds or
+    the network are unavailable the preview still renders the full block and says plainly that
+    it could not diff; an unreachable sheet must not masquerade as "no changes".
+    """
+    from googleapiclient.discovery import build  # type: ignore[reportMissingImports]  # noqa: PLC0415
+
+    paintable, notes, block = _sheet_payload(cols, ledger, notes, con)
+    print(f"\n=== DRY RUN — no write performed. {SHEET_TAB!r} on {SHEET_ID} ===")
+    for n in notes:
+        if n.startswith("CM_COLUMN_NOT_PAINTED"):
+            print("  " + n)
+
+    live = None
+    try:
+        creds = get_google_credentials(["https://www.googleapis.com/auth/spreadsheets.readonly"])
+        svc = build("sheets", "v4", credentials=creds, cache_discovery=False)
+        live = svc.spreadsheets().values().get(
+            spreadsheetId=SHEET_ID, range=f"'{SHEET_TAB}'",
+            valueRenderOption="UNFORMATTED_VALUE").execute().get("values", [])
+    except Exception as exc:  # noqa: BLE001 — any failure degrades to no-diff, never to "clean"
+        print(f"  🔴 COULD NOT READ THE LIVE TAB ({type(exc).__name__}: {exc}) — the block below "
+              "is what would be painted, but NO diff was computed. This is not 'no changes'.")
+
+    if live is not None:
+        n = max(len(live), len(block))
+        changed = 0
+        print(f"  live tab: {len(live)} row(s) · would paint: {len(block)} row(s)")
+        for r in range(n):
+            old_row = live[r] if r < len(live) else []
+            new_row = block[r] if r < len(block) else []
+            for cidx in range(max(len(old_row), len(new_row))):
+                o = str(old_row[cidx]) if cidx < len(old_row) else ""
+                w = str(new_row[cidx]) if cidx < len(new_row) else ""
+                if o != w:
+                    changed += 1
+                    a1 = f"{chr(ord('A') + cidx) if cidx < 26 else '?'}{r + 1}"
+                    print(f"    {a1:>5}  {o!r:<44} -> {w!r}")
+        # 🔴 The `Last refreshed` stamp row differs on EVERY run by construction (it carries a
+        # timestamp), so a diff of exactly that one row is not a content change. Said out loud
+        # because a reader who does not know that reads "1 cell changed" as a real edit.
+        print(f"  {changed} cell(s) differ (the 'Last refreshed' stamp always differs — it is a "
+              "timestamp; a content-free repaint shows exactly that one).")
+    print("=== END DRY RUN — nothing was written ===\n")
+    return block
+
+
 def write_sheet(cols, ledger, notes, con):
     """Repaint the `Carrier Mix` tab from `grid()` — full repaint, stamp written LAST.
 
@@ -793,25 +959,10 @@ def write_sheet(cols, ledger, notes, con):
     from googleapiclient.discovery import build  # type: ignore[reportMissingImports]  # noqa: PLC0415
 
     # 🔴 Gate BEFORE any credential or network call, so a refusal costs nothing and reads first.
-    paintable, refusals = [], []
-    for c in cols:
-        entry = ledger["columns"].get(c["tag"], {})
-        # The ceiling is an IMPOSSIBILITY, not a timing problem: it takes the whole paint down
-        # rather than quietly dropping one column, because a number that cannot exist means the
-        # ledger and the cohort have come apart and nothing on the tab is trustworthy.
-        assert_counts_not_above_raw(c, entry)
-        try:
-            assert_cohort_settled(con, c["tag"])
-        except CohortNotSettled as exc:
-            refusals.append(str(exc))
-            continue
-        paintable.append(c)
-    if not paintable:
-        raise CohortNotSettled(
-            "CM_NOTHING_PUBLISHABLE: every column in the window was refused — "
-            + " | ".join(refusals))
-    notes = list(notes) + [f"CM_COLUMN_NOT_PAINTED: {r}" for r in refusals]
-    cols = paintable
+    # 🔴 D44 — gate AND block come from `_sheet_payload`, shared verbatim with `--dry-run-sheet`.
+    # Do not re-inline either here: a preview that renders a different block than the paint is
+    # worse than no preview, because it is trusted.
+    cols, notes, block = _sheet_payload(cols, ledger, notes, con)
 
     try:
         creds = get_google_credentials(["https://www.googleapis.com/auth/spreadsheets"])
@@ -842,14 +993,6 @@ def write_sheet(cols, ledger, notes, con):
                 "this tool did not paint.")
 
     g = grid(cols, ledger)
-    block = [[SHEET_TITLE], [""]] + g + [[""]] + [[
-        "Rules SSOT: AppyHour/ShippingReports/RESHIP_REPORT_RULES.md D35/D35c · the ledger "
-        "(_outputs/reports/carrier_mix_ledger.json) is the write-once MEMORY, this tab is a VIEW "
-        "repainted whole each run — do not add per-cell write-once here · '—' = not invoiced yet, "
-        "NEVER $0 · if the 'Last refreshed' row below the run notes is missing, the paint is "
-        "INCOMPLETE — rerun --write-sheet."]] \
-        + [[ln] for ln in ([f"- {n}" for n in notes] or ["- run notes: none"])] \
-        + [[""]]
     vals.clear(spreadsheetId=SHEET_ID, range=f"'{SHEET_TAB}'").execute()
     vals.update(spreadsheetId=SHEET_ID, range=f"'{SHEET_TAB}'!A1",
                 valueInputOption="RAW", body={"values": block}).execute()
@@ -1367,6 +1510,94 @@ def self_test(con):
         return "basis + as_of ride on every column; no entry renders '—'"
     check("D41 as_of: basis and as_of reach the painted grid", _as_of_rendered)
 
+    # ── D44: the COST clock carries its own basis + as_of ─────────────────────
+    def _priced(**kw):
+        """A column with real dollars on ONE lane — the shape that earns a cost stamp."""
+        col = dict(base, spend=dict(dict.fromkeys(LANES, 0.0), **{ONTRAC: 100.0}),
+                   invoiced=dict(dict.fromkeys(LANES, 0), **{ONTRAC: 10}),
+                   coverage=dict(dict.fromkeys(LANES, None), **{ONTRAC: 0.5}))
+        col.update(kw)
+        return col
+
+    def _cost_as_of_stamped():
+        led: dict[str, Any] = {"columns": {}}
+        e = reconcile_ledger(led, _priced(tag="_C1", pending=1, age_days=2))
+        assert e["cost_as_of"].get(ONTRAC), "priced lane written with no cost_as_of stamp"
+        assert e.get("cost_basis") == COST_BASIS, e.get("cost_basis")
+        # 🔴 The lanes with NO dollars must carry no stamp — `—` is the absence of a figure.
+        unpriced = [ln for ln in LANES if ln != ONTRAC and e["cost_as_of"].get(ln)]
+        assert not unpriced, f"un-invoiced lanes were stamped: {unpriced}"
+        first = e["cost_as_of"][ONTRAC]
+        # Freeze the lane, then recompute: a frozen cost cell keeps the as_of it froze at.
+        e["cost_frozen"][ONTRAC] = True
+        reconcile_ledger(led, _priced(tag="_C1", pending=0, age_days=9))
+        assert led["columns"]["_C1"]["cost_as_of"][ONTRAC] == first, "frozen cost cell re-stamped"
+        return f"stamped {first[:16]} on the priced lane only; frozen cell keeps it"
+    check("D44 cost as_of: stamped per priced lane, never re-stamped once frozen",
+          _cost_as_of_stamped)
+
+    def _cost_basis_rendered():
+        led: dict[str, Any] = {"columns": {}}
+        col = _priced(tag="_C2", pending=0, age_days=3)
+        reconcile_ledger(led, col)
+        g = grid([col], led)
+        labels = [r[0] for r in g]
+        assert "Cost basis" in labels and "Cost as_of" in labels, labels
+        assert g[labels.index("Cost basis")][1] == COST_BASIS
+        # 🔴 The store is NAMED, not implied — that is the whole guard.
+        assert "local" in g[labels.index("Cost basis")][1], g[labels.index("Cost basis")][1]
+        assert "0/1 frozen" in g[labels.index("Cost as_of")][1], g[labels.index("Cost as_of")][1]
+        # Cost provenance is its OWN row, never merged into the counts rows (two clocks, D35).
+        assert labels.index("Cost as_of") != labels.index("Counts as_of")
+        return "cost basis names the store; ratio counts only priced lanes"
+    check("D44 cost as_of: basis + as_of reach the grid as their own rows", _cost_basis_rendered)
+
+    def _cost_as_of_no_fabrication():
+        # No entry, and an entry whose lanes are all un-invoiced: both render `—`, never a date.
+        assert _cell_cost_as_of({}) == "—", _cell_cost_as_of({})
+        assert _cell_cost_as_of({"cost": dict.fromkeys(LANES, None)}) == "—"
+        # An entry written BEFORE cost_as_of existed reads its date back from its own event log
+        # rather than being back-dated to now — the live ledger is full of these.
+        legacy = {"cost": {ONTRAC: {"spend": 1.0, "per_box": 1.0}},
+                  "cost_frozen": {ONTRAC: True},
+                  "log": [{"at": "2026-08-26T04:56:55",
+                           "events": [f"cost[{ONTRAC}]: FROZEN at 2026-08-26T04:56:55 (coverage 99.6%)"]}]}
+        got = _cell_cost_as_of(legacy)
+        assert got.startswith("2026-08-26 04:56"), got
+        assert "1/1 frozen" in got, got
+        # A log carrying ONLY skipped/un-invoiced events is not a compute — must not be mined.
+        nolog = {"cost": {ONTRAC: {"spend": 1.0, "per_box": 1.0}}, "cost_frozen": {},
+                 "log": [{"at": "2026-09-01T00:00:00",
+                          "events": [f"cost[{ONTRAC}]: frozen, skipped"]}]}
+        assert _cell_cost_as_of(nolog).startswith("unrecorded"), _cell_cost_as_of(nolog)
+        return "no entry → '—'; legacy entries read their own log; skips are not computes"
+    check("D44 cost as_of: never fabricates or back-dates a cost stamp", _cost_as_of_no_fabrication)
+
+    def _dry_run_shares_the_payload():
+        # 🔴 The preview must be the SAME block the paint sends, or it is worse than nothing.
+        # Proven by construction: both call `_sheet_payload`, and `write_sheet` no longer
+        # builds a block of its own.
+        import inspect  # noqa: PLC0415 — self-test only
+        ws = inspect.getsource(write_sheet)
+        assert "_sheet_payload(" in ws, "write_sheet stopped using the shared payload builder"
+        assert "SHEET_TITLE], [" not in ws, "write_sheet re-inlined its own block — it will drift"
+        dr = inspect.getsource(dry_run_sheet)
+        assert "_sheet_payload(" in dr, "dry run builds its own block"
+        # The dry run must never request the WRITE scope: the credential itself cannot paint.
+        assert "spreadsheets.readonly" in dr and '"https://www.googleapis.com/auth/spreadsheets"' not in dr
+        assert "vals.update(" not in dr and "vals.clear(" not in dr, "dry run contains a writer"
+        return "one payload builder; dry run holds a read-only scope and no writer"
+    check("D44 dry run: shares the paint's payload and cannot write", _dry_run_shares_the_payload)
+
+    def _dry_and_write_refused():
+        try:
+            main(["--dry-run-sheet", "--write-sheet"])
+        except CarrierMixError as exc:
+            assert "CM_SHEET_DRY_AND_WRITE" in str(exc), str(exc)
+            return "the combination is refused before any DB or network work"
+        raise AssertionError("--dry-run-sheet --write-sheet was accepted")
+    check("D44 dry run: refuses to combine with --write-sheet", _dry_and_write_refused)
+
     for name, status, detail in results:
         print(f"  [{status}] {name}: {detail}")
     failed = [r for r in results if r[1] == "FAIL"]
@@ -1384,7 +1615,15 @@ def main(argv=None):
     ap.add_argument("--no-ledger", action="store_true", help="render only; write nothing")
     ap.add_argument("--write-sheet", action="store_true",
                     help="repaint the `Carrier Mix` tab on the Running Reship sheet (D35c)")
+    ap.add_argument("--dry-run-sheet", action="store_true",
+                    help="show the cell-by-cell diff --write-sheet WOULD paint; writes nothing (D44)")
     a = ap.parse_args(argv)
+    if a.write_sheet and a.dry_run_sheet:
+        # 🔴 Naming both reads as "preview then paint" but would PAINT. The whole point of the
+        # dry run is that a human sees the diff and decides; refuse rather than pick a side.
+        raise CarrierMixError(
+            "CM_SHEET_DRY_AND_WRITE: --dry-run-sheet cannot combine with --write-sheet. "
+            "Run the dry run, read the diff, then run --write-sheet.")
     if a.write_sheet and a.no_ledger:
         # The tab is a VIEW of the persisted ledger; painting a state that was never persisted
         # puts the view ahead of the memory. Refuse the combination rather than pick a side.
@@ -1449,6 +1688,10 @@ def main(argv=None):
                           + table + "\n\n## Run notes\n\n"
                           + ("\n".join("- " + n for n in notes) or "- none") + "\n")
             print(f"  ledger → {LEDGER}\n  report → {REPORT}")
+        if a.dry_run_sheet:
+            # 🔴 Write-free by argument parsing, same shape as --no-ledger: the ONLY writer in
+            # this module is `write_sheet`, and this branch never reaches it.
+            dry_run_sheet(cols, led, notes, con)
         if a.write_sheet:
             # After the ledger persists: the view must never be newer than the memory.
             write_sheet(cols, led, notes, con)

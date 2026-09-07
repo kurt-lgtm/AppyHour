@@ -3812,3 +3812,112 @@ was never run. Not pushed — `gas_swap.py push Code` is Kurt's.
 
 `Triage!A1` and `Product Mix!A1` both read **`REFRESHED 2026-09-07T08:08:42`** — one run, past the
 PP-dependent legs, after both 09-06 failures. The report was not left broken.
+
+### D44 — A PUBLISHED DOLLAR NAMED NO STORE, SO A CLOUD DEDUPE COST A FULL AUDIT TO RULE OUT; AND THE ONLY WAY TO SEE A REPAINT WAS TO PERFORM IT (2026-09-07)
+
+**Scope.** The cost half of the `Carrier Mix` tab (`ShippingReports/carrier_mix_pivot.py`, D35/D35c/D41)
+and its repaint path. Two gaps, both found by an incident that turned out to be a false alarm — which is
+the point: ruling it out should have been a glance at the tab, and it was a source-code audit instead.
+
+**🔴 THE FALSE ALARM IS THE EVIDENCE, NOT AN ANECDOTE.** On 2026-09-06 the CLOUD `shipments` table was
+deduped: **22,693 rows / $301,596** deleted across two passes (`shipments_dedupe_snapshot_20260906`
+and `_b`; report `_outputs/reports/2026-09-06-do-shipments-dedupe.md`). The question "are the published
+Carrier Mix cost cells overstated?" is a one-word answer — **no** — and nothing on the artifact could
+give it. The tab publishes dollars with a date for the COUNTS and nothing at all for the COSTS.
+
+The answer, established 2026-09-07 and worth stating so it is never re-derived:
+
+- `_invoice_index()` reads `shipments` through `connect_reporting()`, whose allowlist `_CLOUD_OK` is
+  **`("delivery_status",)` only**. `cloud_reads.connect_reporting` **RAISES `ValueError`** on any other
+  table by name, `shipments` explicitly among them (DO_READ_CONTRACT B2/B2b). A cost cell is therefore
+  **structurally incapable** of holding a cloud dollar — the cloud table is not reachable from this tool.
+- Local `C:\AppyHourData\shipping.db` `shipments`, measured 2026-09-07: **98,432 rows / 98,432 distinct
+  `tracking`** — one row per tracking, **zero** duplicates by tracking, and **zero** rows whose
+  `source_file` is under `/tmp/` (every deleted cloud row was a `/tmp/invoices/…` copy with `hub` NULL).
+  Control-probed on four trackings the dedupe report names as cloud dup pairs (`871877220380`,
+  `1Z2H94940334864194`, `1LSD8S9000MXDVF`, `396455860812`): **one row each**, and each is the survivor
+  the cloud kept. A zero is a claim; these are the probes.
+- Second, independent reason the shape could not have hurt: `_invoice_index` builds `tracking → (service,
+  cost)` as a **dict**, so a duplicated invoice line would OVERWRITE its twin, never sum with it. Cost
+  per lane is `SUM` over the *cohort's* boxes joined through that index — one dollar per tracking by
+  construction. Dedupe or no dedupe, the same total.
+
+**1. 🔴 `Cost basis` AND `Cost as_of` NOW RIDE ON EVERY COLUMN, AS THEIR OWN ROWS.** D41 gave the count
+clock `Counts basis` / `Counts as_of` and left the cost clock with neither. `Cost basis` reads
+**`shipments@local (carrier invoices)`** — it names the **STORE**, not just the table, because "which
+store" was the entire unanswerable question. The rows are **separate from the counts rows on purpose**:
+the two clocks freeze independently (D35), and one date cannot honestly describe both halves of a column.
+
+**2. 🔴 THE STAMP GOES WHERE THE DOLLARS ARE ASSIGNED, AND NOWHERE ELSE.** Three paths, three rules,
+each of which would be a lie if merged:
+
+- **Priced lane** → `cost_as_of[lane] = now`. This is the only path that computes a dollar.
+- **Frozen lane** (`cost[…]: frozen, skipped`) → **NO stamp**. A frozen cost cell keeps the `as_of` it
+  froze at; re-stamping it would claim a recompute the freeze exists to prevent. Same rule D41 set for
+  counts, for the same reason.
+- **Un-invoiced lane** (`—`) → **NO stamp**. `—` is the *absence* of a dollar figure (D35 failure #7,
+  blank ≠ `$0`). Stamping it would assert that a cost was computed today when none exists — the
+  blank-≠-zero failure wearing a provenance row.
+
+**🔴 The `k/n frozen` ratio counts PRICED lanes only.** A lane that never bills (`—`) is excluded from
+both halves. Counting it as "not yet frozen" would make a fully-settled week read as perpetually partial
+forever, which is how a correct number gets distrusted. The cell reports the **newest** lane stamp,
+because it answers "how current can these dollars be" — the per-lane coverage prefix already says which
+lanes are still moving.
+
+**Entries written before the field existed read their date back from their own event log**
+(`cost[<lane>]: FROZEN at <ts>`), never back-dated to now — the live ledger is full of these. A log
+carrying only `frozen, skipped` / `not invoiced yet` events is **not** a compute and is not mined for a
+date; that column renders `unrecorded (k/n frozen)`, never a plausible timestamp.
+
+**3. 🔴 `--dry-run-sheet`: THE REPAINT IS INSPECTABLE WITHOUT PERFORMING IT.** Before this, the only way
+to see what a repaint would do to a live tab Kurt reads was to repaint it. That is why every paint of
+this unowned tab needed a human to reason forward from the source instead of reading a diff.
+
+- It prints the **cell-by-cell old→new diff** against the live tab and writes nothing.
+- 🔴 **The gate and the block come from ONE builder, `_sheet_payload()`, shared verbatim with
+  `write_sheet`.** A preview that renders its own block is worse than no preview, because it is
+  trusted. `write_sheet` no longer builds a block at all; a self-test asserts by source inspection that
+  it still delegates and that the dry run contains no `vals.update` / `vals.clear`.
+- 🔴 **The dry run requests the READ-ONLY scope** (`spreadsheets.readonly`) — the credential it holds is
+  incapable of painting, so the guarantee is not "the code path avoids writing", it is "this code path
+  cannot write."
+- 🔴 **A sheet it cannot read reports that it could not diff — never "no changes."** An unreachable tab
+  degrading to a clean-looking diff is the silent-degrade class.
+- `--dry-run-sheet --write-sheet` is **refused** (`CM_SHEET_DRY_AND_WRITE`): the combination reads as
+  "preview then paint" and would paint.
+- 🔴 **A window narrower than the published tab DESTROYS columns, and the dry run is what shows it.**
+  The tab is cleared and rewritten WHOLE (D35c), so `--weeks 3` does not update three columns and leave
+  the rest — it republishes the tab with three. Measured 2026-09-07: `--weeks 3` drops the `08-03`,
+  `08-10` and `08-17` columns entirely. **Never repaint with fewer weeks than the tab already shows.**
+
+**4. 🔴 THE TAB IS CURRENTLY UNPAINTABLE, AND THAT IS A REAL FINDING, NOT A BUG IN THIS CHANGE.** Over
+the default 5-week window the run dies at `CM_ASSERT_FROZEN_COUNTS` on `_SHIP_2026-08-10`: frozen
+`{OnTrac 1534, FedEx-HD 458, 2Day 175, UPS 198}` against a recompute of `{1533, 456, 173, 198}` — **4
+boxes lower**. That is precisely the degradation D35 predicts (the service half reads the MUTABLE routing
+tag; that cohort logged 376 corrective tag writes) and the assert refuses rather than repairs, correctly:
+the ship-time reading is unrecoverable once overwritten. But the consequence is that **no `--write-sheet`
+run can complete at all**, so the tab cannot receive these provenance rows — or any correction — until
+someone decides what happens to that column. Reproduced against `HEAD` before this change; no hunk in
+this diff touches the counts path. **Kurt's call**, alongside the D41 finding-8 item (`_SHIP_2026-08-24`
+published 2,500 against a true 2,545) that is still outstanding for the same reason.
+
+**5. What was NOT changed.** No column was restated and no sheet was written. The ledger was not
+modified (every run in this work used `--no-ledger` or `--self-test`). `postmortem_runner.py` was
+audited and **not touched**: it never queries `shipments` at all — its only dollar figure is
+`kori_snapshot_orders.predicted_cost` (gel-pack cost, `$116.65` on the one artifact,
+`_outputs/postmortems/postmortem-2026-06-08.md`), so no published postmortem carries a carrier-invoice
+number and none needed repair. The `_CLOUD_OK` allowlist was **not widened** — widening it to "make a
+consumer work" is what its own error message forbids.
+
+#### Verification (2026-09-07)
+
+`--self-test` **43/43** (38 pre-existing + 5 new D44 cases: the per-lane stamp and its
+never-re-stamped-once-frozen rule; basis + as_of reaching the grid as their own rows with the ratio over
+priced lanes only; the no-fabrication/no-back-dating rule incl. the legacy-log read and the
+skips-are-not-computes case; the shared-payload + read-only-scope + no-writer source assertions; and the
+`--dry-run-sheet --write-sheet` refusal). `--dry-run-sheet --no-ledger --weeks 3` run end-to-end against
+the live tab: 68 differing cells rendered, **nothing written**, and it is what surfaced finding 3's
+column-destruction case. Local `shipments` probed read-only via `connect_ro` (98,432/98,432 + the four
+control trackings). `write_sheet`'s live path was never executed.
+

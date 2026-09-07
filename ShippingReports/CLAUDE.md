@@ -36,6 +36,17 @@ Analytics pipeline for subscription box shipping. Ingests carrier invoices (OnTr
 > `Counts as_of`. Sibling guard on `TnT2` (`PivotAnalytics.gs`): the ceiling assert that catches its
 > `2,227`-against-`2,226`. 🔴 The two tabs count DIFFERENT populations (orders vs `fulfillments`
 > rows) — never use one as the other's ceiling.
+> 🔴 **D44** — the COST half now carries `Cost basis` + `Cost as_of` as their OWN rows (the two clocks
+> freeze independently; one date cannot describe both). `Cost basis` names the **store** —
+> `shipments@local (carrier invoices)` — because "local or cloud?" is the question a published dollar
+> could not answer when the CLOUD `shipments` table was deduped on 2026-09-06 (22,693 rows / $301,596).
+> It could not have been affected: `connect_reporting` **raises** on `shipments` (only `delivery_status`
+> is cloud-cleared), and local is 98,432 rows / 98,432 distinct trackings with zero `/tmp` copies.
+> 🔴 Preview a repaint with **`--dry-run-sheet`** (cell-by-cell diff, read-only scope, writes nothing)
+> before ever running `--write-sheet`. 🔴 **Never repaint with fewer `--weeks` than the tab already
+> shows** — the tab is cleared and rewritten WHOLE, so a narrower window DELETES published columns.
+> ⚠️ The tab is currently **unpaintable**: `CM_ASSERT_FROZEN_COUNTS` refuses `_SHIP_2026-08-10` (frozen
+> 1534/458/175 vs a recompute 4 boxes lower — the mutable-tag drift D35 predicts). Kurt's call.
 >
 > 🔴 **Weekly reship report (one tab per week)** = `ingest/slack_reship/weekly_task.py` →
 > `sync.py --report --push` → `sheet_push.py`, owner: the `weekly-reship-report` routine, beat
