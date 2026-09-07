@@ -333,7 +333,11 @@ def test_ok_requires_a_drained_queue_not_merely_rows_landing():
 
     drained = {"written": 812, "complete": True, "stop_reason": "", "remaining": 0,
                "unresolved": 0, "oldest_due_days": None, "retired": 3}
-    assert sync_logon._delivery_poll_stamp(drained).startswith("ok:")
+    ok = sync_logon._delivery_poll_stamp(drained)
+    assert ok.startswith("ok:")
+    assert "oldest due none" in ok, (
+        "a drained queue must not wear the word UNKNOWN — an alarm word on the healthiest "
+        "line is how a reader learns to skim the stamp")
 
 
 def test_a_failed_recount_prints_UNKNOWN_and_never_a_fabricated_zero():
@@ -341,6 +345,8 @@ def test_a_failed_recount_prints_UNKNOWN_and_never_a_fabricated_zero():
         {"written": 5, "complete": False, "stop_reason": "budget", "remaining": None,
          "unresolved": None, "oldest_due_days": None, "retired": 0})
     assert "UNKNOWN due remaining" in s and "0 due remaining" not in s
+    assert "oldest due UNKNOWN" in s, (
+        "when remaining is unknown the age is unknown too — 'none' would claim a drained queue")
 
 
 @pytest.fixture
