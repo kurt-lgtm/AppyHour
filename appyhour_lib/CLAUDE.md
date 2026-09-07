@@ -15,6 +15,12 @@ appyhour_lib/
 ├── db.py             # connect()/connect_ro() — MANDATORY shipping.db opener
 │                     #   + write_lock_holder()/assert_write_lock_free() (lock-release proof)
 ├── cancel.py         # CancelToken/StageCancelled/checkpoint() — cooperative stage cancel
+├── invoice_parsers.py # 🔴 THE carrier-invoice readers (UPS both dialects, OnTrac, FedEx xlsx/csv,
+│                     #   identify_hub) — ONE per carrier, imported by BOTH the local Kori ingest
+│                     #   (GelPackCalculator/shipping_invoice_db re-exports) and the cloud ingest-worker
+│                     #   (ShipRouting/server/shipping_invoice_db re-exports → sync_invoices). Cost per
+│                     #   tracking = Σ its charge lines in one file. Rules SSOT:
+│                     #   ShipRouting/INVOICE_INGEST_RULES.md §5.2/§5.3. Never write a second parser.
 └── weather.py        # OpenWeatherMap, NWS alerts
 ```
 
