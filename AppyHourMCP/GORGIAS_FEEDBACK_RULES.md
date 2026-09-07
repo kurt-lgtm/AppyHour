@@ -118,6 +118,23 @@ a repair a monitor or an agent makes. `ISO_CUTOVER` in `appyhour_lib/feedback_co
 the boundary; only rows synced **on or after** it are format-graded. Do not advance that date to
 silence a flag — a flag there means the writer stopped canonicalising.
 
+### 7bb. The backfill tool is `scripts/incident-fixes/normalize_feedback_dates.py`. Do not hand-roll one.
+When Kurt does give the go for rule 7b's backfill, that script is the canonical path — it already
+handles every yeared and year-less shape, dry-runs by default, snapshots to
+`feedback_backup_<UTCstamp>`, and (2026-09-07) VERIFIES zero non-ISO rows remain **inside the same
+transaction** and rolls back if not. A backfill that reports success while skipping a shape
+recreates the mixed column and the lexical-`MAX` mask, so the verify is not optional decoration.
+- 🔴 **Connection discipline.** Until 2026-09-07 this script opened the DB with raw
+  `sqlite3.connect()`, bypassing BOTH the single-writer advisory lock and the canonical-path guard —
+  a surplus write handle racing the MCP servers' checkpointer is the direct cause of all three
+  `shipping.db` WAL corruptions. It now reads through `connect_ro()` (so a dry-run is structurally
+  incapable of taking a write lock) and writes through `connect()`. `DBWriterBusy` means a sync is
+  mid-flight: wait and re-run. **Never** set `AH_WRITE_LOCK_DISABLE` to get past it.
+- The transform needs no year inference — the year is present in `%m/%d/%Y` — and the band is
+  provably month-first: of the 692 rows, 389 have a day component >12 (impossible under `%d/%m/%Y`),
+  none have a first component >12, and month-first puts every row 0-14 days before its `synced_at`
+  while day-first would date 92 of them in the future.
+
 ### 7c. Recency-of-EVENT is a THIRD independent assert. Do not collapse it into the other two.
 This table has now failed in three ways that no single check can see:
 `synced_at` recency (did the task run) · field completeness (rule 8 — it ran and wrote blanks) ·

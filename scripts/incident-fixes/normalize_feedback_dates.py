@@ -15,7 +15,19 @@ date_reported <= synced_at. 'June-11' synced 2026-05-14 -> 2025-06-11;
 
 Safe by default: prints a dry-run plan. Pass --apply to commit. On --apply
 it first snapshots the table to feedback_backup_<UTCstamp> so the change is
-reversible.
+reversible, then VERIFIES that zero non-ISO rows remain before committing —
+a rewrite that silently skips a shape leaves the column mixed, which is the
+exact state this script exists to end.
+
+🔴 CONNECTION DISCIPLINE (2026-09-07). The dry-run reads through
+`appyhour_lib.db.connect_ro()` and the apply writes through `connect()` —
+NEVER raw `sqlite3.connect()`. The raw opener was here until 2026-09-07 and
+bypassed BOTH the single-writer advisory lock and the canonical-path guard;
+that combination (a surplus write handle racing the live MCP servers'
+checkpointer) is the direct cause of all three shipping.db WAL corruptions.
+A dry-run must not take a write lock at all, which is why the phases use
+different openers. If `connect()` raises `DBWriterBusy`, a sync is mid-flight:
+wait and re-run — do NOT set AH_WRITE_LOCK_DISABLE to get past it.
 
 Usage:
     python scripts/incident-fixes/normalize_feedback_dates.py            # dry-run
@@ -34,6 +46,7 @@ from datetime import datetime
 _AH = r"C:/Users/Work/Claude Projects/AppyHour"
 if _AH not in sys.path:
     sys.path.insert(0, _AH)
+from appyhour_lib.db import DBWriterBusy, connect, connect_ro  # noqa: E402
 from appyhour_lib.paths import db_path  # noqa: E402
 
 ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -107,11 +120,16 @@ def main() -> int:
     args = ap.parse_args()
 
     path = str(db_path())
-    con = sqlite3.connect(path, timeout=15)
+    # Phase 1 — READ ONLY. connect_ro() cannot take a write lock or trigger a
+    # checkpoint, so a dry-run is structurally incapable of racing the syncs.
+    con = connect_ro(path)
     con.row_factory = sqlite3.Row
-    rows = con.execute(
-        "SELECT id, date_reported, synced_at FROM feedback"
-    ).fetchall()
+    try:
+        rows = con.execute(
+            "SELECT id, date_reported, synced_at FROM feedback"
+        ).fetchall()
+    finally:
+        con.close()
 
     stats: Counter[str] = Counter()
     updates: list[tuple[str, int]] = []
@@ -144,19 +162,60 @@ def main() -> int:
 
     if not args.apply:
         print("\nDRY-RUN. Re-run with --apply to commit.")
-        con.close()
         return 0
 
-    # Snapshot before mutating — reversible.
-    stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    backup = f"feedback_backup_{stamp}"
-    con.execute(f"CREATE TABLE {backup} AS SELECT * FROM feedback")
-    con.executemany(
-        "UPDATE feedback SET date_reported = ? WHERE id = ?", updates
-    )
-    con.commit()
-    print(f"\nAPPLIED {len(updates)} updates. Backup table: {backup}")
-    con.close()
+    if not updates:
+        print("\nNothing to rewrite — column is already fully ISO. No write attempted.")
+        return 0
+
+    # Phase 2 — WRITE. connect() takes the advisory single-writer lock and
+    # enforces the canonical path; it raises DBWriterBusy rather than racing.
+    try:
+        con = connect(path)
+    except DBWriterBusy as e:
+        print(f"\nDEFERRED — a writer holds the lock: {e}")
+        print("Nothing was changed. Wait for the sync to finish and re-run.")
+        return 2
+
+    try:
+        # Snapshot before mutating — reversible. Full row copy, so the rollback
+        # restores the exact prior string for every touched id.
+        stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        backup = f"feedback_backup_{stamp}"
+        con.execute(f"CREATE TABLE {backup} AS SELECT * FROM feedback")
+        snap = con.execute(f"SELECT COUNT(*) FROM {backup}").fetchone()[0]
+        con.executemany(
+            "UPDATE feedback SET date_reported = ? WHERE id = ?", updates
+        )
+
+        # 🔴 VERIFY BEFORE COMMIT. A backfill that reports success while leaving
+        # rows in the old shape recreates the mixed column and the lexical-MAX
+        # mask. Rows verified in the SAME transaction that made the change.
+        live = con.execute("SELECT COUNT(*) FROM feedback").fetchone()[0]
+        left = con.execute(
+            "SELECT COUNT(*) FROM feedback WHERE date_reported IS NOT NULL "
+            "AND TRIM(date_reported) <> '' "
+            "AND NOT (LENGTH(date_reported) = 10 AND date_reported GLOB "
+            "'[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')"
+        ).fetchone()[0]
+        if left or live != snap:
+            con.rollback()
+            print(
+                f"\nROLLED BACK — verification failed: {left} non-ISO rows remain, "
+                f"row count {live} vs snapshot {snap}. Nothing was changed."
+            )
+            return 1
+
+        con.commit()
+        print(f"\nAPPLIED {len(updates)} updates. Backup table: {backup}")
+        print(f"VERIFIED: 0 non-ISO rows remain; {live} rows (snapshot {snap}).")
+        print(
+            "ROLLBACK (paste as one line if needed):\n"
+            f"  UPDATE feedback SET date_reported = (SELECT b.date_reported FROM {backup} b "
+            f"WHERE b.id = feedback.id) WHERE id IN (SELECT id FROM {backup});"
+        )
+    finally:
+        con.close()  # releases the advisory lock
     return 0
 
 
