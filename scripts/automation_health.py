@@ -225,7 +225,10 @@ def check_sync_heartbeat(findings: list[str]) -> None:
         # run and would hold this gate green forever, which is the silent-degrade class this whole
         # checker exists to catch. These keys were invisible until the file moved off the frozen
         # %APPDATA% overlay, so the exclusion is new even though the rule is not.
-        if key.endswith(("_status", "_last_attempt")):
+        # `_partial_since` joined this list 2026-09-07 for the SAME reason as `_last_attempt`:
+        # it is a marker of unfinished work, not evidence the ingest is alive. Counting it in
+        # `newest` would let a leg stuck partial hold the 48h gate green off its own backlog stamp.
+        if key.endswith(("_status", "_last_attempt", "_partial_since")):
             continue
         try:
             ts = datetime.fromisoformat(str(val))
@@ -260,29 +263,72 @@ def _grade_partial_legs(data: dict, findings: list[str], now: datetime | None = 
     """`partial:` = cancelled at the ceiling AFTER banking rows (rule 18). 🟡 info while the leg
     has an `ok` inside SYNC_PARTIAL_ESCALATE_H; 🔴 CRITICAL once it does not.
 
-    🔴 Recency is the LAST SUCCESS (`<name>`), never the last attempt. A leg stamping a fresh
-    `partial:` every run without ever finishing is exactly the leg that must escalate, and the
-    attempt timestamp would keep it green forever (rule 3b(c), same trap). A leg that has NEVER
-    succeeded (no bare key) is graded from its attempt stamp instead — otherwise it would be
-    CRITICAL on its very first partial, before any backlog could possibly have drained.
+    🔴 Recency is the OLDEST OUTSTANDING WORK, never "now". Three cases, in order:
+      1. the leg HAS an `ok` (`<name>`)   -> measure from that success.
+      2. no `ok`, but `<name>_partial_since` -> measure from the FIRST incomplete attempt.
+      3. no `ok` and no `_partial_since`  -> the leg has never started a tracked backlog: grade
+         from its attempt stamp (age ~0, info) and SAY the stamp is absent.
+
+    🔴 THE BUG THIS SHAPE EXISTS TO STOP (Codex audit, 2026-09-07). Case 2 did not exist: a leg
+    with no `ok` fell straight to `sync_stamp_time`, i.e. its LATEST attempt. A leg that has never
+    once succeeded and keeps issuing fresh `partial:` stamps therefore reported "last ok 0 hours
+    ago" on every single run — forever. The auditor replayed this exact function with such a leg
+    at day 0, day 2 and day 7 and got ZERO findings all three times. That is the loud-failure
+    invariant inverted by the code written to enforce it: a permanently-failing ingest leg was
+    structurally unable to page anyone. The `partial:` stamp had quietly converted a loud failure
+    into a silent one.
+
+    🔴 AND THE FIX THAT WOULD HAVE BEEN WORSE: "no `ok` -> always CRITICAL". A leg that has
+    legitimately never run yet (a new leg, a rebuilt machine, a first deploy) would page on its
+    very first partial, before any backlog could possibly have drained — an expectation nobody
+    can satisfy, which rule 4 bans because it teaches everyone to skim the health post. NEVER
+    STARTED and STARTED-AND-NEVER-FINISHED are different states and are graded differently; the
+    `_partial_since` stamp (written by `sync_logon._stamp` on the first partial after a success,
+    cleared on `ok`, never refreshed by a later partial) is what tells them apart.
+
+    ⚠️ Case 3 is also the PRE-DEPLOY state: a writer still running the old code stamps `partial:`
+    with no `_partial_since`, so it grades green. That is deliberate — inventing a start time for
+    a backlog we cannot date would be a fabricated number in a monitoring path — but it is a real
+    blind window, so it prints the absence rather than passing silently. It closes on the next
+    deploy of `sync_logon.py` to C:\\AppyHourProd, and the next `ok`/`partial:` pair after it.
     """
     now = now or datetime.now()
     for key, val in data.items():
         if not key.endswith("_status") or not str(val).lower().startswith("partial:"):
             continue
         name = key[: -len("_status")]
-        last_ok = data.get(name)
-        try:
-            ref = datetime.fromisoformat(str(last_ok)) if last_ok else sync_stamp_time(data, name)
-        except ValueError:
-            ref = sync_stamp_time(data, name)
+        ref, basis = _partial_reference(data, name)
         age_h = (now - ref).total_seconds() / 3600
         if age_h > SYNC_PARTIAL_ESCALATE_H:
             findings.append(f"ingest leg {name} PARTIAL with no ok for {age_h:.0f}h "
-                            f"(max {SYNC_PARTIAL_ESCALATE_H}h) — backlog not draining: {val}")
+                            f"(max {SYNC_PARTIAL_ESCALATE_H}h, measured from {basis}) — "
+                            f"backlog not draining: {val}")
         else:
-            print(f"  info: {key} = {val} (last ok {age_h:.0f}h ago; "
+            print(f"  info: {key} = {val} ({basis} {age_h:.0f}h ago; "
                   f"escalates at {SYNC_PARTIAL_ESCALATE_H}h)")
+
+
+def _partial_reference(data: dict, name: str) -> tuple[datetime, str]:
+    """(timestamp to grade a `partial:` leg from, human label for it). See `_grade_partial_legs`.
+
+    Split out so the three cases are one readable table and each is separately testable — the
+    bug it replaces was a single `if last_ok else` that silently collapsed cases 2 and 3.
+    """
+    def _parse(v):
+        try:
+            return datetime.fromisoformat(str(v))
+        except (TypeError, ValueError):
+            return None
+
+    ok = _parse(data.get(name))
+    if ok is not None:
+        return ok, "last ok"
+    since = _parse(data.get(f"{name}_partial_since"))
+    if since is not None:
+        return since, "NEVER succeeded; oldest outstanding work"
+    return sync_stamp_time(data, name), ("never succeeded and no _partial_since stamp — "
+                                         "leg not yet tracked (writer pre-deploy or brand new); "
+                                         "graded from last attempt")
 
 
 _SCHTASKS_CSV: str | None = None

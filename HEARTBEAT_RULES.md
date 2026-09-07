@@ -548,8 +548,47 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
      finishing is the dead-cadence class, and counting attempts would hold it green forever (rule 3b
      (c), same trap). 36h = three 12h throttle windows: two consecutive partials on Tue+Wed are the
      measured normal; a third with no `ok` means the backlog is not draining.
+   - **🔴 AMENDMENT 2026-09-07 — a leg with NO `ok` is graded from the OLDEST OUTSTANDING WORK,
+     never from "now". THE ORIGINAL RULE SHIPPED WITH ITS OWN INVERSION IN IT.** The clause above
+     said "measured recency = last SUCCESS", but the code (`_grade_partial_legs`) read
+     *last success **when present**, otherwise the latest **attempt***. So the one leg the escalation
+     exists for — one that has NEVER succeeded and re-stamps a fresh `partial:` every run — reported
+     **"last ok 0 hours ago" forever**. An independent Codex audit (2026-09-07) replayed the real
+     function with such a leg at **day 0, day 2 and day 7 and got ZERO findings all three times**.
+     A permanently-failing ingest leg was structurally incapable of paging anyone. This is the
+     loud-failure invariant (rule 1) inverted by the very code added to enforce it, and it is the
+     third appearance of the same trap after rule 3b(c) and the `_last_attempt` exclusion in
+     `check_sync_heartbeat` — *treating evidence that work was ATTEMPTED as evidence it is HEALTHY*.
+     Grading order is now three explicit cases, in `_partial_reference`:
+       1. an `ok` exists (`<name>`) → measure from that success (unchanged, and it WINS if both exist);
+       2. no `ok` but `<name>_partial_since` exists → measure from the FIRST incomplete attempt;
+       3. neither → graded from the attempt stamp, i.e. lenient, and it PRINTS that the stamp is absent.
+     `sync_logon._stamp` writes `<name>_partial_since` on the first `partial:` after a success,
+     **never refreshes it on a later partial** (refreshing it is the same bug one key over — the age
+     would reset to 0 every run), and **clears it on `ok`**. Tests: `tests/
+     test_automation_health_dispatch.py::PartialLegEscalationTest` (day 0 info / day 2 CRITICAL /
+     day 7 CRITICAL) and `::StampPartialSinceTest` (set-once, never-refreshed, cleared-on-ok).
+     NEGATIVES:
+     - **🔴 Do NOT fix this with "no `ok` → always CRITICAL".** A leg that has legitimately never
+       run yet (a new leg, a rebuilt machine, a first deploy) would page on its very first partial,
+       before any backlog could possibly have drained — an expectation nobody can satisfy, which
+       rule 4 bans because it teaches everyone to skim the whole health post. **NEVER STARTED** and
+       **STARTED AND NEVER FINISHED** are different states; `_partial_since` is what tells them apart.
+     - **Case 3 is a real blind window, and it is named rather than papered over.** An unmigrated
+       writer (dev committed, `C:\AppyHourProd` not yet deployed) stamps `partial:` with no
+       `_partial_since`, so it grades green. Inventing a start time for a backlog we cannot date
+       would be a fabricated number inside a monitoring path — strictly worse. It closes on the
+       next deploy of `sync_logon.py` plus one `ok`/`partial:` cycle.
+     - **`_partial_since` is NOT a freshness signal.** It is excluded from `check_sync_heartbeat`'s
+       `newest` max() alongside `_status` and `_last_attempt`; counting it would let a leg stuck
+       partial hold the 48h ingest gate green off its own backlog stamp.
+     - **A plain `fail:` must not mint a `_partial_since` window.** `fail:` already pages on its own;
+       a window opened by a fail would date a later partial's backlog to work that banked nothing.
    - **`sync_heartbeat.merge` needs no special case** — `partial:` writes `_last_attempt`, so
-     `stamp_time` already carries it newest-wins over an older `ok` (tested).
+     `stamp_time` already carries it newest-wins over an older `ok` (tested). `_partial_since` is a
+     plain timestamp key and merges on its own value; the newest-wins direction is wrong in principle
+     for an "oldest outstanding" stamp, but only the deprecated %APPDATA% fallback can produce a
+     second copy and nothing writes it any more, so this is recorded, not coded around.
    - **The Slack silence on `partial:` is deliberate and is NOT "exception-only without a watcher".**
      Rule 16's order is honoured: the stamp lands, the checker reads it and escalates, and only then
      is the per-run page removed. Re-adding an `info` notify on every partial re-creates the daily

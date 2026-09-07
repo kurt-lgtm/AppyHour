@@ -656,5 +656,189 @@ class ProdParitySplitTest(unittest.TestCase):
         self.assertEqual(ah.finding_key(findings[0]), "prod-drift-reach-unknown")
 
 
+class PartialLegEscalationTest(unittest.TestCase):
+    """HEARTBEAT_RULES rule 18 amendment (2026-09-07, Codex audit finding 2).
+
+    🔴 The regression this pins: `_grade_partial_legs` measured age from the last success when
+    present and OTHERWISE from the LATEST ATTEMPT. A leg that had never once succeeded and kept
+    issuing fresh `partial:` stamps therefore reported "last ok 0 hours ago" on every run —
+    forever. Replayed at day 0, day 2 and day 7 it produced ZERO findings all three times, so a
+    permanently-failing ingest leg could never page anyone. The loud-failure invariant, inverted
+    by the code added to enforce it.
+
+    🔴 And the fix that would have been worse, also pinned here: "no ok -> always CRITICAL" would
+    page a genuinely-new leg on its very first partial (rule 4 — an unsatisfiable expectation
+    trains alarm-deafness). NEVER STARTED and STARTED-AND-NEVER-FINISHED are separate states.
+    """
+
+    PARTIAL = "partial:Timeout:600s:3365 rows committed; remainder re-selected next run"
+
+    @staticmethod
+    def _iso(dt):
+        return dt.isoformat(timespec="seconds")
+
+    def _grade(self, data, now):
+        findings: list[str] = []
+        import contextlib as _c
+        import io as _io
+        out = _io.StringIO()
+        with _c.redirect_stdout(out):
+            ah._grade_partial_legs(data, findings, now=now)
+        return findings, out.getvalue()
+
+    # -- the reproduced bug: a leg that has NEVER succeeded ---------------------------
+    def _never_succeeded(self, day: int):
+        """Day 0 = first partial. Every later day re-stamps a FRESH attempt (the shape that used
+        to hold the gate green) but `_partial_since` stays at day 0."""
+        from datetime import datetime, timedelta
+        t0 = datetime(2026, 9, 1, 9, 0, 0)
+        now = t0 + timedelta(days=day)
+        return {
+            "fulfillments_status": self.PARTIAL,
+            "fulfillments_last_attempt": self._iso(now),   # fresh every run
+            "fulfillments_partial_since": self._iso(t0),   # first incomplete attempt
+        }, now
+
+    def test_never_succeeded_day0_is_info_not_critical(self):
+        data, now = self._never_succeeded(0)
+        findings, out = self._grade(data, now)
+        self.assertEqual(findings, [], findings)
+        self.assertIn("NEVER succeeded", out)
+
+    def test_never_succeeded_day2_is_still_info(self):
+        """48h > 36h in wall-clock but the FIRST partial is what is measured — day 2 from a day-0
+        start IS 48h, so this must be CRITICAL. Kept explicit so the boundary is not guessed."""
+        data, now = self._never_succeeded(2)
+        findings, _ = self._grade(data, now)
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("48h", findings[0])
+
+    def test_never_succeeded_day7_MUST_be_critical(self):
+        """🔴 The core of the audit: this returned ZERO findings before the fix."""
+        data, now = self._never_succeeded(7)
+        findings, _ = self._grade(data, now)
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("PARTIAL with no ok for 168h", findings[0])
+        self.assertIn("NEVER succeeded", findings[0])
+        self.assertEqual(ah.finding_key(findings[0]), "ingest-partial-fulfillments")
+
+    def test_age_is_measured_from_first_partial_not_from_now(self):
+        """The old code's signature symptom: a fresh attempt made the age read as ~0."""
+        data, now = self._never_succeeded(7)
+        _, out = self._grade({**data, "fulfillments_last_attempt": self._iso(now)}, now)
+        self.assertNotIn(" 0h ago", out)
+
+    # -- the fix that would have been worse -------------------------------------------
+    def test_a_genuinely_new_leg_does_NOT_page(self):
+        """No `ok`, no `_partial_since` — a leg that has never started tracked work (new leg, or
+        an unmigrated writer). Must be info and must SAY the stamp is absent, never silently green
+        and never CRITICAL."""
+        from datetime import datetime
+        now = datetime(2026, 9, 1, 9, 0, 0)
+        findings, out = self._grade({"newleg_status": self.PARTIAL,
+                                     "newleg_last_attempt": self._iso(now)}, now)
+        self.assertEqual(findings, [], findings)
+        self.assertIn("no _partial_since stamp", out)
+
+    def test_first_partial_of_a_new_leg_is_info_even_at_day7_of_attempts(self):
+        """An unmigrated writer keeps attempting; with no stamp we cannot date the backlog, so we
+        grade lenient and say so rather than inventing a start time."""
+        from datetime import datetime, timedelta
+        now = datetime(2026, 9, 8, 9, 0, 0)
+        findings, out = self._grade(
+            {"newleg_status": self.PARTIAL,
+             "newleg_last_attempt": self._iso(now - timedelta(minutes=5))}, now)
+        self.assertEqual(findings, [], findings)
+        self.assertIn("pre-deploy", out)
+
+    # -- the ok path stays exactly as it was -------------------------------------------
+    def test_recent_ok_keeps_a_partial_as_info(self):
+        from datetime import datetime, timedelta
+        now = datetime(2026, 9, 7, 9, 0, 0)
+        findings, out = self._grade(
+            {"fulfillments": self._iso(now - timedelta(hours=5)),
+             "fulfillments_status": self.PARTIAL,
+             "fulfillments_last_attempt": self._iso(now)}, now)
+        self.assertEqual(findings, [], findings)
+        self.assertIn("last ok 5h ago", out)
+
+    def test_stale_ok_still_escalates_and_ok_wins_over_partial_since(self):
+        """A success is always the better evidence: if BOTH exist, grade from the `ok`."""
+        from datetime import datetime, timedelta
+        now = datetime(2026, 9, 7, 9, 0, 0)
+        findings, _ = self._grade(
+            {"fulfillments": self._iso(now - timedelta(hours=73)),
+             "fulfillments_partial_since": self._iso(now - timedelta(hours=200)),
+             "fulfillments_status": self.PARTIAL,
+             "fulfillments_last_attempt": self._iso(now)}, now)
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("73h", findings[0])
+        self.assertIn("last ok", findings[0])
+
+    def test_partial_since_is_not_counted_as_a_freshness_signal(self):
+        """`check_sync_heartbeat`'s `newest` max() must skip it, exactly like `_last_attempt`:
+        otherwise a leg stuck partial holds the 48h ingest gate green off its own backlog stamp."""
+        import inspect
+        src = inspect.getsource(ah.check_sync_heartbeat)
+        self.assertIn("_partial_since", src)
+
+
+class StampPartialSinceTest(unittest.TestCase):
+    """The WRITER half of the rule-18 amendment (`sync_logon._stamp`). Pure dict behaviour —
+    `sync_heartbeat.write` is stubbed, so no real heartbeat file is touched."""
+
+    def setUp(self):
+        import importlib
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "GelPackCalculator"))
+        self.sl = importlib.import_module("sync_logon")
+        self.state: dict = {}
+        self._saved = (self.sl._read_heartbeat, self.sl.sync_heartbeat.write)
+        self.sl._read_heartbeat = lambda: dict(self.state)
+        self.sl.sync_heartbeat.write = lambda d: self.state.update(d) or self.state.clear() \
+            or self.state.update(d)
+
+    def tearDown(self):
+        self.sl._read_heartbeat, self.sl.sync_heartbeat.write = self._saved
+
+    PARTIAL = "partial:Timeout:600s:12 rows committed; remainder re-selected next run"
+
+    def test_first_partial_sets_the_stamp(self):
+        self.sl._stamp("fulfillments", self.PARTIAL)
+        self.assertIn("fulfillments_partial_since", self.state)
+
+    def test_a_later_partial_never_refreshes_it(self):
+        """🔴 Refreshing it on every partial IS the bug, one key over — the age would reset to 0
+        on every run and the leg could never reach 36h."""
+        self.sl._stamp("fulfillments", self.PARTIAL)
+        first = self.state["fulfillments_partial_since"]
+        for _ in range(5):
+            self.sl._stamp("fulfillments", self.PARTIAL)
+        self.assertEqual(self.state["fulfillments_partial_since"], first)
+
+    def test_ok_clears_the_stamp_and_advances_last_success(self):
+        self.sl._stamp("fulfillments", self.PARTIAL)
+        self.sl._stamp("fulfillments", "ok")
+        self.assertNotIn("fulfillments_partial_since", self.state)
+        self.assertIn("fulfillments", self.state)
+
+    def test_ok_then_partial_starts_a_NEW_window(self):
+        """The stamp dates THIS backlog, not the leg's whole history."""
+        self.sl._stamp("fulfillments", "ok")
+        self.sl._stamp("fulfillments", self.PARTIAL)
+        self.assertIn("fulfillments_partial_since", self.state)
+
+    def test_a_plain_fail_does_not_mint_a_partial_window(self):
+        """`fail:` already pages on its own (rule 18); a `_partial_since` from a fail would grade
+        a later partial against a window that never banked anything."""
+        self.sl._stamp("fulfillments", "fail:Timeout:600s:cancelled-clean")
+        self.assertNotIn("fulfillments_partial_since", self.state)
+
+    def test_partial_still_does_not_advance_last_success(self):
+        """The pre-existing rule-18 invariant, re-pinned because _stamp changed."""
+        self.sl._stamp("fulfillments", self.PARTIAL)
+        self.assertNotIn("fulfillments", self.state)
+        self.assertIn("fulfillments_last_attempt", self.state)
+
+
 if __name__ == "__main__":
     unittest.main()
