@@ -24,12 +24,15 @@ Desktop analytics for Elevate Foods (subscription cheese/charcuterie). Python + 
 |------|---------|-----------|
 | `GelPackCalculator/` | Thermal analysis, gel-pack sizing, Shopify forecast (tkinter) | `GelPackCalculator/CLAUDE.md` |
 | `InventoryReorder/` | Demand forecasting, cut order, fulfillment web (tkinter + Flask) | `InventoryReorder/CLAUDE.md` |
-| `ShippingReports/` | Shipping analytics + cost analysis (canonical `shipments.db`) | `ShippingReports/CLAUDE.md` |
+| `ShippingReports/` | Shipping analytics + cost analysis (canonical DB = **`C:\AppyHourData\shipping.db`** — `appyhour_lib/paths.py` `SHARED_DB_NAME`; 🔴 NOT `shipments.db`, which is only a legacy `output/` name, and NOT `%APPDATA%`) | `ShippingReports/CLAUDE.md` |
 | `AppyHourMCP/` | Main MCP server — tools for shipping/inventory/gelcalc/orders | `AppyHourMCP/CLAUDE.md` |
 | `AppyHourShippingMCP/` | Shipping-only MCP server (subset) | `AppyHourShippingMCP/CLAUDE.md` |
 | `appyhour_lib/` | Shared library (weather, credentials) — **not** the AppyHour repo | `appyhour_lib/CLAUDE.md` |
 | `scripts/` | Loose utilities (swaps/audits/incident-fixes/utilities) | `scripts/README.md` |
 | `matrix_commander.py` + `matrix_commander_web/` | Fulfillment pipeline orchestrator | **`MATRIX_RULES.md`** (constraints SSOT — read before ANY change) |
+| `scripts/utilities/resolve_matrix_dupes.py` + `order_state_cache.py` | **Matrixify resolver role** — weekly add-sheet checks: in-sheet dupes, live dupes, removed-line silent-fails, Shopify-live inventory, slot-matched $0 substitutes | **`scripts/RESOLVE_DUPES_RULES.md`** (constraints SSOT + 🧭 north star — read before ANY resolve pass) |
+| Shopify Flow `Recharge Gift Order` + Recharge portal "Gift Next Box" | Portal gift orders — `_gift_*` address attributes, shipping-address override | **`GIFT_ORDER_RULES.md`** (constraints SSOT — read before ANY change) |
+| `appyhour_lib/pp_origin.py` + `ShippingReports/build_pp_origin_hub.py` | **PP-native origin hub** — scan-derived `pp_origin_hub` table (which hub a box actually left from) from `pp_webhook_events`, no invoice/`fulfillments` join, zero PP API calls | **`PP_ORIGIN_HUB_RULES.md`** (constraints SSOT — read before ANY change) |
 
 Original 386-line CLAUDE.md preserved as `_CLAUDE-original-2026-05-10.md` (ledger).
 
@@ -47,6 +50,7 @@ Original 386-line CLAUDE.md preserved as `_CLAUDE-original-2026-05-10.md` (ledge
 | Domain demand forecast (per-SKU/cohort, retention+curation aware) | `appyhour_forecast_demand` MCP, `/cut-order`, LTF sheet | TimesFM | — (domain-aware; TimesFM has NO swap/curation/churn knowledge) |
 | Generic TS forecast (new/un-modeled series, quantile bands, trading vol) | `forecast_ts.py` (TimesFM 2.5, pinned) | demand tools above | — (use ONLY when no domain forecaster owns the series; cross-check, not source-of-record) |
 | **Write ANY new script** (auth/recharge/swap/sheets/imap/weather/box) | **`TOOL_REGISTRY.md` FIRST** | — | call the canonical (get_shopify_auth, recharge_client, /swap…), never reimplement |
+| Report / stakeholder diagram (static flowchart, Sankey, swimlane, timeline…) | — | — | `diagram-design` skill (interactive engine explainers → `engine-explainer`) |
 
 ## Box Sizing — DistVol (canonical fact)
 
@@ -70,7 +74,7 @@ pip install -e ".[dev]" && pytest
 - **pywebview = netfx** (.NET Framework), NOT coreclr/.NET 8. Use `waitForBridge()` polling, not `pywebviewready`. `evaluate_js` won't work from API threads.
 - **Recharge cursor pagination MANDATORY** — page-based silently loops. `timeout=30`. v2021-11 nests `variant_id` as dict.
 - **Shopify GraphQL order edit** — `beginEdit` → `addVariant`/`setQuantity` → `commitEdit`. Filter qty=0. Use `fulfillableQuantity`. `_rc_bundle` = removable.
-- **Shared settings JSON** at `%APPDATA%/AppyHour/` — schema changes must be backward-compatible across 3 apps.
+- **Shared settings JSON** canonical at **`C:\AppyHourData\`** (`appyhour_lib.paths.settings_path()` — `gel_calc_shopify_settings.json`, `inventory_reorder_settings.json`). 🔴 `%APPDATA%\AppyHour\` is a **legacy read-only fallback for one deprecation cycle** and warns loudly on stderr — never point a caller back at it to fix a stale read; that is the bug (MSIX virtualization, 7/08 false-MISSING). Resolve through the helpers, never a path literal. Schema changes must stay backward-compatible across 3 apps.
 - **PR-CJAM-GEN** = only generic; curation-specific variants made by Shopify post-charge.
 - **CH-MAFT** never assigned (ASSIGNMENT_EXCLUDE).
 

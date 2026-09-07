@@ -39,12 +39,13 @@ reader must NOT do with it.
 
 ## Hold
 
-> ⏳ **PLACEHOLDER — SEMANTICS CHANGING TODAY (2026-08-26).** Kurt directed a cutover to
-> **unfulfilled-only, all hold types**; that change is in flight in a parallel session
-> (HoldRow12) and its D33 amendments had not landed in `RESHIP_REPORT_RULES.md` when this file
-> was written. Read D33 for the final semantics; columns **before 2026-08-26 are on the original
-> snapshot basis** (all `_HOLD` orders, fulfilled + unfulfilled split out) and are **not
-> comparable** to post-cutover columns. Do not extend this section until D33's update commits.
+> ✅ **CUTOVER LANDED 2026-08-26** (placeholder cleared 2026-09-07 — verified: D33's two addenda are
+> present in `RESHIP_REPORT_RULES.md`, "UNFULFILLED-ONLY SEMANTICS CUTOVER" and "MIGRATION COMPLETE:
+> THE LEGACY `_HOLD` ROWS ARE RETIRED"). Semantics are now **unfulfilled-only, all hold types**, and
+> the legacy `_HOLD` migration-backlog rows are retired (live non-cancelled `_HOLD` = 0). 🔴 The
+> comparability break survives the cutover: columns **before 2026-08-26 are on the original snapshot
+> basis** (all `_HOLD` orders, fulfilled + unfulfilled split out) and are **not comparable** to
+> post-cutover columns. D33 remains the authority for the final semantics.
 
 **NORTH STAR** (D33; `ShippingReports/CLAUDE.md`): a daily snapshot of the
 `_HOLD` → `_CSHOLD`/`_FLOWHOLD`/`_UNRESOLVED` migration backlog, so the drain is visible day
@@ -172,10 +173,20 @@ lane outline cost at a high level. of course those cells have to be on a differe
 because digital ocean will get those invoices later." Confirm or rewrite.)*
 
 **GOTCHAS (negatives-first):**
-- 🔴 **This tab has NO WRITER.** It holds only ship-week headers and Dan's note *"Let's talk this
-  through before you do it Kurt"* — anything that appears here today was hand-typed. The
-  canonical carrier-mix/cost tool (`carrier_mix_pivot.py`, D35) deliberately has **no sheet-write
-  path** and renders to `_outputs/reports/carrier-mix-pivot.md`.
+- 🔴 **This tab has NO WRITER — re-verified 2026-09-07 against the near-miss below.** It holds only
+  ship-week headers and Dan's note *"Let's talk this through before you do it Kurt"* — anything that
+  appears here today was hand-typed. The canonical carrier-mix/cost tool (`carrier_mix_pivot.py`,
+  D35) deliberately has **no sheet-write path** and renders to `_outputs/reports/carrier-mix-pivot.md`.
+- 🔴 **`shipping_cost_report.py --push` is NOT this tab's writer — do not read it as one.** It exists,
+  it is scheduled (the `shipping-cost-sheet` routine, beat `shipping-cost-sheet`), and it does push to
+  Google Sheets — but to a **different spreadsheet entirely**: `cost_sheet_push.push()` opens
+  `_outputs/cache/cost_sheet_id.txt` → **`1F96lZw0x-TD_S27MOzXt90iAEkp3d0LxZ28U1u4UQqk`**
+  ("AppyHour — Shipping Cost (auto)"), **not** the Running Reship pivot
+  `1weQz0AOAZJu7-I2reZ8fIqQ_b10BKWd4sYHn5HAUkGU`. Its tabs are `Exec Summary` · `Pending` ·
+  `Middle-mile` · `Raw` · `Ship Week` · `Weekly` · `Monthly` · `FedEx Detail` · `By Product` ·
+  `Zone x Carrier` · `Flags` — **there is no `Cost` tab among them**. "A cost script with a heartbeat
+  exists" is true and answers a different question; the writer-ownership gate is about *this tab on
+  this sheet*, and it is still unowned.
 - 🔴 **Do not wire a `.gs` writer for it** — the Apps Script project cannot reach `shipping.db`,
   where the invoice cost and routing-tag service token live (D35 "Why it is not a `.gs` tab").
 - **If it is ever filled, D35's cost rules bind:** an empty cost cell is "not invoiced yet",
