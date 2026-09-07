@@ -514,14 +514,22 @@ def _pf_child_main(job_path: str) -> int:
     job = json.loads(Path(job_path).read_text(encoding="utf-8"))
     prod_root = str(Path(job["prod_root"]).resolve())
     here = Path(__file__).resolve()
-    dev_like = [Path(job["dev_root"]).resolve(), here.parents[1], here.parents[2]]
+    workspace = Path(r"C:\Users\Work\Claude Projects")
+    # 🔴 `dev_like` is what the PROOF is about (is any DEV tree still visible?) and must NOT be
+    # derived from this file's own location: the deployed copy of this script lives INSIDE the
+    # prod tree, so `parents[1]` there IS the prod root and the proof would libel it as a dev
+    # entry. `strip` is the wider set actually removed from sys.path — it additionally drops the
+    # script's own directory, which the interpreter inserts automatically and which is the dev
+    # scripts dir whenever this runs from the dev tree.
+    dev_like = [Path(job["dev_root"]).resolve(), workspace]
+    strip = [*dev_like, here.parent]
 
     def under(entry: str, roots) -> bool:
         n = os.path.normcase(os.path.abspath(entry))
         return any(n == os.path.normcase(str(r)) or n.startswith(os.path.normcase(str(r)) + os.sep)
                    for r in roots)
 
-    kept = [p for p in sys.path if p and not under(p, dev_like)]
+    kept = [p for p in sys.path if p and not under(p, strip)]
     sys.path[:] = [prod_root] + [p for p in kept
                                  if os.path.normcase(p) != os.path.normcase(prod_root)]
     proof = {
@@ -529,8 +537,7 @@ def _pf_child_main(job_path: str) -> int:
         "sys_path_0": sys.path[0],
         "sys_path": list(sys.path),
         "dev_entries": [p for p in sys.path if under(p, dev_like)],
-        "workspace_entries": [p for p in sys.path
-                              if under(p, [Path(r"C:\Users\Work\Claude Projects")])],
+        "workspace_entries": [p for p in sys.path if under(p, [workspace])],
         "appyhour_lib_imported": any(m == "appyhour_lib" or m.startswith("appyhour_lib.")
                                      for m in sys.modules),
     }

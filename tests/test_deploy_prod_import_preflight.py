@@ -183,6 +183,21 @@ class RunsIsolatedOnAProductionShapedPath(_Fixture):
                          "the checker must never import the library it is reasoning about")
         self.assertEqual(proof["workspace_entries"], [],
                          "no Claude Projects entry may remain on the checking process's sys.path")
+        self.assertNotIn(str(SCRIPT.parent), proof["sys_path"],
+                         "the interpreter's automatic script-dir entry (the DEV scripts dir) "
+                         "must be stripped, not inherited")
+
+    def test_proof_does_not_libel_the_prod_root_as_a_dev_entry(self):
+        """The DEPLOYED copy of this script lives INSIDE the prod tree. A proof derived from the
+        script's own location would report the prod root as a dev entry — evidence that mislabels
+        is the failure mode this whole check exists to remove."""
+        now = time.time()
+        self.w(self.prod, "a.py", "x = 1\n", mtime=now - 3600)
+        self.w(self.dev, "a.py", "import json\n", mtime=now)
+        c = dp.classify(self.dev, self.prod)
+        res = dp.preflight_imports(dp.copy_set(c, self.prod, include_new=False),
+                                   self.dev, self.prod)
+        self.assertNotIn(str(self.prod.resolve()), res["path_proof"]["dev_entries"])
 
     def test_check_runs_out_of_process(self):
         now = time.time()
