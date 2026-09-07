@@ -1,5 +1,16 @@
 # ShippingReports
 
+> 🔴 **About to WRITE to `shipping.db`? Read [`WRITE_PREFLIGHT_RULES.md`](WRITE_PREFLIGHT_RULES.md)
+> FIRST** (constraints SSOT, 2026-09-07). Every writer passes
+> `appyhour_lib.write_preflight.assert_no_conflicting_writer(surface, source_files=[__file__])`
+> before it mutates anything — it REFUSES and names the collider. Five axes, all required:
+> the `BEGIN IMMEDIATE` probe (the only one that sees the **25 of 33 writers on raw
+> `sqlite3.connect`**), a surface-keyed lock, busy-state beats (🔴 UNKNOWN is NEVER idle),
+> **pending/uncommitted work on the writer's own source** — the axis that was missing when
+> `UPSParserFix` had 93 in-flight lines in `shipping_invoice_db.py` on 2026-09-07 — and the
+> process + scheduled-owner scan. 🔴 There is no bare `--force`: `--force-writer NAME` must
+> name every collider, and a held sqlite write lock is never overridable.
+
 Analytics pipeline for subscription box shipping. Ingests carrier invoices (OnTrac, UPS, FedEx, Veho), Gorgias issues, Parcel Panel tracking → routing recommendations, cost analysis, performance reports.
 
 > 🔴 **Reading shipment data out of DigitalOcean? Read [`DO_READ_CONTRACT.md`](DO_READ_CONTRACT.md)

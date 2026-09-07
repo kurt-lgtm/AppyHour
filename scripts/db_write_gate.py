@@ -39,52 +39,27 @@ from __future__ import annotations
 import argparse
 import contextlib
 import os
-import shutil
 import sqlite3
-import subprocess
 import sys
 import time
-from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from appyhour_lib import db as ahdb  # noqa: E402
 from appyhour_lib import paths  # noqa: E402
 
-# 🔴 Processes whose LIVENESS must block a Claude write. Measured, not guessed — each is a file
-# that contains write SQL against shipping.db. Re-derive with the scan in INVOICE_INGEST_RULES §11
-# when this list ages.
-#
-# 🔴 Do NOT remove an entry just because it migrated to `appyhour_lib.db.connect()`. Holding the
-# advisory lock is not the same as holding it CONTINUOUSLY: a migrated writer that takes the lock
-# per checkpoint (daily_shipping_sync, 2026-08-31) is unlocked most of its ~180-minute run and will
-# write again seconds from now, so `check_lockfile` would see "free" and wave us through. The
-# PROCESS check is what covers that window — same reason it covers the raw-connect writers.
-BYPASSING_WRITERS = (
-    "AppyHourMCP/server.py",          # -> tools/cache.py, raw connect; usually 1-3 live
-    "AppyHourMCP\\server.py",
-    # 2026-08-31: its stages are cancellable now (appyhour_lib/cancel.py) so the abandoned-thread
-    # rationale is gone — but it STAYS, for two live reasons: (a) run_fulfillments takes the lock
-    # PER BATCH, so it is unlocked most of its run and will write again seconds from now, and
-    # (b) its auto_import stage writes through shipping_invoice_db.init_db's RAW sqlite3.connect
-    # and never touches the lock at all. Same "do NOT remove on migration" note as above.
-    "sync_logon.py",
-    "sync_carrier_invoices.py",
-    "daily_shipping_sync.py",         # migrated 2026-08-31: per-checkpoint lock, NOT continuous
-    "gel_pack_webview.py",            # Kori -> kori/db_snapshots.py
-    "gel_pack_shopify.py",
-    "auto_import.py",
-    "weather_sync_cron.py",
-    "sync_shopify_orders.py",
+# 🔴 SINGLE SOURCE (2026-09-07): the writer roster, the scheduled-task roster, the process scan
+# and the imminent-task scan now live in `appyhour_lib/write_preflight.py` and are IMPORTED here,
+# not copied. They were duplicated for two weeks and drifted: this file's WRITER_TASKS was missing
+# BOTH sync_logon schtasks (`appyhour_sync_on_logon`, `appyhour_sync_daily_noon`) — i.e. the single
+# busiest writer on the box was absent from the "is a scheduled writer about to fire" check.
+# Two copies of a safety list is one copy plus a lie. Read WRITE_PREFLIGHT_RULES.md before editing.
+from appyhour_lib.write_preflight import (  # noqa: E402, F401  (re-exported for callers)
+    BYPASSING_WRITERS,
+    WRITER_TASKS,
 )
-
-# Scheduled tasks that write. A run starting mid-write is exactly the two-checkpoint race.
-WRITER_TASKS = (
-    "AppyHour Carrier Invoice Sync",
-    "appyhour_daily_mon", "appyhour_daily_tue", "appyhour_daily_wed",
-    "appyhour_daily_thu", "appyhour_daily_fri",
-    "AppyHour Weekly Offsite Backup",
-    "AppyHour Zone Floor Rebuild",
-    "GorgiasUpdate",
+from appyhour_lib.write_preflight import _imminent_tasks as imminent_tasks  # noqa: E402
+from appyhour_lib.write_preflight import (  # noqa: E402
+    _live_bypassing_writers as live_bypassing_writers,
 )
 
 BLACKOUT_MIN = int(os.environ.get("AH_GATE_BLACKOUT_MIN", "20"))
@@ -130,60 +105,6 @@ def check_lockfile(path: str, problems: list) -> None:
     if os.path.exists(lockpath) and holder:
         if not ahdb._lock_is_stale(lockpath, holder, 1800):
             problems.append(f"advisory writelock held: {ahdb._holder_msg(lockpath, holder)}")
-
-
-def live_bypassing_writers() -> list:
-    """The check that actually covers the 25 raw-connect writers."""
-    try:
-        out = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-Command",
-             "Get-CimInstance Win32_Process | "
-             "Where-Object { $_.CommandLine } | "
-             "ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }"],
-            capture_output=True, text=True, timeout=60).stdout
-    except Exception:                                        # noqa: BLE001
-        return ["(could not enumerate processes — refusing rather than assuming quiet)"]
-    me = str(os.getpid())
-    found = []
-    for line in out.splitlines():
-        if "\t" not in line:
-            continue
-        pid, cmd = line.split("\t", 1)
-        if pid.strip() == me:
-            continue
-        for needle in BYPASSING_WRITERS:
-            if needle.lower() in cmd.lower():
-                found.append(f"pid {pid.strip()}: {os.path.basename(needle)}")
-                break
-    return found
-
-
-def imminent_tasks(minutes: int) -> list:
-    try:
-        out = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-Command",
-             "Get-ScheduledTask | ForEach-Object { $i=$_|Get-ScheduledTaskInfo; "
-             "\"$($_.TaskName)`t$($i.NextRunTime)\" }"],
-            capture_output=True, text=True, timeout=90).stdout
-    except Exception:                                        # noqa: BLE001
-        return ["(could not read scheduled tasks — refusing rather than assuming quiet)"]
-    soon, horizon = [], datetime.now() + timedelta(minutes=minutes)
-    for line in out.splitlines():
-        if "\t" not in line:
-            continue
-        name, nxt = line.split("\t", 1)
-        name, nxt = name.strip(), nxt.strip()
-        if name not in WRITER_TASKS or not nxt:
-            continue
-        for fmt in ("%m/%d/%Y %I:%M:%S %p", "%m/%d/%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
-            try:
-                when = datetime.strptime(nxt, fmt)
-            except ValueError:
-                continue
-            if datetime.now() <= when <= horizon:
-                soon.append(f"{name} fires {when:%Y-%m-%d %I:%M %p}")
-            break
-    return soon
 
 
 def check_begin_immediate(path: str, problems: list) -> None:
