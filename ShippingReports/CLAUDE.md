@@ -159,3 +159,41 @@ python ingest.py            # Parse new invoice files
 - OnTrac: CSV, hub in Reference1 field, has First Scan/POD DateTime for transit calc
 - UPS: CSV (Invoice_000000C411H40*.csv), hub in Reference No.2, no delivery date
 - FedEx: XLSX (AHB_*_FedEx Shipping Breakdown*.XLSX), hub from Shipper City/State, has POD date
+
+### 🔴 Carrier attribution at ingest — filename TOKEN, never the extension
+
+**Gotcha first.** UPS breakdowns arrive from RMFG as **`.csv`**, exactly like OnTrac's. Anything
+that infers carrier from the file EXTENSION mislabels them, and the mistake is **permanent**:
+`store_shipments`' upsert (`shipping_invoice_db.py`, `ON CONFLICT(tracking) DO UPDATE`) refreshes
+cost/service/state/zip/zone/hub but **never updates `carrier`** — so a correct re-ingest of the
+same file repairs every field except the wrong label, which then looks like well-populated real
+data on the wrong Carrier Mix row.
+
+**Burn 2026-09-07.** `AHB_00350_UPS Shipping Breakdown_AHB_5-25-26.csv` reached
+`scan_gmail_invoices`, whose rule was `.csv` → OnTrac, and was parsed by `parse_ontrac_csv_bytes`.
+61 `1Z...` UPS parcels landed with `carrier='OnTrac'` and `cost=0`; `auto_import` re-read the same
+file correctly as UPS three days later and filled in the costs — under the OnTrac label.
+**$828.10 and 61 boxes published on the OnTrac rows.** Its sibling `AHB_00356` escaped only
+because `auto_import` happened to run before the email ingest.
+
+Rules, in force:
+
+1. **`carrier_from_filename()` is the carrier authority** for an invoice attachment — it reads the
+   carrier TOKEN in `AHB_<num>_<CARRIER> Shipping Breakdown_...`. Extension is a fallback *only*
+   when no token is present. Mirrors `ShipRouting/server/sync_invoices.py:219` ("Carrier comes
+   from the FILENAME TOKEN, never the parser path"). **The parser follows the token too** — a UPS
+   file put through the OnTrac parser yields rows with no cost at all.
+2. **`store_shipments` REFUSES a batch whose tracking shape contradicts its carrier label**
+   (`assert_carrier_labels` → `CarrierTrackingMismatch`). It is a pre-flight: a contradicting file
+   writes **zero** rows, not some.
+3. 🔴 **Refuse and report — never auto-correct.** A silently corrected row hides the ingest bug
+   that produced it, and the bug keeps producing rows. Fix the source, re-ingest.
+4. **Shape rules are DERIVED from the table, never invented** (`tracking_carrier_class`): `1Z`+16
+   → UPS (15,308 rows, no legitimate exception), `1LS`+12 → OnTrac (43,475), 8-15 digits → FedEx
+   (30,902). **Veho has no rule** — its 14-char alphanumerics have no stable prefix, so the guard
+   returns `None` and has no opinion. An unclassifiable shape must never overrule a filename token.
+5. **LaserShip is OnTrac** under its old name (`canon.normalize_carrier` folds it). A
+   LaserShip-labelled OnTrac row is **not** a defect and the guard must never flag it.
+6. Back-test before changing a shape rule: run `check_carrier_labels` over the whole `shipments`
+   table. As of the fix it flags exactly the 61 known-bad rows out of 98,432 — any new false
+   positive means the rule, not the data, is wrong.
