@@ -771,6 +771,112 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
     `ShipRouting/server/tests/test_flowhold_no_legal_lane.py`; rules ShipRouting ROUTING_RULES
     §0-K + TECHNICAL_PRINCIPLES P-hold.
 
+23. **A freshness assert on something that legitimately takes HOURS states a PACE, not a level —
+    and an alarm that fires on a healthy state is a dead alarm.** 🔴 2026-09-07: the cloud
+    `prewarm` timer's `STALE after run` page fired FIVE times in one day while the quote fill was
+    healthy and progressing (ship week 2026-09-14: 1,212/9,810 at 09:57 → 6,480/9,675 that evening,
+    ~477 lanes/h, on pace days before the Friday build). Kurt: *"if we know it's healthy, then we
+    don't need an alarm."* The predicate was a LEVEL — `uncached > tail_bar()` — true from the first
+    minute of every fill, so it was guaranteed to page on a healthy Monday; this is rule 1's "silence
+    is the failure signal" over-applied until noise became the failure signal instead.
+    🔴 **Two compounding traps, both general.** (a) **An alarm message that embeds live counts
+    defeats every digest-keyed throttle**: `ingest_worker._alarm_due` re-pages whenever the text
+    changes, so a message carrying "1,212/9,810" minted a new digest every fire and bypassed the 6h
+    repeat window by construction. Dedupe per-INCIDENT and durably, never on message text.
+    (b) **Progress stated against a moving denominator is progress against nothing**: `requested`
+    drifted 9,810 → 9,675 across the same day, and `uncached` legitimately RISES as Recharge
+    converts charges overnight. Guard: `ShipRouting/server/prewarm_progress.py` — pages only on
+    `no_progress` (`cached` flat across ~6h), `projected_miss` (trailing rate clears the §17.9 tail
+    bar after noon ET Friday) or `pre_build_short` (build day arrived, still short — the
+    history-free backstop); ONE durable page per (ship date, reason) via the ship-day guards' own
+    `apply_watch.guard_alarms` + `watch_runs`, and the marker is RESOLVED when the fill recovers so
+    a later stall pages again. NEGATIVES: never measure progress on `uncached` (it rises while the
+    fill works); never re-express the bar as a percentage (a ratio tightens as the denominator
+    grows); never add a second dedupe table when `guard_alarms` exists; never let the quiet stand
+    alone — `GET /health/timers` carries a `prewarm_progress` block (coverage, stated basis, rate,
+    projected-done) and DEGRADES its own verdict while an incident is open, because a
+    claimed-and-quiet alarm reading green is the silence-equals-health hole again; never add a local
+    beat/schtask for this (this PC is off when the prewarm fires — rule 4 dead-cadence by
+    construction). Tests: `ShipRouting/server/tests/test_prewarm_progress.py` (replays the measured
+    09-07 day and demands ZERO pages); rules ShipRouting ROUTING_RULES §17.17 + §17.9, BUG_LOG
+    2026-09-07 DEAD-ALERT.
+
+24. **A BOUNDED RUN MUST ADVANCE, NOT REPEAT — and TWO LEGS NEVER SHARE ONE BUDGET OR ONE
+    STAMP.** 🔴 2026-09-04 → 2026-09-07: `sync_logon`'s `fulfillments` leg had not stamped a
+    success for **~80 hours** against the 36h rule-18 threshold, reporting
+    `partial:Timeout:600s:3365 rows committed; remainder re-selected next run` on every run.
+    **There was no remainder mechanism.** That phrase described an intention; no code implemented
+    it. This is rule 18's blind spot: the `partial:` split correctly stopped paging for a
+    *draining* backlog, and then a backlog that could not drain wore the same stamp.
+
+    **What was actually happening,** from the live log of 09-07 09:45 and a read-only probe of
+    the canonical DB — not reconstructed:
+    - `backfill_sync.sync_parcel_panel` built its work list as `SELECT DISTINCT order_number`
+      with **no ORDER BY and no persisted position**, then walked it from index 0. Work list
+      **2,576 orders; the run stopped at order 800.** The next run rebuilt the identical list and
+      started again at order 1. **Orders past index 800 were never asked — not once.**
+    - `SELECT DISTINCT` orders by TEXT (SQLite's temp B-tree). Order numbers had grown past five
+      digits, so `101334` (new) sorted ahead of `94080` (old): **the newest work was polled first
+      and the oldest starved.** The queue's oldest member was fulfilled **2025-05-22** and sat in
+      the unreachable tail — the 604 class, re-created by scheduling after rule 7 fixed selection.
+    - Progress happened anyway, by **attrition**: orders inside the reachable prefix that PP
+      answered as delivered left the set. Row counts therefore looked like forward motion.
+
+    NEGATIVES:
+    - **🔴 A COUNT OF ROWS IS NOT EVIDENCE OF PROGRESS THROUGH A QUEUE.** `3365` was 2,565
+      `fulfillments` rows PLUS 800 `delivery_status` rows — **a sum across two TABLES**, published
+      as though it were progress on one. Every stamp for a bounded leg carries what is LEFT
+      (`remaining`, `unresolved`) and how old the oldest untouched item is; `written` alone cannot
+      distinguish 800-of-800 from 800-of-2,576, and for four days it did not.
+    - **🔴 A RESUME POSITION IS NEVER AN INDEX.** The list changes size between runs, so an index
+      skips work with nothing to notice it. The cursor is per-item and written in the SAME
+      transaction as the work: `delivery_poll_attempts.last_attempt_at`. Orders just polled sort
+      to the back by construction, so "where we got to" survives a crash and needs no bookkeeping.
+    - **🔴 ORDERING IS PART OF THE CONTRACT, NOT AN OPTIMISATION.** Never-attempted first, then
+      least-recently-attempted, oldest first within each. `delivery_window.due_work_list_sql()`
+      owns it. An unordered `SELECT DISTINCT` is not "no ordering" — it is an accidental one, and
+      here it was exactly backwards.
+    - **🔴 TWO LEGS IN ONE STAGE MEANS ONE STARVES THE OTHER AND NEITHER REPORTS HONESTLY.**
+      `fulfillments` and `delivery_poll` are now separate stages with separate keys. Under one
+      key, `_stamp("fulfillments", "ok")` required BOTH to finish, so the Shopify leg — which
+      completed and advanced its watermark on **every** run — held a last-success frozen for 80
+      hours while `fulfillments.fulfilled_at` was current to that morning. **The alarm was firing
+      on the wrong leg**, and no amount of grading logic could have found that from one key.
+    - **🔴 THE SOFT BUDGET IS NOT A SECOND WATCHDOG, AND IT IS SMALLER THAN THE HARD ONE.**
+      `DELIVERY_POLL_BUDGET_S` (480s) < `STAGE_TIMEOUT_S` (600s). A watchdog cancel raises out of
+      `_flush` and **skips the epilogue** — the final flush, `aged_out_sweep` (the only live
+      writer of the terminal state), and the remaining/oldest re-count. So the leg that was
+      supposed to shrink the tail could only grow it. A leg that can be bounded must bound
+      ITSELF and stop at its own boundary; the watchdog stays above it for a genuine hang.
+      **🔴 `STAGE_TIMEOUT_S` was NOT raised** — rule 17 still forbids it, and splitting the stage
+      is what bought the budget.
+    - **🔴 A RATE CAP AND A TIME CAP ARE BOTH REQUIRED.** Time alone lets a fast ParcelPanel day
+      empty the queue at full tilt against a limit shared with other callers; a call cap alone
+      says nothing about a slow day. `DELIVERY_POLL_MAX_REQUESTS` and `DELIVERY_POLL_BUDGET_S`
+      bite at roughly the same place normally, and the slower one wins when it does not. Neither
+      replaces the limiter (`pp_ratelimit`), which still owns pacing and 429s.
+    - **🔴 `except PPThrottled: continue` IS A BUSY-RETRY.** With the limiter refusing
+      everything, the loop walks the whole list at full speed doing no work, burns the elapsed
+      budget, and then reports `partial:` as though a backlog were draining.
+      `THROTTLE_ABORT_STREAK` ends the run on an unbroken refusal streak; the streak resets on
+      ANY served order, including one PP answers with nothing. A storm is an outage (rule 18's
+      "zero rows in a whole ceiling"), not a slow day.
+    - **🔴 A RE-POLL GETS A BACKOFF; A FIRST POLL NEVER DOES.** And the backoff ladder must sum
+      to less than the age gate that retires an order — otherwise backoff strands boxes a second
+      time, by a new mechanism. `POLL_BACKOFF_HOURS` sums to 186h to bank 6 attempts against a
+      120-day gate; the test pins the arithmetic, not the constants.
+    - **🔴 `ok` MEANS THE QUEUE WAS DRAINED, NEVER THAT ROWS LANDED.** `ok` advances last-success
+      and puts the leg to sleep for 12h under `_should_run`. The leg this replaces banked 800
+      rows every run and never reached its tail; had "rows landed" produced an `ok`, the stall
+      would have been silent instead of merely mis-attributed.
+    - **A missing ParcelPanel key stamps `skipped:`, not `ok`.** `ok` would claim a queue was
+      drained that was never read. `skipped:` grades as not-ok in `check_sync_heartbeat`, which
+      is correct: a delivery poll that cannot run is a defect, quietly.
+    Constraints: `SHIPPING_PIPELINE.md` §3 rule 7 (the queue's own contract) ·
+    `GelPackCalculator/delivery_window.py` module docstring (negatives 4-6).
+    Tests: `tests/test_delivery_poll_resume.py` (22, offline — fake clock, fake PP client,
+    in-memory sqlite; no writer `main()`, no live DB, no network).
+
 ## Wired beats (update when adding/removing)
 
 | name | writer | max age |
