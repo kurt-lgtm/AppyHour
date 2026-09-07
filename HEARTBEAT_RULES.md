@@ -748,6 +748,29 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
     that fails to mirror `tuesday_apply_results.json` WILL page — fix the mirror, do not silence the
     watch. Tests: `ShipRouting/server/tests/test_apply_completion_watch.py`.
 
+22. **An unshippable order must ALARM, and it must be held in the STANDARD vocabulary — the
+    detection is on the cloud PREWARM, never here.** 🔴 `#175517` (Key West FL 33040, Large Tray)
+    had no legal lane, was held by hand with the invented tag `HOLD_KeyWest_NoLegalLane_20260821`,
+    and sat UNFULFILLED 08-20 → 09-07 (ShipRouting BUG_LOG `NO-LEGAL-LANE`). That token is in no
+    vocabulary: `vf_checks.HOLD_TAGS` does not contain it, so no sheet gate, report or alarm could
+    see it — and the cohort tag had been removed too, so nothing else saw the order either. Every
+    gate read green for 18 days. Guard: `ShipRouting/server/flowhold_watch.py` — the prewarm
+    (`server/prewarm_job.run`, cloud, 3h) evaluates every live cohort order through the ONE shared
+    legality check (`lib/lane_legality.py`) and, on a CONFIRMED no-lane, writes the standard
+    `_FLOWHOLD` (add-only, verified by Shopify read-back) and pages `#kurt-ops` ONCE per
+    (order, evidence fingerprint) through `apply_watch.slack_notify` — one notifier, no webhook.
+    Timer `flowhold_watch` (15 min) drains only the DURABLE backlog (saturation overflow, retryable
+    writes, ambiguous deliveries) and freshness-asserts off the shared `watch_runs` ledger.
+    NEGATIVES: never write a bespoke `HOLD_<place>_<reason>_<date>` tag — an invented hold is an
+    invisible hold, and that is the whole burn; never hold on an ABSENT quote or an unreadable
+    coverage file (that is `UNKNOWN_EVIDENCE`, not proof — §17.14 / wk0810); never strip a cohort
+    tag to "hold" an order; never claim the hold exists on a failed write; never propose air for a
+    no-air box; never add a local beat/schtask for this (this PC is off when the prewarm fires —
+    rule 4 dead-cadence by construction). Kill `FLOWHOLD_WATCH=0`, and the freshness assert then
+    RAISES by design. Tests: `ShipRouting/tests/test_lane_legality.py`,
+    `ShipRouting/server/tests/test_flowhold_no_legal_lane.py`; rules ShipRouting ROUTING_RULES
+    §0-K + TECHNICAL_PRINCIPLES P-hold.
+
 ## Wired beats (update when adding/removing)
 
 | name | writer | max age |
