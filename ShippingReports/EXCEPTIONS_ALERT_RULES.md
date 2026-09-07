@@ -1615,6 +1615,129 @@ a new phrasing, means re-running the replay — not eyeballing the regex.
 
 ---
 
+### 🔴 A STALE FLAG IS NOT A STUCK BOX — forward progress kills the DELAYED record (Kurt 2026-09-07)
+
+Kurt, reading the live tab: *"still too many alerts on the exceptions sheet. read it. the fedex
+ones still tell me basic delays."*
+
+**The burn, by order number.** Of 59 rows on the Exceptions tab on 2026-09-07, **17** were classed
+`delayed / stuck in transit` while the box's own newest carrier scan said it was moving normally:
+
+| Rows | Newest scan | Why it was wrong |
+|---|---|---|
+| `#173116` `#173162` | `Arrived at FedEx location, HAGERSTOWN MD 21740` | routine in-network movement |
+| `#173685` | `Arrived at FedEx hub, LENEXA KS 66227` | routine in-network movement |
+| `#170396` `#172581` `#174163` | `Arrived at FedEx location, …` | routine in-network movement |
+| `#173453` | `On FedEx vehicle for delivery, FLINT MI 48507` | **out for delivery — the opposite of stuck** |
+| `#171556` | `On FedEx vehicle for delivery, LADSON SC 29456` | **out for delivery** |
+| `#168829` | `On the way, SUPERIOR WI 54880` | routine in-network movement |
+| `#173592` `#174065` `#174265` `#174307` | `…received and is on its way to your OnTrac Facility…` | routine in-network movement |
+| `#173522` `#173657` `#173794` `#174158` | `Your package has been **delayed due to weather**…, RENO NV` | already on the mute list — and got through anyway |
+
+**Two independent causes, both fixed here. Neither was a new class; both were an existing rule
+failing to be asked.**
+
+1. **The DELAYED class fired off a flag nothing re-checked.** `EXC_SHOPIFY_DELAYED_` is Shopify's
+   fulfillment `displayStatus`, which Shopify stamps once and never withdraws. Gated only by
+   `EXC_DELAYED_MIN_DAYS = 3`, a *stale* flag paired with a *fresh* forward-progress scan still
+   recorded "stuck in transit". 🔴 **A box whose NEWEST scan is forward progress is not stuck** —
+   `excIsForwardProgress_` now suppresses it to `IN_NETWORK` **before** the floor is consulted.
+   Suppressed, not merely un-pinged: DELAYED is record-only, so it was *already* silent in Slack
+   and the complaint is the TAB. `IN_NETWORK` carries `ping:false`, and the caller's
+   `if (!v.ping) return;` is what keeps the row off the sheet.
+2. **`excIsNoise_` was word-order dependent.** It matched the literal `weather delay` (FedEx's
+   phrasing). OnTrac writes *"delayed due to weather"* — same fact, other order — so four rows
+   walked past the one rule whose entire job was muting them. 🔴 **Fixed by proximity, not by
+   adding a third literal:** `weather` within 40 chars of `delay` in *either* direction. Adding one
+   more literal would have left the next phrasing to be discovered the same way, on the tab.
+
+🔴 **Forward progress may ONLY ever suppress the DELAYED/stuck path — never a failure class.**
+`excIsForwardProgress_` is consulted from inside the `delayedElsewhere` branch of `excClassify_`
+and **nowhere else**: below the window walk and below the `FAILED_ATTEMPT` structured rescue.
+DAMAGED / RETURNED / LOST / REFUSED / ADDRESS_ISSUE / ATTEMPT_FAILED all classify and all ping
+exactly as before, even with the DELAYED flag set and a benign later scan. **A damaged box that
+keeps moving is still damaged.** Moving this predicate above the failure matcher would re-create
+the `#170893` class the 2026-08-17 window walk was built to kill. Pinned by self-test.
+
+🔴 **Bare `in transit` is deliberately NOT forward progress.** `#169174` (Maria Wood, NY) is the
+case that earns the DELAYED class at all, and its newest scan was `In transit, ELMSFORD NY` — a
+box can sit in transit for a week. Only *directed* transit (`in transit to …`, `on its way to …`)
+counts. **Widening this to bare `in transit` deletes the class.** Pinned by self-test.
+
+**`never picked up by carrier` was NOT touched.** It is on Kurt's keep list — *"they didn't even
+attempt delivery"*.
+
+---
+
+### 🔴 THE NEVER-PICKED CLOCK STARTS AT DROP-OFF, NOT AT THE LABEL (Kurt 2026-09-07)
+
+Kurt: *"the not picked up thing - for monday - it has to be wednesday for swedesboro orders …
+because that's when they get dropped off now."* **The dock schedule changed.**
+
+**The failure.** `EXC_NEVER_PICKED_MIN_DAYS` is counted from the fulfillment date. For a hub whose
+dock day is not its label day, that bills **normal, expected dock time as carrier failure**: a
+Swedesboro box labelled Monday is not handed to a carrier until **Wednesday**, so the flat clock
+crosses the 3-day floor on Thursday and alarms on a box nobody has been offered yet. It is not
+late — **it has not been dropped off.**
+
+🔴 **It is a TABLE, not a number added to the floor.** `EXC_HUB_DOCK_DAYS_` maps hub →
+`{ fulfilled weekday : drop-off weekday }`. **The next hub with a different dock day is a DATA row,
+never another special case in the code.** An absent hub or absent weekday means same-day drop-off —
+byte-identical to the pre-2026-09-07 behaviour for every other hub.
+
+🔴 **Where the origin comes from, and why it can only be gated in `excNpuFlush_`.** The sweep
+**cannot reach either database** (see `DO_READ_CONTRACT.md` non-goals), so `shipments.hub` is not
+available to it; `delivery_status.origin_hub` is blank on 42% of rows and never carries Swedesboro
+at all. The hub the Apps Script *can* see is the one parsed from the order's **Shopify routing
+tag** (`… - <Hub>_AHB!` → `excHubOfTags_`), which is the routing authority anyway. That lookup is
+**cold-path only** — P16 moved it off the hot request because `tags` more than doubled the response
+bytes on every open box every hour. `excNpuFlush_` already calls `excHubsForOrders_` for exactly
+the never-picked set, so the gate sits immediately after it and costs **zero extra calls and zero
+extra bytes**. Putting it in `excClassify_` instead would re-import the P16 regression.
+
+🔴 **Deferred, never dropped.** A box inside its dock window is filtered out of the flush with
+**nothing stamped** — `open` stays true, `alerted`/`logged` untouched — so the next sweep
+re-classifies it and it alarms normally once the real clock has run. Same delay-not-discard
+semantics as the floor itself.
+
+🔴 **Fail OPEN.** An unresolved, unknown or blank hub has no calendar entry, so it keeps the label
+clock. A hub lookup that failed can **never** be the reason a genuinely stuck box goes unreported —
+the same inversion `excHubsForOrders_` is written to avoid. Pinned by self-test, as is *"a
+Swedesboro box 3 weeks past its drop-off still classifies NEVER_PICKED_UP"*.
+
+**⚠️ OPEN — a Kurt decision, deliberately NOT encoded.** Measured 2026-09-07, median label→pickup
+on Mondays over the last 60 days: Anaheim **0**, Dallas **0**, **Indianapolis 1**, **Nashville 1**
+— both drifted from same-day within that window, so the flat 3-day floor is now tight for them too
+(it effectively gives them 2 days of carrier grace, not 3). Only Swedesboro/Monday is a *stated*
+fact, and this class is one Kurt explicitly wants kept, so a measurement is not licence to loosen
+it. **Adding `Indianapolis: {1:2}` / `Nashville: {1:2}` is a one-line data change once Kurt says
+so — never invent a dock day.**
+
+**Separately: ~18 FedEx rows reading `Shipment information sent to FedEx, 90660` (events 08-14,
+detected 08-19)** are a *different* origin — `90660` is Pico Rivera CA, not Swedesboro — and they
+are **not** dock lag. Dock lag is a scan that arrives late; these have a label and **no carrier
+scan at all** five days on, which is the class working correctly. They are one batch on one day
+from one origin, i.e. the P15 hub-collapse shape (one event, not 18 pings). Raised separately;
+not folded into this fix.
+
+---
+
+### 🔴 `excSelfTest` was RED for four days and nobody saw it (2026-09-07)
+
+The 2026-09-03 noise rule correctly made OnTrac's *"unable to complete your delivery / please
+continue to check your tracking"* a non-event, but the `excSelfTest` case asserting the *pre*-09-03
+verdict (`ATTEMPT_FAILED/true`) was not updated in that commit. **`excSelfTest` has returned FAIL
+on every run since.** Corrected here (test-only — no behaviour changed), verified by running the
+committed `HEAD` copy first: 1 failure at HEAD, the same one, that line.
+
+🔴 **A permanently-red self-test is worse than no self-test** — it is how the next real regression
+gets waved through. The file's own header says *"Run `excSelfTest()` after every edit"*; that
+instruction is worthless the moment red is the normal colour. **Any commit that changes a
+classification rule updates its self-test case in the SAME commit, and the run must end `PASS`.**
+Current state: **PASS: 25 cases**.
+
+---
+
 ## Cadence
 
 ### 🔴 WEEKLY RHYTHM — tab every day, Slack Wed–Sun only (Kurt 2026-08-10, committed to Dan)

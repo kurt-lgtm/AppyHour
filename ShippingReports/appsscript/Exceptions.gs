@@ -241,6 +241,71 @@ var EXC_PP_DEAD_QUARANTINE = 3;
 // time. A floor cannot lose a real case: the sweep re-polls hourly, so raising it DELAYS detection
 // rather than dropping it, and the genuine wk0803 never-collected boxes were silent 7-33 DAYS.
 var EXC_NEVER_PICKED_MIN_DAYS = 3;
+
+/**
+ * 🔴 PER-ORIGIN DOCK CALENDAR — the never-picked clock starts at DROP-OFF, not at the label
+ * (Kurt 2026-09-07: "the not picked up thing - for monday - it has to be wednesday for swedesboro
+ * orders … because that's when they get dropped off now").
+ *
+ * The failure this fixes: EXC_NEVER_PICKED_MIN_DAYS is counted from the fulfillment date, so for a
+ * hub whose dock day is not its label day the floor bills NORMAL, EXPECTED dock time as carrier
+ * failure. A Swedesboro box labelled Monday is not handed to the carrier until WEDNESDAY; the flat
+ * clock crosses the 3-day floor on Thursday and alarms on a box that has not been offered to
+ * anyone yet. It is not late — it has not been dropped off.
+ *
+ * 🔴 IT IS A TABLE, NOT A NUMBER ADDED TO THE FLOOR. The next hub with a different dock day must be
+ * a DATA row here, never another special case in the code. Shape: hub name (exactly as
+ * excHubOfTags_ parses it out of the `... - <Hub>_AHB!` routing tag) -> { fulfilled weekday :
+ * drop-off weekday }, 0=Sun … 6=Sat, UTC. An absent hub or an absent weekday means same-day
+ * drop-off, which is every other hub's measured behaviour and the pre-2026-09-07 semantics exactly.
+ *
+ * 🔴 ONLY SWEDESBORO/MONDAY IS ENCODED, because only Swedesboro/Monday is a stated fact. Measured
+ * 2026-09-07: median label→pickup over the last 60 days is 0 days for Anaheim and Dallas but has
+ * drifted to **1 day for Indianapolis and Nashville** on Mondays. That is a measurement, not a
+ * directive — adding rows for them would loosen a class Kurt explicitly wants kept, so it is
+ * surfaced in EXCEPTIONS_ALERT_RULES.md as a Kurt decision rather than encoded here. Never invent a
+ * dock day.
+ */
+var EXC_HUB_DOCK_DAYS_ = {
+  Swedesboro: { 1: 3 },   // labelled Monday -> physically dropped off Wednesday
+};
+
+/**
+ * PURE. The date the never-picked clock should START for one box: the hub's drop-off day for the
+ * weekday it was fulfilled, or the fulfillment date itself when the hub has no calendar entry.
+ * 🔴 FAIL OPEN. An unknown/blank/unresolved hub returns the fulfillment date unchanged, so a hub
+ * lookup that failed can never be the reason a genuinely stuck box goes unreported — the same
+ * inversion excHubsForOrders_ is written to avoid.
+ * UTC throughout, to match excDaysSince_'s UTC-midnight arithmetic.
+ */
+function excPickupStart_(hub, fulIso) {
+  var ful = String(fulIso || '').slice(0, 10);
+  if (!ful) return '';
+  var cal = EXC_HUB_DOCK_DAYS_[String(hub || '').trim()];
+  if (!cal) return ful;
+  var d = new Date(ful + 'T00:00:00Z');
+  if (isNaN(d)) return ful;
+  var from = d.getUTCDay();
+  var dock = cal[from];
+  if (dock === undefined || dock === null) return ful;
+  d.setUTCDate(d.getUTCDate() + ((Number(dock) - from + 7) % 7));
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * The dock gate itself, factored out so it is testable with no I/O: TRUE when this box's origin has
+ * not yet reached its drop-off day plus the floor — i.e. the box is not late, it has not been
+ * handed to anyone yet. FALSE for every hub without a calendar entry, which is every hub but
+ * Swedesboro, so the pre-2026-09-07 behaviour is bit-identical for them.
+ * 🔴 Deferred, never dropped: the caller stamps nothing, so the box re-enters the flush next run.
+ */
+function excDockDeferred_(hub, fulIso) {
+  var ful = String(fulIso || '').slice(0, 10);
+  var start = excPickupStart_(hub, ful);
+  if (!start || start === ful) return false;
+  return excDaysSince_(start) < EXC_NEVER_PICKED_MIN_DAYS;
+}
+
 // 🔴 HUB-LEVEL COLLAPSE FOR THE NEVER-PICKED CLASS (Kurt 2026-08-26: "i don't want another stream
 // of exceptions", directive P15). When >= this many boxes from ONE hub classify NEVER_PICKED_UP in
 // a single run, that is not N customer problems — it is ONE operational event (a dock that was not
@@ -831,7 +896,47 @@ var EXC_DELAYED_MIN_DAYS = 3;
  * closed", "customer not available", FedEx's "Package not delivered/not attempted".
  */
 function excIsNoise_(e) {
-  return /weather delay|local delivery restriction|delivery not attempted|please continue to check your tracking/.test(String(e || ''));
+  var t = String(e || '');
+  // 🔴 WEATHER IS MATCHED BY PROXIMITY, NOT BY WORD ORDER (Kurt 2026-09-07). The literal
+  // `weather delay` is FedEx's phrasing; OnTrac writes "Your package has been delayed due to
+  // weather. We will deliver as soon as possible, RENO NV" — the same fact, the other way round,
+  // and four of those (#173522, #173657, #173794, #174158) sailed onto the tab past a rule whose
+  // entire job was muting them. Adding one more literal would have left the third phrasing to
+  // find later, so both directions are matched within a short span instead.
+  if (/\bweather\b[\s\S]{0,40}?\bdelay|\bdelay(ed|s|ing)?\b[\s\S]{0,40}?\bweather\b/i.test(t)) return true;
+  return /local delivery restriction|delivery not attempted|please continue to check your tracking/i.test(t);
+}
+
+/**
+ * PURE. 🔴 FORWARD PROGRESS — a box whose NEWEST carrier scan says it MOVED is not stuck
+ * (Kurt 2026-09-07: "the fedex ones still tell me basic delays"). Thirteen of the 59 rows on the
+ * live tab that day were classed `delayed / stuck in transit` off a scan that was plain in-network
+ * movement — "Arrived at FedEx location, HAGERSTOWN MD 21740" (#173116, #173162), "Arrived at
+ * FedEx hub, LENEXA KS 66227" (#173685), "On the way, SUPERIOR WI 54880" (#168829), OnTrac's
+ * "received and is on its way to your OnTrac Facility" (#173592, #174065, #174265, #174307) — and
+ * two of them (#173453, #171556) read "On FedEx vehicle for delivery", which is OUT FOR DELIVERY,
+ * the exact opposite of stuck. The DELAYED class fires off Shopify's `displayStatus`, which is a
+ * flag Shopify sets and never re-checks; nothing in this file asked whether the box had since
+ * moved. This predicate is that question.
+ *
+ * 🔴 IT MAY ONLY EVER SUPPRESS THE DELAYED/STUCK PATH. It is consulted from inside the
+ * `delayedElsewhere` branch of excClassify_ and NOWHERE else — below the window walk and below the
+ * FAILED_ATTEMPT structured rescue, so damaged / returned / lost / refused / address-issue /
+ * attempt-failed all classify and all ping exactly as before. A damaged box that keeps moving is
+ * still damaged; moving it above the failure matcher would silence real failures, which is the one
+ * mistake this whole file exists to prevent.
+ *
+ * 🔴 BARE "in transit" IS DELIBERATELY NOT HERE. #169174 (Maria Wood, NY) is the case that earns
+ * the DELAYED class at all, and its newest scan was "In transit, ELMSFORD NY" — a box can sit in
+ * transit for a week. Only DIRECTED transit ("in transit to <somewhere>") is progress. Widening
+ * this to bare `in transit` deletes the class.
+ */
+function excIsForwardProgress_(e) {
+  var t = String(e || '');
+  return /\barrived at\b[\s\S]{0,60}?\b(location|hub|facility|station|center|destination)\b/i.test(t) ||
+         /\bvehicle for delivery\b|\bout for delivery\b/i.test(t) ||
+         /\bon (the|its) way\b|\bin transit to\b|\bdeparted\b/i.test(t) ||
+         /\bleft\b[\s\S]{0,40}?\bfacility\b/i.test(t);
 }
 
 function excMatchFailure_(e) {
@@ -954,6 +1059,15 @@ function excClassify_(ship, movedElsewhere, delayedElsewhere) {
   // for why a floor cannot lose a real case. Tested BEFORE the movement union on purpose: a
   // delayed box HAS moved, so the union would otherwise swallow every one of them.
   if (delayedElsewhere) {
+    // 🔴 A STALE FLAG IS NOT A STUCK BOX (Kurt 2026-09-07). `displayStatus DELAYED` is stamped by
+    // Shopify once and never withdrawn, so pairing it with a FRESH scan that says the box moved
+    // recorded "delayed / stuck in transit" on boxes that were literally on the delivery vehicle.
+    // Suppressed to IN_NETWORK — not merely un-pinged: DELAYED is a RECORD-ONLY class, so it was
+    // already silent in Slack and the complaint is the TAB. IN_NETWORK carries ping:false, and the
+    // caller's `if (!v.ping) return;` is what keeps it off the sheet.
+    // excIsNoise_ is consulted here for the same reason: a weather delay is on Kurt's mute list,
+    // and muting it only in the text matcher left the Shopify flag to put it back on the tab.
+    if (excIsForwardProgress_(e) || excIsNoise_(e)) return r('IN_NETWORK', false);
     var fulD = String((ship && (ship.fulfillment_date || ship.order_date)) || '').slice(0, 10);
     if (fulD && excDaysSince_(fulD) >= EXC_DELAYED_MIN_DAYS) return r('DELAYED', true);
     return r('IN_NETWORK', false);
@@ -1809,6 +1923,24 @@ function excNpuFlush_(pending, stamp) {
   // of orders once a flood exists, versus `tags` on every open box every hour (see EXC_SHOPIFY_HUB_).
   excHubsForOrders_(pending.map(function (p) { return p.on; }));
   var byHub = {};
+  // 🔴 THE DOCK-CALENDAR GATE (Kurt 2026-09-07). This is the ONLY place the clock can be corrected
+  // per origin: hub is knowable nowhere else in this sweep without putting `tags` back on the hot
+  // path, which is the P16 byte-quota regression. excHubsForOrders_ has ALREADY fetched hubs for
+  // exactly this set one line above, so the gate costs zero extra calls and zero extra bytes.
+  // A box whose hub has not reached its drop-off day yet is DEFERRED, not dropped: nothing is
+  // stamped (`open` stays true, `alerted`/`logged` untouched), so the next sweep re-classifies it
+  // and it alarms normally once the real clock has run. Same DELAY-not-DISCARD semantics as the
+  // floor itself. Fail-open by construction — an unresolved hub has no calendar entry.
+  var deferredDock = 0;
+  pending = pending.filter(function (p) {
+    if (excDockDeferred_(EXC_SHOPIFY_HUB_[p.on] || '', p.ful)) { deferredDock++; return false; }
+    return true;
+  });
+  if (deferredDock) {
+    Logger.log('  dock calendar: deferred ' + deferredDock + ' never-picked box(es) whose hub has ' +
+               'not reached its drop-off day — not late, not yet dropped off. They re-evaluate next run.');
+  }
+  if (!pending.length) return out;
   pending.forEach(function (p) {
     var hub = EXC_SHOPIFY_HUB_[p.on] || '(unknown hub)';
     (byHub[hub] = byHub[hub] || []).push(p);
@@ -2293,7 +2425,13 @@ function hourlyExceptionSweep() {
       // Below EXC_NPU_COLLAPSE_MIN per hub the flush replays the exact per-box semantics of the
       // branches below; at or above it, ONE alarm covers the hub. Deliberately placed AFTER the
       // seeding and dry-run branches so those modes keep their unchanged behavior.
-      if (v.cls === 'NEVER_PICKED_UP') { npuPending.push({ on: on, rec: rec, v: v }); return; }
+      // `ful` rides along run-scoped (state schema untouched, same as hub and tracking): the flush
+      // needs the label date to run the per-origin dock calendar, and `ship` is only in scope here.
+      if (v.cls === 'NEVER_PICKED_UP') {
+        npuPending.push({ on: on, rec: rec, v: v,
+                          ful: String((ship && (ship.fulfillment_date || ship.order_date)) || '').slice(0, 10) });
+        return;
+      }
       // 🔴 Mon/Tue: RECORD but do not alert. The gate must be here as well as inside
       // excSlackPost_ — that one only suppresses the HTTP call, while `alerted` is stamped right
       // after it returns. Relying on the post-path gate alone would mark the exception alerted
@@ -2499,7 +2637,15 @@ function excSelfTest() {
     ['Delivery exception, Incorrect address, HERNDON VA 20171', 'EXCEPTION', 'ADDRESS_ISSUE', true],
     ['The delivery of your package was attempted but could not be completed due to a lack of an access code.', 'EXCEPTION', 'ADDRESS_ISSUE', true],
     ['The delivery of your package was attempted but could not be completed', 'EXCEPTION', 'ATTEMPT_FAILED', true],
-    ["We're sorry but we were unable to complete your delivery. Please continue to check your tracking", 'EXCEPTION', 'ATTEMPT_FAILED', true],
+    // 🔴 STALE EXPECTATION, CORRECTED 2026-09-07 (test-only; no behaviour changed). The 2026-09-03
+    // noise rule deliberately made OnTrac's generic "unable to complete your delivery / please
+    // continue to check your tracking" a NON-event — Kurt: "I also don't want to see delivery
+    // failed by ontrac. that's like a regular delay" — and excIsNoise_ has muted it since. This
+    // case still asserted the pre-09-03 verdict, so excSelfTest has returned RED on every run since
+    // that commit. A permanently-red self-test is worse than no self-test: it is how the next real
+    // regression gets waved through. Verified against the committed HEAD before touching it —
+    // 1 failure at HEAD, the same one, and it is this line.
+    ["We're sorry but we were unable to complete your delivery. Please continue to check your tracking", 'EXCEPTION', 'IN_NETWORK', false],
     ['The driver tried to deliver the package, but the business was closed. We will reattempt up to 3 times.', 'EXCEPTION', 'ATTEMPT_FAILED', true],
     ['At local FedEx facility, Package not delivered/not attempted', 'EXCEPTION', 'ATTEMPT_FAILED', true],
     ['Delivered', 'EXCEPTION', 'DELIVERED', false],
@@ -2589,6 +2735,111 @@ function excSelfTest() {
   if (delayedFresh.cls === 'DELAYED') {
     fails.push('a same-day DELAYED flag must not fire (floor ' + EXC_DELAYED_MIN_DAYS + 'd)');
   }
+  // 🔴 FORWARD PROGRESS (Kurt 2026-09-07). Every string below was read off the LIVE Exceptions tab
+  // on 2026-09-07, where each was classed `delayed / stuck in transit`. Each must now record
+  // NOTHING: a box whose newest scan says it moved is not stuck. The Shopify DELAYED flag is on
+  // (delayedElsewhere=true) and the label is ancient, so the ONLY thing keeping these off the tab
+  // is the forward-progress predicate — if it regresses, these fail.
+  [ 'Arrived at FedEx location, HAGERSTOWN MD 21740',              // #173116, #173162
+    'On FedEx vehicle for delivery, FLINT MI 48507',                // #173453 — out for delivery
+    'On FedEx vehicle for delivery, LADSON SC 29456',               // #171556
+    'Arrived at FedEx hub, LENEXA KS 66227',                        // #173685
+    'On the way, SUPERIOR WI 54880',                                // #168829
+    'Arrived at FedEx location',                                    // #170396, #172581, #174163
+    'Your package has been received and is on its way to your OnTrac Facility, see Estimated Delivery Date',
+    // #173522/#173657/#173794/#174158 — OnTrac's word order, which the old `weather delay`
+    // literal did not match. Four of these reached the tab.
+    'Your package has been delayed due to weather. We will deliver as soon as possible, RENO NV'
+  ].forEach(function (d) {
+    var g = excClassify_({ status: 'IN_TRANSIT', fulfillment_date: '2026-01-01',
+      checkpoints: [{ detail: d, status: 'IN_TRANSIT' }] }, true, true);
+    if (g.cls === 'DELAYED' || g.ping) {
+      fails.push('forward progress / weather must not reach the tab: "' + d.slice(0, 46) +
+                 '" -> ' + g.cls + '/' + g.ping);
+    }
+  });
+  // both word orders, phrasing-independent — not one more literal
+  if (!excIsNoise_('local weather delay - delivery not attempted') ||
+      !excIsNoise_('your package has been delayed due to weather')) {
+    fails.push('excIsNoise_ must catch weather in BOTH word orders');
+  }
+  // 🔴 THE DIRECTION THAT MUST NEVER BREAK: forward progress may only ever suppress DELAYED. A real
+  // failure class still classifies and still pings even with the DELAYED flag set — a damaged box
+  // that keeps moving is still damaged.
+  [['Your package has been damaged. Please contact the seller', 'DAMAGED'],
+   ['Package was returned to the sender, WOBURN MA US', 'RETURNED'],
+   ['Issue with order. Lost by driver', 'LOST'],
+   ['Delivery exception, Delivery was refused by the recipient', 'REFUSED'],
+   ['Delivery exception, Incorrect address, HERNDON VA 20171', 'ADDRESS_ISSUE'],
+   ['Shipment exception, Unable to deliver, BUFFALO NY', 'UNDELIVERABLE'],
+   ['The driver tried to deliver the package, but the business was closed.', 'ATTEMPT_FAILED']
+  ].forEach(function (c) {
+    var g = excClassify_({ status: 'EXCEPTION', fulfillment_date: '2026-01-01',
+      checkpoints: [{ detail: c[0], status: 'EXCEPTION' }] }, true, true);
+    if (g.cls !== c[1] || !g.ping) {
+      fails.push('a real failure must survive the DELAYED flag: "' + c[0].slice(0, 40) +
+                 '" -> ' + g.cls + '/' + g.ping + ' expected ' + c[1] + '/true');
+    }
+  });
+  // ...including the structured rescue: a forward-progress newest scan must not mute FAILED_ATTEMPT
+  var fwdOverStructured = excClassify_({ status: 'FAILED_ATTEMPT',
+    checkpoints: [{ detail: 'Arrived at FedEx location, HAGERSTOWN MD 21740', status: 'IN_TRANSIT' }] });
+  if (fwdOverStructured.cls !== 'ATTEMPT_FAILED' || !fwdOverStructured.ping) {
+    fails.push('forward progress must not outrank PP status FAILED_ATTEMPT -> ' + fwdOverStructured.cls);
+  }
+  // 🔴 bare "in transit" is NOT progress — #169174 is the case that earns the DELAYED class, and
+  // `delayedOld` above asserts it still fires. This pins the predicate that could delete it.
+  if (excIsForwardProgress_('in transit, elmsford ny')) {
+    fails.push('bare "in transit" must not count as forward progress — it would delete DELAYED');
+  }
+  if (!excIsForwardProgress_('on fedex vehicle for delivery, flint mi 48507') ||
+      !excIsForwardProgress_('is on its way to your ontrac facility') ||
+      !excIsForwardProgress_('arrived at fedex hub, lenexa ks 66227')) {
+    fails.push('excIsForwardProgress_ must match the real movement scans');
+  }
+
+  // ---- 🔴 PER-ORIGIN DOCK CALENDAR (Kurt 2026-09-07: Swedesboro Monday boxes drop off Wednesday)
+  // 2026-09-07 is a Monday; 2026-09-09 the Wednesday. PURE, so these are fixed dates.
+  if (excPickupStart_('Swedesboro', '2026-09-07') !== '2026-09-09') {
+    fails.push('a Swedesboro MONDAY label must start its clock on the Wednesday drop-off, got ' +
+               excPickupStart_('Swedesboro', '2026-09-07'));
+  }
+  if (excPickupStart_('Swedesboro', '2026-09-09') !== '2026-09-09') {
+    fails.push('a Swedesboro WEDNESDAY label already sits on its dock day — no shift');
+  }
+  if (excPickupStart_('Swedesboro', '2026-09-08') !== '2026-09-08') {
+    fails.push('only the weekday in the calendar shifts; a Tuesday label is untouched');
+  }
+  // every hub without a calendar row keeps the pre-2026-09-07 clock EXACTLY
+  ['Nashville', 'Dallas', 'Anaheim', 'Indianapolis', '(unknown hub)', ''].forEach(function (h) {
+    if (excPickupStart_(h, '2026-09-07') !== '2026-09-07') {
+      fails.push('hub without a dock calendar must keep the label date: ' + (h || '(empty)'));
+    }
+  });
+  // the shift is exactly two days ON THE CLOCK, not just on the string
+  if (excDaysSince_(excPickupStart_('Swedesboro', '2026-09-07')) !== excDaysSince_('2026-09-07') - 2) {
+    fails.push('the Swedesboro Monday clock must run exactly 2 days behind the label');
+  }
+  // BEFORE the drop-off: not late, not yet dropped off -> deferred, nothing recorded
+  var nextMon = new Date();
+  nextMon.setUTCDate(nextMon.getUTCDate() + ((1 - nextMon.getUTCDay() + 7) % 7 || 7));
+  var nextMonIso = nextMon.toISOString().slice(0, 10);
+  if (!excDockDeferred_('Swedesboro', nextMonIso)) {
+    fails.push('a Swedesboro box whose Wednesday drop-off has not happened must be deferred');
+  }
+  // AFTER the drop-off: a genuinely uncollected Swedesboro box STILL alarms — Kurt keeps this class
+  var oldMon = new Date();
+  oldMon.setUTCDate(oldMon.getUTCDate() - ((oldMon.getUTCDay() + 6) % 7) - 21);
+  var oldMonIso = oldMon.toISOString().slice(0, 10);
+  if (excDockDeferred_('Swedesboro', oldMonIso)) {
+    fails.push('a Swedesboro box 3 weeks past its drop-off must still classify NEVER_PICKED_UP');
+  }
+  // fail OPEN: an unresolved hub can never be the reason a stuck box goes unreported
+  if (excDockDeferred_('', nextMonIso) || excDockDeferred_('(unknown hub)', nextMonIso) ||
+      excDockDeferred_('Nashville', nextMonIso) || excDockDeferred_('Swedesboro', '')) {
+    fails.push('the dock gate must fail OPEN for any hub it cannot resolve a calendar for');
+  }
+
   // display guards for the two new/renamed classes — display only, tokens unchanged
   if (excDisplay_('ATTEMPT_FAILED') !== 'delivery attempt failed') {
     fails.push('ATTEMPT_FAILED must display as "delivery attempt failed"');
