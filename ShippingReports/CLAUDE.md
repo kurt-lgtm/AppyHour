@@ -85,6 +85,40 @@ Analytics pipeline for subscription box shipping. Ingests carrier invoices (OnTr
 - **TNT calc HARD RULE** — final-mile pickup→delivery only; never carrier API `transit_time`. Veho: PP `pickup_date`, not `Tendered`.
 - **FedEx contract 2389560254** earn-floor $390k = 7%; 160/day min currently 91/57% = BREACH RISK. No Express service.
 - **2-day mandatory** all shipments. Tue = Dallas-only hub. Zone5+ from Dallas needs 2DayExpress.
+- 🔴 **A tracking's cost is the SUM of its invoice lines — never one line.** UPS bills a tracking
+  across a freight line plus accessorials and after-the-fact `Adjustments & Other Charges/...`
+  corrections. A parser that emits ONE ROW PER LINE hands the `shipments` upsert
+  (`ON CONFLICT(tracking) DO UPDATE SET cost=excluded.cost`) an arbitrary survivor — locally the
+  LAST line, in the cloud the FIRST. **Burn 2026-09-07:** `1Z2H94940334864194` in
+  `AHB_00356_UPS Shipping Breakdown_AHB_6-1-26.csv` is billed **$18.08** `Ground Residential /
+  Outbound/Shipping API` + **$1.40** `Shipping Charge Corrections`. True charge **$19.48**; local
+  stored **$1.40**, cloud stored $18.08 — a $1.40 UPS ground parcel that nobody questioned. 20
+  trackings, **$490.76** understated on the published UPS cost row.
+  Rules for ANY new or edited invoice reader:
+  * Aggregate by tracking BEFORE returning. `_parse_ups_billing_data` (headerless v2.1) has done
+    this since it was written and is the reference shape; `_parse_ups_headed_csv` was brought into
+    line 2026-09-07.
+  * A **credit / negative adjustment SUBTRACTS** (real case: `1ZC411H40311605473` = 14.92 − 0.61 =
+    **$14.31**). Never drop it, never `abs()` it.
+  * Non-cost fields come from the **freight** line. Adjustment lines carry thin metadata — the
+    address-correction line on `1ZC411H40318992015` has blank city/state/zip, zone `000`, and a
+    pickup date four days after the shipment's.
+  * `shipments` has no column recording how many lines were summed. Multi-line trackings are
+    written to **stderr at parse time** so the ingest log carries the provenance; if that proves
+    insufficient the smallest fix is `ALTER TABLE shipments ADD COLUMN charge_lines INTEGER`.
+  * Do NOT sniff the dialect from the header alone. OnTrac 'Shipping Breakdown' CSVs also carry a
+    `Tracking Number` column, so a header sniff routes 14 OnTrac files into the UPS reader and
+    yields confident $0.00 costs. Select by the **filename token**, same authority as carrier.
+  Guard: `tests/test_ups_headed_csv_line_summing.py` (every value pinned from a real invoice).
+  Repair for the already-stored rows: `_outputs/scripts/ups_headed_cost_repair.py` (dry-run
+  default). Re-ingest is idempotent — `store_shipments` upserts on `tracking`, never appends.
+- 🔴 **Carrier comes from the FILENAME TOKEN, never the parser path.** An OnTrac parser run over a
+  UPS file stamped `carrier='OnTrac'` on 61 `1Z...` trackings from
+  `AHB_00350_UPS Shipping Breakdown_AHB_5-25-26.csv` — ~$829 of UPS cost published on the OnTrac
+  row. `auto_import.rmfg_carrier()` fixed the code path; the stored rows are repaired by
+  `_outputs/scripts/cleanup_invoice_headers.py --commit`, which as of 2026-09-07 has still not been
+  run. A `1Z` prefix is unambiguously UPS — a tracking-prefix sanity check beside the filename-token
+  rule would have caught this at write time.
 
 ## Overview
 Analytics pipeline for subscription box shipping optimization. Ingests carrier invoices (OnTrac, UPS, FedEx), customer issue data (Gorgias), and tracking events (Parcel Panel) to generate routing recommendations, cost analysis, and performance reports.
