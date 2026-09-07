@@ -17,7 +17,8 @@ Measured on the same files, the two readers disagreed on cost for the same track
         carries TWO lines: freight $18.08 (`Ground Residential`, Outbound) + a $1.40 `Shipping
         Charge Corrections` line. Local (sqlite `ON CONFLICT(tracking) DO UPDATE cost=excluded`)
         kept the LAST line: $1.40, service `Ground` — a 93% understatement that looked plausible.
-        Cloud inserted BOTH lines as two shipments — a per-tracking consumer sees an arbitrary one.
+        Cloud ingest wrote BOTH lines as two shipments; the 09-06 dedupe deleted the $1.40 twin,
+        so the cloud store holds $18.08 alone. Each store: ONE fragment. Nobody summed.
   OnTrac `1LSD8S9000MXDVF` (`AHB_00215`) — outbound $8.80 + a `Return to Sender = Y` leg $7.32,
         same invoice number. Local kept $7.32 (the return), cloud kept both rows. Four more RD
         trackings (`AHB_00194`, `AHB_00227`, `AHB_00266` ×2) have the same shape.
