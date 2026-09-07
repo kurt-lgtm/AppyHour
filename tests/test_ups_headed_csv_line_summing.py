@@ -150,6 +150,32 @@ def test_all_adjustment_tracking_keeps_its_only_lines_metadata():
     assert s["service"] == "Ground"
 
 
+def test_shippingreports_headed_parser_agrees(tmp_path):
+    """`ShippingReports/parsers/ups.py::_parse_header_csv` is the CLOUD's reader for the same
+    dialect and carried the same one-row-per-line defect (it kept the FIRST line where local kept
+    the LAST). Both readers must now produce the invoice's sum."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from ShippingReports.parsers.ups import parse_ups_csv
+
+    rows = [
+        _row("1Z2H94940334864194", "Ground Residential", "4", "5/31/2026",
+             "GLORIETA", "NM", "875357187", "18.08", "Outbound/Shipping API", ref2="AHB"),
+        _row("1Z2H94940334864194", "Ground", "4", "5/31/2026",
+             "GLORIETA", "NM", "875357187", "1.4",
+             "Adjustments & Other Charges/Shipping Charge Corrections", ref2="AHB"),
+        _row("1Z2H94940300064942", "Ground Residential", "4", "5/31/2026",
+             "ODESSA", "TX", "797628415", "11.58", "Outbound/Shipping API", ref2="AHB"),
+    ]
+    p = tmp_path / "AHB_00356_UPS Shipping Breakdown_AHB_6-1-26.csv"
+    p.write_text("\n".join([HEADER, *rows]) + "\n", encoding="latin-1")
+
+    out = {s.tracking: s for s in parse_ups_csv(str(p))}
+    assert len(out) == 2
+    assert out["1Z2H94940334864194"].cost == 19.48
+    assert out["1Z2H94940334864194"].service == "Ground Residential"
+    assert out["1Z2H94940300064942"].cost == 11.58
+
+
 def test_headerless_billing_dialect_still_aggregates():
     """`_parse_ups_billing_data` was already correct — the headed fix must not change it."""
     cols = ["" for _ in range(85)]
