@@ -364,7 +364,17 @@ function shopifyIoSummary_() {
  * straight out of `fetch`. Not retryable: a DAILY byte budget does not refill in seven seconds, and
  * retrying spends more of the thing that just ran out (netRetryable_ deliberately excludes it).
  */
-function shopifyQuotaWall_(e) {
+function shopifyQuotaWall_(e) { return gasFetchQuotaWall_(e); }
+
+/**
+ * 🔴 THE SAME WALL, CORRECTLY NAMED — it belongs to GOOGLE, not to whichever vendor's URL happened
+ * to be in flight. `shopifyQuotaWall_` above is kept ONLY because Exceptions.gs calls it by that
+ * name; it delegates here so there is exactly one definition of the test. Call THIS one from any
+ * new site (D43), because the name is the whole point: on 2026-08-31 the wall surfaced on a Shopify
+ * URL and on 2026-09-06 on `open.parcelwill.com`, and both times the raw message invites the reader
+ * to go tune the wrong vendor's rate limiter.
+ */
+function gasFetchQuotaWall_(e) {
   return /bandwidth quota|reducing the rate of data transfer|service invoked too many times/i
     .test(String((e && e.message) || e || ''));
 }
@@ -1008,6 +1018,20 @@ var PP_CYCLE_MS = Math.round(60000 * PP_BATCH / PP_TARGET_PER_MIN);   // 6000
 // afford. Frequent braking means ANOTHER consumer is on this key — signal, not noise. See P12.
 var PP_BRAKE_REMAINING = 12;
 var PP_RETRY_MS = [2000, 4000, 8000, 16000, 32000];   // P13: a 429 is retried, never dropped
+// 🔴 D43 — PER-RUN PARCELPANEL I/O, IN BYTES. The pacing above answers "am I over PP's 120/min?".
+// It cannot answer "am I over GOOGLE's daily url-fetch DATA quota?", which is a different meter,
+// charged to the SCRIPT OWNER and shared with every other fetch in this project. Shopify has had
+// SHOPIFY_IO_BYTES_ since 2026-08-31; ParcelPanel had nothing, so on 2026-09-06 there was no number
+// naming which consumer drank the quota. Descriptive only — nothing caps or skips on these.
+var PP_IO_BYTES_ = 0;    // response bytes received from ParcelPanel this execution
+var PP_IO_CALLS_ = 0;    // responses received (served, whatever the status)
+var PP_IO_WALL_ = null;  // the Apps Script quota-wall exception, if one was hit this execution
+
+/** One line naming what this execution actually drew from ParcelPanel. */
+function ppIoSummary_() {
+  return 'parcelpanel I/O this run: ' + PP_IO_CALLS_ + ' response(s), ' +
+         (PP_IO_BYTES_ / 1024).toFixed(1) + ' KB received';
+}
 
 /** Case-insensitive response-header read. Local copy on purpose: Code.gs must not depend on
  *  Exceptions.gs for its own pacing — that file has been deleted from this project once
@@ -1105,10 +1129,23 @@ function ppLookup_(orderNums, cohortOf) {
   // dropping one silently blanks that order's carrier / transit_days in Dan's column for the run.
   function consume(nums) {
     var retry = [];
-    var resp = UrlFetchApp.fetchAll(nums.map(function (n) {
-      return { url: 'https://open.parcelwill.com/api/v2/tracking/order?order_number=' + encodeURIComponent(n),
-               headers: { 'x-parcelpanel-api-key': key }, muteHttpExceptions: true };
-    }));
+    var resp;
+    // 🔴 D43 — `fetchAll` THROWS the Apps Script quota wall; `muteHttpExceptions` cannot see it,
+    // because it is not an HTTP status. Unhandled, it escaped ppLookup_ and killed the whole
+    // refresh BEFORE `ppCacheSave_` — discarding every stamp the run had just paid for, so the
+    // next hour re-bought them and spent more of the byte quota that had just run out. That is
+    // EXCEPTIONS_ALERT_RULES P9 rule 6 ("a suppressed run still saves what it learned") reappearing
+    // on the report side. Not retried: a DAILY byte budget does not refill in 32 seconds.
+    try {
+      resp = UrlFetchApp.fetchAll(nums.map(function (n) {
+        return { url: 'https://open.parcelwill.com/api/v2/tracking/order?order_number=' + encodeURIComponent(n),
+                 headers: { 'x-parcelpanel-api-key': key }, muteHttpExceptions: true };
+      }));
+    } catch (eF) {
+      if (!gasFetchQuotaWall_(eF)) throw eF;
+      PP_IO_WALL_ = eF;
+      return [];   // nothing served — these orders stay UNSTAMPED and are re-asked next run
+    }
     resp.forEach(function (r, k) {
       var onum = nums[k];
       var code = r.getResponseCode();
@@ -1119,6 +1156,11 @@ function ppLookup_(orderNums, cohortOf) {
       // backpressure into a permanently missing value.
       if (code === 429 || code === 503) { retry.push(onum); return; }
       charged++;                                     // served, whatever it answered
+      // D43: bytes are read ONCE and reused below — the body is already in memory, so this costs
+      // nothing, and it is the only number that can name this consumer's share of Google's quota.
+      var bodyTxt = '';
+      try { bodyTxt = r.getContentText() || ''; } catch (eT) {}
+      PP_IO_CALLS_++; PP_IO_BYTES_ += bodyTxt.length;
       // 🔴 STAMP THE ASK EVEN ON A NON-200. A 404 is a served call and an answer ("no such
       // order"); not stamping it would re-ask the same dead record every run and rebuild the
       // exact drain this cache exists to remove.
@@ -1127,7 +1169,7 @@ function ppLookup_(orderNums, cohortOf) {
       cache[onum] = cur;
       if (code !== 200) return;
       try {
-        var o = JSON.parse(r.getContentText());
+        var o = JSON.parse(bodyTxt);
         var ships = ((o.order || {}).shipments) || ((o.data || {}).shipments) || o.shipments || [];
         if (!ships.length) return;
         var s = ships[0], c = s.carrier, cname = (c && c.name) || (c && c.code) || c || '';
@@ -1157,6 +1199,9 @@ function ppLookup_(orderNums, cohortOf) {
     }
     // Ladder exhausted: leave them UNSTAMPED so the next hourly run asks again. Never a hole.
     if (retry.length) throttled += retry.length;
+    // 🔴 D43 — the wall is not backpressure, it is an exhausted DAILY budget. Dispatching the next
+    // batch cannot succeed and spends more of what ran out. Stop; the rest stay unstamped.
+    if (PP_IO_WALL_) break;
     // --- pace: brake on the live header if the bucket is nearly gone, else hold the cycle ---
     if (remainingMin != null && remainingMin < PP_BRAKE_REMAINING) {
       var ms = 60000 - (new Date().getTime() % 60000) + 500;
@@ -1202,7 +1247,26 @@ function ppLookup_(orderNums, cohortOf) {
              ' still throttled after ' + PP_RETRY_MS.length + ' retries (unstamped — the next run ' +
              'asks again), ' + brakes + ' brake(s), min x-ratelimit-remaining ' +
              (remainingMin == null ? 'n/a' : remainingMin) + '/120; ' +
-             wentTerminal + ' went terminal');
+             wentTerminal + ' went terminal; ' + ppIoSummary_());
+  // 🔴 D43 — RE-LABEL THE METER, THEN FAIL LOUD. The raw message is
+  // "Bandwidth quota exceeded: https://open.parcelwill.com/... Try reducing the rate of data
+  // transfer", which reads as a ParcelPanel problem and sends the next reader to tune a rate
+  // limiter that was already correct and already inside its 120/min. This throw is raised only
+  // AFTER `ppCacheSave_` above, so everything this run learned survives it.
+  if (PP_IO_WALL_) {
+    var deferred = ask.filter(function (n) {
+      return !(cache[n] && cache[n].asked === today);
+    }).length;
+    throw new Error(
+      'GOOGLE Apps Script daily url-fetch DATA quota exhausted (script-owner meter) during the ' +
+      'ParcelPanel leg. 🔴 This is NOT ParcelPanel\'s limit: PP refuses with HTTP 429 + ' +
+      'x-ratelimit-remaining, which this code paces for and retries; the Apps Script wall is a ' +
+      'THROWN exception with no HTTP status, and the same text hit a Shopify URL on 2026-08-31. ' +
+      'Reduce BYTES across every consumer in this project (see ppIoSummary_ / shopifyIoSummary_), ' +
+      'not the PP request rate. ' + ppIoSummary_() + '; ' + charged + ' served before the wall, ' +
+      deferred + ' order(s) left UNSTAMPED and deferred to the next run. Raw: ' +
+      String((PP_IO_WALL_ && PP_IO_WALL_.message) || PP_IO_WALL_).slice(0, 200));
+  }
   return out;
 }
 // "late supersedes warm": a box >2 transit days arrived warm BECAUSE it was delayed —

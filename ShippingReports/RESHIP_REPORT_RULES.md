@@ -3719,3 +3719,96 @@ and a foreign-tag record → throw with the order named. Global-collision sweep 
 `Code.gs` / `Exceptions.gs` / `Notifications.gs` / `PivotAnalytics.gs` (`^(function|var)\s+name`):
 no top-level name defined in more than one file. `main()` / `refreshCurrentColumn` were never run.
 Not pushed to Apps Script — `gas_swap.py push PivotAnalytics` is Kurt's.
+
+### D43 — THE 09-06 "QUOTA EXCEEDED" WAS **GOOGLE'S** METER, NOT PARCELPANEL'S, AND THE THROW DISCARDED EVERY STAMP THE RUN HAD PAID FOR (2026-09-06)
+
+> The alarm, verbatim class: `Exception: Bandwidth quota exceeded:
+> https://open.parcelwill.com/api/v2/tracking/order?order_number=172143. Try reducing the rate of
+> data transfer.` Read literally it says *ParcelPanel*, and it sends the next reader to tune a rate
+> limiter that was already correct.
+
+#### 🔴 The failures this exists to prevent, negatives first
+
+1. **NEVER read a vendor's URL in a quota error as the vendor's quota.** `Bandwidth quota exceeded
+   … reducing the rate of data transfer` is **Apps Script's** wording for the **script owner's
+   DAILY url-fetch DATA quota**. The URL in the message is only whatever request was in flight.
+   Three independent discriminators, all checkable without asking either vendor:
+   - **It is a THROWN exception with no HTTP status.** `ppLookup_` fetches with
+     `muteHttpExceptions: true`, so *no* ParcelPanel status — 429 included — can ever throw. A
+     thrown string is by construction not PP's answer.
+   - **ParcelPanel refuses with `429` + `x-ratelimit-remaining`**, which this code already paces
+     for (`PP_TARGET_PER_MIN = 100` of a measured 120/min), brakes on (`PP_BRAKE_REMAINING`) and
+     retries (`PP_RETRY_MS`, P13). The 09-06 run was inside that limiter and still hit the wall.
+   - **The identical text hit a *Shopify* URL on 2026-08-31** (see the Shopify I/O accounting block
+     in `Code.gs`). One message, two unrelated vendors, one shared meter — Google's.
+   🔴 The two meters are also unrelated in *kind*: PP's is a **rate** (per minute, per API key,
+   shared across every consumer of that key, and it recovers in 60 seconds); Google's is a **daily
+   byte budget** charged to the script owner and shared with every fetch in this project. Pacing
+   PP slower does not buy back one byte of it.
+2. **NEVER let the wall escape `ppLookup_` unhandled.** It did, and it killed the whole refresh
+   **above `ppCacheSave_`** — discarding every `asked` stamp and every carrier the run had already
+   paid Google's bytes for. The next hour therefore re-bought the same facts and spent more of the
+   budget that had just run out. That is `EXCEPTIONS_ALERT_RULES` **P9 rule 6** ("a suppressed run
+   still saves what it learned") reappearing on the report side, one file over. **The cache is
+   saved BEFORE the throw.**
+3. **NEVER retry the wall, and never dispatch the next batch after it.** A *daily* byte budget does
+   not refill in 32 seconds, and each retry spends more of the thing that is gone. The batch loop
+   `break`s on the first wall. This is the opposite of a 429, which is backpressure and **must**
+   be retried (P13) — conflating the two would either drop real 429s or hammer an exhausted quota.
+4. **NEVER stamp an order the wall prevented us from asking about.** An unstamped order is re-asked
+   next run (rule 3 of the PP cache); stamping one would suppress it for the rest of the calendar
+   day and blank its carrier / `transit_days` in Dan's column — a refused request recorded as an
+   answer, which is precisely what P13 forbids. Orders behind the wall are left **UNSTAMPED and
+   deferred**, and the throw says how many.
+5. **NEVER raise an alarm that names the wrong system.** The re-labelled throw leads with *GOOGLE
+   Apps Script daily url-fetch DATA quota (script-owner meter)*, states that it is **not**
+   ParcelPanel's limit and why, points the fix at BYTES across every consumer, and keeps the raw
+   text (truncated) for forensics. P16's "the alarm named the wrong system once" is the motivating
+   precedent; this is the same mistake caught one vendor later.
+6. **A consumer with no byte meter cannot be indicted or exonerated.** Shopify has had
+   `SHOPIFY_IO_BYTES_` since 2026-08-31; ParcelPanel had nothing, so on 09-06 no number existed to
+   say whose bytes ran the quota out. `PP_IO_BYTES_` / `PP_IO_CALLS_` / `ppIoSummary_()` now
+   mirror it, on both the success log line and the wall throw. 🔴 **Descriptive only** — nothing
+   caps, paces or skips on them (directive P3 as rewritten by P12); a code path that gates on these
+   is the regression this clause exists to prevent.
+7. **`gasFetchQuotaWall_` is the name; `shopifyQuotaWall_` is a one-line delegate kept only because
+   `Exceptions.gs` calls it** (two sites). One definition of the test, and the correct name at every
+   new call site — the wall belongs to Google, and a helper named for a vendor is how the wrong
+   vendor gets blamed a third time.
+
+#### What was NOT changed, deliberately
+
+The pacing itself. `PP_BATCH` / `PP_TARGET_PER_MIN` / `PP_BRAKE_REMAINING` / `PP_RETRY_MS` and the
+dispatch-measured cycle were already correct and already deployed on 2026-09-03 — the 09-06 wall
+happened **with** them in place, which is itself evidence for the diagnosis above. Tightening them
+would have treated a symptom of a meter they cannot touch. The `_pp_cache` (F1/P11) remains the only
+lever that actually reduces bytes, and it is why the report's PP leg is already cheap.
+
+#### The second 09-06 failure is a different fault
+
+The Shopify `Internal Server Error` in the ~17:09–17:21 ET window (which also took down
+`delivery_status_sync` and the exceptions seed) is a Shopify-side 5xx, already covered by
+`netFetch_`'s connection-class retry (D25) and outside this rule.
+
+#### Verification (2026-09-06, node 24)
+
+`scratchpad/pp_wall_test.js` — **25/25 PASS**. Loads `Code.gs` verbatim into a `vm` context with
+stubbed Apps Script globals and a stubbed `UrlFetchApp.fetchAll`; **no ParcelPanel call was placed**
+(the key is shared at 120/min — a test run is a real spend). Asserts: the real 09-06 PP wall text,
+the real 08-31 Shopify wall text and `service invoked too many times` all classify TRUE while an
+HTTP-429 message and `Address unavailable` classify FALSE; `shopifyQuotaWall_` still delegates
+correctly for `Exceptions.gs`; a wall on the first batch throws naming Google, disclaims PP,
+reports 3 deferred orders, dispatches exactly ONE batch and stamps nothing; a wall *after* a good
+batch still throws but `ppCacheSave_` ran first and all 10 served orders persist with their
+carrier; a 429 is still retried, answered and stamped (P13 intact); a non-wall throw propagates
+verbatim; `ppIoSummary_()` reports responses and KB. `node --check` on `.js` copies of all five
+`.gs` files: SYNTAX OK. Global-collision sweep (`^(function|var)\s+name`) across
+`Code.gs` / `Exceptions.gs` / `Notifications.gs` / `PivotAnalytics.gs` / `PivotSheet.gs`: the three
+new globals collide with nothing; the only hits (`refresh`, `STATE_COLS`, `iso_`) are pre-existing
+`Code.gs`↔`PivotSheet.gs` pairs, and `PivotSheet.gs` is not in the deployed project. `refresh()`
+was never run. Not pushed — `gas_swap.py push Code` is Kurt's.
+
+#### The re-run that proves the report recovered
+
+`Triage!A1` and `Product Mix!A1` both read **`REFRESHED 2026-09-07T08:08:42`** — one run, past the
+PP-dependent legs, after both 09-06 failures. The report was not left broken.
