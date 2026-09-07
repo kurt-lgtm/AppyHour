@@ -13,6 +13,12 @@ config.yaml
 *.pdf
 RMFG_*/
 Invoices/
+# carrier-invoice PARSER fixtures (real rows, redacted) — tests/test_invoice_parsers.py. The dir
+# must be re-included before its files can be (git cannot re-include under an excluded parent).
+!tests/fixtures/invoices/
+!tests/fixtures/invoices/*.csv
+!tests/fixtures/invoices/*.xlsx
+!tests/fixtures/invoices/*.XLSX
 Shipments/
 snapshots/
 output/
