@@ -10,9 +10,13 @@ two owners on one script, two writers on one heartbeat key (which defeats this v
 expectations/beats with no counterpart. See its block comment for what it deliberately lets
 through and why.
 
-Run:  python scripts/automation_health.py [--verbose] [--no-notify]
+Runs 7 DAYS A WEEK (rule 20). On Sat/Sun it narrows to the subjects that actually run at the
+weekend and stays CRITICAL-only — see WEEKEND_ELIGIBLE_BEATS for the burn and the scoping.
+
+Run:  python scripts/automation_health.py [--verbose] [--no-notify] [--weekend|--weekday]
       --no-notify = audit mode: same checks, same report, same exit code, but NO Slack post,
       NO heartbeat beat and NO dispatch. Use it for ANY read-only run of this file.
+      --weekend / --weekday force the scope branch (default: the local calendar decides).
       (bootstrap.init handles UTF-8 stdio)
 Exit: 0 green, 1 findings, 2 checker-broken (treat as red).
 """
@@ -41,14 +45,15 @@ EXPECTED = {
     "forecast-a-monitor": 8 * 24,
     "loop-scorecard": 8 * 24,
     "corrections-mining": 8 * 24,
-    # 🔴 4d, not 2d (2026-08-31): the owning routine `automation-health-daily` is cron
-    # `15 12 * * 1-5` — WEEKDAYS ONLY. Friday 12:16 -> Monday 12:16 is 72h, so a 48h limit graded
-    # Friday's healthy run stale every single Monday, forever, and 08-31 fed that false alarm into
-    # the rule-12 dispatcher. 4d = the Fri->Mon gap plus one missed weekday, same shape and reason
-    # as pytest-shiprouting below. Chosen over a weekday-aware limit deliberately: "is the beat
-    # older than N hours" is one comparison anyone can verify, while "what was the previous
-    # SCHEDULED run day" needs a calendar the checker does not have (holidays, a disabled task, a
-    # cron change) — an unprovable threshold in a false-alarm fix is the bug again.
+    # 🔴 4d, not 2d (2026-08-31): a 48h limit graded a healthy Friday run stale every single
+    # Monday, forever, and 08-31 fed that false alarm into the rule-12 dispatcher. The owning
+    # routine went 7-DAY on 2026-09-07 (rule 20) so the Fri->Mon gap no longer exists, but the
+    # limit STAYS at 4d: a Claude routine's fire is late-on-catch-up by design (the machine sleeps
+    # through slots), so the legal gap between two healthy beats is not 24h. Chosen over a
+    # weekday-aware limit deliberately: "is the beat older than N hours" is one comparison anyone
+    # can verify, while "what was the previous SCHEDULED run day" needs a calendar the checker does
+    # not have (holidays, a disabled task, a cron change) — an unprovable threshold in a
+    # false-alarm fix is the bug again.
     "automation-health": 4 * 24,
     "freshness-sweep": 8 * 24,
     # weekday-only via catch-up-missed-tasks.sh; 4d allows the Fri->Mon gap + one missed day
@@ -94,6 +99,77 @@ SYNC_HEARTBEAT_MAX_H = 48
 # 12h throttle windows: two consecutive partials (Tue+Wed backlog) are the measured normal; a
 # third with no `ok` means the backlog is not draining — the dead-cadence class.
 SYNC_PARTIAL_ESCALATE_H = 36
+
+# --- WEEKEND SCOPE (2026-09-07, HEARTBEAT_RULES rule 20) --------------------------------
+# 🔴 THE BURN. This checker's routine ran `15 12 * * 1-5` — WEEKDAYS ONLY. The `fulfillments`
+# ingest leg crossed its 36h no-success threshold on **Saturday 2026-09-06 21:36** and nothing
+# looked at it until **Monday 12:15** — 38 unwatched hours, repeating every single weekend. The
+# checker was correct; nobody was scheduled to run it. A dead-man switch that only watches on
+# weekdays is not headless, it is staffed.
+#
+# The fix is ONE task on a 7-day cron with the gate below — deliberately NOT a second
+# weekend-only task. Two tasks running this script would both `beat("automation-health")`, i.e.
+# TWO WRITERS ON ONE HEARTBEAT KEY: a beat from either would make the other look alive, so
+# `check_beats` could not detect either one dying. That is the DUAL-OWNER class this file's own
+# `check_task_set` exists to catch (the FreshnessSweep pair, 2026-08-31) — reintroducing it on the
+# dead-man switch itself is the worst possible place for it.
+#
+# 🔴 AND THE GATE IS NOT OPTIONAL. Firing every check on a Saturday would page for things that
+# STRUCTURALLY CANNOT HAVE FAILED YET: `warm-cohort-report` runs Monday, so its beat being 5 days
+# old on a Saturday is what HEALTHY looks like. An alarm nobody can act on — or that is guaranteed
+# wrong — trains everyone to skim the health post, which is rule 4's alarm-deafness and gotcha
+# class A1. Weekend pages are CRITICAL-only: no INFO, no counts, no config hygiene.
+#
+# 🔴 DESTINATION IS NOT A KNOB. Every weekend alarm leaves through `appyhour_lib.notify.notify()`
+# → `AH_SLACK_CHANNEL` / `KURT_OPS_CHANNEL` = C0BT47XG8CW, the PRIVATE #kurt-ops. Do not add a
+# channel argument, do not write a channel or user id into this file or the SKILL.md, and NEVER
+# reintroduce an incoming webhook: a webhook's destination lives in its URL and cannot be
+# re-pointed, which is how cloud alarms landed in the public #reships on 2026-08-31 and CS agents
+# read `invoice_ingest CRASHED` as an instruction (rule 5 / notify.py's module docstring).
+#
+# Membership below is HAND-TRIAGED per subject, same shape and same reason as SCHTASK_EXPECTED:
+# a name is here only when the thing it grades ACTUALLY RUNS at the weekend. Absent = the subject
+# is itself weekday-only, so its silence on a Saturday is not evidence of anything.
+
+# EXPECTED keys whose owning automation fires on Sat/Sun.
+WEEKEND_ELIGIBLE_BEATS = frozenset({
+    # `\AppyHour Weekly Offsite Backup` schtask, SUNDAY 02:00 (WakeToRun) — the machine's only
+    # safety net, and the one automation whose whole cadence lives at the weekend.
+    "offsite-backup",
+    # this checker's own beat (rule 7). 7-day as of today, so a missing beat on a Sunday means
+    # Saturday's run did not happen — which on a 7-day dead-man switch is the finding.
+    "automation-health",
+})
+# Everything else in EXPECTED is weekday-scheduled and is deliberately NOT here:
+#   forecast-a-monitor, loop-scorecard (Mon), corrections-mining (Fri), freshness-sweep (Mon),
+#   pytest-shiprouting (weekday catch-up hook), warm-cohort-report (Mon), shipping-cost-sheet
+#   (Mon), vendor-matrix (Tue), slack-reship (Tue), truffle-watch (Mon-Fri), wrong-address-handler
+#   (Mon-Fri), sku-lifecycle-scan (Mon), carrier-sla-monitor (Mon).
+# Their max-ages (4d/8d/10d) all comfortably clear a weekend, so on Sat/Sun they are either green
+# or repeating a finding Friday already reported. Neither is worth a page nobody can act on.
+
+# SCHTASK_EXPECTED keys (already normalised: lowercased, leading "\" stripped) whose task fires
+# on Sat/Sun. Read off each task's own trigger, recorded in SCHTASK_EXPECTED's comments.
+SCHTASK_WEEKEND_ELIGIBLE = frozenset({
+    "appyhour carrier invoice sync",   # DAILY 16:00
+    "appyhour_sync_daily_noon",        # DAILY noon — this is the writer of sync_heartbeat.json
+    "appyhour-db-healthcheck",         # DAILY 12:10
+    "appyhour weekly offsite backup",  # SUNDAY 02:00
+    "appyhour_sync_on_logon",          # at-logon; Kurt boots on weekends, Last Result is audited
+})
+# NOT here, each weekday-triggered: appyhour_daily_{tue,wed,thu,fri}, appyhour\gorgiasupdate (Wed),
+# appyhour\meltefficiencycalibrator + appyhour\postmortemrunner + appyhour\safetyfactorsweep (Mon),
+# appyhour-vf-archive-refresh (Tue).
+
+
+def is_weekend_run(now: datetime | None = None) -> bool:
+    """True on Saturday/Sunday LOCAL time. `weekday()` is 0=Mon..6=Sun.
+
+    Local, not UTC, on purpose: the cron that fires this routine is local-time, so a UTC-based
+    gate would flip scope in the middle of Friday evening and Sunday evening runs.
+    """
+    return (now or datetime.now()).weekday() >= 5
+
 
 # --- Windows scheduled tasks ------------------------------------------------------------
 # 🔴 Why this is a REGISTRY and not a prefix (2026-08-31): the audit filtered on
@@ -180,13 +256,17 @@ SCHTASK_OK_RESULTS = ("0", "267009", "267011", "")
 SCHTASK_NEVER_RUN = ("11/30/1999 12:00:00 AM", "N/A", "")
 
 
-def check_beats(findings: list[str]) -> None:
+def check_beats(findings: list[str], weekend: bool = False) -> None:
+    """`weekend=True` grades only WEEKEND_ELIGIBLE_BEATS (rule 20). The ledger read itself is
+    NEVER skipped: an unreadable ledger blinds the whole dead-man switch on any day of the week."""
     try:
         ledger = read_ledger()
     except Exception as e:
         findings.append(f"heartbeat LEDGER UNREADABLE ({type(e).__name__}: {e}) — treat as red")
         return
     for name, max_h in EXPECTED.items():
+        if weekend and name not in WEEKEND_ELIGIBLE_BEATS:
+            continue  # weekday-scheduled subject: its silence on Sat/Sun proves nothing
         ts = ledger.get(name)
         if not ts:
             if name == "automation-health" and not ledger:
@@ -357,7 +437,13 @@ def _schtasks_csv() -> str:
     return _SCHTASKS_CSV
 
 
-def check_schtasks(findings: list[str]) -> None:
+def check_schtasks(findings: list[str], weekend: bool = False) -> None:
+    """`weekend=True` audits only SCHTASK_WEEKEND_ELIGIBLE tasks (rule 20).
+
+    The UNREGISTERED finding is suppressed with them: "nobody added this task to the registry" is
+    registry hygiene someone does on a Monday, not an outage, and it would be the loudest thing in
+    a weekend post that is supposed to be CRITICAL-only.
+    """
     try:
         out = _schtasks_csv()
     except Exception as e:
@@ -375,6 +461,8 @@ def check_schtasks(findings: list[str]) -> None:
         seen.add(key)
         if key in SCHTASK_EXCLUDED:
             continue
+        if weekend and key not in SCHTASK_WEEKEND_ELIGIBLE:
+            continue  # weekday-triggered task (or unregistered): nothing to prove on Sat/Sun
         if key not in SCHTASK_EXPECTED:
             findings.append(
                 f"schtask '{name}': UNREGISTERED — not in SCHTASK_EXPECTED or SCHTASK_EXCLUDED "
@@ -1806,17 +1894,34 @@ def main(argv: list[str]) -> int:
     # (a harness missing a check reports a green that the real run would not).
     # It suppresses ONLY those three. Findings, report text and exit codes are identical.
     no_notify = "--no-notify" in argv
+    # 🔴 WEEKEND SCOPE (rule 20). One task, 7-day cron, gated HERE — see WEEKEND_ELIGIBLE_BEATS
+    # for why this is not a second weekend-only task and why the gate is not optional.
+    # `--weekend` / `--weekday` force the branch for testing and for a manual catch-up run;
+    # unforced, the calendar decides.
+    weekend = ("--weekend" in argv) or (is_weekend_run() and "--weekday" not in argv)
     findings: list[str] = []
     try:
-        check_beats(findings)
-        check_sync_heartbeat(findings)
-        check_schtasks(findings)
-        check_task_set(findings)  # set-level: collisions/dual-owners no per-task check can see
-        check_shipping_db(findings)
-        check_replica_freshness(findings)
-        check_prod_parity(findings)
-        check_prod_entry_points(findings)  # rule 19: prod script importing DEV appyhour_lib
-        check_editable_mapping(findings)
+        check_beats(findings, weekend=weekend)
+        # ALWAYS, both branches — these three grade subjects that run 7 days a week, and the
+        # first of them is the one that went 38h unwatched on Sat 2026-09-06.
+        check_sync_heartbeat(findings)      # ingest legs; `appyhour_sync_daily_noon` is DAILY
+        check_shipping_db(findings)         # integrity of the canonical DB; no cadence to wait for
+        check_replica_freshness(findings)   # cloud->local pull, fed by the same DAILY sync
+        check_schtasks(findings, weekend=weekend)
+        if not weekend:
+            # 🔴 Weekday-only, deliberately. None of these four can produce a finding that is
+            # actionable before Monday, and every one of them is chatty:
+            #  - check_task_set: cron collisions / dual owners / orphan registry rows — CONFIG
+            #    hygiene, and its snapshot-blind degrade is a guaranteed weekend page.
+            #  - check_prod_parity + check_prod_entry_points + check_editable_mapping: deploy
+            #    state. The remedy is `deploy_prod.py --apply`, which is Kurt's call and is not
+            #    made at 12:15 on a Saturday.
+            # Skipping them is what keeps the weekend post CRITICAL-only; running them is how the
+            # channel gets muted before the one page that matters arrives.
+            check_task_set(findings)  # set-level: collisions/dual-owners no per-task check can see
+            check_prod_parity(findings)
+            check_prod_entry_points(findings)  # rule 19: prod script importing DEV appyhour_lib
+            check_editable_mapping(findings)
     except Exception as e:
         findings.append(f"CHECKER CRASHED mid-run ({type(e).__name__}: {e})")
         print("🔴 automation-health checker crashed: " + findings[-1])
@@ -1824,17 +1929,39 @@ def main(argv: list[str]) -> int:
             notify("🔴 automation-health checker crashed: " + findings[-1], level="error")
         return 2
     if not no_notify:
-        beat("automation-health")  # self-beat LAST (rule 7)
-        dispatch_findings(findings)  # rule 12: repeat-findings -> handoff row; additive, isolated
+        beat("automation-health")  # self-beat LAST (rule 7) — every day, incl. Sat/Sun
+        # 🔴 THE WEEKEND RUN MUST NOT TOUCH THE DISPATCH STREAKS (2026-09-07). `dispatch_findings`
+        # ends in `finalize(seen)`, which RESETS every key absent from this run — and a weekend run
+        # deliberately omits most keys. So a weekday finding sitting at 2/3 on Friday would be
+        # reset to 0 by Saturday's run and again by Sunday's, and could then NEVER reach 3: the
+        # 7-day cron would silently disable rule 12's escalation for every weekday finding. That
+        # is a monitoring regression smuggled in by a scheduling change, which is exactly the shape
+        # of bug this file keeps being bitten by.
+        # NEGATIVE — do NOT "fix" it by finalizing only the weekend keys: `finalize` is a
+        # whole-run reconciliation, and a partial one is what under-counts. Freezing is the honest
+        # option: "consecutive" now means "consecutive WEEKDAY runs", the same cadence the streak
+        # was calibrated on. A weekend CRITICAL still pages on every run and is picked up by
+        # Monday's run, which resumes counting.
+        if not weekend:
+            dispatch_findings(findings)  # rule 12: repeat-findings -> handoff row; additive
+        else:
+            print("dispatch: SKIPPED on a weekend run — streaks are weekday-consecutive (rule 20)")
     if findings:
-        msg = "🔴 automation-health: " + str(len(findings)) + " finding(s)\n• " + "\n• ".join(findings)
+        scope = "weekend-scope " if weekend else ""
+        # notify() resolves the destination itself (AH_SLACK_CHANNEL / KURT_OPS_CHANNEL =
+        # private #kurt-ops). No channel argument is passed here, on any branch, ever — see
+        # WEEKEND_ELIGIBLE_BEATS' destination note and notify.py's module docstring.
+        msg = ("🔴 automation-health: " + scope + str(len(findings)) + " finding(s)\n• "
+               + "\n• ".join(findings))
         print(msg)
         if not no_notify:
             notify(msg, level="error")
         return 1
     if verbose:
-        print("automation-health: all green (beats, ingest, schtasks, task-set, db, replicas, "
-              "prod-parity, prod-libpath, editable-mapping)")
+        ran = "beats(weekend-scope), ingest, schtasks(weekend-scope), db, replicas" if weekend \
+            else ("beats, ingest, schtasks, task-set, db, replicas, prod-parity, prod-libpath, "
+                  "editable-mapping")
+        print(f"automation-health: all green ({ran})")
     return 0
 
 

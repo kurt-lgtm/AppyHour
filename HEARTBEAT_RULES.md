@@ -662,6 +662,92 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
      BYTES match; this says the bytes that RUN are the ones that matched. Both green is the only
      "prod runs prod".
 
+20. **The dead-man switch runs 7 DAYS A WEEK — a watcher that only watches on weekdays is not
+    headless, it is staffed.** 🔴 THE BURN (2026-09-07, Kurt GO: *"if its for headless stuff, then
+    yes build it"*): the routine `automation-health-daily` was cron `15 12 * * 1-5`. The
+    `fulfillments` ingest leg crossed its 36h no-success threshold on **Saturday 2026-09-06 21:36**
+    and nothing looked at it until **Monday 12:15** — 38 unwatched hours on an ingest leg, and the
+    same hole every weekend. The checker was right; nobody was scheduled to run it. Rule 1 says
+    silence is the failure signal — this is the schedule half of the same idea: a checker nobody
+    runs produces silence indistinguishable from health.
+    NEGATIVES, each a design that was considered and is worse:
+    - 🔴 **Do NOT add a second, weekend-only task.** Both would run `automation_health.py` and both
+      would `beat("automation-health")` — TWO WRITERS ON ONE HEARTBEAT KEY, so a beat from either
+      makes the other look alive and `check_beats` cannot detect either dying. That is the
+      DUAL-OWNER class of rule 14 / `check_task_set` (the FreshnessSweep pair, 2026-08-31), and
+      putting it on the dead-man switch itself is the worst available place for it. **ONE task,
+      7-day cron, scope gated INSIDE the script** (`is_weekend_run` + `WEEKEND_ELIGIBLE_BEATS` +
+      `SCHTASK_WEEKEND_ELIGIBLE`).
+    - 🔴 **Do NOT run every check at the weekend.** A weekday-only subject cannot have failed yet
+      on a Saturday: `warm-cohort-report` runs Monday, so a 5-day-old beat on Saturday is what
+      HEALTHY looks like. Paging on it is an alarm nobody can act on — rule 4's alarm-deafness,
+      and the reason the one page that matters gets skimmed. **Weekend runs are CRITICAL-only:**
+      no INFO, no counts, no config/deploy hygiene (`check_task_set`, `check_prod_parity`,
+      `check_prod_entry_points`, `check_editable_mapping` are weekday-only for exactly this).
+    - **Eligibility is HAND-TRIAGED off each subject's own trigger, never inferred from a name.**
+      Same shape and reason as `SCHTASK_EXPECTED`. Weekend-eligible today: beats `offsite-backup`
+      (Sunday 02:00 schtask) and `automation-health` (this checker's own, rule 7); schtasks
+      `AppyHour Carrier Invoice Sync`, `appyhour_sync_daily_noon`, `appyhour-db-healthcheck`,
+      `AppyHour Weekly Offsite Backup`, `appyhour_sync_on_logon`. Always-on regardless of day:
+      `check_sync_heartbeat`, `check_shipping_db`, `check_replica_freshness` — their subjects run
+      daily, and the first is the one that went unwatched.
+    - 🔴 **A weekend run must NOT call `dispatch_findings`.** `finalize(seen)` resets every key
+      absent from the run, and a weekend run deliberately omits most keys — so a weekday finding at
+      2/3 on Friday would be reset twice and could NEVER reach 3, silently disabling rule 12's
+      escalation. Streaks are frozen at the weekend: "consecutive" means consecutive WEEKDAY runs,
+      the cadence the counter was calibrated on. A weekend CRITICAL still pages every run.
+    - 🔴 **DESTINATION IS NOT A KNOB — #kurt-ops (private) or nowhere** (Kurt 2026-09-07: *"just
+      make sure it pings kurt ops and no non private channels"*). Every alarm leaves through
+      `appyhour_lib.notify.notify()`, which resolves `AH_SLACK_CHANNEL` → `KURT_OPS_CHANNEL`
+      internally; no caller passes a channel and no channel/user id is written into a script or a
+      SKILL.md. **NEVER reintroduce an incoming webhook:** its destination lives in the URL and
+      cannot be re-pointed, which is how cloud alarms landed in the public `#reships` on
+      2026-08-31 and CS agents read `invoice_ingest CRASHED` as an instruction. See rule 5 and
+      `appyhour_lib/notify.py`'s module docstring.
+    - 🔴 **THE LOCAL CRON IS STILL `1-5`, AND THAT IS THE HONEST ANSWER — the weekend owner has to
+      be CLOUD-SIDE (open Kurt decision, 2026-09-07).** The scope gate above shipped; the schedule
+      did not, and it must not be forced. `~/.claude/hooks/align-gate.sh:102` DENIES any weekend or
+      every-day cron: *"machine off weekends, missed runs don't rerun (7/04 burn)"*, and
+      `catch-up-missed-tasks.sh:8` says the same (*"machine is off Sat/Sun; Kurt doesn't want
+      weekend runs OR weekend catch-up"*) — that hook is a SessionStart catch-up anyway, i.e. it
+      needs Kurt to open Claude, which is staffed, not headless.
+      So Kurt's dead-job rule bites: **a schedule that cannot catch up is a dead job.** A local
+      `15 12 * * *` on a machine that is off Sat/Sun would fire nothing, catch up nothing, and
+      report green on Monday — a weekend watcher that is itself unwatched, which is a WORSE state
+      than the known 38h hole because it looks fixed.
+      🔴 Do NOT weaken `align-gate.sh` to get past this. The guard's own escape clause is "unless
+      Kurt explicitly asked for weekends", and the substance of what Kurt asked for is weekend
+      COVERAGE, not a local cron — granting the exception without the machine being on just buys
+      the appearance.
+      **Evidence considered and rejected as insufficient:** the one-time `audit-remainder-saturday`
+      fired ~29h late (`fireAt` 2026-09-05 16:00Z → `lastRunAt` 2026-09-06 21:25Z), which shows a
+      one-time `fireAt` task RE-ARMS and lands late. That is a different mechanism from a recurring
+      cron OCCURRENCE, and no recurring task in the current set has been observed catching up a
+      missed fire. Do not cite it as proof that a 7-day cron self-heals.
+      **Therefore the weekend owner is a cloud check** (App Platform, the same destination decision
+      already recorded for `freshness-sweep`), running this same scope-gated script so there is
+      still ONE grader and ONE `automation-health` beat writer. Until that exists the weekend hole
+      is OPEN and is recorded here as open — rule 1: a gap nobody has closed must not be written up
+      as closed.
+    - **Do not tighten `automation-health`'s 4d max-age just because it now beats daily.** A
+      routine's fire is late-on-catch-up by design, so the legal gap between two healthy beats is
+      not 24h (rule 4).
+
+21. **A sent vF is not an applied cohort — the ship-day apply assert lives on the CLOUD worker, never
+    here.** 🔴 RMFG_20260825 and RMFG_20260901 (ShipRouting BUG_LOG 2026-09-07, NO-APPLY-CONTROL ×3)
+    shipped with the sheet at RMFG and Shopify BARE; the one Tuesday flow job died `failed` at
+    05:56 ET and nothing paged — the console only pages failures the WORKER ran, and this PC (where
+    `apply_tuesday.py` runs) is off on ship mornings, so a local beat could never have caught it.
+    Guards: `ShipRouting/server/apply_watch.py` timers `apply_completion_watch` (12:00 ET: every
+    cohort with a built vF for today has a gate-confirmed done apply OR a mirrored CLI apply record
+    in `apply_record_blobs`) and `failed_flow_job_alarm` (any failed `flow`/`vf_build`/`route_edit`
+    job on a ship day, once per job id). Both durable-dedupe their pages (`apply_watch_alarms`,
+    `failed_job_alarms`) and freshness-assert off their own `watch_runs` ledger, surfaced on
+    `GET /health/timers`. NEGATIVES: never add a local `beat()`/schtask for the apply assert (rule 4
+    dead-cadence by construction on a machine that is off); never a success ping; a CLI Tuesday apply
+    that fails to mirror `tuesday_apply_results.json` WILL page — fix the mirror, do not silence the
+    watch. Tests: `ShipRouting/server/tests/test_apply_completion_watch.py`.
+
 ## Wired beats (update when adding/removing)
 
 | name | writer | max age |
@@ -670,7 +756,7 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
 | `forecast-a-monitor` | `_outputs/scripts/forecast_a_monitor.py` | 8 days |
 | `loop-scorecard` | `ShipRouting/scripts/loop_scorecard.py` | 8 days |
 | `corrections-mining` | `_outputs/scripts/corrections_digest.py` | 8 days |
-| `automation-health` | `scripts/automation_health.py` self-beat | 4 days (routine is Mon–Fri; 2d graded every Friday run stale on Monday) |
+| `automation-health` | `scripts/automation_health.py` self-beat | 4 days (routine is 7-day as of 2026-09-07, rule 20; 4d stays — a catch-up fire is late by design, and 2d graded every Friday run stale on Monday under the old Mon–Fri cron) |
 | `freshness-sweep` | `_outputs/scripts/freshness_sweep.py` (weekly data-freshness monitor — Mon 12:33 Claude scheduled task; beats on run, flags or not) | 8 days |
 | `pytest-shiprouting` | `_outputs/scripts/pytest_cadence.py` (weekday ShipRouting fast-tier suite via `~/.claude/hooks/catch-up-missed-tasks.sh` — stamp-guarded; Slack only on red, beat every run) | 4 days |
 | `warm-cohort-report` | `_outputs/scripts/warm_cohort_report.py` end of `main()`, after the report file is written (routine `warm-cohort-report`, Mon ~14:10) | 10 days |
