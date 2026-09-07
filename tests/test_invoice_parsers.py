@@ -111,6 +111,25 @@ def test_a_ups_file_missing_a_required_column_RAISES_and_names_it():
         ip.parse_ups_csv_bytes(b"some,unrelated,header\n1,2,3\n", "x")
 
 
+def test_carrier_is_the_filename_TOKEN_a_reader_fed_the_wrong_carrier_REFUSES():
+    """Tracking Coordinator (4): carrier selection is by filename token ONLY; header sniffing is
+    for the dialect WITHIN a carrier. OnTrac CSVs also carry `Tracking Number`, so a header-sniff
+    carrier guess sends them to the UPS reader — 14 rows came back at $0.00 that way, and the
+    reverse (AHB_00350 UPS file → OnTrac reader) wrote 61 `1Z` rows as OnTrac at $0. Neither
+    reader may quietly produce rows for the other carrier's file: it must RAISE, naming columns."""
+    ontrac = _b("AHB_00215_OnTrac Shipping Breakdown_AHB_1-5-26 (rts).csv")
+    ups = _b("AHB_00356_UPS Shipping Breakdown_AHB_6-1-26.csv")
+    with pytest.raises(ip.InvoiceDialectError) as ei:
+        ip.parse_ups_csv_bytes(ontrac, "AHB_00215")
+    assert "Billed Charge" in str(ei.value)
+    with pytest.raises(ip.InvoiceDialectError) as ei:
+        ip.parse_ontrac_csv_bytes(ups, "AHB_00356")
+    assert "Total Charges" in str(ei.value)
+    # the right carrier's reader, from the token, still parses both
+    assert ip.parse_ontrac_csv_bytes(ontrac, "AHB_00215")[0]["cost"] > 0
+    assert ip.parse_ups_csv_bytes(ups, "AHB_00356")[0]["cost"] > 0
+
+
 def test_ontrac_file_missing_total_charges_RAISES():
     text = _b("AHB_00215_OnTrac Shipping Breakdown_AHB_1-5-26 (rts).csv").decode("latin-1")
     with pytest.raises(ip.InvoiceDialectError) as ei:
