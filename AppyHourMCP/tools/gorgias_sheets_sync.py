@@ -8,7 +8,9 @@ then appends them to the UPDATE_Operational Issues tab.
 
 import json
 import logging
+import os
 import re
+import sys
 import time
 from datetime import datetime, timedelta
 
@@ -16,6 +18,16 @@ import requests
 
 from utils import OPS_SHEET_ID
 from tools._gorgias_internal import get_auth, _load_settings
+
+# appyhour_lib lives in the AppyHour repo root (two levels up from tools/). The MCP server is
+# launched with AppyHourMCP as cwd, so the root is not guaranteed to be on sys.path already.
+_AH_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _AH_ROOT not in sys.path:
+    sys.path.insert(0, _AH_ROOT)
+
+from appyhour_lib.feedback_completeness import (  # noqa: E402
+    normalize_report_date as _normalize_report_date,
+)
 
 
 # ── date_reported canonicalisation (DB side only) ───────────────────────
@@ -42,24 +54,22 @@ from tools._gorgias_internal import get_auth, _load_settings
 # event date to make a format tidy is strictly worse than an odd-looking string, and a guessed
 # year is the 2026-06-18 burn that started this (year-less dates made 2025 tickets masquerade as
 # 2026). Unparseable input is preserved for a human to see.
+#
+# 🔴 THIS IS A THIN ALIAS, NOT A SECOND IMPLEMENTATION (2026-09-07). The rule itself lives in
+# `appyhour_lib.feedback_completeness.normalize_report_date`, because this tee is NOT the only
+# `feedback` writer: `GelPackCalculator/shipping_invoice_db.py` `store_feedback` (reachable from
+# Kori's feedback save and from `import_feedback_csv.py`) writes the same column and had no
+# equivalent — one Kori save after the ISO backfill would have re-mixed the column and brought
+# the lexical-`MAX` mask straight back. Both writers now call the ONE function. Do not re-inline
+# the strptime loop here; two copies of a date rule diverge, which is this same bug one level up.
 def _normalize_date_reported(value: str | None) -> str | None:
     """Canonicalise a sheet-shaped date to ISO `YYYY-MM-DD` for the DB tee.
 
-    Accepts the sheet's `%m/%d/%Y`, an already-ISO value, or a full ISO
-    timestamp. Anything else is returned verbatim — never dropped, never
-    guessed (no year inference: that is what made 2025 tickets read as 2026).
+    Delegates to the shared writer-side rule — see
+    `appyhour_lib.feedback_completeness.normalize_report_date` for the
+    semantics (verbatim on parse failure, no year inference, month-first).
     """
-    if value is None:
-        return None
-    s = str(value).strip()
-    if not s:
-        return None
-    for fmt in ("%Y-%m-%d", "%m/%d/%Y"):
-        try:
-            return datetime.strptime(s[:10], fmt).strftime("%Y-%m-%d")
-        except ValueError:
-            continue
-    return s
+    return _normalize_report_date(value)
 
 
 # ── Universal-DB tee: mirror Gorgias rows into shipping.db feedback ─────

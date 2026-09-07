@@ -69,6 +69,7 @@ __all__ = [
     "EVENT_STALE_DAYS",
     "ISO_CUTOVER",
     "parse_report_date",
+    "normalize_report_date",
     "week_start",
     "weekly_orphan_stats",
     "max_event_date",
@@ -102,6 +103,48 @@ def parse_report_date(raw: object) -> date | None:
         except ValueError:
             continue
     return None
+
+
+# ── the ONE canonicalisation every `feedback.date_reported` WRITER must call ─────────
+# 🔴 WHY THIS LIVES HERE AND NOT IN A WRITER (2026-09-07).
+# The eleven-week mask (see the block below) was fixed at the Gorgias tee only. A sweep the same
+# day found a SECOND writer with no equivalent — `GelPackCalculator/shipping_invoice_db.py`
+# `store_feedback`/`_feedback_value`, reachable from Kori's feedback save and from
+# `import_feedback_csv.py` — which wrote the raw value through, stripped only. One Kori save after
+# the 692-row ISO backfill would have re-mixed the column and brought the lexical-`MAX` mask
+# straight back. Fixing one of two writers is what produced the original bug.
+#
+# 🔴 THEREFORE: there is exactly ONE copy of this rule and every writer CALLS it. Do not inline a
+# `strptime` loop in a new writer, and do not copy this function into a vendored module — two
+# copies of a date rule diverge, which is this same failure one level up. A new `feedback` writer
+# that does not call this is a defect (GORGIAS_FEEDBACK_RULES rule 7d).
+#
+# 🔴 UNPARSEABLE IS RETURNED VERBATIM — never None, never a guessed year. Losing an event date to
+# make a format tidy is strictly worse than an odd-looking string, and year inference is the
+# 2026-06-18 burn that started all of this (year-less dates made 2025 tickets read as 2026).
+#
+# 🔴 MONTH-FIRST ONLY. `%m/%d/%Y` is proven for this data: 389 rows have a second component > 12
+# and ZERO have a first component > 12. Do not add day-first handling — it cannot be distinguished
+# per-row and would silently transpose 692 legacy rows.
+#
+# 🔴 THE OPS SHEET IS NOT TOUCHED. Ops Summary formulas compare column A against date cells and
+# need `%m/%d/%Y`. Only the value written to `shipping.db` is canonicalised.
+def normalize_report_date(raw: object) -> str | None:
+    """Canonicalise a `feedback.date_reported` value to ISO `YYYY-MM-DD` for the DB.
+
+    Accepts the ops sheet's `%m/%d/%Y`, an already-ISO date, or a full ISO
+    timestamp. `None`/blank → `None`. Anything else is returned verbatim —
+    never dropped, never guessed.
+    """
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    parsed = parse_report_date(s)
+    if parsed is None:
+        return s
+    return parsed.isoformat()
 
 
 # ── EVENT-date freshness (2026-09-07) ───────────────────────────────────────

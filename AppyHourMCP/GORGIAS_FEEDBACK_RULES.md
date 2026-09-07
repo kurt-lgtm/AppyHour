@@ -102,6 +102,7 @@ the codebase. Only the ONE-TIME backfill ran, which rewrote history and made the
 exactly one day. **Repairing the data instead of the writer bought three days of green.**
 
 Rules now in force:
+- **EVERY writer writes ISO — see rule 7d. The tee is not the only one.**
 - **The tee writes ISO.** `_normalize_date_reported()` in `gorgias_sheets_sync.py` canonicalises the
   DB value; **the SHEET keeps `%m/%d/%Y`** (Ops Summary formulas compare column A against date cells).
   Never "simplify" this by changing `date_str` at its construction site — that breaks the sheet.
@@ -110,6 +111,39 @@ Rules now in force:
 - **Consumers still parse BOTH** — the pre-cutover legacy band is untouched (see rule 7b).
 - **Never `MAX(date_reported)`/`ORDER BY date_reported` in SQL.** Parse, then take the max
   (`max_event_date()`). `test_lexical_max_masks_newer_rows_but_the_assert_does_not` pins the burn.
+
+### 7d. 🔴 THERE ARE THREE `date_reported` WRITERS. All call ONE shared function. A new one MUST too.
+**Near-miss, 2026-09-07 (the reason this rule exists).** Rule 7's fix landed at the Gorgias tee
+*only*. A sweep hours later — while the Kurt-approved rule-7b backfill was queued — found a SECOND
+writer with no equivalent: `GelPackCalculator/shipping_invoice_db.py` `store_feedback` /
+`_feedback_value`, which wrote `entry.get("date_reported", entry.get("date",""))` through verbatim,
+stripped only. It is reachable from **Kori's feedback save** (`kori/gel_pack_webview.py`) and from
+`import_feedback_csv.py`. **One Kori save or one CSV import after the backfill would have re-mixed
+the column and brought the lexical-`MAX` mask straight back** — the same defect, on repaired data.
+A third, vendored copy (`ShipRouting/server/shipping_invoice_db.py`, no caller today, live-shaped and
+one import from being one) had the same gap.
+
+This is the workspace's *"an authority governs EVERY consumer — enumerate the write-paths, not the
+one in front of you"* class. **Fixing one of two writers is what produced the original bug**: the
+2026-06-18 entry hardened the data and left the writer; 2026-09-07 hardened one writer and left two.
+
+Rules:
+- **The rule lives in ONE place:** `appyhour_lib.feedback_completeness.normalize_report_date`. It
+  sits beside `parse_report_date` (the read side) so the write and read halves of the same format
+  contract cannot drift apart.
+- **Every writer CALLS it. Never re-implement, never copy it into a vendored module.** Two divergent
+  copies of a date rule is this exact bug one level up. `_normalize_date_reported` in
+  `gorgias_sheets_sync.py` is now a thin alias, kept only because it is the documented symbol.
+- **A new `feedback` writer that does not call it is a defect**, whatever it looks like in review.
+  Before landing one, run `rg --no-ignore --hidden -n "date_reported"` over `AppyHour`, `ShipRouting`
+  and `_outputs/scripts` — the plain repo grep is near-blind here (root `.gitignore` is `*`).
+- **Semantics are identical at every call site** and are not a writer's choice: `%m/%d/%Y` and ISO
+  (date or timestamp) in, ISO out; blank/None → None; **anything else returned VERBATIM** — never
+  dropped, never year-inferred. Month-first only (rule 7bb has the proof: 389 rows with day >12,
+  zero with a first component >12); do not add day-first handling.
+- **Pinned by `tests/test_feedback_completeness.py`**, including
+  `test_both_writers_agree_on_every_input` — the equality test is what stops a future divergence,
+  so if it fails, DELETE the divergent implementation rather than patching both.
 
 ### 7b. The 692-row legacy `%m/%d/%Y` band is NOT repaired. A backfill is Kurt's decision.
 Rows synced 2026-06-19..2026-09-07 remain US-format on purpose. Eleven weeks of warm data touches
@@ -224,16 +258,21 @@ synced** — verify the prod file, not the repo file.
 9. An upsert key is adopted only after its **duplicate count is measured against the live
    table** and reported. Unproven key → insert-only, never upsert (an upsert on a non-unique key
    merges distinct events, which reads as a clean table and is a silent subtraction).
+10. **Every writer of `date_reported` canonicalises through
+    `appyhour_lib.feedback_completeness.normalize_report_date` — there is exactly one
+    implementation of that rule** (rule 7d). A writer with its own date handling is a defect even
+    if its output happens to match today.
 
 ## Files
 
 | Path | Role |
 |------|------|
-| `GelPackCalculator/shipping_invoice_db.py` | `store_feedback` (append-only merge) + `delete_feedback_rows` (the only deleter) |
+| `GelPackCalculator/shipping_invoice_db.py` | `store_feedback` (append-only merge) + `delete_feedback_rows` (the only deleter). **`date_reported` WRITER #2** (rule 7d) |
 | `GelPackCalculator/kori/gel_pack_webview.py` | Kori sheet sync — the button; supplies `gorgias_link` so rows land on the proven key |
 | `GelPackCalculator/tests/test_feedback_append_only.py` | production-shape append-only + idempotency tests |
-| `ShipRouting/server/shipping_invoice_db.py` | vendored copy for the DO deploy — keep `store_feedback` identical |
-| `AppyHourMCP/tools/gorgias_sheets_sync.py` | sync + extraction + SQLite tee |
+| `ShipRouting/server/shipping_invoice_db.py` | vendored copy for the DO deploy — keep `store_feedback` identical. **`date_reported` WRITER #3** (no caller today; fixed anyway, rule 7d) |
+| `AppyHourMCP/tools/gorgias_sheets_sync.py` | sync + extraction + SQLite tee. **`date_reported` WRITER #1** — `_normalize_date_reported` is now a thin alias |
+| `appyhour_lib/feedback_completeness.py` → `normalize_report_date` | 🔴 **THE ONE `date_reported` write-side rule** — every writer calls it (rule 7d) |
 | `AppyHourMCP/run_gorgias_update.py` | CLI entry (`gorgias_update.bat`, scheduled task) |
 | `appyhour_lib/feedback_completeness.py` | field-level completeness assert + threshold derivation |
 | `tests/test_feedback_completeness.py` | production-shape tests (real wk0608 / wk0727 / wk0817) |

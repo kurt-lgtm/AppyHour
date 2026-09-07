@@ -283,3 +283,47 @@ def test_normalizer_writes_iso_and_never_guesses():
     assert n("2026-09-04T16:06:45") == "2026-09-04"
     assert n("June-11") == "June-11"      # never year-guessed (the 2026-06-18 burn)
     assert n("") is None and n(None) is None
+
+
+# ── SECOND WRITER (2026-09-07) ────────────────────────────────────────────────────────
+# 🔴 The tee was fixed alone on 2026-09-07 and a sweep the same day found `store_feedback` in
+# `GelPackCalculator/shipping_invoice_db.py` — reachable from Kori's feedback save and from
+# `import_feedback_csv.py` — writing `date_reported` verbatim. One Kori save after the approved
+# 692-row ISO backfill would have re-mixed the column and restored the lexical-`MAX` mask.
+# These tests exist so a THIRD writer, or a divergence between the two, is caught here.
+
+def _store_feedback_value(col_value):
+    """Run a Kori-shaped entry dict through the GelPackCalculator writer's value extractor."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "GelPackCalculator"))
+    import shipping_invoice_db as sidb
+    return sidb._feedback_value({"date": col_value}, "date_reported")
+
+
+def test_gelpack_writer_canonicalises_date_reported_to_iso():
+    """A Kori-shaped save lands as ISO, not the sheet's %m/%d/%Y."""
+    assert _store_feedback_value("06/16/2026") == "2026-06-16"
+
+
+def test_gelpack_writer_leaves_iso_unchanged():
+    assert _store_feedback_value("2026-06-16") == "2026-06-16"
+    assert _store_feedback_value("2026-06-16T09:12:00") == "2026-06-16"
+
+
+def test_gelpack_writer_stores_unparseable_verbatim():
+    """Never dropped, never year-guessed — an odd string beats a lost event date."""
+    assert _store_feedback_value("June-11") == "June-11"
+    assert _store_feedback_value("") == ""
+    assert _store_feedback_value(None) == ""
+
+
+def test_both_writers_agree_on_every_input():
+    """🔴 THE ANTI-DIVERGENCE TEST. Two copies of a date rule is the original bug one level up.
+
+    If this ever fails, one writer grew its own implementation — fix by deleting it and calling
+    `appyhour_lib.feedback_completeness.normalize_report_date`, never by patching both.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "AppyHourMCP"))
+    from tools.gorgias_sheets_sync import _normalize_date_reported as tee
+    for raw in ("06/16/2026", "09/04/2026", "2026-09-04", "2026-09-04T16:06:45",
+                "June-11", "Dec 6", "not a date", "", "  "):
+        assert (tee(raw) or "") == _store_feedback_value(raw), raw
