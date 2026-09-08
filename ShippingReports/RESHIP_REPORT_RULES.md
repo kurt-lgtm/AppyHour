@@ -495,7 +495,16 @@ The trigger UI cannot express any of the following, so all four live in `refresh
 - **Hard cap 200 PP calls/run**, any day, **oldest-scan first** — the box silent longest is the one
   most worth rescuing. Logs `PP: capped, skipped N candidates` when it bites. A silent truncation
   would read as "PP found nothing", which is the failure this whole leg already burned us on.
-- **Steady state ≈ 45 × 4 ≈ 180 PP calls/week** against 2,500.
+- **Steady state ≈ 45 × 4 ≈ 180 PP calls/week.** 🔴 Corrected 2026-09-08: this line used to read
+  *"against 2,500"*, i.e. it was still scored against the weekly budget P12 deleted three weeks
+  earlier. **There is no weekly ParcelPanel budget.** The only limit is **120 requests/minute per
+  API KEY**, and the key is **SHARED** across every consumer — the Apps Script sweeps, the reship
+  refresh and the cloud reconcile all draw on the same bucket, so the number that matters is
+  requests per minute in aggregate, never a weekly total. Read the per-run figure as what it is: a
+  **workload bound** (200/run hard cap, oldest-scan first, paced), not headroom against a quota.
+  🔴 And it is not permission to fetch more: the caps and pacing stay exactly as they are, a 429 is
+  **backpressure that is retried with backoff and never dropped** (P13), and any increase in
+  production PP volume is its own decision with its own evidence.
 
 🔴 **The cohort is resolved from the CALENDAR + Shopify, never from the sheet's rightmost header.**
 Reading the header pins the script to whatever column already exists, so it could never discover a

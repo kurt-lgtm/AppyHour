@@ -12,6 +12,20 @@ reader must NOT do with it.
 > self-applying one-shots. A change that adds a manual step moves AWAY from this doc's north
 > star — flag it, don't ship it. A tab with no scheduled owner (writer-ownership gate) is a
 > violation of this north star, not a footnote.
+>
+> 🔴 **Two tab STATES, and conflating them is how a speculative writer gets built** (2026-09-07
+> audit D-T2). The north star binds **ACTIVE** tabs — a tab with agreed semantics whose writer is
+> missing or unscheduled is a violation, chase it. An **UNIMPLEMENTED (by decision)** tab has *no
+> agreed semantics and no owner yet*; its gap is a **Kurt decision**, not an engineering defect,
+> and "the sheet must be headless" is NOT a licence to invent semantics and wire a writer so the
+> slogan reads true. Today exactly one tab is UNIMPLEMENTED: **Cost**. Saying "the sheet is
+> headless" without that carve-out either over-claims coverage or turns a pending decision into a
+> build ticket — both have been done here.
+>
+> 🔴 **And "self-corrects" is scoped to the LIVE window.** Automatic correction may rewrite
+> current-window cells only. Matured/frozen columns are Kurt-owned history (D15/A1): amending one
+> is a separately gated action, never something a self-correcting writer does on its own — a
+> headless-ness argument must never be used to bypass a frozen-history guard.
 
 > 🔴 **This is a READER'S companion, not a rules SSOT.** The rules live in
 > [`RESHIP_REPORT_RULES.md`](RESHIP_REPORT_RULES.md) (R1–R17, D1–D35) and
@@ -165,7 +179,15 @@ deadline, not an eventually-sent count.
 - **Human-typed values are never overwritten** (D29c fill-blanks-only on matured columns) — to
   hand a cell to the script, clear it.
 
-## Cost
+## Cost — 🔴 UNIMPLEMENTED BY DECISION (not a defect to fix)
+
+> **STATUS: UNIMPLEMENTED.** No agreed semantics, no owner, no writer — and it STAYS that way until
+> Kurt decides what this tab means and who fills it (re-affirmed 2026-09-08 closing the 2026-09-07
+> audit's D-T2). 🔴 Do **not** wire a writer to close the headless gap: any writer built now would
+> encode a *guessed* definition of "cost at a high level" (which store? invoiced or shipped
+> denominator? which lag horizon?) as published dollars, and a published dollar with invented
+> semantics is worse than a blank tab. 🔴 Do **not** reach for the frozen-history exception to make
+> it fill either. The elicit rule applies in full: ask, do not invent.
 
 **NORTH STAR: MISSING — needs Kurt.** *(Best guess, clearly a guess: the on-sheet home for the
 cost half of the D35 Carrier Mix — Kurt 2026-08-25: "have a second row under each carrier service

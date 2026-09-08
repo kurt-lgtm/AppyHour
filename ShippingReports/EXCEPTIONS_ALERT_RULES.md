@@ -230,10 +230,23 @@ REMAINS, spread over the runs still left in the week:
 with `EXC_PP_MIN_PER_RUN = 10` (10 × 168 = 1,680 < 2,000, so the floor cannot itself drain the week)
 and `excRunsLeftThisWeek_()` counting hours to Sunday-midnight ET, because the week key rolls Monday.
 
-⚠️ **OPEN KURT DECISION, not fixed here:** 2,000 calls/week cannot poll a ~1,500-box open set
-hourly at all — pacing guarantees the ping window is *fed*, it does not make the set *fresh*.
-Raising the ParcelPanel plan, or widening `excResolveDelivered_`'s free Shopify narrowing, is the
-only way to poll a live cohort quickly. Do not silently raise `EXC_PP_WEEKLY_BUDGET` past the plan.
+🗑️ **SUPERSEDED BY P12 (2026-08-20) — kept as the historical record of the budget era, not as a
+live rule.** The paragraph below reasons against a **2,000/week ParcelPanel allowance that never
+existed**; P12 measured the real limit as **120 requests/minute per API KEY** (shared by every
+consumer), with order LOOKUPS consuming no plan quota at all. `EXC_PP_WEEKLY_BUDGET` and
+`excWeekKey_` are deleted. The "open Kurt decision" it names is CLOSED — not by raising a plan, but
+by the webhook plus per-minute pacing. Read on for what was believed on 2026-08-06, then read P12.
+
+> ⚠️ **(HISTORICAL) OPEN KURT DECISION, not fixed here:** 2,000 calls/week cannot poll a ~1,500-box
+> open set hourly at all — pacing guarantees the ping window is *fed*, it does not make the set
+> *fresh*. Raising the ParcelPanel plan, or widening `excResolveDelivered_`'s free Shopify
+> narrowing, is the only way to poll a live cohort quickly. Do not silently raise
+> `EXC_PP_WEEKLY_BUDGET` past the plan.
+
+🔴 **What survives, and must not be loosened by the correction:** per-minute pacing (target 100 of
+120/min, shared key), the per-run caps, oldest-scan-first ordering, and 429-as-backpressure —
+retried with backoff, **never dropped**. "There is no weekly budget" is not authorization to
+increase the production polling workload; that is a separate decision with its own evidence.
 
 ### 2. A run that polls ZERO is not an all-clear
 
@@ -794,6 +807,12 @@ is ~470 for that cohort, which the weekly budget still cannot poll in one day �
 decision C (2,000/wk cannot make a live cohort fresh), unchanged by this directive** and now
 answered by the webhook rather than by pacing.
 
+> 🗑️ **The "weekly budget" in the sentence above is HISTORICAL (pre-P12) and no longer a fact**
+> (labelled 2026-09-08). There is no weekly ParcelPanel call budget; the limit is 120 req/min on a
+> **shared** key, and ~470 due boxes is minutes of paced fetching, not a week's allowance. Decision
+> C is closed. The scoping and pacing described here still stand on their own merits — this note
+> corrects the arithmetic's premise, it does not license more polling.
+
 #### `excSeedBacklogAsLogged` — KEPT, no longer needed for backlog control
 
 It is not deleted. Backlog control is now structural, so the seeder has no routine job; it stays as
@@ -848,6 +867,12 @@ list or create them. Until he does, `excOnScheduleET_` makes every leftover hour
 PP calls and say so, so the migration is fail-safe rather than fail-expensive.
 
 #### The arithmetic that makes the diagnosis forced, not inferred
+
+> 🗑️ **Read the "2,500/week account plan" in this subsection as HISTORICAL** (labelled 2026-09-08).
+> P12, later the same day, measured that no weekly request budget exists — 120 req/min on a shared
+> API key, lookups free of plan quota. **P11's diagnosis survives the correction intact**: the
+> report leg really was consuming the sweep's allowance, and the fix (scoping `rpt`, killing the
+> budget layer) is the same either way. Only the denominator in the ×31.9 arithmetic was fictional.
 
 `excBudgetTake_` is `take = max(0, min(want, left, EXC_PP_MAX_PER_RUN, pace))` with
 `pace = ceil(left / runsLeft)` (floored at `EXC_PP_MIN_PER_RUN` only under P6's condition).
