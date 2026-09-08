@@ -872,10 +872,49 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
     - **A missing ParcelPanel key stamps `skipped:`, not `ok`.** `ok` would claim a queue was
       drained that was never read. `skipped:` grades as not-ok in `check_sync_heartbeat`, which
       is correct: a delivery poll that cannot run is a defect, quietly.
+    **🔴 THE SECOND POLLER, CLOSED 2026-09-08 — and the reason it was NOT already "fine".**
+    `daily_shipping_sync.run_pp_sync` shares this queue and carried the identical
+    unordered-restart shape. It was left open on 09-07 because its predicate was genuinely
+    different. It had not *visibly* bitten only because it had **no budget to truncate the
+    queue** — which is not a defence, it is the other failure: an unbounded poll is a
+    28-minute (once ~180-minute) stage sitting in front of Gorgias, reclassify and the Tue/Fri
+    postmortem on a task that fires at 12:00. Both halves had to land together, because either
+    one alone is a NEW bug: **an ordered queue with no budget blocks the day, and a budget over
+    an unordered, position-less queue truncates the queue permanently.** Never add a cap to a
+    poller without `delivery_window.due_work_list_sql()` underneath it.
+    - **🔴 THE CURSOR IS BANKED PER FLUSH, IN THE SAME TRANSACTION AS THE WORK — NEVER ONCE AT
+      THE END.** `run_pp_sync` used to call `record_attempts` after the loop, inside the same
+      `try:` as `aged_out_sweep`. Under a budget that is a fresh instance of this rule wearing a
+      different mechanism: a run that stops early — or an epilogue that raises — leaves NO
+      cursor for orders it *did* poll, so the next run re-asks exactly what it just asked,
+      while the delivery rows still land and every log line still looks like progress. Banking
+      it separately is equally wrong in the other direction: an attempt counted for an order
+      whose answer was not durably stored inflates the counter `aged_out_sweep` gates on, and an
+      inflated counter retires a LIVE box early. A lock loss therefore holds BOTH, never half.
+    - **A DIFFERENT PREDICATE IS RESOLVED BY MEASUREMENT, NEVER ABSORBED.** Two clauses stood
+      between this poller and the one owner, and each was checked read-only against the
+      canonical DB before it moved: the `pickup_date IS NULL` re-pull **selected 0 orders**
+      (work list 2,796 with it, 2,796 without — all 28,398 delivery_date-set/pickup-NULL rows
+      are already `delivered`), so it is DROPPED; and the `tracking_number` join → the canonical
+      `order_number` join **drops 87 and adds 0**, all 87 already carrying a landed order-level
+      `delivery_date` and unreachable only because the fulfilment's tracking ≠ the
+      `delivery_status` row's (99 such tracking numbers; the OnTrac→LaserShip label switch).
+      Multi-leg was measured too: 19 orders with >1 tracking, **0** mixed. 🔴 The fix for a
+      genuinely-missing predicate is a change in `delivery_window` — the ONE owner — never a
+      second predicate left in the poller.
+    - **A LEG WITH NO STAMP STILL OWES THE SAME REPORT.** `daily_shipping_sync` logs, it does not
+      `_stamp`, so `complete=`, `remaining_due=`, `unresolved=` and `oldest_due_days=` go in its
+      log every run, and a failed re-count writes UNKNOWN, never 0. A lock-busy schema step logs
+      `UNTOUCHED` — nothing polled is not a drained queue and not a dead feed.
+    - **THE GUARDS DIVIDE BY WHAT THE RUN REACHED.** With a budget, `polled` and `len(orders)`
+      are different numbers; `errors < len(orders) * 0.1` would let a 200-order run that failed
+      on 90% of what it touched report success against a 2,796-order denominator.
+
     Constraints: `SHIPPING_PIPELINE.md` §3 rule 7 (the queue's own contract) ·
     `GelPackCalculator/delivery_window.py` module docstring (negatives 4-6).
-    Tests: `tests/test_delivery_poll_resume.py` (22, offline — fake clock, fake PP client,
-    in-memory sqlite; no writer `main()`, no live DB, no network).
+    Tests: `tests/test_delivery_poll_resume.py` (22) + `tests/test_daily_pp_sync_resume.py` (17)
+    — both offline: fake clock, fake PP client, in-memory sqlite; no writer `main()`, no live
+    DB, no network.
 
 ## Wired beats (update when adding/removing)
 
