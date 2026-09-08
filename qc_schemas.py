@@ -64,10 +64,10 @@ _TAG_TOKEN_RE = re.compile(r"^!(?:NO )?[^!,]+ - [^!,]+_AHB!$")
 # lanes). Duplicated here ON PURPOSE: this module must stay import-side-effect-free (no
 # ShipRouting import). If §0 changes, update this dict in the SAME commit.
 _CARRIER_HUBS = {
-    "Veho": {"Nashville", "Indianapolis"},
+    "Veho": set(),
     "UPS": {"Dallas"},
-    "OnTrac": {"Anaheim", "Nashville", "Dallas"},
-    "FedEx": {"Dallas", "Nashville", "Anaheim", "Indianapolis"},
+    "OnTrac": {"Anaheim", "Chicago", "Dallas", "Nashville", "Swedesboro"},
+    "FedEx": {"Anaheim", "Chicago", "Dallas", "Nashville", "Swedesboro"},
 }
 _LAST_MILE = ("Veho", "OnTrac")  # zip-footprint carriers (serviceability bug class)
 
@@ -147,7 +147,7 @@ ROUTING_TAB5_SCHEMA = DataFrameSchema(
     },
     checks=[
         Check(_row_lanes_legal, name="legal_lane",
-              error="illegal carrier-hub pair (Veho=Nash/Indy, UPS=Dallas, OnTrac=Anaheim/Nash/Dallas)"),
+              error="illegal carrier-hub pair (canonical ShipRouting carrier-hub roster)"),
         Check(_row_lastmile_has_zip, name="lastmile_zip",
               error="positive Veho/OnTrac tag without a 5-digit dest zip (serviceability class)"),
     ],

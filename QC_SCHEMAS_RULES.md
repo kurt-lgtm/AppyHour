@@ -59,7 +59,7 @@ against season before promoting that check.
 |---|---|
 | `Zip Code` = 5-char string w/ leading zeros (`coerce=False`) | **zip-leading-zero class** — a numeric coercion turns NJ `07001` into `7001` and every zip-keyed lookup (serviceability, TNT, ice) silently misses. |
 | `tag_grammar` (`!(NO )<Carrier Service> - <Hub>_AHB!` or empty) | malformed `!!`/stray tags reaching Shopify — apply path is `_AHB!`-grammar-gated; a bad tag = order silently unrouted. |
-| `legal_lane` (Veho=Nash/Indy · UPS=Dallas · OnTrac=Anaheim/Nash/Dallas · FedEx=all 4) | engine once proposed **physically impossible Veho-Dallas** lanes; also the 475-row Veho@Dallas ingest mis-attribution (2026-06-24). |
+| `legal_lane` (Veho=none · UPS=Dallas · OnTrac=Anaheim/Chicago/Dallas/Nashville/Swedesboro · FedEx=Anaheim/Chicago/Dallas/Nashville/Swedesboro) | engine once proposed **physically impossible Veho-Dallas** lanes; also the 475-row Veho@Dallas ingest mis-attribution (2026-06-24). FedEx-Swedesboro is the current config-enabled physical Barrington injection. |
 | `lastmile_zip` (positive Veho/OnTrac tag ⇒ real 5-digit zip) | **serviceability class — 358–391 live Veho/OnTrac orders routed to UNSERVICED zips** on `_SHIP_2026-06-29` (HISTORY_SERVICEABILITY STATE layer minted coverage). Shape-level guard; the full coverage-file check lives in qc_audit SERVICEABILITY. |
 | `tnt_le_2` (TNT effective ∈ {"", 1, 2}) | 3-day-on-final-sheet = late/warm class; also surfaces **FedEx-Ground over-assignment spikes** (6/15 incident) as TNT drift. Seasonal caveat above. |
 
