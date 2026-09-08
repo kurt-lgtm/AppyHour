@@ -50,7 +50,8 @@ from appyhour_lib.notify import notify  # noqa: E402
 
 SHEET_ID = "1JgyYknIxJ3-UJxJOX-y78rf8cPNhT0uPy5FUw2zO9wE"  # Reship Sheet
 STATE_PATH = _ROOT.parent / "_outputs" / "cache" / "reship_report_state.json"
-CREDS_FALLBACK = _ROOT / "shipping-perfomance-review-accd39ac4b78.json"
+# SA credentials resolve via appyhour_lib.credentials (GoogleIntegration() with
+# no path): inline JSON on App Platform, the key file locally.
 MATURITY_DAYS = 14  # cohort considered final for tail-CDF purposes
 LATE_REPORT_DAYS = 16  # requested > Monday+16d -> flag (proxy for >14d post-delivery)
 HIGH_VALUE = 150.0
@@ -463,7 +464,7 @@ def build(weeks_back: int, dry_run: bool) -> None:
     overrides: dict[str, dict] = {}
     if not dry_run:
         from google_integration import GoogleIntegration
-        gclient = GoogleIntegration(str(CREDS_FALLBACK))
+        gclient = GoogleIntegration()
         try:
             raw = gclient.read_sheet(SHEET_ID, "'Raw Data'!A3:M10000") or []
         except Exception:
@@ -786,26 +787,22 @@ def main() -> int:
 
 KURT_SLACK_ID = "U08R19137UL"
 
-
 def alert_kurt(msg: str) -> None:
-    """Alert Kurt PRIVATELY only (Kurt 2026-07-13: never a public channel like
-    #reships). Bot DM via chat.postMessage (needs Bot chat:write scope); if that
-    isn't granted yet, fall back to EMAIL — NEVER the AH_SLACK_WEBHOOK, which is
-    bound to the public #reships channel."""
-    import os
-    token = os.environ.get("AH_SLACK_BOT_TOKEN", "").strip()
-    if token:
-        try:
-            r = requests.post("https://slack.com/api/chat.postMessage",
-                              headers={"Authorization": f"Bearer {token}"},
-                              json={"channel": KURT_SLACK_ID, "text": f":rotating_light: {msg}"},
-                              timeout=15)
-            if r.ok and r.json().get("ok"):
-                return
-        except Exception:
-            pass
-    # email fallback — explicitly drop the public-channel webhook first
-    os.environ.pop("AH_SLACK_WEBHOOK", None)
+    """Alert Kurt PRIVATELY only (Kurt 2026-07-13: never a public channel like #reships).
+
+    🔴 THE DESTINATION IS NOT NAMED HERE, AND MUST NEVER BE. This function used to
+    hold a `KURT_OPS_CHANNEL = "<id>"` literal plus its own `chat.postMessage` call,
+    with `notify()` as the fallback underneath — so the channel existed in two places
+    and the copy in this file could silently drift from the one that actually governs.
+    A channel id in a script is also a destination nobody can re-point without a code
+    change, which is how an alert ends up in a public channel after a rename.
+    `appyhour_lib.notify` owns the destination (`AH_SLACK_CHANNEL`, private #kurt-ops)
+    and nothing else may state it — not this file, not a SKILL.md (Kurt 2026-08-27).
+
+    The hand-rolled post is gone rather than kept as a "fast path": it was a duplicate
+    of what notify() already does, and its only unique contribution was the literal.
+    AH_SLACK_WEBHOOK stays dead here and in notify — it is bound to public #reships by
+    URL and cannot be re-pointed from code."""
     notify(msg, level="critical")
 
 

@@ -5,6 +5,7 @@ as readable MCP resources and tools.
 """
 
 import json
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -18,15 +19,28 @@ def _find_memory_dir() -> Path:
 
 
 MEMORY_DIR = _find_memory_dir()
-SETTINGS_PATH = Path(__file__).parent.parent.parent / "InventoryReorder" / "dist" / "inventory_reorder_settings.json"
 ERRORS_DIR = Path(__file__).parent.parent.parent / "InventoryReorder" / "Errors"
+
+# 🔴 This used to hardcode `InventoryReorder/dist/inventory_reorder_settings.json` — a subdir
+# that exists in the DEV tree only. That is the same literal that failed every carrier IMAP
+# download on 2026-07-27 while the caller still reported ok. Worse here: _load_settings()
+# returns {} when the path is missing, so a wrong path degrades to "no settings" silently
+# rather than failing. Resolve through appyhour_lib.paths (canonical C:\AppyHourData, with a
+# loud legacy fallback) and say so when it genuinely is not there.
+_APPYHOUR_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def _load_settings() -> dict:
     """Load the inventory reorder settings JSON (single source of truth)."""
-    if not SETTINGS_PATH.exists():
+    if str(_APPYHOUR_ROOT) not in sys.path:
+        sys.path.insert(0, str(_APPYHOUR_ROOT))
+    from appyhour_lib.paths import inventory_settings_path
+    try:
+        path = inventory_settings_path()
+    except FileNotFoundError as exc:
+        print(f"context: inventory settings unavailable — {exc}", file=sys.stderr)
         return {}
-    with open(SETTINGS_PATH, encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 

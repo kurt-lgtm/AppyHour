@@ -157,7 +157,7 @@ NAME_TO_SKU: dict[str, str] = {
     "Port Salut": "CH-SPORT",
     "Pradera - Dutch Aged Gouda": "CH-PRAD",
     "Prairie Breeze": "CH-BRZ",
-    "Prairie Breeze.": "CH-PRBZ",
+    "Prairie Breeze.": "CH-BRZ",
     "Pumpkin Cider Fromage": "CH-NMPSC",
     "Queso de Murcia al Vino DOP": "CH-QCAV",
     "Raclette Livradios": "CH-RACL",
