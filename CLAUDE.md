@@ -79,6 +79,26 @@ pip install -e ".[dev]" && pytest
 - **PR-CJAM-GEN** = only generic; curation-specific variants made by Shopify post-charge.
 - **CH-MAFT** never assigned (ASSIGNMENT_EXCLUDE).
 
+## 🔴 Shopify order links — STANDING RULE (Kurt 2026-09-08)
+
+Whenever an agent names a Shopify order to Kurt, the order NUMBER is the link text and the
+href is the admin URL built from that order's **real numeric admin id**:
+
+```
+[#181803](https://admin.shopify.com/store/504ac4/orders/7362504229144?link_source=search)
+```
+
+- **The id is LOOKED UP, never derived from the order number.** `#181803` and the admin id
+  `7362504229144` are unrelated numbers. `order_checks.fetch_gql` keys its cache by order
+  NAME, so an agent holding that dict has no id at all -- and inventing a plausible one
+  produces a link that 404s on a real order. That happened this session
+  ([[never-fabricate]]: look it up or say you do not have it).
+- Resolve it with `orders(query:"name:<number>"){ ... id }` and strip the `gid://shopify/
+  Order/` prefix, or read `id` off a node already fetched with that field selected.
+- **The number is the link text.** Do not print the URL beside the number, and do not emit
+  a bare URL as its own line -- one linked `#number`, nothing else.
+- Applies to chat, reports, handoffs, and Slack alike.
+
 ## Domain Quick-Ref
 
 - **SKU prefixes:** CH (cheese), MT (meat), AC (artisan), AHB (box type), BL (bulk), PR-CJAM (jam pairing), CEX-EC (extra cheese), TR (trays), PK (inserts), MR (journal). **All prefixes are pickable** — PK & MR carry 0 DistVol; TR has DistVol (~1.0); CH/AC/MT/TR have per-SKU DistVol from the xlsx. Only CH/MT/AC count for item-count error detection.

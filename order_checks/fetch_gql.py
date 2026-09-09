@@ -36,6 +36,29 @@ Q = """query($q:String!){orders(first:60, query:$q){edges{node{
 # reading that line's bundled_variants metafield.
 
 
+STORE = "504ac4"
+
+
+def admin_url(node) -> str:
+    """-> the admin URL for an order NODE (needs the node's `id`, not its name).
+
+    🔴 The order NUMBER and the admin id are unrelated numbers: #181803 lives at
+    /orders/7362504229144. Never build this from the number -- an invented id 404s on a
+    real order, which is worse than no link (Kurt 2026-09-08, [[never-fabricate]]).
+    Every node from Q already carries `id`; read it, do not guess it.
+    """
+    gid = node.get("id") if isinstance(node, dict) else node
+    if not gid:
+        raise ValueError("admin_url needs the order's `id`; the order number is not an id")
+    return (f"https://admin.shopify.com/store/{STORE}/orders/"
+            f"{str(gid).rsplit('/', 1)[-1]}?link_source=search")
+
+
+def admin_link(node) -> str:
+    """-> `[#181803](https://admin.shopify.com/...)` -- the number IS the link text."""
+    return f"[{node.get('name')}]({admin_url(node)})"
+
+
 def _auth():
     for p in (r"C:\Users\Work\Claude Projects\AppyHour\AppyHourMCP",
               r"C:\Users\Work\Claude Projects\AppyHour\GelPackCalculator"):
