@@ -3878,10 +3878,40 @@ PP-dependent legs, after both 09-06 failures. The report was not left broken.
 9. **A consumer with no byte meter cannot be indicted or exonerated** (D43 rule 6, third instance):
    `GORGIAS_IO_CALLS_` / `GORGIAS_IO_BYTES_` / `gorgiasIoSummary_()` now mirror the Shopify and PP
    counters. 🔴 Descriptive only — nothing caps, paces or skips on them.
-10. **Still open, deliberately NOT changed:** `Exceptions.gs excGorgiasCreate_` posts to
-    `/tickets` inside a `try/catch` that never throws, so it already degrades — but it records a
-    wall as a generic `failed` with the raw text, i.e. it *blames Gorgias*. It should call
-    `gasFetchQuotaWall_` and label the meter. Out of scope for this change (Code.gs only).
+10. 🔴 **A DEGRADING PATH CAN STILL BLAME THE WRONG SYSTEM — CLOSED 2026-09-09.** `Exceptions.gs
+    excGorgiasCreate_` posts to `/tickets` inside a `try/catch` that never throws, so it always
+    degraded; that is exactly why it went unnoticed. It recorded the wall as a generic `failed`
+    carrying the raw text (`Bandwidth quota exceeded: https://appyhour.gorgias.com/...`), so the
+    `#kurt-ops` alarm counted GOOGLE's meter as a Gorgias failure and pointed its reader at a rate
+    limiter that was never involved — the same mislabel as D43, on the **fourth** path (PP 09-06,
+    Shopify 08-31, Gorgias enrichment 09-08, ticket-create). **Not throwing is not the same as
+    naming the fault correctly.** Now:
+    - `gasFetchQuotaWall_(e)` discriminates in the catch **before** anything is recorded, and
+      `noteQuotaWall_(e, 'gorgias-ticket-create')` records it run-wide with its own leg name —
+      the shared Code.gs definitions (rule 7), never a second copy of the test.
+    - 🔴 **`quota_wall` is its OWN counter on `EXC_GORGIAS_RUN_`, never folded into `failed`.**
+      Folding them is what made the number unreadable; `excGorgiasFlush_` publishes the deferred
+      count separately and says `DEFERRED on GOOGLE's daily url-fetch DATA quota (script-owner
+      meter) — *not* Gorgias throttling`.
+    - 🔴 **No retry, and no next POST** (D43 rule 3): once `RUN_QUOTA_WALL_` is set, later calls
+      short-circuit before placing a request. A daily byte budget does not refill inside one
+      execution, and each attempt spends more of what is gone.
+    - The drafts behind the wall are **DEFERRED, not lost** — nothing is stamped, so the next run
+      re-attempts them. The P18 ping/state path is untouched: a draft ticket is an assistive
+      artifact, never the alarm itself.
+    - **A real Gorgias failure is still `failed`.** An HTTP 500 (or any non-wall throw) keeps its
+      status code and does not set `RUN_QUOTA_WALL_` — pinned by the regression guard below.
+
+    **Verification (2026-09-09, node 24, offline).**
+    `appsscript/tests/d43b_exceptions_gorgias_create_quota_test.js` — **26/26 PASS**. Loads the real
+    `Code.gs` **and** `Exceptions.gs` into one `vm` context (as the project shares a global scope),
+    driving the verbatim Google wording against a Gorgias `/tickets` URL; **no Gorgias, Shopify,
+    ParcelPanel or Slack call was placed** (`excSlackOps_` is stubbed at the one function that would
+    post, so no channel id is involved). Asserts every clause above, plus: it still never throws, the
+    happy 201 path still counts `created` and raises no alarm, and the HTTP-500 regression guard.
+    `d43_gorgias_quota_guard_test.js` re-run: **20/20 PASS** (unchanged). `node --check` on both
+    files: SYNTAX OK. No new globals. 🔴 **Not deployed** — `gas_swap.py push Exceptions` is Kurt's
+    call and is PENDING.
 
 **Verification (2026-09-08/09, node 24, offline).** `appsscript/tests/d43_gorgias_quota_guard_test.js`
 — **20/20 PASS**. Loads `Code.gs` verbatim into a `vm` context with stubbed Apps Script globals; **no

@@ -59,6 +59,19 @@ Analytics pipeline for subscription box shipping. Ingests carrier invoices (OnTr
 > ⚠️ The tab is currently **unpaintable**: `CM_ASSERT_FROZEN_COUNTS` refuses `_SHIP_2026-08-10` (frozen
 > 1534/458/175 vs a recompute 4 boxes lower — the mutable-tag drift D35 predicts). Kurt's call.
 >
+> 🔴 **CEO shipping-COST report** = `_outputs/scripts/shipping_cost_report.py` (+ `cost_sheet_push.py`,
+> read-only via `connect_ro`). Rules SSOT = [`RESHIP_REPORT_RULES.md`](RESHIP_REPORT_RULES.md) **D45**;
+> read it first. 🔴 Ageing past a carrier's invoice-lag horizon proves the feed is DONE, never that it
+> BILLED — a week past its window and still under the 95% floor is `gap` (costs kept, shortfall
+> published), **never** `complete`. Until 2026-09-08 it was silently `complete`: 58 weeks so stamped hid
+> **15,307 unbilled boxes**, FedEx at **76.6%** coverage (8,786 boxes). 🔴 It was **NOT** a join bug —
+> normalizing every tracking finds **0** extra matches; `shipments` simply holds **zero** FedEx rows for
+> 2025-06 and 2025-09 (files never received). `never_billed` (chase the invoice) and `join_defect` (code
+> bug, must be 0) are now separate published numbers, and **both** `$/box` denominators ship side by side
+> ($11.63 invoiced / $9.25 shipped — the spread IS the unbilled tail). 🔴 Never judge ingest recency by
+> `MAX(source_file)`: it is a LEXICAL max and `FedEx_...` sorts above `AHB_...`. Guard:
+> `_outputs/scripts/tests/test_cost_coverage_join.py` (trackings pinned from the live DB).
+>
 > 🔴 **Weekly reship report (one tab per week)** = `ingest/slack_reship/weekly_task.py` →
 > `sync.py --report --push` → `sheet_push.py`, owner: the `weekly-reship-report` routine, beat
 > `slack-reship` (10d). Rules SSOT = [`RESHIP_REPORT_RULES.md`](RESHIP_REPORT_RULES.md) **D40**;

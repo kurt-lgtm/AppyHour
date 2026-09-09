@@ -127,7 +127,12 @@ var GORGIAS_ENABLED_PROP = 'GORGIAS_EXC_ENABLED';
 var GORGIAS_USER_PROP = 'GORGIAS_USER';
 var GORGIAS_KEY_PROP = 'GORGIAS_API_KEY';
 var GORGIAS_TAG = 'exception-sweep';
-var EXC_GORGIAS_RUN_ = { created: 0, failed: 0, skipped_no_email: 0, disabled: 0, errors: [] };
+// 🔴 D43b rule 10 (2026-09-09) — `quota_wall` is its OWN counter, never folded into `failed`.
+// A GOOGLE url-fetch DATA-quota stop is not a Gorgias failure: it carries no HTTP status, it is
+// not retryable today, and the ticket it prevented is deferred rather than lost. Counting it as
+// `failed` sent the ops alarm's reader to Gorgias's rate limiter — the wrong system, for the
+// fourth time (PP 09-06, Shopify 08-31, Gorgias enrichment 09-08, this path).
+var EXC_GORGIAS_RUN_ = { created: 0, failed: 0, skipped_no_email: 0, disabled: 0, quota_wall: 0, errors: [] };
 var EXC_CUSTOMER_CACHE_ = {};   // order -> {email, name, first} — one Shopify lookup per pinged box per run
 
 function excPingDayET_() {
@@ -1707,11 +1712,27 @@ function excGorgiasPayload_(rec, cls, detail, eventAt, cust) {
  * Create the draft ticket for a box that was JUST pinged. Live-post path only, after
  * excSlackPost_ — never from record-only, dry-run, Mon/Tue, or the P15 collapse.
  * 🔴 NEVER THROWS. Basic auth from Script Properties; the key never reaches a log line.
+ *
+ * 🔴 D43b rule 10 (2026-09-09) — THE WALL IS GOOGLE'S, AND THIS PATH USED TO BLAME GORGIAS.
+ * `netFetch_` throws the Apps Script daily url-fetch DATA-quota wall straight through (it is
+ * deliberately excluded from `netRetryable_`), and this catch recorded it as a generic `failed`
+ * with the raw vendor text — `Bandwidth quota exceeded: https://appyhour.gorgias.com/...` — which
+ * reads as Gorgias throttling us and sends the next reader to tune a limiter that was never
+ * involved. Same discrimination as `Code.gs`: `gasFetchQuotaWall_(e)` (D43) detects the class,
+ * `noteQuotaWall_(e, leg)` records it run-wide and names the meter.
+ *
+ * 🔴 NEVER RETRY IT AND NEVER POST THE NEXT TICKET AFTER IT (D43 rule 3). A DAILY byte budget does
+ * not refill inside one execution, so every later call in this loop short-circuits before it
+ * spends anything. The drafts behind the wall are DEFERRED, not lost: nothing is stamped, and the
+ * next run re-attempts them (the P18 ping/state path is unchanged — a draft ticket is an
+ * assistive artifact, never the alarm itself).
  */
 function excGorgiasCreate_(rec, cls, detail, eventAt) {
   var run = EXC_GORGIAS_RUN_;
   try {
     if (EXC_DRY_RUN) return;
+    // 🔴 Already behind the wall — do not place the request at all.
+    if (typeof RUN_QUOTA_WALL_ !== 'undefined' && RUN_QUOTA_WALL_) { run.quota_wall++; return; }
     var props = PropertiesService.getScriptProperties();
     if (props.getProperty(GORGIAS_ENABLED_PROP) !== '1') { run.disabled++; return; }
     var user = props.getProperty(GORGIAS_USER_PROP), key = props.getProperty(GORGIAS_KEY_PROP);
@@ -1733,6 +1754,16 @@ function excGorgiasCreate_(rec, cls, detail, eventAt) {
     }
     run.created++;
   } catch (e) {
+    // 🔴 Discriminate GOOGLE's meter from a Gorgias failure BEFORE recording anything.
+    if (typeof gasFetchQuotaWall_ === 'function' && gasFetchQuotaWall_(e)) {
+      run.quota_wall++;
+      if (typeof noteQuotaWall_ === 'function') noteQuotaWall_(e, 'gorgias-ticket-create');
+      run.errors.push('#' + rec.order + ' ' + cls + ': GOOGLE Apps Script daily url-fetch DATA ' +
+        'quota (script-owner meter) — NOT Gorgias throttling; the vendor URL in the raw text is ' +
+        'only what was in flight. Not retryable today; draft DEFERRED to the next run. Raw: ' +
+        String(e).slice(0, 160));
+      return;
+    }
     run.failed++;
     run.errors.push('#' + rec.order + ' ' + cls + ': ' + String(e).slice(0, 160));
   }
@@ -1740,13 +1771,22 @@ function excGorgiasCreate_(rec, cls, detail, eventAt) {
 
 function excGorgiasFlush_() {
   var run = EXC_GORGIAS_RUN_;
-  if (run.created || run.failed || run.skipped_no_email) {
-    Logger.log('  gorgias: created ' + run.created + ', failed ' + run.failed + ', no-email ' + run.skipped_no_email);
+  if (run.created || run.failed || run.skipped_no_email || run.quota_wall) {
+    Logger.log('  gorgias: created ' + run.created + ', failed ' + run.failed + ', no-email ' +
+               run.skipped_no_email + ', quota-wall deferred ' + run.quota_wall);
   }
-  if (!run.failed && !run.skipped_no_email) return;
+  if (!run.failed && !run.skipped_no_email && !run.quota_wall) return;
   try {
     excSlackOps_(':warning: exceptions → Gorgias drafts: ' + run.created + ' created · ' + run.failed + ' failed · ' +
-                 run.skipped_no_email + ' no email\n' + run.errors.slice(0, 8).join('\n') +
+                 run.skipped_no_email + ' no email' +
+                 // 🔴 D43b rule 10 — the deferred count is named separately and the meter is named
+                 // as GOOGLE's, so this alarm cannot send its reader at Gorgias's rate limiter.
+                 (run.quota_wall
+                   ? ' · ' + run.quota_wall + ' DEFERRED on GOOGLE\'s daily url-fetch DATA quota ' +
+                     '(script-owner meter) — *not* Gorgias throttling; reduce BYTES across every ' +
+                     'consumer in this project, and it resets on Google\'s daily cycle'
+                   : '') +
+                 '\n' + run.errors.slice(0, 8).join('\n') +
                  (run.errors.length > 8 ? '\n(+' + (run.errors.length - 8) + ' more)' : ''));
   } catch (e) {
     Logger.log('  gorgias ops alarm itself failed: ' + e);
