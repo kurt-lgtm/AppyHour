@@ -168,7 +168,7 @@ def _extract_body(msg) -> str:
 ORDER_QUERY = """
 query($id: ID!) {
   order(id: $id) {
-    id name tags
+    id name tags cancelledAt
     customer { id email }
     shippingAddress { address1 address2 city provinceCode zip country }
   }
@@ -251,7 +251,7 @@ def main() -> int:
               + ", ".join(f"{r['name']}={r['kind']}" for r in learned[:6]))
     fp_allow = learn.learned_false_positives()
     safe, needs, hold, gone, autofix = [], [], [], [], []
-    resolved = 0
+    resolved = cancelled = 0
     for oid in order_ids:
         gid = f"gid://shopify/Order/{oid}"
         try:
@@ -261,6 +261,15 @@ def main() -> int:
             continue
         if not o:
             gone.append(oid)
+            continue
+        # 🔴 A CANCELLED ORDER IS NOT A DECISION. It will never ship, so its address cannot be
+        # wrong in any way that costs anything -- staging one as "your call" asks Kurt to rule on
+        # a box that does not exist. Burn 2026-09-09: #182251 reached NEEDS_FIX while cancelled;
+        # Kurt: "that one order is cancelled. i don't need to address it. this is a bad alarm."
+        # Checked BEFORE the tag test on purpose: the invalid-address tag survives cancellation,
+        # so tag-presence alone can never distinguish these.
+        if o.get("cancelledAt"):
+            cancelled += 1
             continue
         tags = o.get("tags") or []
         if INVALID_TAG not in tags:
@@ -331,7 +340,8 @@ def main() -> int:
 
     print(f"AUTO_FIX: {len(autofix)} ({'applied ' + str(fixed) if args.apply_fix else 'staged'}) | "
           f"SAFE_UNTAG: {len(safe)} ({'untagged ' + str(untagged) if args.apply_untag else 'staged'}) | "
-          f"NEEDS_FIX(your call): {len(needs)} | HOLD: {len(hold)} | tag-cleared: {resolved} | deleted: {len(gone)}")
+          f"NEEDS_FIX(your call): {len(needs)} | HOLD: {len(hold)} | tag-cleared: {resolved} | "
+          f"cancelled(skipped): {cancelled} | deleted: {len(gone)}")
     if cand.get("typos") or cand.get("false_positives"):
         print(f"NEW learned-rule candidates: {cand['typos']} typo, {cand['false_positives']} false-positive "
               f"-> approve in {cand.get('path')}")
