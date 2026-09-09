@@ -709,14 +709,106 @@ cohort proof instead.
 metrics invariant (`NATURAL_KEYS` = `(order_number, tracking_number)`, 0 dup groups / 0 missing
 both sides).
 
+### B1-R2 — 🔴 an INSERT-ONLY sync against a MUTABLE source column diverges on EVERY reship
+
+**The failure, first, because it is the whole point.** On **2026-09-08** the repair ran
+`--apply --yes-write-production` and inserted **2,703** rows correctly. Every count agreed
+afterwards: cloud `fulfillments` **124,078** = local **124,078**, local-only **0**, cloud-only
+**0**. And `--verify` **STILL FAILED** per-ship-week parity, on **five** weeks:
+
+| ship_week | local | cloud | delta |
+|---|---|---|---|
+| 2026-07-20 | 2,072 | 2,079 | −7 |
+| 2026-07-27 | 2,225 | 2,218 | +7 |
+| 2026-08-03 | 2,361 | 2,362 | −1 |
+| 2026-08-10 | 2,360 | 2,363 | −3 |
+| 2026-08-17 | 2,366 | 2,362 | +4 |
+
+**Cause, measured exactly: 11 rows whose cloud `ship_date` is an EARLIER date than local.** They
+are **RESHIPS** — a box shipped 2026-07-20 and reshipped 2026-07-27. Local moved `ship_date` and
+`ship_week` and dropped the superseded `_SHIP_` tags; the cloud copy never learned, because
+**INSERT-ONLY STRUCTURALLY CANNOT TOUCH A KEY THAT ALREADY EXISTS.** Local `updated_at` is newer on
+all eleven (Sep 3/7/8 vs Aug 12/31), so local is the right copy on every one.
+
+    163680 163719 163720 163722 163723 163724 163735   (07-20 -> 07-27)
+    169599 170532 170844                               (08-10 -> 08-17)
+    168231                                             (08-03 -> 08-17)
+
+🔴 **THE 11 MATTER LESS THAN THE RECURRENCE, AND THAT IS THE CONSTRAINT.** Every future reship
+re-opens this. Row counts, `MAX(updated_at)`, local-only and cloud-only can ALL read perfect while
+the two copies disagree about which week a box shipped — none of them can see a value that changed
+in place. Per-ship-week parity is the only check that can, so it fails from here on, week after
+week, **until somebody mutes it for crying wolf** — at which point the one guard that can see a
+missing ship week (the 75,000 row floor cannot) is gone. B1-X item 1 depends on this check being
+believed.
+
+⚠️ **Do NOT "fix" this by syncing every column that differs.** Measured the same day across the
+124,078 shared rows: `updated_at` differs on **17,881** (a local bulk re-stamp), `tags` on **281**,
+`ship_date`/`ship_week` on **11**. A column-blind update rewrites 17,881 rows to repair 11.
+
+**What shipped (2026-09-08): `repair_cloud_fulfillments.py --update-stale`, OFF BY DEFAULT.**
+Same double opt-in as the insert path (`--apply` AND `--yes-write-production`), dry otherwise.
+The negatives it encodes:
+
+* **Selection and write are DIFFERENT sets.** `--stale-on` (default `ship_date,ship_week`) picks
+  WHICH ROWS — that is the row bound, and why the run is 11 and not 17,881. The write set is then
+  every column that actually differs on those rows (so their stale `tags`/`updated_at` are
+  corrected too — a row whose `ship_date` we moved to 07-27 still carrying `_SHIP_2026-07-20` is a
+  knowingly half-repaired row). Never a whole-row overwrite: columns nobody compared are never
+  written.
+* 🔴 **A cloud-newer candidate REFUSES THE RUN.** Insert-only got that rule for free (it cannot
+  overwrite); here it has teeth. A newer cloud row is a writer this repair does not know about.
+* 🔴 **Identity is never rewritten.** `id`, `order_number`, `tracking_number` cannot be in the SET
+  list or in `--stale-on`, and a candidate differing on one is a FINDING that refuses — a differing
+  key is a different row, and repairing one by rewriting the other's key mints a second identity
+  for one fulfilment (the '#'-asymmetry failure in a different costume).
+* 🔴 **No repair clock, and not only in our SQL.** Values are byte-verbatim from local; the SQL
+  assertion bans `NOW()`/`CURRENT_TIMESTAMP`/`SYSDATE`/`UNIX_TIMESTAMP`; **and** the run refuses if
+  any destination column carries `ON UPDATE CURRENT_TIMESTAMP` — a server-side clock stamps the
+  repair's own time with nothing in the statement to inspect, and `fulfillments` has no provenance
+  column to distinguish that from a live writer (rule 18a). Verified 2026-09-08: no cloud column
+  has it; `id` is `auto_increment`, every other `EXTRA` is empty.
+* **`--max-rows` (default 500) REFUSES, never truncates.** A cap that trimmed to fit would turn
+  "bigger than you thought" into a silent partial write.
+* **Every UPDATE must affect exactly one row**, checked on `rowcount` BEFORE the commit; a batch
+  that does not is rolled back and stops the run.
+* `_assert_insert_only()` is **UNCHANGED** and still guards the INSERT path. The update path has
+  its own assertion; it does not borrow a hole in the insert path's.
+* The delta manifest names every row and CLOUD's prior value for every column, written before the
+  write and re-flushed per batch, so the undo is exact.
+* 🔴 **A ZERO IS A CLAIM — the stale join must PROVE it matched before `stale=0` reads as clean**
+  (gate `🔴 the stale join MATCHED`, `_stale_join_alive()`, added 2026-09-09). `measure_stale()`
+  builds its OWN dict keyed on `(_norm(order_number), _norm(tracking_number))` — the insert path's
+  `_control_join()` does not vouch for it. If that key ever stops lining up ('#' creeping onto one
+  side, a renamed column, a `--source-db` snapshot of the wrong table), every cloud row misses the
+  dict, `shared_rows` falls to 0, and the run prints **"NOTHING TO DO — no shared row has drifted"**
+  and exits **0**: a clean bill of health manufactured by a broken join, on the exact key format
+  that has produced confident zeros in this operation three times. So `measure_stale()` now reports
+  its denominator (`local_rows`, `cloud_rows`, `shared_rows`) and the gate REFUSES on zero overlap
+  between two non-empty mirrors — that is a defect in the join, never a fact about the data. The
+  gate is deliberately **not** exempted from the idempotent-success path, because that path is the
+  only place a dead join could still be reported as a clean run. Bar is `> 0`, not a ratio: "how
+  much of local is missing from cloud" belongs to the insert path and this mode does not get a
+  second opinion on it. Live 2026-09-09: `local=124245 cloud=124078 shared=124078`.
+
+**Status 2026-09-08: DRY RUN ONLY.** The mode is built, tested (54 cases, including cloud-newer
+refusal, max-rows refusal, identity-diff refusal, server-clock refusal, single-column diff,
+rowcount rollback, interrupt/resume, and a clean no-op), and the live dry run names exactly those
+11 rows with every gate PASS. 🔴 **The live `--apply` was NOT executed** — that is the cloud
+owner's call.
+
 ### B1-X — the exit condition for flipping `fulfillments` onto the DO read path
 
 B1's original clearing evidence covers the writer but not the hole or the reader. Sharpened —
 **all five, not any:**
 
-1. **Hole filled:** cloud-only-missing = 0 **and per-ship-week parity**, by
+1. **Hole filled AND no in-place drift:** cloud-only-missing = 0 **and per-ship-week parity**, by
    `repair_cloud_fulfillments.py --verify`. Row count alone is insufficient (the 75,000 floor is
-   blind to two missing weeks).
+   blind to two missing weeks) — and 🔴 **per B1-R2, row-count parity is insufficient too**: on
+   2026-09-08 every count agreed and per-week parity still failed on five weeks, because 11
+   reshipped rows had drifted in place. Run the verify as
+   `--verify --update-stale` so the drift check runs alongside the week parity; the two are one
+   condition, not two.
 2. **A registered `fulfillments` timer** in `server/ingest_worker.REGISTRY` with a declared
    interval — absent, not flag-off, is the current state.
 3. 🔴 **A freshness assert on the CLOUD copy that fires WHILE FLAG-OFF.** This is the gap nobody

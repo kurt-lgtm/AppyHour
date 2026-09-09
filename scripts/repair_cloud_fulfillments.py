@@ -121,6 +121,73 @@ in the write path; `_assert_insert_only()` rejects the SQL if one appears, and `
 byte-compares both timestamps on a sample of inserted rows read back FROM DO. The alarm clears
 only if the copied rows are genuinely recent, which is the truth.
 
+`--update-stale` — THE INSERT-ONLY BLIND SPOT, AND WHY IT IS A SEPARATE MODE
+===========================================================================
+🔴 INSERT-ONLY CANNOT CORRECT A ROW THAT ALREADY EXISTS, AND `ship_date` MOVES. That is not a
+theoretical gap — it was MEASURED on 2026-09-08, immediately after the insert path ran cleanly:
+2,703 rows inserted, cloud rows == local rows == 124,078, local-only 0, cloud-only 0 — and
+`--verify` STILL FAILED per-ship-week parity on five weeks. Cause, exactly: **11 rows whose cloud
+`ship_date` is an EARLIER date than local.** They are RESHIPS — a box shipped 2026-07-20 and
+reshipped 2026-07-27; local moved `ship_date`/`ship_week` (and dropped the stale `_SHIP_` tags),
+and the cloud copy never learned, because an INSERT structurally cannot touch a key that is
+already there.
+
+    163680 163719 163720 163722 163723 163724 163735   (07-20 -> 07-27)
+    169599 170532 170844                               (08-10 -> 08-17)
+    168231                                             (08-03 -> 08-17)
+
+🔴 THE 11 MATTER LESS THAN THE RECURRENCE. **Every future reship re-opens this.** An insert-only
+sync against a MUTABLE source column diverges a little further every week, and the per-ship-week
+parity check then fails forever — until somebody mutes it for crying wolf, at which point the one
+guard that can see a missing ship week is gone. The mode exists to keep that check honest.
+
+WHAT BOUNDS IT (measured, because the naive version is enormous)
+  A blanket "sync every column that differs" is NOT what this does, and the numbers say why. Over
+  the 124,078 shared rows on 2026-09-08: `updated_at` differs on **17,881** (a local bulk
+  re-stamp), `tags` on 281, and `ship_date`/`ship_week` on exactly **11**. A column-blind update
+  would rewrite 17,881 rows to repair 11.
+  So SELECTION and WRITE are two different sets, deliberately:
+    * `--stale-on` (default `ship_date,ship_week`) selects WHICH ROWS are candidates. It is the
+      row bound, and it is the reason this run is 11 rows and not 17,881.
+    * For a selected row, the WRITE set is every column that ACTUALLY DIFFERS and is not an
+      identity column — so the 11 also get their stale `tags` and `updated_at` corrected. Leaving
+      a row whose `ship_date` we just moved to 07-27 still carrying `_SHIP_2026-07-20` in `tags`
+      would be a knowingly half-repaired row, which is worse than either extreme.
+  `--max-rows` (default 500) REFUSES the whole run rather than truncating it. A truncating cap
+  turns "this is bigger than you thought" into a silent partial write.
+
+NON-NEGOTIABLES, EACH ONE A SEPARATE ASSERTION
+  * `--update-stale` requires **BOTH** `--apply` and `--yes-write-production`, exactly as the
+    insert path does. Dry by default: it measures, names every row, predicts every gate, writes
+    a delta manifest, and touches nothing.
+  * 🔴 A ZERO IS A CLAIM, AND THIS MODE'S ZERO HAS ITS OWN CONTROL. `_control_join()` proves the
+    INSERT path's join is live; it does not vouch for `measure_stale()`, which builds its own dict
+    on the normalized natural key. A key that stopped lining up would make every cloud row miss
+    that dict, drop `shared_rows` to 0, and print "no shared row has drifted" — a clean run
+    manufactured by a broken join. `_stale_join_alive()` therefore REFUSES when two non-empty
+    mirrors share zero keys, and the measurement reports `local_rows`/`cloud_rows`/`shared_rows`
+    so the zero can be falsified by a reader.
+  * `_assert_insert_only()` is UNCHANGED and still guards the INSERT path. The update path does
+    not borrow a hole in it — it has its own `_assert_update_only()`, which refuses anything that
+    is not a single parameterized `UPDATE ... WHERE order_number=%s AND tracking_number=%s`, and
+    refuses a SET list touching `id`, `order_number` or `tracking_number`.
+  * 🔴 CLOUD-NEWER IS A REFUSAL, NEVER A MERGE — the same rule the insert path states, now with
+    teeth, because here we CAN overwrite. If any candidate's cloud `COALESCE(updated_at,
+    fulfilled_at)` is newer than local's, the run refuses and reports it: that is a cloud writer
+    this repair does not know about, and overwriting it destroys someone else's work.
+  * 🔴 NO REPAIR CLOCK, SAME AS THE INSERT PATH. Values are byte-verbatim from local;
+    `_assert_update_only` bans `NOW()`/`CURRENT_TIMESTAMP`/`SYSDATE`/`UNIX_TIMESTAMP`; and
+    `_server_clock_gate()` REFUSES if any destination column carries `ON UPDATE
+    CURRENT_TIMESTAMP` in `information_schema` — a server-side clock would stamp the repair's own
+    time on every UPDATE with no SQL to inspect, which is the one way rule 18a could be broken by
+    a statement that reads perfectly clean. (Checked 2026-09-08: no cloud column has it. The gate
+    stays, because the schema is not ours.)
+  * Every UPDATE must affect EXACTLY ONE row. The batch's `rowcount` is checked BEFORE the commit
+    and the batch is rolled back if it does not match — a WHERE that matched 0 or 2 rows means the
+    key is not the key, and that must stop the run, not be discovered later.
+  * The manifest records CLOUD's prior value for every column of every row BEFORE the write, so
+    the undo is exact, and it is re-flushed after every batch.
+
 WHERE THIS CAN RUN (read before planning the run)
 =================================================
 The write needs a sqlite read AND a MySQL socket in one process, and no host has both: this PC
@@ -150,6 +217,8 @@ USAGE
     python repair_cloud_fulfillments.py --apply --yes-write-production
     python repair_cloud_fulfillments.py --apply --yes-write-production \
         --scratch-table fulfillments_repair_scratch      # REHEARSAL: writes to a copy, not live
+    python repair_cloud_fulfillments.py --update-stale                   # DRY: name the stale rows
+    python repair_cloud_fulfillments.py --update-stale --apply --yes-write-production
 """
 from __future__ import annotations
 
@@ -199,6 +268,22 @@ COLS = ["id", "order_number", "order_id", "order_date", "tags", "tracking_number
 FRESHNESS_COL = "fulfilled_at"
 # etl_history NATURAL_KEYS["fulfillments"]
 NATURAL_KEY = ("order_number", "tracking_number")
+
+# 🔴 IDENTITY. Never in an UPDATE's SET list, never a `--stale-on` column, and a difference in one
+# of them on a shared key is a REFUSAL, not a repair: `order_number`/`tracking_number` ARE the key
+# (rewriting one mints a second identity for the same fulfilment, the '#'-asymmetry failure in a
+# different costume), and `id` is MySQL `auto_increment` — the cloud copy is id-identical to local
+# on every shared row, so an `id` that disagrees means the mirror assumption is already broken and
+# nothing downstream of that assumption should be trusted.
+IMMUTABLE_COLS = ("id", *NATURAL_KEY)
+
+# `--stale-on` default: the columns whose drift the insert path cannot see. Measured 2026-09-08 on
+# 124,078 shared rows — ship_date/ship_week differ on 11, `updated_at` on 17,881, `tags` on 281.
+# Selecting on the 11-row columns is what makes this bounded; see the docstring's WHAT BOUNDS IT.
+DEFAULT_STALE_ON = ("ship_date", "ship_week")
+# REFUSAL ceiling, never a truncation. 500 clears today's 11 by 45x and stops a `--stale-on
+# updated_at` style mistake dead instead of half-writing it.
+MAX_UPDATE_ROWS = 500
 
 # The DESTINATION table on the MySQL side. `--scratch-table` repoints this at a seeded COPY so the
 # whole run — measure, gates, insert, verify, re-run — can be rehearsed without touching live.
@@ -512,6 +597,247 @@ def gates(m: dict) -> list[tuple[str, bool, str]]:
     return out
 
 
+# ------------------------------------------------- STALE ROWS (the `--update-stale` measurement)
+
+def _cell(v) -> str:
+    """One comparable spelling for a column value, both sides.
+
+    🔴 STRINGS, NOT PARSED VALUES — the same reason `verify()` byte-compares timestamps. pymysql
+    hands back `text` columns as `str` and local sqlite stores them as `str`, so a difference here
+    is a real difference in the stored bytes and not a parser's opinion. NULL and '' collapse to
+    the same thing deliberately: this table's writer produces both for "absent", and treating them
+    as different manufactures a diff on a row nobody changed.
+    """
+    return "" if v is None else str(v)
+
+
+def _validate_stale_on(names: list[str]) -> list[str]:
+    """`--stale-on` names real, non-identity columns — checked here, not at the SQL."""
+    if not names:
+        raise ValueError("--stale-on must name at least one column")
+    for c in names:
+        if c not in COLS:
+            raise ValueError(f"--stale-on: {c!r} is not a column of `{TABLE}` ({COLS})")
+        if c in IMMUTABLE_COLS:
+            raise ValueError(
+                f"🔴 REFUSED: --stale-on {c!r} is an identity column {IMMUTABLE_COLS}. A row is "
+                f"not 'stale' on its own key — a differing key is a DIFFERENT row, and repairing "
+                f"one by rewriting the other's key mints a second identity for one fulfilment.")
+    return list(names)
+
+
+def measure_stale(lc, cc, stale_on: list[str] | tuple[str, ...] = DEFAULT_STALE_ON) -> dict:
+    """Find shared keys whose SOURCE VALUES CHANGED, and say exactly which columns and to what.
+
+    🔴 This is a FULL-COLUMN read of both sides. It is not folded into `measure()` on purpose:
+    `measure()` is the insert path's measurement, every existing gate and test is written against
+    its shape, and widening it to serve a second mode is how one function ends up meaning two
+    things. Two modes, two measurements, one `_norm()` for matching.
+
+    Returns candidates ALREADY SPLIT into what may be repaired and what may not:
+      * `stale`            — selected rows, each with the exact per-column cloud/local pair
+      * `cloud_newer`      — 🔴 a candidate whose cloud copy is NEWER. A finding. Refuses the run.
+      * `immutable_diffs`  — a candidate differing on `id`/the key. A finding. Refuses the run.
+    """
+    stale_on = _validate_stale_on(list(stale_on))
+    oi, ti = COLS.index("order_number"), COLS.index("tracking_number")
+    ui, fi = COLS.index("updated_at"), COLS.index(FRESHNESS_COL)
+
+    lrows: dict[tuple[str, str], tuple] = {}
+    sql = "SELECT " + ",".join(f'"{c}"' for c in COLS) + f" FROM {TABLE}"
+    for row in lc.execute(sql):
+        lrows[(_norm(row[oi]), _norm(row[ti]))] = tuple(row)
+
+    cur = cc.cursor()
+    cur.execute("SELECT " + ",".join(f"`{c}`" for c in COLS) + f" FROM {DEST_TABLE}")
+
+    stale, cloud_newer, immutable_diffs = [], [], []
+    shared = 0
+    cloud_rows = 0
+    diff_census: collections.Counter = collections.Counter()
+    for crow in cur.fetchall():
+        cloud_rows += 1
+        k = (_norm(crow[oi]), _norm(crow[ti]))
+        lrow = lrows.get(k)
+        if lrow is None:
+            continue                      # cloud-only: insert-only never touched it, nor does this
+        shared += 1
+        diffs = {c: {"cloud": _cell(crow[i]), "local": _cell(lrow[i])}
+                 for i, c in enumerate(COLS) if _cell(crow[i]) != _cell(lrow[i])}
+        for c in diffs:
+            diff_census[c] += 1
+        triggered = [c for c in stale_on if c in diffs]
+        if not triggered:
+            continue
+
+        # 🔴 The WHERE key is CLOUD's OWN raw spelling, never local's and never the normalized
+        # form. Normalization exists to MATCH; the statement that edits a cloud row must address it
+        # by the bytes cloud actually stores, or the UPDATE silently matches nothing.
+        entry = {
+            "key": [_cell(crow[oi]), _cell(crow[ti])],
+            "normalized_key": list(k),
+            "triggered_by": triggered,
+            "diffs": diffs,
+            "cloud_freshness": _cell(crow[ui]) or _cell(crow[fi]),
+            "local_freshness": _cell(lrow[ui]) or _cell(lrow[fi]),
+        }
+
+        bad_immutable = [c for c in IMMUTABLE_COLS if c in diffs]
+        if bad_immutable:
+            entry["immutable_cols"] = bad_immutable
+            immutable_diffs.append(entry)
+            continue
+
+        hit, note = _cloud_is_newer(entry["cloud_freshness"], entry["local_freshness"])
+        if hit:
+            entry["cloud_newer_note"] = note
+            cloud_newer.append(entry)
+            continue
+
+        # 🔴 Only columns that ACTUALLY DIFFER, and never an identity column. No blind whole-row
+        # overwrite: a row is repaired by the smallest statement that fixes it.
+        entry["update_cols"] = [c for c in COLS if c in diffs and c not in IMMUTABLE_COLS]
+        stale.append(entry)
+
+    stale.sort(key=lambda e: e["key"])
+    return {
+        "measured_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "stale_on": stale_on,
+        # 🔴 THE DENOMINATOR IS REPORTED SO THE ZERO CAN BE FALSIFIED. `stale_count == 0` is a
+        # claim, and a broken join produces exactly that zero with no error — the '#'-asymmetry
+        # class, which has minted confident zeros in this operation three times. These three
+        # numbers are what `_stale_join_alive()` gates on before a zero is allowed to read clean.
+        "local_rows": len(lrows),
+        "cloud_rows": cloud_rows,
+        "shared_rows": shared,
+        "shared_diff_census": dict(diff_census),
+        "stale": stale,
+        "stale_count": len(stale),
+        "cloud_newer": cloud_newer,
+        "cloud_newer_count": len(cloud_newer),
+        "immutable_diffs": immutable_diffs,
+        "immutable_diff_count": len(immutable_diffs),
+        "update_col_census": dict(collections.Counter(
+            c for e in stale for c in e["update_cols"])),
+    }
+
+
+def _server_clock_gate(cc) -> tuple[bool, str]:
+    """🔴 REFUSE if any destination column carries `ON UPDATE CURRENT_TIMESTAMP`.
+
+    Rule 18a bans a repair clock, and `_assert_update_only()` can only police the SQL WE write. A
+    server-side `ON UPDATE CURRENT_TIMESTAMP` stamps the repair's own time on every UPDATE with
+    nothing in the statement to inspect — the one way a perfectly clean-reading statement still
+    fresh-washes a possibly-dead writer for the whole 8-day window. `fulfillments` has no
+    provenance column, so that stamp would be indistinguishable from a live writer.
+    Checked 2026-09-08: no cloud column has it. The gate stays; the schema is not ours to assume.
+    """
+    cur = cc.cursor()
+    cur.execute("SELECT column_name, extra FROM information_schema.columns "
+                "WHERE table_schema=DATABASE() AND table_name=%s", (DEST_TABLE,))
+    hits = [r[0] for r in cur.fetchall() if "on update" in str(r[1] or "").lower()]
+    if hits:
+        return False, (f"🔴 {hits} carry ON UPDATE CURRENT_TIMESTAMP — an UPDATE would stamp the "
+                       f"repair's clock server-side (rule 18a). Nothing written.")
+    return True, "no destination column carries ON UPDATE CURRENT_TIMESTAMP"
+
+
+def _stale_join_alive(sm: dict) -> tuple[bool, str]:
+    """🔴 A ZERO IS A CLAIM — prove the stale join MATCHED before letting `stale_count == 0` read
+    as "nothing has drifted".
+
+    `_control_join()` proves the INSERT path's join is live. It cannot vouch for this one:
+    `measure_stale()` builds its own full-column dict keyed on `(_norm(order_number),
+    _norm(tracking_number))`, and if that key ever stops lining up — a '#' creeping onto one side,
+    a renamed column, a `--source-db` snapshot of the wrong table — every cloud row misses the
+    dict, `shared` stays 0, and the run prints "no shared row has drifted" and exits 0. That is a
+    clean bill of health produced by a broken join, which is the failure this whole script's
+    docstring is written against.
+
+    The invariant that cannot be satisfied by accident: two non-empty tables that are supposed to
+    MIRROR each other must overlap. So a zero-overlap read is a defect in the join, never a fact
+    about the data, and it refuses. (Bar is deliberately just `> 0`, not a ratio: the insert path
+    is what owns "how much of local is missing from cloud", and duplicating that judgement here
+    would give this mode a second opinion on a number it does not own.)
+    """
+    lr, cr, sh = sm["local_rows"], sm["cloud_rows"], sm["shared_rows"]
+    if lr == 0 or cr == 0:
+        return False, (f"🔴 a side is EMPTY (local={lr} cloud={cr}) — nothing can be compared, and "
+                       f"stale={sm['stale_count']} is an artifact of that, not a measurement.")
+    if sh == 0:
+        return False, (f"🔴 local={lr} cloud={cr} but shared keys=0 — two non-empty mirrors CANNOT "
+                       f"have zero overlap. The natural-key join {NATURAL_KEY} is broken (key form "
+                       f"split?), so stale={sm['stale_count']} is meaningless. Nothing written.")
+    return True, (f"local={lr} cloud={cr} shared={sh} — join matched; "
+                  f"columns differing on a shared row: {sm['shared_diff_census'] or '{} (none)'}")
+
+
+def update_gates(sm: dict, max_rows: int, clock_ok: bool = True,
+                 clock_msg: str = "") -> list[tuple[str, bool, str]]:
+    """Predict every gate on the UPDATE path. `ok=False` anywhere means --apply must refuse.
+
+    These are the update path's OWN assertions. None of them relaxes anything the insert path
+    asserts, and `_assert_insert_only()` is untouched — an update-mode run still cannot make the
+    INSERT statement mutate a row.
+    """
+    out: list[tuple[str, bool, str]] = []
+
+    # 🔴 FIRST, because every gate below it is a statement ABOUT a number this one proves is real.
+    # It is deliberately NOT exempted from `update_others_ok` in main(): a dead join must block the
+    # "NOTHING TO DO — no shared row has drifted" exit, which is the only place a broken join could
+    # still be reported as a clean run.
+    alive_ok, alive_msg = _stale_join_alive(sm)
+    out.append(("🔴 the stale join MATCHED (a zero is a claim; prove the denominator)",
+                alive_ok, alive_msg))
+
+    n = sm["cloud_newer_count"]
+    out.append(("🔴 no candidate row is CLOUD-NEWER (a newer cloud row is a refusal, not a merge)",
+                n == 0,
+                f"cloud-newer candidates={n}" + ("" if n == 0 else
+                                                 f"  sample={sm['cloud_newer'][:2]}")))
+
+    n2 = sm["immutable_diff_count"]
+    out.append((f"no candidate differs on an identity column {IMMUTABLE_COLS}", n2 == 0,
+                f"identity-diff candidates={n2}" + ("" if n2 == 0 else
+                                                    f"  sample={sm['immutable_diffs'][:2]}")))
+
+    out.append(("no destination column carries ON UPDATE CURRENT_TIMESTAMP (rule 18a)",
+                clock_ok, clock_msg or "not evaluated"))
+
+    n3 = sm["stale_count"]
+    out.append((f"stale rows <= --max-rows {max_rows} (REFUSES, never truncates)", n3 <= max_rows,
+                f"stale={n3} ceiling={max_rows}"
+                + ("" if n3 <= max_rows else
+                   "  🔴 raise --max-rows deliberately, or narrow --stale-on. A cap that "
+                   "truncated would half-write this.")))
+
+    out.append(("every stale row has at least one non-identity column to write",
+                all(e["update_cols"] for e in sm["stale"]),
+                f"rows={n3} columns touched={sm['update_col_census']}"))
+
+    out.append(("there is actually stale drift to repair", n3 > 0, f"stale rows={n3}"))
+    return out
+
+
+def stale_table(sm: dict, n: int = 50) -> str:
+    """Name every row. A count is not a diff — the same rule the insert path's delta file follows."""
+    if not sm["stale"]:
+        return "  (none)"
+    lines = []
+    for e in sm["stale"][:n]:
+        lines.append(f"  ~ order={e['key'][0]:<8} trk={e['key'][1]:<20} "
+                     f"trigger={','.join(e['triggered_by'])}")
+        for c in e["update_cols"]:
+            d = e["diffs"][c]
+            cv, lv = d["cloud"], d["local"]
+            if len(cv) > 60 or len(lv) > 60:
+                cv, lv = cv[:57] + "...", lv[:57] + "..."
+            lines.append(f"        {c:<16} cloud={cv!r}  ->  local={lv!r}")
+    if sm["stale_count"] > n:
+        lines.append(f"  ... {sm['stale_count'] - n} more (all of them are in the delta file)")
+    return "\n".join(lines)
+
+
 def per_week_table(m: dict) -> str:
     lw, cw = m["local"]["by_ship_week"], m["cloud"]["by_ship_week"]
     lines = [f"{'ship_week':<16}{'local':>9}{'cloud':>9}{'delta':>9}"]
@@ -565,11 +891,17 @@ def _recent_keys(lc, n: int) -> list[tuple[str, str]]:
         f"ORDER BY id DESC LIMIT {int(n)}").fetchall()]
 
 
-def verify(lc, cc) -> tuple[bool, str]:
+def verify(lc, cc, stale_on: list[str] | tuple[str, ...] | None = None) -> tuple[bool, str]:
     """🔴 PROOF IS THE TABLE READING DIFFERENTLY, not the script reporting success.
 
     Three independent checks — a row count alone cannot see a missing ship week (the 75,000
     histdb floor passes a table missing two of them).
+
+    `stale_on` adds a FOURTH when `--update-stale` is in play: zero shared rows still drifted on
+    those columns. It is opt-in because it costs a second full-column read of both sides, and
+    because the insert path's proof must keep meaning exactly what it meant before this mode
+    existed. 🔴 The per-ship-week check below is the one that FAILED on 2026-09-08 with the table
+    at full parity on row count — it is what this mode has to turn green, and it is the proof.
     """
     m = measure(lc, cc)
     global REPAIRED_WEEKS
@@ -619,6 +951,15 @@ def verify(lc, cc) -> tuple[bool, str]:
     lines.append(f"  [{'PASS' if good else 'FAIL'}] per-ship-week parity across "
                  f"{len(set(lw) | set(cw))} weeks"
                  + ("" if good else f"  MISMATCHED: {sorted(map(str, bad))}"))
+
+    if stale_on:
+        sm = measure_stale(lc, cc, stale_on)
+        good = sm["stale_count"] == 0 and sm["cloud_newer_count"] == 0
+        ok &= good
+        lines.append(f"  [{'PASS' if good else 'FAIL'}] no shared row drifted on {list(stale_on)} "
+                     f"— stale={sm['stale_count']} cloud-newer={sm['cloud_newer_count']}"
+                     + ("" if good else
+                        f"  STILL STALE: {[e['key'] for e in sm['stale'][:10]]}"))
 
     # Spot-check named orders from the repaired weeks, read back FROM DO.
     cur = cc.cursor()
@@ -689,6 +1030,86 @@ def _assert_insert_only(sql: str) -> None:
         raise RuntimeError(
             f"🔴 REFUSED: the write statement is not insert-only / not timestamp-preserving. "
             f"Offending token(s): {hits or ['does not start with INSERT INTO']}\nSQL: {sql}")
+
+
+# 🔴 The UPDATE path's OWN forbidden list. It is NOT `FORBIDDEN_SQL` minus a line: `UPDATE` is the
+# verb here, so this list has to be built from the other direction — everything that would make the
+# statement do something other than set named columns on ONE row addressed by the natural key.
+# `_assert_insert_only()` and `FORBIDDEN_SQL` are UNCHANGED and still guard the INSERT path; this
+# does not borrow a hole in them.
+FORBIDDEN_UPDATE_SQL: tuple[tuple[str, str], ...] = (
+    ("INSERT", r"\bINSERT\b"),
+    ("REPLACE", r"\bREPLACE\b"),
+    ("DELETE", r"\bDELETE\b"),
+    ("TRUNCATE", r"\bTRUNCATE\b"),
+    ("DROP", r"\bDROP\b"),
+    ("IGNORE", r"\bIGNORE\b"),          # would swallow the errors that must stop the run
+    ("JOIN", r"\bJOIN\b"),              # multi-table UPDATE — blast radius we never want
+    ("SELECT", r"\bSELECT\b"),
+    ("LIMIT", r"\bLIMIT\b"),            # a LIMITed UPDATE is a silent partial write
+    ("NOW()", r"\bNOW\s*\("),
+    ("CURRENT_TIMESTAMP", r"\bCURRENT_TIMESTAMP\b"),
+    ("SYSDATE", r"\bSYSDATE\b"),
+    ("UNIX_TIMESTAMP", r"\bUNIX_TIMESTAMP\s*\("),
+)
+_SET_CLAUSE = re.compile(r"^`\w+`=%s(?:,`\w+`=%s)*$")
+
+
+def build_update_sql(table: str, cols: list[str] | tuple[str, ...]) -> str:
+    """The ONE update statement shape: named columns, parameterized values, natural-key WHERE.
+
+    🔴 Every value is a `%s` parameter and the WHERE names BOTH key columns. There is no
+    `ON DUPLICATE`, no LIMIT, no join, and no expression on the right of any `=` — a repair that
+    could compute a value is a repair that could compute the wrong one. The values come byte-
+    verbatim from local, exactly as the INSERT path's do.
+    """
+    if not cols:
+        raise ValueError("build_update_sql: no columns to set")
+    sets = ",".join(f"`{c}`=%s" for c in cols)
+    return (f"UPDATE `{table}` SET {sets} "
+            f"WHERE `{NATURAL_KEY[0]}`=%s AND `{NATURAL_KEY[1]}`=%s")
+
+
+def _assert_update_only(sql: str, cols: list[str] | tuple[str, ...]) -> None:
+    """Fail the run unless this is a single, parameterized, natural-key-scoped column update.
+
+    🔴 The executable form of the update path's contract, and the counterpart to
+    `_assert_insert_only()` — which it deliberately does NOT reuse, because that one refuses on the
+    word UPDATE. Refuses: a SET list touching `id`/`order_number`/`tracking_number`; any literal on
+    the right of a `=`; a missing or key-incomplete WHERE; a clock function; anything that inserts,
+    deletes, joins, ignores or limits.
+    """
+    bad = [c for c in cols if c in IMMUTABLE_COLS]
+    if bad:
+        raise RuntimeError(
+            f"🔴 REFUSED: the update statement is not identity-preserving — SET touches {bad}. "
+            f"{IMMUTABLE_COLS} identify the row; rewriting one mints a second identity.")
+    unknown = [c for c in cols if c not in COLS]
+    if unknown:
+        raise RuntimeError(f"🔴 REFUSED: SET names columns outside the contract: {unknown}")
+
+    scan = _QUOTED_IDENT.sub("`x`", sql).upper()
+    hits = [label for label, pat in FORBIDDEN_UPDATE_SQL if re.search(pat, scan)]
+    if hits or not scan.startswith("UPDATE `X` SET "):
+        raise RuntimeError(
+            f"🔴 REFUSED: the update statement is not a plain, timestamp-preserving column update. "
+            f"Offending token(s): {hits or ['does not start with UPDATE <table> SET']}\nSQL: {sql}")
+
+    try:
+        set_part, where_part = sql.split(" SET ", 1)[1].split(" WHERE ", 1)
+    except (IndexError, ValueError):
+        raise RuntimeError(f"🔴 REFUSED: update statement has no WHERE clause.\nSQL: {sql}") from None
+    if not _SET_CLAUSE.fullmatch(set_part.strip()):
+        raise RuntimeError(
+            f"🔴 REFUSED: every SET value must be a bare `%s` parameter — no literals, no "
+            f"expressions.\nSET: {set_part}")
+    want = f"`{NATURAL_KEY[0]}`=%s AND `{NATURAL_KEY[1]}`=%s"
+    if where_part.strip() != want:
+        raise RuntimeError(
+            f"🔴 REFUSED: the WHERE must be exactly the natural key ({want}); an update scoped by "
+            f"anything else can hit rows nobody named.\nWHERE: {where_part}")
+    if sql.count("%s") != len(cols) + 2:
+        raise RuntimeError(f"🔴 REFUSED: parameter count {sql.count('%s')} != {len(cols) + 2}")
 
 
 def _validate_identifier(name: str) -> str:
@@ -811,6 +1232,106 @@ def _flush_manifest(path: Path, man: dict) -> None:
     path.write_text(json.dumps(man, indent=2, default=str), encoding="utf-8")
 
 
+# ------------------------------------------------------- the write (UPDATE, `--update-stale`)
+
+def update_stale_rows(cc, sm: dict, manifest_path: Path, batch: int = BATCH) -> dict:
+    """Correct the drifted columns of the selected rows. BATCHED, COMMITTING EACH BATCH.
+
+    🔴 Statements are GROUPED BY THE EXACT SET OF COLUMNS THAT DIFFER, so each `executemany` sends
+    one statement shape and every row in it is repaired by the smallest statement that fixes it.
+    The alternative — one statement listing every column and letting the unchanged ones "write
+    themselves back" — is a whole-row overwrite wearing a diff's clothing: it re-writes columns
+    nobody compared, and any cloud value in them dies without ever appearing in a diff.
+
+    🔴 ROWCOUNT IS CHECKED BEFORE THE COMMIT. Each UPDATE must affect exactly one row. If the batch
+    does not, the natural key is not behaving like a key against this table and the run stops with
+    the batch rolled back — discovering that after the commit means discovering it too late.
+
+    Commit-per-batch and the re-flushed manifest are the insert path's contract 4, unchanged: an
+    interrupt keeps every committed batch, and the resume is just a re-run, because `measure_stale`
+    re-reads cloud and a repaired row is no longer stale.
+    """
+    cur = cc.cursor()
+    man = json.loads(manifest_path.read_text(encoding="utf-8"))
+    man.update({"mode": "update-stale", "destination_table": DEST_TABLE,
+                "stale_on": sm["stale_on"], "batch_size": batch,
+                "updated_keys": [], "updated_count": 0, "batches": [], "statements": [],
+                "status": "running"})
+
+    groups: dict[tuple[str, ...], list[dict]] = collections.defaultdict(list)
+    for e in sm["stale"]:
+        groups[tuple(e["update_cols"])].append(e)
+
+    def flush(sql, cols, buf, entries):
+        if not buf:
+            return
+        try:
+            cur.executemany(sql, buf)
+            affected = cur.rowcount
+            if affected != len(buf):
+                raise RuntimeError(
+                    f"🔴 REFUSED MID-RUN: {len(buf)} statements affected {affected} rows. Each "
+                    f"UPDATE must hit exactly one row on ({NATURAL_KEY[0]}, {NATURAL_KEY[1]}); "
+                    f"this batch is rolled back and nothing further is written.")
+            cc.commit()
+        except BaseException as exc:
+            # BaseException for the same reason the insert path uses it: Ctrl+C / a kill raises
+            # KeyboardInterrupt|SystemExit, which `except Exception` misses, and the manifest of a
+            # dead run must not claim it is still running.
+            cc.rollback()
+            man["status"] = ("INTERRUPTED" if isinstance(exc, KeyboardInterrupt | SystemExit)
+                             else "FAILED")
+            man["failed_batch_keys"] = [e["key"] for e in entries]
+            man["error"] = f"{type(exc).__name__}: {exc}"
+            _flush_manifest(manifest_path, man)
+            raise
+        man["updated_keys"].extend([e["key"] for e in entries])
+        man["updated_count"] += len(buf)
+        man["batches"].append({"rows": len(buf), "cols": list(cols), "committed_at":
+                               datetime.datetime.now().isoformat(timespec="seconds")})
+        _flush_manifest(manifest_path, man)
+        print(f"  committed batch of {len(buf):>4}  cols={list(cols)}  "
+              f"total {man['updated_count']:>5} / {sm['stale_count']}")
+
+    for cols, entries in sorted(groups.items()):
+        sql = build_update_sql(DEST_TABLE, cols)
+        _assert_update_only(sql, cols)          # 🔴 per statement shape, not once for the run
+        man["statements"].append({"sql": sql, "rows": len(entries)})
+        _flush_manifest(manifest_path, man)
+        buf, chunk = [], []
+        for e in entries:
+            buf.append(tuple([e["diffs"][c]["local"] for c in cols] + e["key"]))
+            chunk.append(e)
+            if len(buf) >= batch:
+                flush(sql, cols, buf, chunk)
+                buf, chunk = [], []
+        flush(sql, cols, buf, chunk)
+
+    man["status"] = "complete"
+    man["undo_note"] = (
+        "Undo is row-by-row: for each entry in `pre_write_stale.stale`, re-apply the `cloud` value "
+        "of each column in `update_cols` under the same natural-key WHERE. Nothing was inserted or "
+        "removed and no column outside `update_cols` was written, so that restores cloud exactly.")
+    _flush_manifest(manifest_path, man)
+    return man
+
+
+def write_stale_delta_file(sm: dict, path: Path) -> int:
+    """Every stale row, every column, cloud value AND local value — written BEFORE the write.
+
+    Same rule as the insert path's delta file: a dry run that prints a count is not a dry run. This
+    file is also the undo record, because it holds cloud's prior value for every column touched.
+    """
+    path.write_text(json.dumps(
+        {"measured_at": sm["measured_at"], "stale_on": sm["stale_on"],
+         "stale_count": sm["stale_count"], "update_col_census": sm["update_col_census"],
+         "shared_diff_census": sm["shared_diff_census"],
+         "cloud_newer": sm["cloud_newer"], "immutable_diffs": sm["immutable_diffs"],
+         "stale": sm["stale"]},
+        indent=2, default=str), encoding="utf-8")
+    return sm["stale_count"]
+
+
 def write_delta_file(lc, m: dict, path: Path) -> int:
     """Write EVERY row the run would insert. A dry run that prints a count is not a dry run."""
     missing = {tuple(k) for k in m["missing_keys"]}
@@ -843,6 +1364,18 @@ def main() -> int:
                     help="with --scratch-table: DROP and reseed the scratch copy first")
     ap.add_argument("--batch", type=int, default=BATCH,
                     help=f"rows per INSERT+COMMIT (default {BATCH})")
+    ap.add_argument("--update-stale", action="store_true",
+                    help="ALSO correct rows that already exist in cloud but whose SOURCE VALUES "
+                         "CHANGED (reships move ship_date; insert-only cannot see it). Dry unless "
+                         "BOTH --apply and --yes-write-production are given, same as the insert "
+                         "path. Off by default.")
+    ap.add_argument("--stale-on", default=",".join(DEFAULT_STALE_ON),
+                    help=f"comma-separated columns whose drift SELECTS a row as stale "
+                         f"(default {','.join(DEFAULT_STALE_ON)}). This is the row bound — see the "
+                         f"docstring's WHAT BOUNDS IT. Identity columns are refused.")
+    ap.add_argument("--max-rows", type=int, default=MAX_UPDATE_ROWS,
+                    help=f"ceiling on stale rows (default {MAX_UPDATE_ROWS}). 🔴 REFUSES the run "
+                         f"when exceeded — it never truncates to fit.")
     args = ap.parse_args()
 
     if args.apply and not args.yes_write_production:
@@ -850,6 +1383,14 @@ def main() -> int:
         return 2
     if args.batch < 1:
         print("REFUSED: --batch must be >= 1.")
+        return 2
+    if args.max_rows < 1:
+        print("REFUSED: --max-rows must be >= 1.")
+        return 2
+    try:
+        stale_on = _validate_stale_on([c.strip() for c in args.stale_on.split(",") if c.strip()])
+    except ValueError as exc:
+        print(f"REFUSED: {exc}")
         return 2
 
     lc, cc = local_con(args.source_db), cloud_con()
@@ -873,7 +1414,7 @@ def main() -> int:
             return 2
 
         if args.verify:
-            ok, report = verify(lc, cc)
+            ok, report = verify(lc, cc, stale_on if args.update_stale else None)
             print("\n=== VERIFICATION (read-only) ===")
             print(report)
             print("\nVERDICT:", "REPAIRED ✅" if ok else "🔴 NOT REPAIRED")
@@ -899,11 +1440,32 @@ def main() -> int:
                   f"{m['missing_key_count']}. The plan and the count disagree; nothing written.")
             return 2
 
-        print("\n=== GATES ===")
+        print("\n=== GATES (insert path) ===")
         g = gates(m)
         for name, ok_, detail in g:
             print(f"  [{'PASS' if ok_ else 'REFUSE'}] {name}\n           {detail}")
-        all_ok = all(x[1] for x in g)
+
+        # ---------------------------------------------------------- the UPDATE path (opt-in)
+        # 🔴 Measured SEPARATELY and gated SEPARATELY. Nothing here relaxes an insert-path gate.
+        sm = update_g = stale_delta = None
+        if args.update_stale:
+            clock_ok, clock_msg = _server_clock_gate(cc)
+            sm = measure_stale(lc, cc, stale_on)
+            stale_delta = REPORTS / f"repair_cloud_fulfillments_stale_delta_{stamp}.json"
+            n_stale = write_stale_delta_file(sm, stale_delta)
+            print("\n=== STALE ROWS — cloud row EXISTS but its source values CHANGED ===")
+            print(f"  selected on {sm['stale_on']} across {sm['shared_rows']} shared rows")
+            print(f"  columns differing anywhere on a shared row: {sm['shared_diff_census']}")
+            print(f"  stale rows={sm['stale_count']}  cloud-newer={sm['cloud_newer_count']}  "
+                  f"identity-diff={sm['immutable_diff_count']}")
+            print(f"  columns this would write: {sm['update_col_census']}")
+            print(stale_table(sm))
+            print(f"\nEXACT rows this would UPDATE: {n_stale} -> {stale_delta}")
+
+            print("\n=== GATES (update path) ===")
+            update_g = update_gates(sm, args.max_rows, clock_ok, clock_msg)
+            for name, ok_, detail in update_g:
+                print(f"  [{'PASS' if ok_ else 'REFUSE'}] {name}\n           {detail}")
 
         # 🔴 IDEMPOTENCY IS A SUCCESS, NOT A REFUSAL. A second run — a resume, a re-check, a
         # scheduled sweep — finds the hole already filled and must say so and exit 0. Reporting
@@ -911,9 +1473,20 @@ def main() -> int:
         # refusal message, which is how a real refusal gets waved through. Every OTHER gate must
         # still hold: a cloud-newer row or a key-form split is a finding even with nothing to do.
         others_ok = all(ok_ for name, ok_, _ in g if "hole to fill" not in name)
-        if m["missing_key_count"] == 0 and others_ok:
-            print("\n✅ NOTHING TO DO — cloud already holds every local row on the natural key. "
-                  "Re-running this is a no-op by design.")
+        update_others_ok = (update_g is None or
+                            all(ok_ for name, ok_, _ in update_g if "stale drift" not in name))
+        nothing_stale = sm is None or sm["stale_count"] == 0
+        # 🔴 "there is actually a hole to fill" is a REFUSAL for a run that only has UPDATEs to do,
+        # and an exit 1 on a fully-green update plan is exactly the cry-wolf that gets a refusal
+        # message ignored — the same reasoning that made idempotency an exit 0 below. So the
+        # verdict is: every OTHER gate holds, on both paths, and there is work of SOME kind.
+        # With `--update-stale` off, `sm is None` and this reduces to the old `all_ok` exactly.
+        work_exists = m["missing_key_count"] > 0 or not nothing_stale
+        verdict_ok = others_ok and update_others_ok and work_exists
+        if m["missing_key_count"] == 0 and others_ok and nothing_stale and update_others_ok:
+            print("\n✅ NOTHING TO DO — cloud already holds every local row on the natural key"
+                  + (" and no shared row has drifted." if args.update_stale else ".")
+                  + " Re-running this is a no-op by design.")
             return 0
 
         if args.json_out:
@@ -922,13 +1495,21 @@ def main() -> int:
 
         if not (args.apply and args.yes_write_production):
             print(f"\nDRY RUN — nothing written. {m['missing_key_count']} row(s) would be "
-                  f"INSERTED into `{DEST_TABLE}`; 0 existing rows would be modified or removed.")
+                  f"INSERTED into `{DEST_TABLE}`; "
+                  + (f"{sm['stale_count']} existing row(s) would be UPDATED on "
+                     f"{sm['update_col_census']}; " if sm else
+                     "0 existing rows would be modified or removed; ")
+                  + "0 rows would be removed.")
             print("To apply: --apply --yes-write-production   (🔴 needs Kurt's explicit go; the "
                   "cloud write is Routing Coordinator's surface)")
-            return 0 if all_ok else 1
+            return 0 if verdict_ok else 1
 
-        if not all_ok:
-            print("\n🔴 REFUSED: a gate above did not pass. Nothing written.")
+        if not (others_ok and work_exists):
+            print("\n🔴 REFUSED: an insert-path gate above did not pass. Nothing written.")
+            return 2
+        if args.update_stale and not update_others_ok:
+            print("\n🔴 REFUSED: an update-path gate above did not pass. Nothing written — "
+                  "including the inserts, because a refusal is about this run, not this phase.")
             return 2
 
         manifest = REPORTS / f"repair_cloud_fulfillments_{stamp}.json"
@@ -938,16 +1519,45 @@ def main() -> int:
             indent=2, default=str), encoding="utf-8")
         print(f"\nrollback manifest (pre-write state) -> {manifest}")
 
-        print(f"\n=== INSERTING {m['missing_key_count']} row(s) into `{DEST_TABLE}`, "
-              f"{args.batch}/batch, committing each batch ===")
-        man = insert_missing(lc, cc, m, manifest, batch=args.batch)
-        print(f"inserted {man['inserted_count']} row(s) in {len(man['batches'])} batch(es); "
-              f"manifest -> {manifest}")
+        if m["missing_key_count"]:
+            print(f"\n=== INSERTING {m['missing_key_count']} row(s) into `{DEST_TABLE}`, "
+                  f"{args.batch}/batch, committing each batch ===")
+            man = insert_missing(lc, cc, m, manifest, batch=args.batch)
+            print(f"inserted {man['inserted_count']} row(s) in {len(man['batches'])} batch(es); "
+                  f"manifest -> {manifest}")
+
+        if args.update_stale:
+            # 🔴 RE-MEASURE and RE-GATE after the inserts. The plan printed above was measured
+            # before anything was written; acting on a stale plan is the class this whole file
+            # exists to stop. Re-reading also re-earns the cloud-newer refusal at write time.
+            clock_ok, clock_msg = _server_clock_gate(cc)
+            sm = measure_stale(lc, cc, stale_on)
+            update_g = update_gates(sm, args.max_rows, clock_ok, clock_msg)
+            if not all(ok_ for name, ok_, _ in update_g if "stale drift" not in name):
+                print("\n🔴 REFUSED: an update-path gate failed on the RE-MEASURE at write time. "
+                      "No UPDATE was issued.")
+                for name, ok_, detail in update_g:
+                    print(f"  [{'PASS' if ok_ else 'REFUSE'}] {name}\n           {detail}")
+                return 2
+            if sm["stale_count"]:
+                umanifest = REPORTS / f"repair_cloud_fulfillments_update_{stamp}.json"
+                umanifest.write_text(json.dumps(
+                    {"pre_write_stale": sm, "gates": [[a, b, c] for a, b, c in update_g],
+                     "stale_delta_file": str(stale_delta), "destination_table": DEST_TABLE},
+                    indent=2, default=str), encoding="utf-8")
+                print(f"\nupdate manifest (pre-write cloud values) -> {umanifest}")
+                print(f"\n=== UPDATING {sm['stale_count']} existing row(s) in `{DEST_TABLE}`, "
+                      f"{args.batch}/batch, committing each batch ===")
+                uman = update_stale_rows(cc, sm, umanifest, batch=args.batch)
+                print(f"updated {uman['updated_count']} row(s) in {len(uman['batches'])} "
+                      f"batch(es); manifest -> {umanifest}")
+            else:
+                print("\n(no stale rows remained at write time — nothing to update)")
 
         # PROOF comes from re-reading DO, on fresh connections.
         cc.close()
         cc = cloud_con()
-        ok, report = verify(lc, cc)
+        ok, report = verify(lc, cc, stale_on if args.update_stale else None)
         print("\n=== VERIFICATION (re-read from DO) ===")
         print(report)
         print("\nVERDICT:", "REPAIRED ✅" if ok else "🔴 NOT REPAIRED — consider rollback")
