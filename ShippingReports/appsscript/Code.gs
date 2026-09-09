@@ -158,12 +158,25 @@ function menuBackfillGorgias() {
   ss.toast('Sweeping reships + backfilling Gorgias… (~1–2 min)', 'Reship Report', -1);
   var mondays = menuMondays_(), oldest = mondays[mondays.length - 1];
   var state = loadState_();
-  sweepAndEnrich_(state, oldest);
-  enrichBoxTypes_(state, mondays);
-  enrichTransitOverride_(state, mondays);  // late (>2d transit) supersedes warm
-  fillRequestedFromSlack_(state, oldest);
+  // Same D43 guard as build_(): save what was learned, publish it, and say it is partial.
+  try {
+    sweepAndEnrich_(state, oldest);
+    if (!RUN_QUOTA_WALL_) enrichBoxTypes_(state, mondays);
+    if (!RUN_QUOTA_WALL_) enrichTransitOverride_(state, mondays);  // late (>2d transit) supersedes warm
+    if (!RUN_QUOTA_WALL_) fillRequestedFromSlack_(state, oldest);
+  } catch (e) {
+    if (!gasFetchQuotaWall_(e)) throw e;
+    noteQuotaWall_(e, 'enrichment');
+  }
   saveState_(state);
   refreshPivotSheet_(state, mondays);
+  if (RUN_QUOTA_WALL_) {
+    var partial = quotaPartialNote_();
+    Logger.log(partial);
+    try { slack_(':warning: Reship report PARTIAL — ' + partial, true); } catch (eS) {}
+    ss.toast('PARTIAL — url-fetch DATA quota. See Executions log.', 'Reship Report', 15);
+    return;
+  }
   ss.toast('Done — Raw Data re-rendered.', 'Reship Report', 5);
 }
 
@@ -187,11 +200,32 @@ function build_() {
   // tab has history; enrichment stays incremental under the 6-min GAS cap.
   var histSince = iso_(addDays_(today, -HISTORY_DAYS));
   var sweepFrom = histSince < iso_(oldest) ? new Date(histSince) : oldest;
-  sweepAndEnrich_(state, sweepFrom);
-  enrichBoxTypes_(state, mondays);
-  enrichTransitOverride_(state, mondays);  // late (>2d transit) supersedes warm
-  fillRequestedFromSlack_(state, histSince);
+  // 🔴 D43 — EVERY FETCHING LEG IS INSIDE ONE QUOTA GUARD, and saveState_ is OUTSIDE it. The wall
+  // is a shared daily BYTE budget: whichever leg meets it first, the rest cannot succeed, so the
+  // run stops enriching and still publishes what it has. The 2026-09-08 death was this exact
+  // sequence with no guard — the Gorgias throw escaped sweepAndEnrich_ and killed refresh() BEFORE
+  // saveState_, discarding the enrichments whose bytes had just exhausted the quota.
+  try {
+    sweepAndEnrich_(state, sweepFrom);
+    // Once the wall is up nothing further can be fetched — skip the remaining legs rather than
+    // spend the run's remaining minutes proving it one failed request at a time.
+    if (!RUN_QUOTA_WALL_) enrichBoxTypes_(state, mondays);
+    if (!RUN_QUOTA_WALL_) enrichTransitOverride_(state, mondays);  // late (>2d transit) supersedes warm
+    if (!RUN_QUOTA_WALL_) fillRequestedFromSlack_(state, histSince);
+  } catch (e) {
+    if (!gasFetchQuotaWall_(e)) throw e;   // anything else still fails the run, unchanged
+    noteQuotaWall_(e, 'enrichment');
+  }
   saveState_(state);
+
+  // 🔴 A QUOTA STOP IS NOT A SUCCESS. Stamp every tab this run writes with the partial marker, so a
+  // half-enriched publish can never be read as a complete one, and alert #kurt-ops.
+  if (RUN_QUOTA_WALL_) {
+    var partial = quotaPartialNote_();
+    stamp += '  ' + partial;
+    Logger.log(partial);
+    try { slack_(':warning: Reship report PARTIAL — ' + partial, true); } catch (eS) {}
+  }
 
   refreshPivotSheet_(state, mondays);
   writeProductMix_(mondays, denoms, stamp);
@@ -379,6 +413,41 @@ function gasFetchQuotaWall_(e) {
     .test(String((e && e.message) || e || ''));
 }
 
+/**
+ * 🔴 D43 (2026-09-08 recurrence) — RUN-LEVEL RECORD OF THE WALL, so a run that hit it can never
+ * finish looking like a clean one. The detector above existed since 2026-09-06 but was wired at
+ * three CALL SITES (Code.gs ppLookup_, Exceptions.gs x2) instead of at the fetch boundary, so the
+ * FOURTH path — `gorgiasGet_`, two fetches per reship — met the wall unguarded and killed the whole
+ * refresh at 7:08am on 2026-09-08. A guard belongs at the CLASS boundary, not at the sites you
+ * happened to think of.
+ * `leg` names which consumer was in flight; the vendor URL in the raw message never does.
+ */
+var RUN_QUOTA_WALL_ = null;   // {err, leg} — set ONCE, by whichever leg met the wall first
+function noteQuotaWall_(e, leg) {
+  if (!RUN_QUOTA_WALL_) {
+    RUN_QUOTA_WALL_ = { err: e, leg: leg };
+    Logger.log('🔴 Google Apps Script daily url-fetch DATA quota wall hit on the ' + leg + ' leg. ' +
+               'NOT the vendor\'s rate limit: it is thrown by UrlFetchApp, carries no HTTP status, ' +
+               'and does not refill today. Raw: ' + String((e && e.message) || e).slice(0, 200));
+  }
+  return RUN_QUOTA_WALL_;
+}
+
+/**
+ * The one sentence a partial run has to say about itself. Goes on every tab's REFRESHED cell and
+ * into the ops Slack — a silent partial that looks identical to a complete run is the failure mode
+ * this file has now been repaired for twice.
+ */
+function quotaPartialNote_() {
+  if (!RUN_QUOTA_WALL_) return '';
+  return '⚠️ PARTIAL — stopped on GOOGLE\'s daily url-fetch DATA quota (script-owner meter) during ' +
+         'the ' + RUN_QUOTA_WALL_.leg + ' leg; NOT the vendor\'s rate limit. ' +
+         GORGIAS_ENRICH_SKIPPED_ + ' row(s) left UNENRICHED and deferred to the next run' +
+         (GORGIAS_WINDOW_UNCOVERED_ ? ', ' + GORGIAS_WINDOW_UNCOVERED_ + ' ticket window(s) unpaged' : '') +
+         '. ' + gorgiasIoSummary_() + '; ' + shopifyIoSummary_() +
+         '. Reduce BYTES across every consumer in this project, not the request rate.';
+}
+
 function shopifyGql_(query, variables) {
   var props = PropertiesService.getScriptProperties();
   var url = 'https://' + props.getProperty('SHOPIFY_STORE') + '.myshopify.com/admin/api/2026-04/graphql.json';
@@ -451,6 +520,14 @@ function sweepAndEnrich_(state, oldest) {
         enriched++;
       }
       state[n.name] = rec;
+      // 🔴 D43 — STOP CLEANLY on the Google url-fetch DATA wall. Everything already written into
+      // `state` stays, the caller saves it, and the next run resumes from there instead of
+      // re-buying what this run's bytes already paid for. Never throw from here.
+      if (RUN_QUOTA_WALL_) {
+        Logger.log('sweepAndEnrich_ stopped early on the url-fetch DATA quota wall after ' +
+                   enriched + ' enrichment(s); ' + gorgiasIoSummary_());
+        return;
+      }
     }
     if (!o.pageInfo.hasNextPage) break;
     cursor = o.pageInfo.endCursor;
@@ -477,32 +554,115 @@ function findOriginal_(customerGid, beforeIso, selfName, complaintDate) {
 
 // ---------- Gorgias (R4) ----------
 
+// 🔴 D43 — THIS LEG IS THE HEAVIEST BYTE CONSUMER IN THE PROJECT, and until 2026-09-08 it was the
+// only fetch path with NO quota-wall guard. `MAX_ENRICH_PER_RUN` caps the COUNT of enrichments; the
+// wall is a shared daily BYTE budget, so a count cap does not bound it. Two fetches per reship, and
+// the tickets response was the biggest body the project pulls.
+var GORGIAS_IO_CALLS_ = 0;      // gorgias responses received this execution
+var GORGIAS_IO_BYTES_ = 0;      // gorgias response bytes this execution
+var GORGIAS_ENRICH_SKIPPED_ = 0; // findRequested_ calls refused because the wall was already hit
+var GORGIAS_WINDOW_UNCOVERED_ = 0; // customers whose ticket window could not be fully paged
+
+// Ticket paging: the old call was a flat `limit: 30`. `findRequested_` only needs tickets back to
+// `floor`, so ask for a SMALL page and page further ONLY when the window is not yet covered. Same
+// ceiling as before (never look at more than 30 tickets), typically a third of the bytes.
+// 🔴 `limit` / `order_by` / `cursor` are the only list params used anywhere in this codebase
+// (`AppyHourMCP/tools/_gorgias_internal.py: gorgias_paginate`). Gorgias v1 has NO verified sparse-
+// fieldset parameter — do NOT add a `fields=` guess here: `gorgiasGet_` turns a 400 into `null`,
+// which would silently blank `requested` for every reship instead of failing.
+var GORGIAS_TICKET_PAGE = 10;
+var GORGIAS_TICKET_MAX = 30;
+
+/** One line naming what this execution actually drew from Gorgias. */
+function gorgiasIoSummary_() {
+  return 'gorgias I/O this run: ' + GORGIAS_IO_CALLS_ + ' call(s), ' +
+         (GORGIAS_IO_BYTES_ / 1024).toFixed(1) + ' KB received' +
+         (RUN_QUOTA_WALL_ ? ' — STOPPED on the Google url-fetch DATA quota wall' : '');
+}
+
 function gorgiasGet_(path, params) {
+  // 🔴 A DAILY byte budget does not refill mid-run. Once the wall is up, every further request is
+  // guaranteed to fail and spends more of the thing that ran out — so do not place it at all.
+  if (RUN_QUOTA_WALL_) return null;
   var props = PropertiesService.getScriptProperties();
   var qs = Object.keys(params || {}).map(function (k) { return k + '=' + encodeURIComponent(params[k]); }).join('&');
-  var resp = netFetch_('https://appyhour.gorgias.com/api' + path + (qs ? '?' + qs : ''), {
-    headers: {
-      Authorization: 'Basic ' + Utilities.base64Encode(
-        props.getProperty('GORGIAS_USER') + ':' + (props.getProperty('GORGIAS_KEY') || props.getProperty('GORGIAS_API_KEY'))),
-      'User-Agent': 'AppyHourReshipReport/1.0', // default UA gets Cloudflare 1010
-    },
-    muteHttpExceptions: true,
-  }, 'gorgias api');
+  var resp;
+  try {
+    resp = netFetch_('https://appyhour.gorgias.com/api' + path + (qs ? '?' + qs : ''), {
+      headers: {
+        Authorization: 'Basic ' + Utilities.base64Encode(
+          props.getProperty('GORGIAS_USER') + ':' + (props.getProperty('GORGIAS_KEY') || props.getProperty('GORGIAS_API_KEY'))),
+        'User-Agent': 'AppyHourReshipReport/1.0', // default UA gets Cloudflare 1010
+      },
+      muteHttpExceptions: true,
+    }, 'gorgias api');
+  } catch (eF) {
+    // 🔴 D43 — the wall is THROWN by UrlFetchApp. `muteHttpExceptions` and the response-code check
+    // below can never see it, which is exactly how it escaped this function and killed refresh()
+    // on 2026-09-08. Degrade: record it, return no data, let the caller stop cleanly. Never retry.
+    if (!gasFetchQuotaWall_(eF)) throw eF;
+    noteQuotaWall_(eF, 'gorgias');
+    return null;
+  }
   Utilities.sleep(1200); // ~0.8 req/s pacing
-  if (resp.getResponseCode() >= 400) return null;
-  return JSON.parse(resp.getContentText());
+  var body = '';
+  try { body = resp.getContentText() || ''; } catch (eT) {}
+  GORGIAS_IO_CALLS_++; GORGIAS_IO_BYTES_ += body.length;
+  if (resp.getResponseCode() >= 400) {
+    // Was a silent `return null`. A 4xx here blanks `requested` for the row, so say so out loud —
+    // a rejected parameter must never look like "this customer has no tickets".
+    Logger.log('⚠️ gorgias ' + path + ' -> HTTP ' + resp.getResponseCode() +
+               ' (params: ' + Object.keys(params || {}).join(',') + '); enrichment for this row is blank');
+    return null;
+  }
+  return JSON.parse(body);
+}
+
+/**
+ * Tickets for `customerId`, newest first, back to `floor` (an ISO date). Pages in
+ * GORGIAS_TICKET_PAGE-sized bites and stops as soon as the window is covered, so the common case
+ * (a customer with a handful of tickets) costs one small response instead of a 30-ticket one.
+ * Returns whatever it has; a wall mid-page is reported by the caller, never patched over.
+ */
+function gorgiasTicketsToFloor_(customerId, floor) {
+  var out = [], cursor = null;
+  while (out.length < GORGIAS_TICKET_MAX) {
+    var p = { customer_id: customerId, limit: GORGIAS_TICKET_PAGE, order_by: 'created_datetime:desc' };
+    if (cursor) p.cursor = cursor;
+    var t = gorgiasGet_('/tickets', p);
+    if (!t || !t.data || !t.data.length) return out;
+    out = out.concat(t.data);
+    var oldest = String(t.data[t.data.length - 1].created_datetime || '').slice(0, 10);
+    if (oldest && oldest < floor) return out;              // window fully covered — stop paying
+    if (t.data.length < GORGIAS_TICKET_PAGE) return out;   // end of this customer's tickets
+    cursor = (t.meta || {}).next_cursor || null;
+    if (!cursor) {
+      // Same coverage the flat limit:30 would have had is NOT guaranteed here — say so rather than
+      // let a possibly-missed earliest ticket look like a clean answer.
+      GORGIAS_WINDOW_UNCOVERED_++;
+      Logger.log('⚠️ gorgias tickets: window back to ' + floor + ' NOT covered for customer ' +
+                 customerId + ' and no next_cursor returned — earliest in-window ticket may be missed');
+      return out;
+    }
+  }
+  return out;
 }
 
 function findRequested_(email, entered, floorDate) {
   if (!email) return ['', ''];
-  var c = gorgiasGet_('/customers', { email: email });
+  // 🔴 STOP CLEANLY, DO NOT THROW. The caller's accumulated state must survive to saveState_().
+  if (RUN_QUOTA_WALL_) { GORGIAS_ENRICH_SKIPPED_++; return ['', '']; }
+  var c = gorgiasGet_('/customers', { email: email, limit: 1 });
   if (!c || !c.data || !c.data.length) return ['', ''];
-  var t = gorgiasGet_('/tickets', { customer_id: c.data[0].id, limit: 30, order_by: 'created_datetime:desc' });
-  if (!t || !t.data) return ['', ''];
   var floor = iso_(addDays_(new Date(entered), -14));
   if (floorDate && floorDate > floor) floor = floorDate; // complaint can't predate shipment
+  var tickets = gorgiasTicketsToFloor_(c.data[0].id, floor);
+  // A wall part-way through the paging leaves a NEWEST-first fragment, which would yield a LATER
+  // "earliest" ticket than the truth. A wrong date is worse than a blank one — return blank.
+  if (RUN_QUOTA_WALL_) { GORGIAS_ENRICH_SKIPPED_++; return ['', '']; }
+  if (!tickets.length) return ['', ''];
   var best = '', bestId = '';
-  t.data.forEach(function (tk) {
+  tickets.forEach(function (tk) {
     var tc = (tk.created_datetime || '').slice(0, 10);
     if (tc >= floor && tc <= entered) { best = tc; bestId = String(tk.id); } // desc -> last = earliest
   });
@@ -1144,6 +1304,7 @@ function ppLookup_(orderNums, cohortOf) {
     } catch (eF) {
       if (!gasFetchQuotaWall_(eF)) throw eF;
       PP_IO_WALL_ = eF;
+      noteQuotaWall_(eF, 'parcelpanel');   // D43: name the leg run-wide, not just in this closure
       return [];   // nothing served — these orders stay UNSTAMPED and are re-asked next run
     }
     resp.forEach(function (r, k) {
@@ -1557,15 +1718,17 @@ function gorgiasForOrder_(orderName, postedIso) {
   var d = shopifyGql_('query($q:String!){ orders(first:1, query:$q){ edges{node{ email }}}}', { q: 'name:' + nm });
   var e = d.orders.edges, email = e.length ? e[0].node.email : '';
   if (!email) return '';
-  var c = gorgiasGet_('/customers', { email: email });
+  var c = gorgiasGet_('/customers', { email: email, limit: 1 });
   if (!c || !c.data || !c.data.length) return '';
-  var t = gorgiasGet_('/tickets', { customer_id: c.data[0].id, limit: 30, order_by: 'created_datetime:desc' });
-  if (!t || !t.data || !t.data.length) return '';
   var p = String(postedIso || '').slice(0, 10);
-  for (var i = 0; i < t.data.length; i++) {
-    if ((t.data[i].created_datetime || '').slice(0, 10) <= p) return String(t.data[i].id);
+  // Same paging as findRequested_ (D43): this wants the newest ticket at or before `p`, so page
+  // back only until the list crosses that boundary instead of always pulling 30 tickets.
+  var tickets = gorgiasTicketsToFloor_(c.data[0].id, p);
+  if (RUN_QUOTA_WALL_ || !tickets.length) return '';
+  for (var i = 0; i < tickets.length; i++) {
+    if ((tickets[i].created_datetime || '').slice(0, 10) <= p) return String(tickets[i].id);
   }
-  return String(t.data[t.data.length - 1].id);
+  return String(tickets[tickets.length - 1].id);
 }
 
 // ---- Triage DECISION vocabulary + counting contract (Kurt 2026-08-19) ----

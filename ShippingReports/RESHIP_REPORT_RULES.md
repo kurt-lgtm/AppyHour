@@ -3822,6 +3822,81 @@ was never run. Not pushed — `gas_swap.py push Code` is Kurt's.
 `Triage!A1` and `Product Mix!A1` both read **`REFRESHED 2026-09-07T08:08:42`** — one run, past the
 PP-dependent legs, after both 09-06 failures. The report was not left broken.
 
+#### D43b — THE GUARD EXISTED AND THE RUN STILL DIED: IT WAS WIRED TO THREE CALL SITES, NOT TO THE FETCH BOUNDARY (2026-09-08)
+
+> The alarm, verbatim from Google: `9/8/26 7:08:40 AM CDT refresh — Exception: Bandwidth quota
+> exceeded: https://appyhour.gorgias.com/api/customers?email=… Try reducing the rate of data
+> transfer.` Same meter, same wording, **third** vendor URL (PP 09-06, Shopify 08-31, Gorgias 09-08),
+> and the whole `refresh()` died at 7:10:08.
+
+1. 🔴 **NEVER wire a class-level guard to the call sites you happened to think of.** This is the
+   reusable lesson and it outranks everything else in D43b. `gasFetchQuotaWall_` had existed since
+   09-06 and was correct — it was simply called at **three** places (`Code.gs` `ppLookup_`,
+   `Exceptions.gs` ×2). `gorgiasGet_` was the **fourth** fetch path and had no guard, so the wall
+   walked straight out of it, out of `findRequested_`, out of `sweepAndEnrich_`, and killed the run.
+   A guard for a failure class belongs at the **boundary where the class is produced** — here, the
+   place a `UrlFetchApp` call is made — so that a path nobody enumerated is covered by construction.
+   Enumerating call sites is how the same wall gets to kill a run three times with the detector
+   already in the file. **`gorgiasGet_` now catches it itself**, and any NEW fetch helper must too.
+2. 🔴 **NEVER let a byte wall look like a Gorgias problem.** Same three discriminators as D43: it is
+   **thrown**, not an HTTP status (`gorgiasGet_` fetches with `muteHttpExceptions: true`, so its
+   `getResponseCode() >= 400` check could never see it); Gorgias refuses with a status; the identical
+   text has now hit three different vendors' URLs. Chasing Gorgias's rate limit is chasing a meter
+   that was never involved.
+3. 🔴 **A COUNT CAP DOES NOT BOUND A BYTE BUDGET.** `MAX_ENRICH_PER_RUN = 60` is labelled "Gorgias
+   429 guard" and caps how many rows get enriched — it says nothing about how many BYTES those rows
+   cost, which is the meter that actually ran out. This leg is the project's heaviest consumer: two
+   fetches per reship, and the tickets body was the largest response the project pulls.
+4. 🔴 **A QUOTA STOP IS NOT A SUCCESS, AND MUST NOT LOOK LIKE ONE.** The run no longer dies, so the
+   silent-partial risk is now the live risk. Every tab this run writes gets its `REFRESHED` cell
+   suffixed with `⚠️ PARTIAL — stopped on GOOGLE's daily url-fetch DATA quota … N row(s) left
+   UNENRICHED`, the same line goes to `#kurt-ops` via `slack_`, and `quotaPartialNote_()` is the one
+   definition of that sentence. A partial publish that reads identically to a complete one is the
+   failure this file has now been repaired for twice.
+5. 🔴 **PERSIST BEFORE YOU STOP.** Same doctrine as D43 rule 2 (`ppCacheSave_` before the throw),
+   one function up: in `build_()` **every fetching leg is inside one try/catch and `saveState_(state)`
+   is OUTSIDE it**, so the enrichments whose bytes exhausted the quota are written down instead of
+   being re-bought next hour. `sweepAndEnrich_` **returns** on the wall rather than throwing;
+   `findRequested_` returns `['','']`. `menuBackfillGorgias` carries the identical guard.
+6. 🔴 **NEVER PUBLISH A DATE DERIVED FROM A HALF-FETCHED WINDOW.** `findRequested_` scans tickets
+   newest-first and keeps the last in-window match, so a fragment truncated by the wall yields a
+   *later* "earliest ticket" than the truth. It returns **blank**, not a guess. Blank is recoverable
+   next run; a wrong `requested` date silently poisons the tail CDF.
+7. 🔴 **DO NOT INVENT API PARAMETERS TO SHRINK A RESPONSE.** Gorgias v1 has **no verified sparse-
+   fieldset parameter** — the only list params evidenced anywhere in this codebase are `limit`,
+   `order_by` and `cursor` (`AppyHourMCP/tools/_gorgias_internal.py: gorgias_paginate`). A guessed
+   `fields=` would be rejected, and `gorgiasGet_` turns a 4xx into `null`, which would blank
+   `requested` for **every** reship while looking like "these customers have no tickets". For the
+   same reason a 4xx is now **logged**, never swallowed silently.
+8. **The byte cut that was actually made.** `/tickets` was a flat `limit: 30` on every customer.
+   `findRequested_` only needs tickets back to `floor` (entered − 14d, raised to the ship date), so
+   `gorgiasTicketsToFloor_` asks for `limit: 10` and pages further **only** while the window is
+   uncovered, with the **same 30-ticket ceiling** as before — typically ⅓ of the bytes, identical
+   coverage. `/customers?email=` carries `limit: 1` (at most one match; we read `data[0].id`).
+   `gorgiasForOrder_` reuses the same pager. If a window cannot be covered because no `next_cursor`
+   came back, that is **counted and logged** (`GORGIAS_WINDOW_UNCOVERED_`), never assumed away.
+9. **A consumer with no byte meter cannot be indicted or exonerated** (D43 rule 6, third instance):
+   `GORGIAS_IO_CALLS_` / `GORGIAS_IO_BYTES_` / `gorgiasIoSummary_()` now mirror the Shopify and PP
+   counters. 🔴 Descriptive only — nothing caps, paces or skips on them.
+10. **Still open, deliberately NOT changed:** `Exceptions.gs excGorgiasCreate_` posts to
+    `/tickets` inside a `try/catch` that never throws, so it already degrades — but it records a
+    wall as a generic `failed` with the raw text, i.e. it *blames Gorgias*. It should call
+    `gasFetchQuotaWall_` and label the meter. Out of scope for this change (Code.gs only).
+
+**Verification (2026-09-08/09, node 24, offline).** `appsscript/tests/d43_gorgias_quota_guard_test.js`
+— **20/20 PASS**. Loads `Code.gs` verbatim into a `vm` context with stubbed Apps Script globals; **no
+Gorgias, Shopify, ParcelPanel or Slack call was placed and `refresh()` was never run.** Drives the
+**verbatim 09-08 exception string**. Asserts: the detector matches it through both names and still
+rejects a real HTTP-429 message; the healthy path resolves the earliest in-window ticket in exactly
+**2** requests (customers + ONE ticket page, where the old code always pulled 30 tickets);
+`findRequested_` does **not** throw on the wall and returns a blank pair; the run-level wall is
+recorded with the leg named `gorgias`; exactly ONE request is placed before the stop and **zero**
+afterwards; `gorgiasGet_` short-circuits once the wall is up; `sweepAndEnrich_` **returns** on a
+mid-sweep wall with the already-swept row intact in `state` (which `build_` then saves); and the
+partial note names the meter, disclaims the vendor, names the leg and reports the unenriched count.
+Global-collision sweep (`^(function|var)\s+<name>`) across all five `.gs` files: the eleven new
+globals collide with nothing.
+
 ### D44 — A PUBLISHED DOLLAR NAMED NO STORE, SO A CLOUD DEDUPE COST A FULL AUDIT TO RULE OUT; AND THE ONLY WAY TO SEE A REPAINT WAS TO PERFORM IT (2026-09-07)
 
 **Scope.** The cost half of the `Carrier Mix` tab (`ShippingReports/carrier_mix_pivot.py`, D35/D35c/D41)
@@ -3930,3 +4005,101 @@ the live tab: 68 differing cells rendered, **nothing written**, and it is what s
 column-destruction case. Local `shipments` probed read-only via `connect_ro` (98,432/98,432 + the four
 control trackings). `write_sheet`'s live path was never executed.
 
+
+---
+
+### D45 — AGEING PAST THE INVOICE WINDOW WAS READ AS EVIDENCE OF HAVING BEEN BILLED, AND 15,307 UNBILLED BOXES WERE STAMPED COMPLETE (2026-09-08)
+
+**Scope.** The CEO shipping-COST report `_outputs/scripts/shipping_cost_report.py` and its sheet writer
+`_outputs/scripts/cost_sheet_push.py`. Sibling to **D35/D44**, which govern the `Carrier Mix` cost half:
+D44 made a published dollar name its STORE; D45 makes a published dollar name its **DENOMINATOR**. Both
+exist because a cost cell that cannot say what it was divided by cannot be audited.
+
+**🔴 THE FAILURE, FIRST. A WEEK AT 0.0% CARRIER COVERAGE WAS CALLED "COMPLETE".** The completeness gate
+polices a carrier-week only while it is inside that carrier's invoice-lag horizon (`CARRIER_HORIZON_WEEKS`,
+D-note in the source). Past it, the 95% floor was skipped **entirely** — the `and` in
+`if wk >= horizon[c] and pct < COMPLETE_PCT` — so a week nothing had ever billed sailed through as fully
+settled. Ageing out answers *"will more invoices arrive?"*. It says **nothing** about whether any arrived.
+Measured over the 58 ship-weeks the report then called complete:
+
+| carrier | handed | invoiced | coverage | never billed |
+|---|---|---|---|---|
+| FedEx | 37,476 | 28,690 | **76.6%** | **8,786** |
+| OnTrac | 43,033 | 39,221 | 91.1% | 3,812 |
+| UPS | 17,005 | 14,883 | 87.5% | 2,122 |
+| Veho | 9,265 | 8,678 | 93.7% | 587 |
+| **ALL** | **106,779** | **91,472** | **85.7%** | **15,307** (14.3%) |
+
+**🔴 IT WAS NOT A JOIN BUG, AND THAT IS THE PART WORTH REMEMBERING.** The instinct — and the first three
+hypotheses — said key-format drift (`#132940` vs `132940`, the trap that produced confident zeros twice
+here) or FedEx tracking reuse. Both were **wrong, and measured wrong, not assumed wrong**: normalizing
+every handed tracking to bare upper-case alphanumerics and re-testing against `shipments` finds
+**0 additional matches on all four carriers**. Every unmatched box has **no invoice row under any key**.
+The causes, counted:
+
+| count | cause | the fix it implies |
+|---|---|---|
+| 7,411 | invoice file covered only PART of the ship-week | chase the missing file |
+| 6,348 | **no invoice for that carrier-week at all** | chase the missing file |
+| 1,548 | delivered, week otherwise well covered, never billed | accept, or dispute with the carrier |
+| **0** | **billed but unmatched (join defect)** | would be a CODE fix — none needed |
+
+The blackout is structural and visible in the store: `shipments` holds **zero** FedEx rows for all of
+**2025-06** and all of **2025-09**, and only 431 for 2025-10 — the FedEx invoice files for those windows
+were never received. 2025-06 has UPS rows only; 2025-09 has OnTrac rows only. Nothing was mis-parsed.
+
+**🔴 DO NOT JUDGE INGEST RECENCY BY `MAX(source_file)`.** It is a LEXICAL max on text: `FedEx_...` sorts
+above `AHB_...`, so the newest AHB breakdown is invisible behind an older auto-pull. It lied on this exact
+question. (Same class as `'2026-06-19' > '09/04/2026'` hiding 692 warm-arrival rows.) Judge recency by
+`ship_date` coverage per carrier, never by a filename.
+
+**1. 🔴 A WEEK PAST ITS WINDOW AND STILL SHORT IS `gap`, A THIRD STATE — NEVER `complete`.**
+`_completeness` now returns `(complete, gap, pending)`:
+
+- `ok` — `pct >= COMPLETE_PCT`.
+- `pending` — under the floor, **inside** the window. Invoices may still land; the week is held out of
+  every average, exactly as before.
+- `gap` — under the floor, **past** the window. They never landed and never will. The week's **costs stay
+  in the report** (the freight was genuinely incurred; blanking a year of history is a bigger lie than the
+  shortfall) but it is **excluded from `complete_weeks`** and its shortfall is published per carrier.
+
+🔴 Never widen a horizon, or the floor, to turn a `gap` week green. A `gap` is a missing invoice; the only
+thing that closes it is the invoice.
+
+**2. 🔴 `never_billed` AND `join_defect` ARE DIFFERENT FAILURES AND THE REPORT MUST NAME WHICH.** They take
+opposite fixes and were previously indistinguishable — one number, "unmatched", that quietly implied a bug
+we did not have while hiding an ingest gap we did.
+
+- `never_billed` — no invoice row under ANY key → **ingest/billing** gap; chase the file.
+- `join_defect` — an invoice row EXISTS whose tracking differs only by punctuation or case → **CODE** bug;
+  fixing the ingest would not help.
+
+`never_billed + join_defect == handed − invoiced` by construction (asserted in the tests). `join_defect` is
+**0 today** and is computed every run precisely so a future key-format drift surfaces as a number instead
+of hiding inside "coverage went down". 🔴 **The join itself stays EXACT.** The normalized key MEASURES; it
+must never MATCH — loosening the join would let genuinely different labels collide, which is a worse bug
+than the one being diagnosed.
+
+**3. 🔴 BOTH `$/box` DENOMINATORS ARE PUBLISHED, LABELLED, SIDE BY SIDE.** `$/box` had two defensible
+values — **$11.63** (invoiced denominator, 84,962 boxes) and **$9.25** (shipped denominator, 106,779
+boxes) — and the report published one without ever naming which. That is not a rounding argument: the gap
+between them **is** the 15,307 never-billed boxes, which contribute a box but no dollars. Quoting either
+alone is how the same week acquires two true costs.
+
+- `$/box (invoiced boxes)` = cost ÷ boxes we hold an invoice for. What every table in the report divides by.
+- `$/box (shipped boxes)` = cost ÷ boxes handed to carriers. **UNDERSTATED** by exactly the never-billed tail.
+
+**4. What was NOT changed.** The join was not loosened. No week's costs were removed from the report —
+`gap` weeks stay in, so no published total moves; what changes is that 58 weeks no longer *claim* to be
+complete (now 27 complete + 31 closed-with-gap on the full-history run). `shipping.db` was read
+**read-only** throughout (`connect_ro`); no data repair was written, and the missing FedEx invoice files
+are a **collection** problem, not a code one. The `Carrier Mix` tab was not touched and was **not**
+repainted — it remains unpaintable pending Kurt's `CM_ASSERT_FROZEN_COUNTS` / `_SHIP_2026-08-10` decision
+(D44 finding 4).
+
+**Guard.** `_outputs/scripts/tests/test_cost_coverage_join.py` — 15 cases, every tracking **pinned from
+the live DB** (a synthesized tracking cannot catch key-format drift). Covers the known-present control on
+both sides, the normalizer's identity-on-canonical-keys and its refusal to collide distinct labels, the
+`never_billed + join_defect` identity, `join_defect == 0`, the blackout week (`2025-09-08`) never being
+stamped complete, complete/gap/pending disjointness, every complete week really clearing the floor, and
+both denominators reaching the sheet rows.
