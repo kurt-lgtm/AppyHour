@@ -26,8 +26,14 @@ Q = """query($q:String!){orders(first:60, query:$q){edges{node{
   currentTotalPriceSet{shopMoney{amount}}
   discountCodes
   lineItems(first:200){edges{node{sku title quantity currentQuantity
+    variant{id}
     originalUnitPriceSet{shopMoney{amount}}
     discountedUnitPriceSet{shopMoney{amount}}}}}}}}}"""
+# 🔴 variant{id} is not optional. A Simple Bundles parent can carry NO SKU at all
+# (#178568 'Ultimate Add-on Package: Summer Cookout', $28, sku=None). Every check keys on
+# SKU, so a null-SKU line counts 0 children and matches no rule -- it is invisible, and
+# its components never reach the pick sheet. The variant id is the only handle left for
+# reading that line's bundled_variants metafield.
 
 
 def _auth():

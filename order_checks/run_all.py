@@ -30,6 +30,7 @@ import sys
 from . import sheet as sheetmod
 from .categorize import categorize
 from .check7 import run as check7_run
+from .bundles import bundle_check
 from .checks import bare_cex_check, cracker_check, fixed_route_check, fixed_route_roster, validate_swap_list
 from .dan_checks import load_rules
 from .dan_checks import run as dan_run
@@ -185,6 +186,14 @@ def main(argv=None):
         hits = [{"order": k, "issue": fn(o)} for k, o in rest.items() if fn(o)]
         print(f"    {name:<14}{len(hits)}")
         dump(os.path.join(a.out, f"{name.split()[0].lower()}_{a.tag}.csv"), hits)
+
+    # 🔴 Bundles are checked by VARIANT ID, not SKU. A Simple Bundles parent can
+    # carry no SKU at all (#178568, $28 'Ultimate Add-on Package'), which makes it
+    # invisible to every SKU-keyed check above -- 0 children, no rule, no parent.
+    bundles = bundle_check(orders)
+    dump(os.path.join(a.out, f"bundles_{a.tag}.csv"), bundles)
+    for r in bundles:
+        print(f"      {r['order']}  {r['sku']:<20} {r['state']}  {r['missing']}")
 
     # Fixed_Route: the PROFILE pin next to the ORDER's routing tag, for EVERY pinned
     # customer -- not only the mismatches. A clean cohort otherwise shows nothing, so you

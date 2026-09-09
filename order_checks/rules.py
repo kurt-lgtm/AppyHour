@@ -112,6 +112,18 @@ SLOT_TYPE = {"EX-EM": "MT-", "EX-EC": "CH-", "EX-EA": "AC-",
              "CEX-EM": "MT-", "CEX-EC": "CH-", "CEX-EA": "AC-", "CEX-CR": "AC-"}
 
 
+def slot_key(sku: str) -> str:
+    """CEX-<slot> and EX-<slot> are the SAME slot (Kurt 2026-09-08).
+
+    🔴 A bundle recipe naming EX-EA is satisfied by a CEX-EA line and vice versa --
+    "they got CEX-EA INSTEAD, which is effectively the same". Comparing the raw strings
+    reported #181468 and #181629 as un-exploded bundles when both were complete. Any
+    check asking "is this slot filled" must compare through here, never by equality.
+    """
+    u = (sku or "").strip().upper()
+    return u[1:] if u.startswith("CEX-") else u
+
+
 @functools.lru_cache(maxsize=4)
 def load_rule_set(path: str) -> dict:
     """Parse the RULE SET + SKU ADDS BY DISC CODE tabs. LIKELY is deliberately ignored."""
