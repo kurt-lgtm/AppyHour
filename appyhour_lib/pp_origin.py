@@ -49,7 +49,7 @@ MISSING = "MISSING"
 
 __all__ = [
     "ET", "MISSING", "MOVEMENT", "AUTHORITY_FACILITY_ZIP", "DERIVED_FACILITY_ZIP",
-    "REFUSED_FACILITY_ZIP", "FACILITY_CITY_STATE", "HUB_SOURCES",
+    "REFUSED_FACILITY_ZIP", "FACILITY_CITY_STATE", "HUB_SOURCES", "NO_HUB_STATES",
     "iter_checkpoints", "first_physical_checkpoint", "parse_scan_location",
     "label_origin_zip", "dest_zip5", "to_et", "transit_days", "hub_for_facility",
     "derive_origin",
@@ -103,33 +103,64 @@ AUTHORITY_FACILITY_ZIP = {
     "60446": "Chicago",      # hubs.HUB_ONTRAC_ZIP["Chicago"]     — Romeoville IL (OnTrac)
 }
 
-# TIER 2 "derived": clustered from first-scan city × assigned-hub tag over the 2026-08-20→08-27
-# window (2,694 orders). Each is ≥99.6% concentrated on ONE hub across ≥240 observations, and each
-# is the carrier's own ORIGIN-handoff scan ("…on its way to your OnTrac Facility…").
-# 🔴 These are NOT independent of the routing tag — they were derived FROM it. Any agreement
-# statistic over these rows is circular and must be reported separately from the tier-1 number
-# ([[count-only-independent-checks]]). They exist because ShipRouting's HUB_ONTRAC_ZIP carries only
-# Swedesboro + Chicago; the OnTrac injection zips for Anaheim / Nashville / Dallas are an AUTHORITY
-# GAP (PP_ORIGIN_HUB_RULES "open for Kurt"), not a fact this module may invent.
+# TIER 2 — PROMOTED TO AUTHORITY 2026-09-10 (Kurt: "if the city matches, then it's fine").
+#
+# These were originally clustered from first-scan city × assigned-hub tag, which made any agreement
+# statistic over them CIRCULAR — the hub was inferred FROM the tag, then checked against the tag.
+# Kurt's geographic test removes that: a facility sitting in the hub's metro is confirmed by
+# GEOGRAPHY, which no routing tag of ours can influence. Provenance stops mattering once an
+# independent fact gives the same answer.
+#
+# Distances measured 2026-09-10 via ShipRouting/lib/geo.hub_distances (zip centroid + haversine),
+# NOT estimated. Calibration control: the four DECLARED zips above sit 11-18 mi from their own hub,
+# so the centroid source agrees with HUB_ORIGIN_ZIP and these numbers are on the same scale.
+# 🔴 Adding a zip here REQUIRES its measured distance and its next-nearest hub in the comment. A zip
+# promoted without them is back to being tag-derived and nothing in the code will catch it.
 DERIVED_FACILITY_ZIP = {
-    "08014": "Swedesboro",   # OnTrac Bridgeport NJ    549/550 Swedesboro-tagged (99.8%)
-    "90040": "Anaheim",      # OnTrac Los Angeles CA   307/307 Anaheim-tagged   (100%)
-    "37090": "Nashville",    # OnTrac Lebanon TN       245/245 Nashville-tagged (100%)
-    "75115": "Dallas",       # OnTrac DeSoto TX        232/233 Dallas-tagged    (99.6%)
+    "08014": "Swedesboro",   # OnTrac Bridgeport NJ    18 mi (next hub 593) — 549/550 tagged (99.8%)
+    "90040": "Anaheim",      # OnTrac Los Angeles CA   28 mi (next hub 582) — 307/307 tagged (100%)
+    "37090": "Nashville",    # OnTrac Lebanon TN        2 mi (next hub 254) — 245/245 tagged (100%)
+    "75115": "Dallas",       # OnTrac DeSoto TX        24 mi (next hub 602) — 232/233 tagged (99.6%)
 }
+
+# 🔴 IN-METRO IS NECESSARY, NEVER SUFFICIENT — SCAN ORDER IS THE OTHER HALF (verified 2026-09-10).
+# `84104` is 2 mi from HUB_ORIGIN_ZIP["Salt Lake City"] — CLOSER than 90040/Anaheim above — and is
+# nonetheless a DELIVERY station. 41 orders carry a real 84104 checkpoint; all 41 are Utah
+# destinations, Anaheim-tagged, and the scan sits ~2 days AFTER the Anaheim pickup, consistently
+# 5th of 8-12 in the sequence and NEVER first. Carrier page for #177153 confirms it directly:
+# LOS ANGELES CA 90040 (origin injection) -> SALT LAKE CITY 84104 "received by your local OnTrac
+# facility, processing for delivery" -> Lehi -> AMERICAN FORK UT 84003 delivered.
+# SLC is both a metro we ship INTO and a metro with a (volumeless placeholder) hub, which is exactly
+# why geography alone cannot separate them. Take the FIRST physical checkpoint, never a later one.
+#
+# 🔴 AND NEVER KEY THAT TEST ON `pickup_date`. On 13 of those 41, PP's `pickup_date` EQUALS the
+# 84104 scan time to the second — PP derived pickup FROM the destination-side scan. A rule asking
+# "is this facility at or before pickup_date?" therefore answers ORIGIN for a delivery station,
+# because the field it trusts was computed from the very scan it is classifying
+# ([[self-verifying-denominator]], third instance). Key on ORDER within the sequence.
 
 # 🔴 REFUSED — observed at volume, deliberately NOT mapped. Listed so the next person does not
 # "finish the map" by pattern-matching. Each returns MISSING with the reason as hub_source.
 REFUSED_FACILITY_ZIP = {
     # FedEx stamps its synthetic midnight "Picked up" scan with the shipper ACCOUNT address.
-    # Woburn MA is HQ, not a hub. The same payloads declare origin zip 60445 (Chicago).
+    # 01887 is WILMINGTON MA (FedEx's own tracking page renders it that way; the old comment here
+    # said "Woburn", which is 01801 — the decommissioned HQ. Two towns, conflated in the docs;
+    # corrected 2026-09-10). Either way it is an office address, not a hub, and the same payloads
+    # declare origin zip 60445 (Chicago).
+    # 🔴 Measured 290 mi from the NEAREST hub (Swedesboro), next 802 — it fails the geographic test
+    # outright, unlike 84104 which passes geography and fails scan order.
     "01887": "refused_shipper_account_address",
     # 34 orders, only 65% on one hub (Anaheim 22 / Chicago 7 / Dallas 5) — below any threshold that
     # is not just tag-echo. FedEx's own declared origin zip splits 90660 vs 60445 on the same city.
     "90670": "refused_ambiguous_facility",
     # hubs.HUB_ORIGIN_ZIP["Salt Lake City"] is an explicit PLACEHOLDER for a hub with no cohort
-    # volume; the 8 rows scanning here are Anaheim-tagged OnTrac boxes hitting a DESTINATION-side
+    # volume; the rows scanning here are Anaheim-tagged OnTrac boxes hitting a DESTINATION-side
     # facility. Mapping it would invent a Salt Lake City hub out of downstream scans.
+    # 🔴 COUNT CORRECTED 2026-09-10: 41 orders carry a real 84104 checkpoint, not the 8 this
+    # comment and PP_ORIGIN_HUB_RULES.md:221 both claimed. (682 raw events mention the string;
+    # 250 order/tracking pairs mention it anywhere in the payload — most outside checkpoints.)
+    # See the scan-order note above: this zip is the counter-example proving geography alone is
+    # not enough, so it must stay refused even though it sits 2 mi from its hub.
     "84104": "refused_placeholder_zip",
 }
 
@@ -138,14 +169,24 @@ FACILITY_CITY_STATE = {
     ("MESQUITE", "TX"): ("Dallas", "scan_authority_zip"),   # UPS "Arrived at Facility, Mesquite TX US"
 }
 
+# 🔴 STATES WITH NO HUB — a scan here can never be an origin, whatever the zip (Kurt 2026-09-10:
+# "any MA is just wrong"). This is a class rule, not a zip entry: it catches the NEXT office/HQ
+# address FedEx stamps on a synthetic pickup without waiting for it to be observed at volume first.
+# Hubs live in CA (Anaheim), TX (Dallas), TN (Nashville), NJ (Swedesboro), IL (Chicago), IN
+# (Indianapolis, closed). MA has never held one — the Woburn office was decommissioned Feb 2026 and
+# was never a fulfillment hub. 🔴 If a hub is ever opened in a new state, ADD ITS STATE to the hub
+# roster before shipping from it, or every one of its origin scans is refused here.
+NO_HUB_STATES = frozenset({"MA"})
+
 HUB_SOURCES = (
     "scan_authority_zip",        # tier 1 — facility zip is in ShipRouting/lib/hubs.py
-    "scan_derived_facility",     # tier 2 — clustered facility, tag-correlated (NOT independent)
+    "scan_derived_facility",     # tier 2 — geo-confirmed 2026-09-10, promoted to authority
     "no_physical_scan",          # no MOVEMENT checkpoint carried a location (never-collected class)
     "unmapped_facility",         # a real scan at a facility we cannot map — MISSING, listed for Kurt
     "refused_shipper_account_address",
     "refused_ambiguous_facility",
     "refused_placeholder_zip",
+    "refused_state_has_no_hub",  # class rule — see NO_HUB_STATES
 )
 
 
@@ -266,9 +307,19 @@ def hub_for_facility(city, state, zip5):
       1. tier-1 authority zip   → ``scan_authority_zip``
       2. tier-2 derived zip     → ``scan_derived_facility``
       3. explicitly REFUSED zip → ``MISSING`` + the refusal reason
-      4. (city, state) fallback → only for unambiguous zip-less pairs
-      5. anything else          → ``MISSING`` + ``unmapped_facility``
+      4. state has no hub       → ``MISSING`` + ``refused_state_has_no_hub`` (class CATCH-ALL)
+      5. (city, state) fallback → only for unambiguous zip-less pairs
+      6. anything else          → ``MISSING`` + ``unmapped_facility``
+
+    🔴 The state rule sits AFTER the per-zip refusals, not before. Both refuse `01887`, but the
+    zip entry knows WHY FedEx emitted it (a synthetic pickup stamped with the shipper account
+    address) and the state rule only knows that MA holds no hub. A specific diagnosis beats a
+    general one, and the UNRESOLVED bucket is only useful if its reasons are the precise ones.
+    The state rule's job is the address we have NOT seen yet: per-zip refusal is whack-a-mole,
+    catching a bad address only after it shows up at volume and someone hand-adds it, whereas the
+    class rule refuses the next office address FedEx invents on first sight.
     """
+    st = str(state or "").upper().strip()
     if zip5:
         z = str(zip5).strip()
         if z in AUTHORITY_FACILITY_ZIP:
@@ -277,8 +328,12 @@ def hub_for_facility(city, state, zip5):
             return DERIVED_FACILITY_ZIP[z], "scan_derived_facility"
         if z in REFUSED_FACILITY_ZIP:
             return MISSING, REFUSED_FACILITY_ZIP[z]
+        if st and st in NO_HUB_STATES:
+            return MISSING, "refused_state_has_no_hub"
         return MISSING, "unmapped_facility"
-    key = (str(city or "").upper().strip(), str(state or "").upper().strip())
+    if st and st in NO_HUB_STATES:
+        return MISSING, "refused_state_has_no_hub"
+    key = (str(city or "").upper().strip(), st)
     if key in FACILITY_CITY_STATE:
         hub, src = FACILITY_CITY_STATE[key]
         return hub, src

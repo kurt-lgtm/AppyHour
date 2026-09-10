@@ -217,6 +217,63 @@ def test_wilmington_ma_is_refused_not_mapped_to_chicago():
     assert row["origin_label_zip"] == "60445"  # the evidence is kept, unmapped
 
 
+def test_no_hub_state_refuses_an_ma_zip_never_seen_before():
+    """🔴 The class rule, not the zip list (Kurt 2026-09-10: "any MA is just wrong").
+
+    Per-zip refusal is whack-a-mole — it only catches an address AFTER it shows up at volume and
+    someone hand-adds it. FedEx stamps its synthetic pickup with whatever office address is on the
+    account, so the next one will be a different MA zip that nothing in REFUSED_FACILITY_ZIP knows
+    about. No hub has ever been in Massachusetts, so the state alone settles it.
+    """
+    unseen = "01801"   # Woburn, the decommissioned office — deliberately NOT in the refused list
+    assert unseen not in pp_origin.REFUSED_FACILITY_ZIP
+    hub, src = pp_origin.hub_for_facility("WOBURN", "MA", unseen)
+    assert hub == pp_origin.MISSING
+    assert src == "refused_state_has_no_hub"
+
+
+def test_specific_zip_refusal_beats_the_state_class_rule():
+    """A precise reason outranks a general one — the UNRESOLVED bucket is only useful if it says
+    WHY. 01887 is in MA and would satisfy the state rule, but the zip entry knows it is FedEx's
+    shipper-account-address stamp, which is the actionable diagnosis."""
+    hub, src = pp_origin.hub_for_facility("WILMINGTON", "MA", "01887")
+    assert hub == pp_origin.MISSING
+    assert src == "refused_shipper_account_address"
+
+
+def test_hub_states_are_not_refused_by_the_class_rule():
+    """Guard against the rule swallowing real origins. Every hub state must resolve normally."""
+    for zip5, expected in (("75149", "Dallas"), ("37122", "Nashville"),
+                           ("08007", "Swedesboro"), ("60446", "Chicago")):
+        hub, src = pp_origin.hub_for_facility("", "", zip5)
+        assert hub == expected, f"{zip5} must still resolve to {expected}"
+        assert src == "scan_authority_zip"
+
+
+def test_geo_confirmed_zips_are_authority_now():
+    """The four promoted 2026-09-10 on Kurt's geographic test. They still report
+    `scan_derived_facility` as their source — the PROVENANCE is unchanged and stays visible — but
+    they are published in the headline rate because geography, not the tag, confirms them."""
+    for zip5, expected in (("90040", "Anaheim"), ("37090", "Nashville"),
+                           ("75115", "Dallas"), ("08014", "Swedesboro")):
+        hub, src = pp_origin.hub_for_facility("", "", zip5)
+        assert hub == expected
+        assert src == "scan_derived_facility"
+
+
+def test_84104_stays_refused_despite_being_2mi_from_its_hub():
+    """🔴 The counter-example that proves in-metro is NECESSARY, NOT SUFFICIENT.
+
+    84104 is 2 mi from HUB_ORIGIN_ZIP["Salt Lake City"] — closer than 90040/Anaheim (28 mi), which
+    IS promoted. It is still refused, because all 41 orders carrying that checkpoint are Utah
+    destinations whose scan sits ~2 days after an Anaheim pickup, 5th of 8-12 in the sequence and
+    never first. Geography cannot separate a hub metro from a delivery metro; scan ORDER can.
+    """
+    hub, src = pp_origin.hub_for_facility("SALT LAKE CITY", "UT", "84104")
+    assert hub == pp_origin.MISSING
+    assert src == "refused_placeholder_zip"
+
+
 def test_unmapped_facility_is_missing_never_a_guess():
     p = _ontrac_payload()
     p["checkpoints"] = [{"detail": "Package received by your local OnTrac facility, DENVER, "

@@ -197,28 +197,91 @@ The facility zip appears **verbatim** in `ShipRouting/lib/hubs.py`. Pinned by
 
 Plus the zip-less UPS dialect: `("MESQUITE","TX") → Dallas` (same facility, no zip in UPS text).
 
-## Tier 2 `scan_derived_facility` — clustered, NOT independent
-Each is ≥99.6% concentrated on one hub over ≥240 observations AND is the carrier's own
-ORIGIN-handoff scan (*"…on its way to your OnTrac Facility…"*).
+## Tier 2 `scan_derived_facility` — PROMOTED TO AUTHORITY 2026-09-10
 
-| zip | facility | hub | concentration |
-|---|---|---|---|
-| `08014` | Bridgeport NJ | Swedesboro | 549/550 (99.8%) |
-| `90040` | Los Angeles CA | Anaheim | 307/307 (100%) |
-| `37090` | Lebanon TN | Nashville | 245/245 (100%) |
-| `75115` | DeSoto TX | Dallas | 232/233 (99.6%) |
+**Kurt, 2026-09-10: "if the city matches, then it's fine."** These four are now published in the
+headline rate. The circularity objection is answered, not waived: the hub was originally inferred
+FROM the tag, but a facility sitting in the hub's METRO is confirmed by **geography**, which no
+routing tag of ours can influence. Provenance stops mattering once an independent fact agrees.
 
-🔴 These exist **only because `HUB_ONTRAC_ZIP` carries just Swedesboro and Chicago.** The OnTrac
-injection zips for Anaheim / Nashville / Dallas are an **AUTHORITY GAP**, not a fact this module may
-invent — see "Open for Kurt". The moment Kurt confirms them they move to tier 1 and the headline
-disagreement denominator roughly doubles.
+Distances measured via `ShipRouting/lib/geo.hub_distances` (zip centroid + haversine), **not
+estimated**. Calibration control: the four DECLARED tier-1 zips sit 11–18 mi from their own hub, so
+the centroid source agrees with `HUB_ORIGIN_ZIP` and these are on the same scale.
+
+| zip | facility | hub | distance | next-nearest hub | concentration |
+|---|---|---|---:|---:|---|
+| `08014` | Bridgeport NJ | Swedesboro | 18 mi | 593 mi | 549/550 (99.8%) |
+| `90040` | Los Angeles CA | Anaheim | 28 mi | 582 mi | 307/307 (100%) |
+| `37090` | Lebanon TN | Nashville | 2 mi | 254 mi | 245/245 (100%) |
+| `75115` | DeSoto TX | Dallas | 24 mi | 602 mi | 232/233 (99.6%) |
+
+🔴 **"City matches" means IN THE HUB'S METRO, never a string comparison.** None of the four match
+their hub by name — carriers name injection facilities after the town they occupy, not the metro.
+A literal-equality reading of this rule promotes nothing and looks like it works.
+
+🔴 **Adding a zip here REQUIRES its measured distance AND its next-nearest hub**, in this table and
+in `pp_origin.py`, same commit. A zip promoted without them is back to being tag-derived, and
+nothing in the code will catch that.
+
+🔴 **IN-METRO IS NECESSARY, NEVER SUFFICIENT — scan ORDER is the other half.** See `84104` in the
+refused table below: it is **2 mi** from its hub, closer than `90040` above, and is a DELIVERY
+station. A metro can hold both a hub we ship FROM and customers we ship TO; geography cannot tell
+those apart and position in the scan sequence can. Take the FIRST physical checkpoint, never a
+later one.
+
+🔴 **NEVER key that test on `pickup_date`.** On 13 of the 41 `84104` orders, PP's `pickup_date`
+EQUALS the `84104` scan time to the second — PP derived pickup FROM the destination-side scan. A
+rule asking *"is this facility at or before pickup_date?"* therefore answers ORIGIN for a delivery
+station, because the field it trusts was computed from the very scan it is classifying.
+Self-verifying-denominator class, third instance.
 
 ## Tier 3 — REFUSED and MISSING
 | facility | orders | why refused |
 |---|---:|---|
-| `WILMINGTON, MA 01887` | 125 | FedEx shipper-ACCOUNT address (Woburn HQ), not a facility — gotcha 8 |
-| `SANTA FE SPRINGS, CA 90670` | 34 | only 65% on one hub; FedEx's own origin zip splits 90660/60445 |
-| `SALT LAKE CITY, UT 84104` | 8 | `HUB_ORIGIN_ZIP` PLACEHOLDER for a hub with no volume; these are Anaheim-tagged boxes at a DESTINATION-side facility |
+| `WILMINGTON, MA 01887` | 125 | FedEx shipper-ACCOUNT address, not a facility — gotcha 8. **290 mi from the nearest hub (Swedesboro)**, next 802 — fails geography outright. Also caught by the MA state rule below |
+| `SANTA FE SPRINGS, CA 90670` | 34 | 8 mi from Anaheim, so geography ALONE would promote it — but only 65% on one hub (Anaheim 22 / Chicago 7 / Dallas 5) and FedEx's own origin zip splits 90660/60445. Ambiguous stays refused |
+| `SALT LAKE CITY, UT 84104` | **41** | **2 mi from its hub and still a DELIVERY station** — the counter-example proving in-metro is not sufficient. See below |
+
+### 🔴 `84104` — verified 2026-09-10, and the count was wrong
+
+This row said **8 orders**. The real number is **41** with a genuine `84104` checkpoint. (682 raw
+events mention the string; 250 order/tracking pairs mention it anywhere in the payload — most
+outside checkpoints.) A count nobody re-derived sat in the SSOT for weeks.
+
+Evidence, all 41: Utah destinations, Anaheim-tagged, the `84104` scan ~2 days AFTER the Anaheim
+pickup, consistently **5th of 8–12 in the sequence and never first**. Zero non-Utah destinations.
+The carrier's own page for `#177153` shows it end to end:
+
+```
+LOS ANGELES CA 90040   08/31 3:52pm  "received and is on its way to your OnTrac Facility"   <- ORIGIN
+SALT LAKE CITY 84104   09/02 7:35am  "received by your local OnTrac facility, processing"   <- DELIVERY-side
+LEHI UT 84043          09/02 5:31pm  loaded onto a vehicle
+AMERICAN FORK UT 84003 09/02 8:58pm  delivered
+```
+
+`90040` first, `84104` never first — scan order separates them cleanly, and `90040` resolving to
+Anaheim is exactly the promotion above working as intended.
+
+🔴 **SLC is not a destination we ship to — it is a waypoint.** Kurt: *"we HAVE NEVER SHIPPED INTO
+SLC."* Correct: this box delivered to American Fork. Describing `84104` as a "delivery station"
+without that distinction reads as a destination and sends the next reader hunting a cohort that
+does not exist.
+
+### 🔴 NO_HUB_STATES — the class rule (Kurt 2026-09-10: "any MA is just wrong")
+
+A scan in a state that has never held a hub can never be an origin, **whatever the zip**. Hubs live
+in CA, TX, TN, NJ, IL, and IN (Indianapolis, closed). `NO_HUB_STATES = {"MA"}`.
+
+Per-zip refusal is whack-a-mole: it catches a bad address only AFTER it appears at volume and
+someone hand-adds it. FedEx stamps its synthetic pickup with whatever office address is on the
+account, so the next one is a different MA zip nothing in the refused list knows about.
+
+- **Order matters: the state rule runs AFTER the per-zip refusals.** Both refuse `01887`, but the
+  zip entry knows WHY (shipper-account stamp) and the state rule only knows MA holds no hub. A
+  precise diagnosis outranks a general one; the UNRESOLVED bucket is only useful if its reasons are
+  specific. The class rule's job is the address not yet seen.
+- 🔴 **Opening a hub in a new state requires updating the hub roster BEFORE shipping from it**, or
+  every one of its origin scans is refused here.
 | 43 OnTrac tail facilities (Denver CO, Phoenix AZ, Milpitas CA, Lockbourne OH …) | 202 | the payload never carried an injection scan — its first physical scan is the DESTINATION-local facility. Not a hub; correctly MISSING |
 | no physical scan | 2 | never-picked-up class; absence is the answer |
 
