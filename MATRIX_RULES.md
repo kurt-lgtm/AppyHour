@@ -205,6 +205,14 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
     Shopify, so the matrix rows generated from Shopify carry stale/too-few items for them; the old
     `merge_gift_xlsx` skipped any gift OrderID already in the matrix as a "duplicate" — which kept
     exactly the stale rows the weekly `*_vFGR.xlsx` (Access_LIVE format, Downloads) exists to fix.
+    **Routing input clarification, Kurt 2026-09-10:** Shopify order numbers ending in A
+    are excluded before matrix validation and routing/prewarm work, with a short visible
+    dropped-order message; the remaining cohort continues. `#182723A` stopped 1,807 orders
+    at the numeric-ID check despite 7,930/7,930 warm lanes. Use
+    `appyhour_lib.routing_scope` for both readers. Do not strip A, rename the order, alter
+    Shopify, or add its quantities to the parent during this exclusion. Numeric gift
+    orders remain eligible; this is not an exclusion based on a gift tag. The vFGR's
+    existing quantity-fold behavior below is a separate input contract.
     Semantics, in order:
     (a) **A-suffix twin fold FIRST** (Simple Bundles "Associated Order", e.g. `164878A`): when the
         vFGR lists parent AND twin as separate rows, SUM both rows' product cells onto the parent

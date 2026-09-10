@@ -1654,6 +1654,8 @@ def _shopify_graphql_matrix(base: str, headers: dict, query: str, variables: dic
 def _fetch_orders_graphql(tag: str, shop_url: str, headers: dict) -> list[dict]:
     """Fetch all open, unfulfilled Shopify orders matching a tag via GraphQL."""
     import time
+    from appyhour_lib.routing_scope import is_gift_redemption_twin, report_dropped_gifts
+    dropped = []
 
     q = f"tag:{tag} status:open fulfillment_status:unfulfilled"
     cursor = None
@@ -1667,6 +1669,9 @@ def _fetch_orders_graphql(tag: str, shop_url: str, headers: dict) -> list[dict]:
         order_conn = data["orders"]
         for edge in order_conn["edges"]:
             order = edge["node"]
+            if is_gift_redemption_twin(order.get("name")):
+                dropped.append(order.get("name"))
+                continue
             line_items = order["lineItems"]
             if line_items["pageInfo"]["hasNextPage"]:
                 extra = []
@@ -1690,6 +1695,7 @@ def _fetch_orders_graphql(tag: str, shop_url: str, headers: dict) -> list[dict]:
         cursor = order_conn["pageInfo"]["endCursor"]
 
     elapsed = time.perf_counter() - start
+    report_dropped_gifts(dropped)
     print(f"  GraphQL fetch wall-clock: {elapsed:.1f}s ({len(orders)} orders, {page} pages)")
     return orders
 
@@ -2222,6 +2228,8 @@ def generate_matrix_xlsx(
     print(f"  Fetching orders with tag '{rmfg_tag}'...")
     shopify_orders = _fetch_orders_graphql(rmfg_tag, base, headers)
     print(f"  {len(shopify_orders)} orders fetched")
+    from appyhour_lib.routing_scope import without_gift_redemption_twins
+    shopify_orders = without_gift_redemption_twins(shopify_orders)
 
     if not shopify_orders:
         print(f"  {_RED}No orders found for tag {rmfg_tag}{_RESET}")
