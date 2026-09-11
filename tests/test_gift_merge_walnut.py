@@ -13,9 +13,19 @@
 from __future__ import annotations
 
 import openpyxl
+import pytest
 
 import matrix_commander as mc
 from matrix_commander import NAME_TO_SKU
+
+
+@pytest.fixture(autouse=True)
+def _authority_from_the_mirror(monkeypatch):
+    """merge_gift_xlsx gates headers on the MFG authority (the DO table). Creds-free here: bind
+    the local read-mirror as the EXPLICIT --authority override (the one test seam, rule 21) —
+    real RMFG names, no invented fixture, no database."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(mc, "MFG_AUTHORITY_OVERRIDE", mc.MFG_AUTHORITATIVE_PATH)
 
 WALNUT_COMMA = "AHB (S_REG): Walnut, Honey & Extra Virgin Olive Oil Crackers"
 WALNUT_15B = "AHB (S_REG): Walnut Honey & Extra Virgin Olive Oil Crackers"

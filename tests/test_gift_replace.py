@@ -18,6 +18,16 @@ import pytest
 import matrix_commander as mc
 from matrix_commander import GiftMergeError
 
+
+@pytest.fixture(autouse=True)
+def _authority_from_the_mirror(monkeypatch):
+    """merge_gift_xlsx gates headers on the MFG authority (the DO table). Creds-free here: bind
+    the local read-mirror as the EXPLICIT --authority override (the one test seam, rule 21) —
+    real RMFG names, no invented fixture, no database."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(mc, "MFG_AUTHORITY_OVERRIDE", mc.MFG_AUTHORITATIVE_PATH)
+
+
 META = ["OrderID", "Name", "Total", "Zip", "Tags", "Notes", "ProductionDay"]
 P1 = "AHB (S_REG): Montasio"
 P2 = "AHB (S_REG): Barista"

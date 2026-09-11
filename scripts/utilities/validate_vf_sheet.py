@@ -8,7 +8,7 @@ fabrication class) by checking every product header against the authoritative
 meal-type export.
 
 Authorities (never fabricated here):
-  - MFG names  -> AppyHour/mfg_names_authoritative.csv (via matrix_commander loader)
+  - MFG names  -> DO table mfg_names_authoritative (via matrix_commander.load_mfg_names; never the csv mirror)
   - Structure/PO-box/syntax rules -> VF_SHEET_RULES.md (extract of Kori QC)
 Full routing-tag allowlist/combo validation stays in Kori (ROUTING_TAG_SET +
 is_approved_bang_tag + validate_routing_tag_combo live in the heavy webview module);
