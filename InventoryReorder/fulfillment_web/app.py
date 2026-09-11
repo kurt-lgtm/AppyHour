@@ -4508,14 +4508,14 @@ def swap_ship_tags():
 
     tag_type = (request.args.get("type") or "ship").lower()
 
-    s = _s()
-    store = s.get("shopify_store_url", "")
-    token = s.get("shopify_access_token", "")
-    if not store or not token:
+    # Canonical auth (appyhour_lib.credentials): env vars first, these same settings as the
+    # fallback, same 2026-04 default. Proven byte-identical to the hand-rolled form it replaced.
+    from appyhour_lib.credentials import get_shopify_auth, get_shopify_credentials
+    try:
+        store, token = get_shopify_credentials()
+        base, headers = get_shopify_auth()
+    except RuntimeError:
         return jsonify({"error": "Shopify credentials not configured"}), 400
-
-    base = f"https://{store}.myshopify.com/admin/api/2026-04"
-    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
 
     tags = set()
     url = f"{base}/orders.json"
