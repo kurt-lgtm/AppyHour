@@ -128,6 +128,9 @@ def main(argv=None):
                     help="the vF. OPTIONAL: only check 2 (sheet vs Shopify) and the swap "
                          "caps read it. Without it every order-side check still runs, "
                          "fetching the cohort BY TAG.")
+    ap.add_argument("--have-is-available", action="store_true",
+                    help="the HAVE file is Shopify AVAILABLE (already net of committed "
+                         "orders): do NOT subtract this run's demand again")
     ap.add_argument("--have", metavar="PATH",
                     help="this week's declared HAVE export (.csv/.xlsx) for check 7's "
                          "swap caps -- REQUIRED, no baked-in fallback (a dated literal "
@@ -257,7 +260,8 @@ def main(argv=None):
 
     print("\n-- check 7 repeats --")
     repeats, sat, per_sku, clears, swap_rows, _ = check7_run(orders, con, sheet=sheet,
-                                                             have_path=a.have, tag=a.tag)
+                                                             have_path=a.have, tag=a.tag,
+                                                             have_is_available=a.have_is_available)
     print(f"    flagged {len(repeats)}   swap candidates {len(swap_rows)}")
 
     kept, per = [], collections.Counter()

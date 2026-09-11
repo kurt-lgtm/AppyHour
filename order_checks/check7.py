@@ -325,7 +325,7 @@ def sheet_demand(sheet):
     return tot
 
 
-def run(orders, con, verbose=True, sheet=None, have_path=None, tag=None):
+def run(orders, con, verbose=True, sheet=None, have_path=None, tag=None, have_is_available=False):
     """-> (repeats, saturation, per_sku, swaps)."""
     first_seen = sku_first_seen(con)
     # candidate pool = free child SKUs circulating in this run
@@ -337,6 +337,11 @@ def run(orders, con, verbose=True, sheet=None, have_path=None, tag=None):
                 in_run[s] += li["currentQuantity"]
     # but STOCK is drawn against the sheet's demand, which is the larger number
     committed = sheet_demand(sheet) if sheet else in_run
+    # 🔴 Shopify AVAILABLE already nets out every unfulfilled order's allocation, so this
+    # run's demand is IN it. remaining = HAVE - committed would subtract it twice and
+    # starve the pool (Kurt 2026-09-11: "available is correct on shopify").
+    if have_is_available:
+        committed = collections.Counter()
 
     repeats, skipped = [], collections.Counter()
     for oid, o in sorted(orders.items()):
