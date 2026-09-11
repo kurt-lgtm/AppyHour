@@ -211,7 +211,7 @@ python scripts/utilities/resolve_matrix_dupes.py --src <export.csv> --out <…_R
 
 | Flag | Rule | Behaviour |
 |------|------|-----------|
-| `--fresh` | 2 | re-pull mutable `box`/`removed` for every order (default reuses the cache — a stale cache hid dupes) |
+| `--fresh` | 2 | re-pull mutable `box`/`removed` for every order, in batches (default reuses the cache and batch-fetches only misses — a stale cache hid dupes) |
 | `--floor SKU=N` | 6 | keep only enough source adds that live − kept ≥ N; overflow force-swapped (`FLOOR`); SKU never picked as a sub |
 | `--cap SKU=N` / `--zero SKU` | 6 | keep the first N add-rows / none; overflow swapped (`CAP` / `ZERO`); never picked |
 | `--min-avail N` (30) | 6 | a pool SKU with live − drawn-this-run ≤ N is skipped; the pre-resolve report lists every SKU the sheet pushes below N |
@@ -224,7 +224,30 @@ Outputs (rule 9): `--out` is never overwritten — an existing file versions to 
 the bottom, ASCII only). Swap targets carry the $0 product's **handle** (not its title) in
 `Line: Product Handle` — Matrixify resolves by handle and the old code wrote the title. Stock =
 `inventoryQuantity` summed over the SKU's $0 variants, which must all share ONE product (rule 4).
-`fetch_prod`/`fetch_state` are the only Shopify reads; both are monkeypatched in tests.
+
+**Shopify reads are BATCHED (2026-09-11 — the 486-order 09-11 sheet took ~7 min at one GraphQL
+call per order + one per customer + one per SKU; batched it runs in ~21 s, 0.5 s of it products).**
+All reads go through `gql` (READ-ONLY, throttle-aware) via two seams, both monkeypatched in tests:
+- `fetch_states(orders) -> (states, missing)` — `orders(first:50)` with OR-joined `name:#N` terms
+  (40 per call, paginated), keyed back by the EXACT name so a fuzzy search hit never stands in for
+  another order. Customer history = one **aliased** `orders(first:20, email:X)` field per customer
+  (15 per request). 🔴 Never collapse history into one OR-joined `email:` search: it pages the union
+  and shifts each customer's 20-order `ever` window, silently changing which substitutes are blocked.
+  Box/removed semantics unchanged (rule 2/3). `--fresh` still re-pulls EVERY order (rule 2);
+  without it only cache misses are fetched (`OrderStateCache.peek` / `put_many`).
+- **Missing orders are REPORTED, never dropped:** an order Shopify doesn't return keeps its rows,
+  resolves against an empty state, and is printed as `MISSING:` + listed in the swap-log header.
+- `fetch_prods(skus)` — `productVariants(first:100)` with OR-joined `sku:X` terms (40 per call,
+  fully paginated), regrouped by EXACT sku, then the rule 4 check (`NON_INBOX_PRODUCTS` excluded,
+  one $0 product or `None`). The CLI prefetches every SKU it can touch (sheet child_skus + every
+  pool member + every PR-CJAM pair); `fetch_prod` stays as the per-SKU fallback.
+- Throttling: `THROTTLED`, 429 and 5xx retry after `(requestedQueryCost − currentlyAvailable) /
+  restoreRate`; after a success, pause only if the bucket can't cover one more query of that shape;
+  any other GraphQL error raises `ShopifyReadError`. 🔴 Don't raise the proactive-pause bar to
+  "WORKERS × cost": cost still in flight looks spent, so every call stalls (165 s on the 09-11
+  sheet before the fix). Up to `WORKERS` (4) reads run concurrently.
+- Equivalence check (2026-09-11, live, read-only, while the sheet was mid-import): for 380/380
+  orders whose state held steady, old per-order reads == batched reads; 46/46 steady SKUs identical.
 
 Order state cache: `scripts/utilities/order_state_cache.py` (`_outputs/cache/matrix_order_state.db`;
 `--cache-db` points elsewhere). Phase-A detector: `scripts/utilities/check_import_dupes.py`. Older

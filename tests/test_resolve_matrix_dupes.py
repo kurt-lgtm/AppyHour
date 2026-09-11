@@ -330,10 +330,17 @@ def test_rule6_source_adds_are_committed_stock_so_subs_never_oversell():
 
 
 # ── CLI end-to-end (no network) ──────────────────────────────────────────────────────────────
+def _batch_seams(monkeypatch, states: dict, prod, missing=()):
+    """Patch the CLI's batched Shopify seams (fetch_states / fetch_prods) with injected state."""
+    monkeypatch.setattr(rmd, "fetch_states", lambda orders: (
+        {o: states.get(o, _state()) for o in orders}, [o for o in orders if o in set(missing)]))
+    monkeypatch.setattr(rmd, "fetch_prods", lambda skus: {s: prod(s) for s in skus})
+    monkeypatch.setattr(rmd, "fetch_prod", lambda s: pytest.fail(f"per-SKU fetch after prefetch: {s}"))
+
+
 def test_cli_end_to_end(tmp_path, monkeypatch, capsys):
     states = {"200003": _state(box=["CH-FONT"])}
-    monkeypatch.setattr(rmd, "fetch_state", lambda o: states.get(o, _state()))
-    monkeypatch.setattr(rmd, "fetch_prod", lambda s: rmd.Prod(f"pid-{s}", s.lower(), 31 if s == "CH-OGK" else 100))
+    _batch_seams(monkeypatch, states, lambda s: rmd.Prod(f"pid-{s}", s.lower(), 31 if s == "CH-OGK" else 100))
     out = tmp_path / "r_RESOLVED.csv"
     rc = rmd.main(["--src", str(FIX / "add_sheet.csv"), "--out", str(out), "--fresh",
                    "--cache-db", str(tmp_path / "c.db"), "--floor", "CH-SHADOW=10", "--zero", "CH-OGK"])
@@ -346,9 +353,197 @@ def test_cli_end_to_end(tmp_path, monkeypatch, capsys):
 
 
 def test_cli_aborts_on_already_imported(tmp_path, monkeypatch):
-    monkeypatch.setattr(rmd, "fetch_state", lambda o: _state(box=["AC-FCROSE", "CH-FONT", "MT-CAPO"]))
-    monkeypatch.setattr(rmd, "fetch_prod", lambda s: rmd.Prod("p", s, 100))
+    live = _state(box=["AC-FCROSE", "CH-FONT", "MT-CAPO"])
+    _batch_seams(monkeypatch, {"300001": live, "300002": live}, lambda s: rmd.Prod("p", s, 100))
     with pytest.raises(rmd.AlreadyImported):
         rmd.main(["--src", str(FIX / "already_imported.csv"), "--out", str(tmp_path / "o.csv"),
                   "--cache-db", str(tmp_path / "c.db")])
     assert not (tmp_path / "o.csv").exists()
+
+
+# ── Batched Shopify reads (speed-up 2026-09-11) — a fake store answers the real query shapes ─
+_REAL_GQL = rmd.gql   # captured before the autouse fixture swaps it for `boom`
+
+
+def _li(sku, qty=1, cur: int | None = 1):
+    return {"sku": sku, "quantity": qty, "currentQuantity": cur}
+
+
+class FakeStore:
+    """Answers ORDERS / aliased HIST / V queries from dicts; records every call. `page` forces pagination."""
+
+    def __init__(self, orders=None, history=None, variants=None, page=50):
+        self.orders = orders or {}        # "#N" -> {"email":..., "lines":[...]}
+        self.history = history or {}      # email -> [[lines], [lines], ...]
+        self.variants = variants or []    # variant nodes
+        self.page, self.calls = page, []
+
+    def _paged(self, nodes, after):
+        start = int(after or 0)
+        chunk = nodes[start:start + self.page]
+        more = start + self.page < len(nodes)
+        return {"pageInfo": {"hasNextPage": more, "endCursor": str(start + self.page) if more else None},
+                "edges": [{"node": n} for n in chunk]}
+
+    def __call__(self, q, v):
+        self.calls.append((q, dict(v)))
+        if "productVariants" in q:
+            want = {t.split(":", 1)[1] for t in v["q"].split(" OR ")}
+            hits = [n for n in self.variants if any(n["sku"].startswith(w) for w in want)]   # search is fuzzy
+            return {"productVariants": self._paged(hits, v.get("after"))}
+        if "$q0" in q:                    # aliased history
+            return {k.replace("q", "h"): {"edges": [{"node": {"lineItems": {"nodes": ls}}}
+                                                    for ls in self.history.get(em.split(":", 1)[1], [])[:20]]}
+                    for k, em in v.items()}
+        names = [t.split(":", 1)[1] for t in v["q"].split(" OR ")]
+        hits = [{"name": nm, "customer": {"email": o["email"]} if o.get("email") else None,
+                 "lineItems": {"nodes": o["lines"]}}
+                for nm, o in self.orders.items() if any(nm.startswith(w) for w in names)]      # fuzzy prefix
+        return {"orders": self._paged(hits, v.get("after"))}
+
+
+def test_batch_orders_chunk_boundaries(monkeypatch):
+    store = FakeStore(orders={f"#{100000 + i}": {"email": None, "lines": [_li("CH-X")]} for i in range(81)})
+    monkeypatch.setattr(rmd, "gql", store)
+    monkeypatch.setattr(rmd, "ORDER_CHUNK", 40)
+    states, missing = rmd.fetch_states([str(100000 + i) for i in range(81)])
+    sizes = sorted(len(v["q"].split(" OR ")) for q, v in store.calls if "orders(first:50" in q)
+    assert sizes == [1, 40, 40] and missing == [] and len(states) == 81   # 81 = 40 + 40 + 1
+
+
+def test_batch_orders_follow_pagination(monkeypatch):
+    store = FakeStore(orders={f"#{200 + i}": {"email": None, "lines": [_li("CH-X")]} for i in range(7)}, page=3)
+    monkeypatch.setattr(rmd, "gql", store)
+    states, missing = rmd.fetch_states([str(200 + i) for i in range(7)])
+    assert len(states) == 7 and not missing and len(store.calls) == 3    # pages of 3, 3, 1
+
+
+def test_batch_missing_orders_reported_not_dropped(monkeypatch, tmp_path, capsys):
+    store = FakeStore(orders={"#200001": {"email": None, "lines": [_li("MT-SAL")]},
+                              "#2000010": {"email": None, "lines": [_li("CH-FONT")]}})   # fuzzy hit for #200001x
+    monkeypatch.setattr(rmd, "gql", store)
+    states, missing = rmd.fetch_states(["200001", "200002"])
+    assert missing == ["200002"] and states["200002"] == rmd._empty_state()
+    assert states["200001"]["box"] == ["MT-SAL"]                         # exact name, not the fuzzy #2000010
+    # CLI: the missing order's rows stay in the output and it is named in stdout + swap log
+    _batch_seams(monkeypatch, {}, lambda s: rmd.Prod(f"pid-{s}", s.lower(), 100), missing=["200004"])
+    out = tmp_path / "m_RESOLVED.csv"
+    assert rmd.main(["--src", str(FIX / "add_sheet.csv"), "--out", str(out), "--fresh",
+                     "--cache-db", str(tmp_path / "c.db")]) == 0
+    assert "MISSING: 1 order(s)" in capsys.readouterr().out
+    with open(out, encoding="utf-8-sig", newline="") as f:
+        assert sum(1 for r in csv.DictReader(f) if r["Name"] == "#200004") == 2
+    assert "#200004" in rmd.swaplog_path(out).read_text(encoding="utf-8")
+
+
+def test_batch_state_semantics_box_removed_ever(monkeypatch):
+    store = FakeStore(
+        orders={"#500": {"email": "a@x.com", "lines": [_li("CH-A", 1, 1), _li("AC-FCROSE", 1, 0), _li("MT-Z", 0, 0),
+                                                       _li("", 1, 1)]},
+                "#501": {"email": "a@x.com", "lines": [_li("CH-B")]}},
+        history={"a@x.com": [[_li("CH-OLD", 1, 1), _li("CH-REFUND", 1, 0)], [_li("MT-OLD", 2, None)]]})
+    monkeypatch.setattr(rmd, "gql", store)
+    states, _ = rmd.fetch_states(["500", "501"])
+    s = states["500"]
+    assert s["box"] == ["CH-A"] and s["removed"] == ["AC-FCROSE"]        # currentQuantity>0 / q>0 & cur==0
+    assert s["ever"] == ["CH-A", "CH-OLD", "MT-OLD"] and s["email"] == "a@x.com"
+    assert sum(1 for q, _ in store.calls if "$q0" in q) == 1              # one customer -> one history read
+
+
+def test_batch_history_alias_chunks(monkeypatch):
+    emails = [f"c{i}@x.com" for i in range(16)]
+    store = FakeStore(orders={f"#{900 + i}": {"email": em, "lines": [_li("CH-A")]} for i, em in enumerate(emails)},
+                      history={em: [[_li(f"CH-H{i}")]] for i, em in enumerate(emails)})
+    monkeypatch.setattr(rmd, "gql", store)
+    monkeypatch.setattr(rmd, "HIST_ALIASES", 15)
+    states, _ = rmd.fetch_states([str(900 + i) for i in range(16)])
+    assert sorted(len(v) for q, v in store.calls if "$q0" in q) == [1, 15]
+    assert states["915"]["ever"] == ["CH-A", "CH-H15"]                   # the 16th customer, 2nd request
+
+
+def test_batch_prods_chunks_exact_sku_and_rules(monkeypatch):
+    def var(sku, price, qty, pid, handle):
+        return {"sku": sku, "price": price, "inventoryQuantity": qty, "availableForSale": True,
+                "product": {"id": f"gid://shopify/Product/{pid}", "title": handle, "handle": handle}}
+    store = FakeStore(variants=[
+        var("AC-TOK", "5.50", 999, 1, "toketti-paid"), var("AC-TOK", "0.00", 41, 2, "toketti"),
+        var("AC-TOKX", "0.00", 77, 3, "other"),                                        # fuzzy hit, not AC-TOK
+        var("AC-PRPE", "0.00", 224, 4, "prpe"), var("AC-PRPE", "0.00", 5, 10384502784280, "free-vip-gift"),
+        var("CH-LOU", "0", 5, 5, "a"), var("CH-LOU", "0", 5, 6, "b"),
+    ] + [var(f"MT-S{i:02d}", "0", 50, 100 + i, f"s{i}") for i in range(40)], page=10)
+    monkeypatch.setattr(rmd, "gql", store)
+    monkeypatch.setattr(rmd, "SKU_CHUNK", 40)
+    skus = ["AC-TOK", "AC-PRPE", "CH-LOU", "CH-NONE"] + [f"MT-S{i:02d}" for i in range(40)]
+    got = rmd.fetch_prods(skus)
+    assert set(got) == set(skus)
+    assert got["AC-TOK"] == rmd.Prod("2", "toketti", 41)                 # $0 variant, exact sku only
+    assert got["AC-PRPE"] == rmd.Prod("4", "prpe", 224)                  # free-vip-gift excluded (NON_INBOX)
+    assert got["CH-LOU"] is None and got["CH-NONE"] is None              # two $0 products / no variant
+    assert got["MT-S39"] == rmd.Prod("139", "s39", 50)
+    assert sorted({len(v["q"].split(" OR ")) for q, v in store.calls}) == [4, 40]   # 44 skus -> 40 + 4
+
+
+def test_inventory_prefetch_means_no_per_sku_reads():
+    calls = []
+    inv = rmd.Inventory(lambda s: pytest.fail(f"per-SKU read {s}"))
+    inv.prefetch(["CH-A", "CH-B", "CH-A"], lambda ss: calls.append(list(ss)) or {s: rmd.Prod(s, s, 50) for s in ss})
+    assert inv.live("CH-A") == 50 and inv.can_draw("CH-B") and calls == [["CH-A", "CH-B"]]
+
+
+def test_prefetch_skus_covers_sheet_pools_and_cjam():
+    _, rows = _rows()
+    got = set(rmd.prefetch_skus(rows, rmd.DEFAULT_CJAM_PAIRS))
+    assert {r["child_sku"] for r in rows} <= got
+    assert {s for p in rmd.POOLS.values() for s in p} <= got and {"CH-SOT", "AC-MFJ", "CH-MONT", "AC-SCJ"} <= got
+
+
+def test_load_states_fresh_refetches_all_cached_reuses(tmp_path, monkeypatch):
+    cache = rmd.OrderStateCache(tmp_path / "c.db")
+    cache.put_many({"1": _state(box=["STALE"])})
+    seen = []
+    monkeypatch.setattr(rmd, "fetch_states", lambda os_: (seen.append(list(os_)) or
+                                                          ({o: _state(box=["NEW"]) for o in os_}, [])))
+    st, _ = rmd.load_states(["1", "2"], cache, fresh=False)
+    assert seen == [["2"]] and st["1"]["box"] == ["STALE"]               # only the miss is fetched
+    st, _ = rmd.load_states(["1", "2"], cache, fresh=True)
+    assert seen[-1] == ["1", "2"] and st["1"]["box"] == ["NEW"]          # rule 2: --fresh re-pulls EVERY order
+    assert cache.peek("1")["box"] == ["NEW"]
+
+
+# ── Cost throttling ──────────────────────────────────────────────────────────────────────────
+def _cost(avail, requested=100, restore=200.0):
+    return {"requestedQueryCost": requested, "actualQueryCost": 10,
+            "throttleStatus": {"maximumAvailable": 4000.0, "currentlyAvailable": avail, "restoreRate": restore}}
+
+
+def test_throttled_backs_off_then_retries(monkeypatch):
+    replies = [{"errors": [{"message": "Throttled", "extensions": {"code": "THROTTLED"}}],
+                "extensions": {"cost": _cost(avail=20, requested=420)}},
+               {"data": {"ok": 1}, "extensions": {"cost": _cost(avail=3900)}}]
+    sleeps = []
+    monkeypatch.setattr(rmd, "_post", lambda q, v: replies.pop(0))
+    monkeypatch.setattr(rmd.time, "sleep", sleeps.append)
+    assert _REAL_GQL("q", {}) == {"ok": 1}
+    assert sleeps == [pytest.approx(400 / 200 + 0.25)]                   # waited for the bucket to refill
+
+
+def test_low_bucket_pauses_proactively_and_real_errors_raise(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(rmd.time, "sleep", sleeps.append)
+    monkeypatch.setattr(rmd, "_post", lambda q, v: {"data": {"ok": 1}, "extensions": {"cost": _cost(avail=1000)}})
+    _REAL_GQL("q", {})
+    assert sleeps == []                                                   # bucket covers the next call -> no stall
+    monkeypatch.setattr(rmd, "_post", lambda q, v: {"data": {"ok": 1}, "extensions": {"cost": _cost(avail=60)}})
+    _REAL_GQL("q", {})
+    assert sleeps == [pytest.approx((100 - 60) / 200)]                    # 60 < 100 requested -> wait the deficit
+    monkeypatch.setattr(rmd, "_post", lambda q, v: {"errors": [{"message": "Field 'x' doesn't exist"}]})
+    with pytest.raises(rmd.ShopifyReadError, match="doesn't exist"):
+        _REAL_GQL("q", {})
+
+
+def test_transient_errors_give_up_loudly(monkeypatch):
+    monkeypatch.setattr(rmd.time, "sleep", lambda s: None)
+    monkeypatch.setattr(rmd, "_post", lambda q, v: {"errors": [{"message": "HTTP 502",
+                                                                 "extensions": {"code": "TRANSIENT"}}]})
+    with pytest.raises(rmd.ShopifyReadError, match="gave up"):
+        _REAL_GQL("q", {})

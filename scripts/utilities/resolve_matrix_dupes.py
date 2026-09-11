@@ -25,6 +25,8 @@ What it does (per order, negatives-first):
 
 🔴 READ-ONLY vs Shopify. Writes ONE corrected CSV + one swap log. Never edits an order.
 `--fresh` re-pulls the mutable box/removed state (rule 2 — a stale cache hid dupes).
+Reads are BATCHED (fetch_states / fetch_prods): OR-joined name/sku searches + aliased per-customer
+history, throttle-aware. 09-11 sheet (486 orders): ~7 min per-order -> ~21 s batched (RULES Contract).
 
 Usage:
   python resolve_matrix_dupes.py --src "<add.csv>" --out "<resolved.csv>" [--fresh]
@@ -39,6 +41,7 @@ import io
 import json
 import re
 import sys
+import time
 from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -58,18 +61,93 @@ for _p in (AH, AH / "InventoryReorder" / "fulfillment_web", AH / "scripts" / "ut
 from order_state_cache import OrderStateCache  # noqa: E402
 
 SHOP = "504ac4"
+API_VERSION = "2026-04"   # same as shopify_swap._gql
 SETTINGS = AH / "InventoryReorder" / "dist" / "inventory_reorder_settings.json"
 _TOKEN: list[str] = []
+_SESSION: list = []
+
+# Batch sizes (probed live 2026-09-11: 40 OR'd names = 93 requested cost, one aliased 20-order history
+# = 62, 40 OR'd SKUs = 20; single-query ceiling is 1000, bucket 4000 restoring 200/s).
+ORDER_CHUNK = 40      # name:#A OR name:#B ... per orders(first:50) call
+HIST_ALIASES = 15     # aliased orders(first:20, email:X) per request (15 x 62 = 930 < 1000)
+SKU_CHUNK = 40        # sku:A OR sku:B ... per productVariants(first:100) call
+WORKERS = 4           # concurrent READ requests; throttle-aware backoff below keeps the bucket positive
+MAX_ATTEMPTS = 8
 
 
-def gql(query: str, variables: dict) -> dict:
-    """Shopify Admin GraphQL — lazy import so tests can monkeypatch this symbol. READ-ONLY queries only."""
-    from shopify_swap import _gql  # noqa: PLC0415
+class ShopifyReadError(RuntimeError):
+    """A READ query failed for a reason other than throttling / a transient HTTP error."""
+
+
+def _post(query: str, variables: dict) -> dict:
+    """Raw Admin GraphQL POST -> the full JSON body (data + errors + extensions.cost)."""
+    import requests  # noqa: PLC0415
 
     if not _TOKEN:
         with open(SETTINGS, encoding="utf-8") as f:
             _TOKEN.append(json.load(f)["shopify_access_token"])
-    return _gql(SHOP, _TOKEN[0], query, variables)
+    if not _SESSION:
+        _SESSION.append(requests.Session())
+    url = f"https://{SHOP}.myshopify.com/admin/api/{API_VERSION}/graphql.json"
+    hdr = {"X-Shopify-Access-Token": _TOKEN[0], "Content-Type": "application/json"}
+    resp = _SESSION[0].post(url, headers=hdr, json={"query": query, "variables": variables}, timeout=60)
+    if resp.status_code == 429 or resp.status_code >= 500:
+        return {"errors": [{"message": f"HTTP {resp.status_code}", "extensions": {"code": "TRANSIENT"}}]}
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _throttle_wait(cost: dict | None, attempt: int) -> float:
+    """Seconds to wait so the bucket holds the requested cost again (THROTTLED), else exp. backoff."""
+    ts = (cost or {}).get("throttleStatus") or {}
+    need = float((cost or {}).get("requestedQueryCost") or 0) - float(ts.get("currentlyAvailable") or 0)
+    rate = float(ts.get("restoreRate") or 0)
+    if need > 0 and rate > 0:
+        return need / rate + 0.25
+    return min(2.0 * (attempt + 1), 10.0)
+
+
+def gql(query: str, variables: dict) -> dict:
+    """Shopify Admin GraphQL, READ-ONLY queries only -> `data`. Tests monkeypatch this symbol.
+    Honours cost throttling: THROTTLED / 429 / 5xx retry after the bucket refills; when the
+    bucket runs low after a success, pause before the next call instead of hitting THROTTLED."""
+    j: dict = {}
+    for attempt in range(MAX_ATTEMPTS):
+        try:
+            j = _post(query, variables)
+        except OSError as e:  # connection reset / timeout (requests' errors subclass OSError)
+            j = {"errors": [{"message": str(e), "extensions": {"code": "TRANSIENT"}}]}
+        cost = (j.get("extensions") or {}).get("cost")
+        errs = j.get("errors") or []
+        if any((e.get("extensions") or {}).get("code") in ("THROTTLED", "TRANSIENT") for e in errs):
+            time.sleep(_throttle_wait(cost, attempt))
+            continue
+        if errs:
+            raise ShopifyReadError(f"GraphQL errors: {json.dumps(errs)[:800]}")
+        # Proactive pause ONLY when the bucket can't cover one more query of this shape. A higher bar
+        # (e.g. WORKERS x cost) mis-reads the cost of requests still in flight as spent and stalls
+        # every call -- it cost 165 s on the 09-11 sheet before this was fixed.
+        ts = (cost or {}).get("throttleStatus") or {}
+        need = float((cost or {}).get("requestedQueryCost") or 0)
+        avail, rate = float(ts.get("currentlyAvailable") or 0), float(ts.get("restoreRate") or 0)
+        if ts and rate > 0 and avail < need:
+            time.sleep((need - avail) / rate)
+        return j["data"]
+    raise ShopifyReadError(f"gave up after {MAX_ATTEMPTS} attempts: {json.dumps(j)[:800]}")
+
+
+def _chunks(seq: list, n: int) -> list[list]:
+    return [seq[i:i + n] for i in range(0, len(seq), n)]
+
+
+def _pmap(fn, items: list) -> list:
+    """Run READ calls concurrently (WORKERS threads); results in input order; first error propagates."""
+    if len(items) <= 1:
+        return [fn(x) for x in items]
+    from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
+
+    with ThreadPoolExecutor(max_workers=WORKERS) as ex:
+        return list(ex.map(fn, items))
 
 
 norm = lambda v: re.sub(r"\D", "", v or "")  # noqa: E731
@@ -147,12 +225,16 @@ DEFAULT_CJAM_PAIRS = OrderedDict([("CH-SOT", "AC-MFJ"), ("CH-MONT", "AC-SCJ")])
 DIETARY_RX = re.compile(r"^AHB-[ML]?CUST-(NN|CO|NC)(RS|FS)-", re.I)
 DIETARY_SLOT = {"NC": "cracker", "CO": "meat", "NN": "accompaniment"}  # NN: nuts live in accompaniments
 
-ONE = ('query($q:String!){orders(first:1,query:$q){edges{node{id customer{email} '
-       'lineItems(first:100){nodes{sku currentQuantity quantity}}}}}}')
-HIST = ('query($q:String!){orders(first:20,query:$q){edges{node{lineItems(first:100)'
-        '{nodes{sku currentQuantity quantity}}}}}}')
-V = ('query($q:String!){productVariants(first:20,query:$q){edges{node{sku price availableForSale '
-     'inventoryQuantity product{id title handle}}}}}')
+# Batched READ queries. ORDERS: OR-joined `name:#N` terms, keyed back by EXACT name. HIST: one
+# aliased orders(first:20, email:X) field per customer -- aliases, not an OR-joined email search, so
+# each customer keeps exactly the 20-order history window the per-order fetch used (an OR search
+# pages the union and would shift the window for customers with long histories). V: OR-joined
+# `sku:X` terms, fully paginated, filtered to the EXACT sku.
+ORDERS = ('query($q:String!,$after:String){orders(first:50,query:$q,after:$after){pageInfo{hasNextPage endCursor} '
+          'edges{node{name customer{email} lineItems(first:100){nodes{sku currentQuantity quantity}}}}}}')
+HIST_FIELD = 'h{i}:orders(first:20,query:$q{i}){{edges{{node{{lineItems(first:100){{nodes{{sku currentQuantity quantity}}}}}}}}}}'
+V = ('query($q:String!,$after:String){productVariants(first:100,query:$q,after:$after){pageInfo{hasNextPage endCursor} '
+     'edges{node{sku price availableForSale inventoryQuantity product{id title handle}}}}}')
 
 
 @dataclass(frozen=True)
@@ -173,13 +255,8 @@ def _skus(node) -> set[str]:
     return o
 
 
-def fetch_state(order: str) -> dict:
-    """Live order state: box (currentQuantity>0), removed (quantity>0 & currentQuantity==0), ever."""
-    d = gql(ONE, {"q": f"name:#{order}"})["orders"]["edges"]
-    if not d:
-        return {"box": [], "removed": [], "ever": [], "last": None, "email": None}
-    node = d[0]["node"]
-    em = (node.get("customer") or {}).get("email")
+def _box_removed(node) -> tuple[set[str], set[str]]:
+    """Rule 2/3: box = currentQuantity>0; removed = quantity>0 & currentQuantity==0."""
     box, rem = set(), set()
     for n in node["lineItems"]["nodes"]:
         s = (n.get("sku") or "").strip()
@@ -191,11 +268,81 @@ def fetch_state(order: str) -> dict:
             box.add(s)
         elif q > 0:
             rem.add(s)
-    ever = set(box)
-    if em:
-        for e in gql(HIST, {"q": f"email:{em}"})["orders"]["edges"]:
-            ever |= _skus(e["node"])
-    return {"box": sorted(box), "removed": sorted(rem), "ever": sorted(ever), "last": None, "email": em}
+    return box, rem
+
+
+def _paged(query: str, root: str, q: str) -> list[dict]:
+    """Every node of a paginated `root` connection for search string `q`."""
+    out, after = [], None
+    while True:
+        d = gql(query, {"q": q, "after": after})[root]
+        out.extend(e["node"] for e in d["edges"])
+        pi = d.get("pageInfo") or {}
+        if not pi.get("hasNextPage"):
+            return out
+        after = pi["endCursor"]
+
+
+def fetch_orders(orders: list[str]) -> dict[str, dict]:
+    """{order_digits: node} for every order found -- one OR-joined name search per ORDER_CHUNK.
+    Keyed by EXACT name, so a fuzzy search hit can never stand in for a missing order."""
+    want = set(orders)
+
+    def one(chunk: list[str]) -> list[dict]:
+        return _paged(ORDERS, "orders", " OR ".join(f"name:#{o}" for o in chunk))
+
+    found = {}
+    for nodes in _pmap(one, _chunks(list(orders), ORDER_CHUNK)):
+        for n in nodes:
+            o = (n.get("name") or "").lstrip("#")
+            if o in want:
+                found[o] = n
+    return found
+
+
+def fetch_histories(emails: list[str]) -> dict[str, set[str]]:
+    """{email: skus ever on the customer's orders} -- HIST_ALIASES aliased 20-order windows per request."""
+    def one(chunk: list[str]) -> dict[str, set[str]]:
+        q = ("query(" + ",".join(f"$q{i}:String!" for i in range(len(chunk))) + "){"
+             + " ".join(HIST_FIELD.format(i=i) for i in range(len(chunk))) + "}")
+        d = gql(q, {f"q{i}": f"email:{em}" for i, em in enumerate(chunk)})
+        return {em: set().union(*(_skus(e["node"]) for e in d[f"h{i}"]["edges"])) for i, em in enumerate(chunk)}
+
+    out: dict[str, set[str]] = {}
+    for part in _pmap(one, _chunks(list(emails), HIST_ALIASES)):
+        out.update(part)
+    return out
+
+
+def _empty_state() -> dict:
+    return {"box": [], "removed": [], "ever": [], "last": None, "email": None}
+
+
+def fetch_states(orders: list[str]) -> tuple[dict[str, dict], list[str]]:
+    """Live state for EVERY requested order: ({order: {box, removed, ever, last, email}}, missing).
+    An order Shopify doesn't return is REPORTED in `missing` and gets the empty state -- its rows
+    are never dropped (rule 1)."""
+    orders = list(OrderedDict.fromkeys(orders))
+    nodes = fetch_orders(orders)
+    emails = sorted({em for n in nodes.values() if (em := (n.get("customer") or {}).get("email"))})
+    hist = fetch_histories(emails) if emails else {}
+    states, missing = {}, []
+    for o in orders:
+        n = nodes.get(o)
+        if n is None:
+            missing.append(o)
+            states[o] = _empty_state()
+            continue
+        em = (n.get("customer") or {}).get("email")
+        box, rem = _box_removed(n)
+        ever = box | hist.get(em, set()) if em else set(box)
+        states[o] = {"box": sorted(box), "removed": sorted(rem), "ever": sorted(ever), "last": None, "email": em}
+    return states, missing
+
+
+def fetch_state(order: str) -> dict:
+    """Live order state for ONE order (see fetch_states -- the CLI always batches)."""
+    return fetch_states([order])[0][order]
 
 
 # Multi-SKU $0 grab-bag products: they hold a $0 variant for MANY skus, so they collide with the
@@ -205,16 +352,35 @@ def fetch_state(order: str) -> dict:
 NON_INBOX_PRODUCTS = frozenset({"10384502784280"})  # free-vip-gift
 
 
-def fetch_prod(sku: str) -> Prod | None:
+def _prod_from_variants(sku: str, nodes: list[dict]) -> Prod | None:
     """Rule 4/6: the $0 variant(s) of `sku` must resolve to exactly ONE product; qty = LIVE inventoryQuantity."""
-    e = gql(V, {"q": f"sku:{sku}"})["productVariants"]["edges"]
-    z = [x["node"] for x in e if (x["node"].get("sku") or "") == sku and float(x["node"].get("price") or 0) == 0.0
-         and x["node"]["product"]["id"].split("/")[-1] not in NON_INBOX_PRODUCTS]
+    z = [x for x in nodes if (x.get("sku") or "") == sku and float(x.get("price") or 0) == 0.0
+         and x["product"]["id"].split("/")[-1] not in NON_INBOX_PRODUCTS]
     if not z or len({x["product"]["id"] for x in z}) != 1:
         return None
     qty = sum(int(x.get("inventoryQuantity") or 0) for x in z)
     p = z[0]["product"]
     return Prod(p["id"].split("/")[-1], p.get("handle") or p.get("title") or "", qty)
+
+
+def fetch_prods(skus) -> dict[str, Prod | None]:
+    """{sku: Prod | None} for EVERY requested sku -- one OR-joined, fully paginated variant search per
+    SKU_CHUNK. Search hits are regrouped by EXACT sku before the rule 4 uniqueness check."""
+    skus = list(OrderedDict.fromkeys(s for s in skus if s))
+
+    def one(chunk: list[str]) -> list[dict]:
+        return _paged(V, "productVariants", " OR ".join(f"sku:{s}" for s in chunk))
+
+    by_sku: dict[str, list[dict]] = {}
+    for nodes in _pmap(one, _chunks(skus, SKU_CHUNK)):
+        for n in nodes:
+            by_sku.setdefault(n.get("sku") or "", []).append(n)
+    return {s: _prod_from_variants(s, by_sku.get(s, [])) for s in skus}
+
+
+def fetch_prod(sku: str) -> Prod | None:
+    """One SKU (see fetch_prods -- the CLI prefetches every SKU it can touch in batches)."""
+    return fetch_prods([sku])[sku]
 
 
 # ── Rule 6: stock-aware inventory ────────────────────────────────────────────────────────────
@@ -225,6 +391,13 @@ class Inventory:
         self.min_avail = min_avail
         self.floors, self.caps, self.zero = dict(floors or {}), dict(caps or {}), set(zero or ())
         self.drawn: Counter = Counter()
+
+    def prefetch(self, skus, batch_fn) -> None:
+        """Warm the $0-product cache in batches (batch_fn(skus) -> {sku: Prod|None}); `prod` stays the
+        per-SKU fallback for anything not prefetched."""
+        need = [s for s in OrderedDict.fromkeys(skus) if s and s not in self._pc]
+        if need:
+            self._pc.update(batch_fn(need))
 
     def prod(self, sku: str) -> Prod | None:
         if sku not in self._pc:
@@ -501,6 +674,28 @@ def write_outputs(out: Path, fields: list[str], res: Result, header: list[str]) 
     return out, lp
 
 
+# ── Batched state load (rule 2: --fresh re-pulls every order) ────────────────────────────────
+def load_states(orders: list[str], cache, *, fresh: bool) -> tuple[dict[str, dict], list[str]]:
+    """({order: state}, missing). --fresh -> every order re-pulled live (box/removed are MUTABLE,
+    rule 2); otherwise only cache misses are fetched. Either way ONE batched pass, not one call per order."""
+    states = {} if fresh else {o: st for o in orders if (st := cache.peek(o)) is not None}
+    need = [o for o in orders if o not in states]
+    missing: list[str] = []
+    if need:
+        fetched, missing = fetch_states(need)
+        cache.put_many(fetched)
+        states.update(fetched)
+    return states, missing
+
+
+def prefetch_skus(rows: list[dict], pairs: OrderedDict) -> list[str]:
+    """Every SKU the resolver can look up: the sheet's child_skus, every pool member, every PR-CJAM pair."""
+    out = [r["child_sku"].strip() for r in rows if r.get("child_sku", "").strip()]
+    out += [s for pool in POOLS.values() for s in pool]
+    out += [s for kv in pairs.items() for s in kv]
+    return list(OrderedDict.fromkeys(out))
+
+
 # ── CLI ──────────────────────────────────────────────────────────────────────────────────────
 def _kv(items: list[str] | None) -> dict[str, int]:
     out = {}
@@ -553,13 +748,22 @@ def main(argv: list[str] | None = None) -> int:
 
     cache = OrderStateCache(a.cache_db) if a.cache_db else OrderStateCache()
     orders = list(OrderedDict.fromkeys(norm(r["Name"]) for r in rows))
-    states = {o: cache.get(o, fetch_state, refresh=a.fresh) for o in orders}
+    t0 = time.perf_counter()
+    states, missing = load_states(orders, cache, fresh=a.fresh)
+    t1 = time.perf_counter()
 
     frac = guard_already_imported(rows, states, a.imported_threshold)  # rule 8 -- raises
+    pairs = _pairs(a.cjam_pair)
     inv = Inventory(fetch_prod, min_avail=a.min_avail, floors=_kv(a.floor), caps=_kv(a.cap),
                     zero={z.strip().upper() for z in a.zero or []})
+    inv.prefetch(prefetch_skus(rows, pairs), fetch_prods)
+    t2 = time.perf_counter()
     low = low_stock_report(rows, inv)
     print(f"orders {len(orders)}  rows {len(rows)}  live-dupe fraction {frac:.1%}")
+    print(f"shopify reads: order state {t1 - t0:.1f}s (fresh={a.fresh})  $0 products {t2 - t1:.1f}s")
+    if missing:
+        print(f"MISSING: {len(missing)} order(s) not returned by Shopify -- rows KEPT, resolved against an "
+              f"empty state; check them by hand: {', '.join('#' + o for o in missing)}")
     print(f"-- rule 6: SKUs the sheet pushes below {a.min_avail} available (live, adds, after) --")
     for sku, live, n, after in low:
         print(f"  {sku:<12} live={live:<5} adds={n:<4} after={after}")
@@ -567,10 +771,12 @@ def main(argv: list[str] | None = None) -> int:
         print("  (none)")
 
     res = resolve(rows, states, inv, Options(storm=a.storm, imported_threshold=a.imported_threshold,
-                                             cjam_pairs=_pairs(a.cjam_pair)))
+                                             cjam_pairs=pairs))
     header = [f"# resolve_matrix_dupes  src={src}  fresh={a.fresh}  min_avail={a.min_avail}  storm={a.storm}",
-              f"# floors={_kv(a.floor)} caps={_kv(a.cap)} zero={sorted(inv.zero)} cjam={dict(_pairs(a.cjam_pair))}",
+              f"# floors={_kv(a.floor)} caps={_kv(a.cap)} zero={sorted(inv.zero)} cjam={dict(pairs)}",
               f"# low-stock: {low}"]
+    if missing:
+        header.append(f"# missing-orders (not in Shopify, rows kept): {['#' + o for o in missing]}")
     outp, logp = write_outputs(out, fields, res, header)
     for e in res.swaplog:
         print(f"#{e['order']} {e['orig']} -> {e['new']}  [{e['reason']} / {e['slot']}]")

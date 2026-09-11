@@ -56,6 +56,29 @@ class OrderStateCache:
         self.db.commit()
         return st
 
+    def peek(self, order: str) -> dict | None:
+        """Cached state or None -- never fetches. Batch callers (resolve_matrix_dupes) use peek +
+        put_many so misses are fetched in ONE batched pass instead of one call per order."""
+        row = self.db.execute(
+            "SELECT box,removed,ever,last,email FROM order_state WHERE order_id=?", (str(order),)
+        ).fetchone()
+        if not row:
+            return None
+        return {"box": json.loads(row[0]), "removed": json.loads(row[1]),
+                "ever": json.loads(row[2]), "last": row[3], "email": row[4]}
+
+    def put_many(self, states: dict) -> int:
+        """Upsert {order: state} in one transaction (same row shape as get())."""
+        now = datetime.datetime.now().isoformat(timespec="seconds")
+        self.db.executemany(
+            "INSERT OR REPLACE INTO order_state VALUES (?,?,?,?,?,?,?)",
+            [(str(o), json.dumps(st.get("box", [])), json.dumps(st.get("removed", [])),
+              json.dumps(st.get("ever", [])), st.get("last"), st.get("email"), now)
+             for o, st in states.items()],
+        )
+        self.db.commit()
+        return len(states)
+
     def import_json(self, json_path: Path | str) -> int:
         """One-time migrate a scratch JSON cache ({order: state}) into the DB."""
         data = json.loads(Path(json_path).read_text(encoding="utf-8"))
