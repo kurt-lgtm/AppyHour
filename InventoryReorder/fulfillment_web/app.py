@@ -6899,9 +6899,10 @@ def shopify_sync():
                 cached["cache_age_seconds"] = int(age_seconds)
             return jsonify(cached)
 
-    store = s.get("shopify_store_url", "").strip()
-    token = s.get("shopify_access_token", "").strip()
-    if not store or not token:
+    from appyhour_lib.credentials import get_shopify_credentials
+    try:
+        store, token = get_shopify_credentials()
+    except RuntimeError:
         return jsonify({"error": "Shopify store URL or access token not configured"}), 400
 
     if not store.startswith("http"):
