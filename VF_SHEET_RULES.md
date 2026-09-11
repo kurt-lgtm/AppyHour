@@ -7,8 +7,11 @@ the authority that already enforces it — do NOT invent or "close-enough" any v
 - **Sheet QC / syntax authority:** Kori — `AppyHour/GelPackCalculator/kori/gel_pack_webview.py`
   QC pass (`qc_check_sheet`, ~lines 2240-2646). This doc is a readable extract of that code; the
   code wins on any conflict.
-- **MFG / product names authority:** `AppyHour/mfg_names_authoritative.csv` (the meal-type export),
-  code-guarded by `matrix_commander.validate_mfg_names` (MATRIX_RULES rule 21).
+- **MFG / product names authority:** DO MySQL `mfg_names_authoritative` + `mfg_translations` (the
+  meal-type export, written ONLY by console `/admin/upload` kind=`mfg_names`,
+  `ShipRouting/server/manual_ingest.py`). `AppyHour/mfg_names_authoritative.csv` is a local
+  read-mirror of that table — refresh via `ShipRouting/scripts/sync_local_inputs.py --write`, never
+  by hand-copying an export. Code-guarded by `matrix_commander.validate_mfg_names` (MATRIX_RULES rule 21).
 - **Lanes / routing-tag & serviceability authority:** `ShipRouting/ROUTING_RULES.md` + coverage
   CSVs (`ShipRouting/lib/zip_loaders.py`); resolved by `lib/engine.serviceability_gate`.
 
