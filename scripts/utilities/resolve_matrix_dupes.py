@@ -84,14 +84,27 @@ SLOT_OF_PARENT = (
 )
 
 
+# Composite parents: ONE parent, several slots -> the CHILD prefix picks the slot. Authority for the
+# composition is order_checks/rules.py PARTY (EX-PS = 2 CH + 2 MT + 2 AC, Kurt 2026-08-25);
+# ORDER_CHECKS_RULES.md:60. An AC- child here is an ACCOMPANIMENT, never a cracker.
+COMPOSITE_PARENTS = {"EX-PS": {"CH-": "cheese", "MT-": "meat", "AC-": "accompaniment"}}
+
+
 def slot_for(parent_sku: str, child_sku: str) -> str | None:
-    """The parent_sku IS the slot. Fallback only for CH-/MT- (unambiguous per product-rules);
-    an AC- child under a non-slot parent is NOT categorised (AC spans crackers/nuts/jams) -> None."""
+    """The parent_sku IS the slot. A COMPOSITE parent (EX-PS) dispatches on the child prefix.
+    Fallback only for CH-/MT- (unambiguous per product-rules); an AC- child under a non-slot,
+    non-composite parent is NOT categorised (AC spans crackers/nuts/jams) -> None."""
     p = (parent_sku or "").strip().upper()
+    c = (child_sku or "").strip().upper()
+    comp = COMPOSITE_PARENTS.get(p)
+    if comp:
+        for pref, slot in comp.items():
+            if c.startswith(pref):
+                return slot
+        return None
     for rx, slot in SLOT_OF_PARENT:
         if rx.match(p):
             return slot
-    c = (child_sku or "").strip().upper()
     if c.startswith("CH-"):
         return "cheese"
     if c.startswith("MT-"):
@@ -100,7 +113,11 @@ def slot_for(parent_sku: str, child_sku: str) -> str | None:
 
 
 # ── Rule 7: barred list (regardless of stock) ────────────────────────────────────────────────
-BARRED_EXACT = frozenset({"MT-HOTP", "AC-RMC", "MT-IBRES", "MT-BSS", "CH-MAFT", "AC-RBOL", "AC-BLUCAR"})
+BARRED_EXACT = frozenset({"MT-HOTP", "AC-RMC", "MT-IBRES", "MT-BSS", "CH-MAFT", "AC-RBOL", "AC-BLUCAR",
+                          # Kurt 2026-09-11: "too expensive, can't use them" / "no" -- never a substitute
+                          "AC-SLL", "AC-PBLINI", "AC-SCP", "AC-FLH", "AC-CARM"})
+# Kurt 2026-09-11: AC-BRJA is a valid standing ACCOMPANIMENT swap, but never a PR-CJAM jam.
+CJAM_EXCLUDED_JAMS = frozenset({"AC-BRJA"})
 BARRED_SUBSTR = ("-FS-", "BRIE")
 MINI_JAMS = frozenset({"AC-GBEF", "AC-SCJ", "AC-SRHUB", "AC-MFJ"})  # legal ONLY inside a PR-CJAM pair
 MEAT_PRIORITY = "MT-CCCS"
@@ -181,10 +198,18 @@ def fetch_state(order: str) -> dict:
     return {"box": sorted(box), "removed": sorted(rem), "ever": sorted(ever), "last": None, "email": em}
 
 
+# Multi-SKU $0 grab-bag products: they hold a $0 variant for MANY skus, so they collide with the
+# real in-box $0 product and rule 4's uniqueness check silently returns None -> the SKU reports
+# live=0 (burn 2026-09-08: AC-PRPE read 0, actually 224; CH-BPC read 0, actually 290). They are
+# never an in-box add target. Excluded by product id, never by title.
+NON_INBOX_PRODUCTS = frozenset({"10384502784280"})  # free-vip-gift
+
+
 def fetch_prod(sku: str) -> Prod | None:
     """Rule 4/6: the $0 variant(s) of `sku` must resolve to exactly ONE product; qty = LIVE inventoryQuantity."""
     e = gql(V, {"q": f"sku:{sku}"})["productVariants"]["edges"]
-    z = [x["node"] for x in e if (x["node"].get("sku") or "") == sku and float(x["node"].get("price") or 0) == 0.0]
+    z = [x["node"] for x in e if (x["node"].get("sku") or "") == sku and float(x["node"].get("price") or 0) == 0.0
+         and x["node"]["product"]["id"].split("/")[-1] not in NON_INBOX_PRODUCTS]
     if not z or len({x["product"]["id"] for x in z}) != 1:
         return None
     qty = sum(int(x.get("inventoryQuantity") or 0) for x in z)
@@ -354,6 +379,11 @@ def resolve(rows: list[dict], states: dict, inv: Inventory, opts: Options) -> Re
         g.setdefault(norm(r["Name"]), []).append(i)
     picker, out, log, rep, flags = _Picker(inv), [], [], Counter(), []
     kept: Counter = Counter()   # SHEET-wide count of source adds kept per SKU (floors/caps span orders)
+    # Rule 6: the sheet's OWN adds are committed stock. Seed them as drawn so a substitute can never
+    # land on a SKU the source rows already consume (burn 2026-09-11: CH-CONI 67 live / 67 source adds,
+    # CH-CARO 95/95 -- the resolver still picked both as subs and pushed them negative). A source row
+    # swapped out releases its unit back below.
+    inv.drawn.update(Counter(r["child_sku"].strip() for r in rows))
 
     for o, idxs in g.items():
         st = states[o]
@@ -413,6 +443,7 @@ def resolve(rows: list[dict], states: dict, inv: Inventory, opts: Options) -> Re
                     o_rep["NO-SUB"] += 1
                 else:
                     _set_target(r, inv.prod(sub), sub)
+                    inv.drawn[orig] -= 1   # the swapped-out source unit is no longer committed
                     chosen.add(sub)
                     entry["new"] = sub
                     o_rep[why] += 1

@@ -307,7 +307,26 @@ def test_rule11_swap_storm_leaves_order_untouched_and_flags():
     assert res.report["PROBABLE-ALREADY-PROCESSED"] == 1 and any("175884" in f for f in res.flags)
     o2 = _by_order(res.rows)["175885"]
     assert o2[0] != "CH-FONT" and res.report["LIVE-DUPE"] == 1        # the normal order still resolved
-    assert sum(inv.drawn.values()) == 1                                 # storm draws were rolled back
+    # drawn is seeded with the sheet's own adds (rule 6 committed stock); the one resolved swap nets 0
+    # (sub +1, released source unit -1) and the storm order's draws were rolled back.
+    assert sum(inv.drawn.values()) == len(rows)
+
+
+def test_rule6_source_adds_are_committed_stock_so_subs_never_oversell():
+    """Burn 2026-09-11: CH-CONI 67 live / 67 source adds was still picked as a sub -> -2."""
+    rows = [{"Name": "#1", "child_sku": "CH-CONI", "parent_sku": "EX-EC"},
+            {"Name": "#2", "child_sku": "CH-CONI", "parent_sku": "EX-EC"},
+            {"Name": "#3", "child_sku": "CH-FONT", "parent_sku": "EX-EC"}]
+    st = {"1": _state(), "2": _state(), "3": _state(box=["CH-FONT"])}
+    qty = {"CH-CONI": 32}                 # 32 live - 2 source adds = 30 -> NOT drawable (> 30 required)
+    inv = rmd.Inventory(lambda s: rmd.Prod(f"pid-{s}", s.lower(), qty.get(s, 0 if s in rmd.POOLS['cheese'][:0] else 100)))
+    rmd.POOLS_BACKUP = dict(rmd.POOLS)
+    try:
+        rmd.POOLS["cheese"] = ["CH-CONI", "CH-OTTA"]
+        res = rmd.resolve(rows, st, inv, rmd.Options())
+    finally:
+        rmd.POOLS.update(rmd.POOLS_BACKUP)
+    assert _by_order(res.rows)["3"] == ["CH-OTTA"]
 
 
 # ── CLI end-to-end (no network) ──────────────────────────────────────────────────────────────

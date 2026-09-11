@@ -8,7 +8,7 @@
 > from the full session transcripts (`_outputs/reports/` audit pending) — supersedes the
 > 2026-08 version, whose rule 7 ("AC- dupes are dropped") is now WRONG (see rule 1).
 
-## 🧭 North Star (Kurt, verbatim, 2026-09-04)
+## 🧭 North Star (Kurt, verbatim — signed off by Kurt 2026-09-04)
 
 > **"when i give you a matrixify export file, you look for dupes in order, dupes in the sheet,
 > look for removed items on the orders so I don't silent error when i try to add the same thing
@@ -90,6 +90,12 @@ a silent fail ships.
      instruction overrides (*"Toketti is the cracker in use"*), but expect the flag.
    - **EX-EA / CEX-EA → accompaniment** (AC-RMC, AC-QUIC, AC-SDF, AC-DTCH, AC-MARC … belong here).
    - **EX-EM / CEX-EM → meat.  EX-EC / CEX-EC(-suffix) → cheese.**
+   - **EX-PS (Party Size Upgrade) is COMPOSITE — 2 CH + 2 MT + 2 AC** (Kurt 2026-08-25), so the
+     CHILD prefix picks the slot: `CH-`→cheese, `MT-`→meat, **`AC-`→accompaniment, never a
+     cracker**. Authority = `order_checks/rules.py` `PARTY` / `ORDER_CHECKS_RULES.md:60` — it was
+     already in the DB; the resolver just didn't read it and emitted `NO-SUB:UNKNOWN-SLOT`
+     (#181549 AC-MARC, 2026-09-08). Composite parents live in
+     `resolve_matrix_dupes.COMPOSITE_PARENTS`; add one there, never infer.
    - PR-CJAM-* → cheese + jam, both required; swap the duped half, keep the pair coherent
      (SOT→AC-MFJ, MONT→AC-SCJ). See [[prcjam-pairing-needs-cheese-and-jam]].
    Burn: prefix pool put AC-QUIC/AC-SDF/AC-DTCH into CEX-CR; the source itself carried 30 AC-RMC
@@ -110,8 +116,10 @@ a silent fail ships.
    committed. also I don't want to go out of stock on anything"* (2026-09-04). Never plan a
    substitute down to zero.
    - Report every SKU the sheet would push **below 30** available (after adds), before resolving.
-   - Substitutes are drawn stock-aware: a pool SKU whose (live − already drawn this run) ≤ 30 is
-     skipped. **Spread across the pool** (round-robin) — never dump overflow onto one SKU (18 Brie
+   - Substitutes are drawn stock-aware: a pool SKU whose (live − the sheet's own source adds − subs
+     drawn this run) ≤ 30 is skipped. **The sheet's own adds are committed stock** — burn 2026-09-11:
+     CH-CONI (67 live / 67 source adds) and CH-CARO (95/95) were still picked as subs and pushed
+     negative because the draw only counted the resolver's own picks. Fixed: source adds seed `drawn`. **Spread across the pool** (round-robin) — never dump overflow onto one SKU (18 Brie
      overflow all landed on CH-CARO; corrected).
    - Standing floors/caps (Kurt): **CH-OGK never to 0 and never below 30 → force-swap OGK adds
      out; never pick it.** CH-CCC = 0 stock → swap all out. CH-SHADOW floor 10 (relaxed from 30).
@@ -124,7 +132,9 @@ a silent fail ships.
    in the source). **MT-HOTP vetoed.** Standing barred list (Kurt 2026-08-28, cross-session
    brief): **AC-RMC** (*"I have 600, but don't use it"*), **MT-IBRES, MT-BSS, CH-MAFT** (*"we
    don't give them MAFT"*), **AC-RBOL, AC-BLUCAR, all mini jams (AC-GBEF/AC-SCJ/AC-SRHUB/AC-MFJ)
-   as generic subs, all brie** — and *"a cracker only ever swaps for a cracker."* **MT-CCCS is
+   as generic subs, all brie**; **cost-excluded (Kurt 2026-09-11, *"too expensive, can't use them"*): AC-SLL,
+   AC-PBLINI, AC-SCP; *"no"*: AC-FLH, AC-CARM**. **AC-BRJA is the exception: a valid standing
+   ACCOMPANIMENT swap, never a PR-CJAM jam** (Kurt 2026-09-11 reversed my blanket bar; `CJAM_EXCLUDED_JAMS`) — and *"a cracker only ever swaps for a cracker."* **MT-CCCS is
    the first-priority meat sub** (always tried first, no rotation). BL-FSJ / BL-FFJ rows are
    removed from the sheet, not resolved. Dietary boxes (`NN`/`CO`/`NC` fragments — six variants,
    match the letters not `RS`) → the restricted category is off-limits; never guess an exclusion
@@ -155,6 +165,12 @@ a silent fail ships.
     exact committed set, touch nothing else. Gift-redemption orders are hard-locked (*"you can't
     do 178839 even if you wanted"*) — expect 5–10 %, never retry, report the skip. "Hold on to
     it" means hold: do not resolve until told.
+    **🔴 A correction edit that removes a never-picked $0 unit MUST restock it** —
+    `orderEditSetQuantity(..., restock: true)`. Default is `false`, which silently takes the unit
+    out of `on_hand`. Burn 2026-09-11: 103 correction swaps removed units without restock →
+    Shopify showed CH-CONI 7 (really 66), CH-BRIE 0, CH-BARI 8, MT-TUSC 16 — every floor looked
+    breached. Repaired by `inventoryAdjustQuantities` (`@idempotent`, `changeFromQuantity`
+    required) at RMFG after reconciling pre-available − net committed == live + removed, per SKU.
 
 11. **A swap-storm on one order (≥5 substitutions) means the box was already processed — surface
     it, don't mass-swap.** #175884 (2026-09-04): *"remove 175884. good catch. it was already
