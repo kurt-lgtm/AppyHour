@@ -15,6 +15,12 @@ appyhour_lib/
 ├── db.py             # connect()/connect_ro() — MANDATORY shipping.db opener
 │                     #   + write_lock_holder()/assert_write_lock_free() (lock-release proof)
 ├── cancel.py         # CancelToken/StageCancelled/checkpoint() — cooperative stage cancel
+├── cloud_db.py       # 🔴 THE cloud-MySQL credential resolver + connection builder —
+│                     #   database_url() (env DATABASE_URL → %APPDATA%\AppyHour\database_url.txt)
+│                     #   and connect(). ONE owner (Kurt 2026-09-11 dedupe): five copies were live
+│                     #   and disagreed — ShipRouting/server/manual_ingest._mysql() is env-ONLY (no
+│                     #   file fallback) and stays that way on purpose (cloud image, repo split).
+│                     #   No I/O at import; pymysql imported inside connect(). Tests: test_cloud_db.py
 ├── invoice_parsers.py # 🔴 THE carrier-invoice readers (UPS both dialects, OnTrac, FedEx xlsx/csv,
 │                     #   identify_hub) — ONE per carrier, imported by BOTH the local Kori ingest
 │                     #   (GelPackCalculator/shipping_invoice_db re-exports) and the cloud ingest-worker

@@ -191,10 +191,11 @@ Registered via the scheduled-tasks MCP (NOT manually slash-invoked). Each: capab
 | Weather + NWS | `appyhour_lib/weather.py` | import — never new OWM/NWS callers |
 | Box / SKU classify | `appyhour_lib/box_classify.py`, `internal_classify.py` | import — never inline prefix regex (use `product-rules`) |
 | Paths / app dirs | `appyhour_lib/paths.py` | import — never hardcoded `%APPDATA%` |
+| 🔴 Cloud MySQL credential + connection | `appyhour_lib/cloud_db.py` → `database_url()` / `connect()` | import — never a local `DATABASE_URL`→`%APPDATA%` resolver or `pymysql.connect(...)` block (five copies were live 2026-09-11 and disagreed on the file fallback). Reporting reads with the table allowlist stay on `cloud_reads.connect_reporting`; `ShipRouting/server/manual_ingest._mysql()` is the cloud-image builder and is deliberately NOT routed here (repo split) |
 | User uploads | `appyhour_lib/user_data.save_user_file()` | never write to `.claude/` |
 | Gel-pack lookup keys | `OPENWEATHER_API_KEY` (env) read by `appyhour_lib/credentials.get_openweather_key()` | — |
 
-`appyhour_lib/` (bootstrap, credentials, weather, paths, box_classify, internal_classify, user_data, notify) = pure-util single source. Every consumer imports from it; never copy a util into an app.
+`appyhour_lib/` (bootstrap, credentials, cloud_db, weather, paths, box_classify, internal_classify, user_data, notify) = pure-util single source. Every consumer imports from it; never copy a util into an app.
 
 ---
 
