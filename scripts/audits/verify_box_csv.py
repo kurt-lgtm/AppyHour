@@ -29,7 +29,6 @@ sys.path.insert(0, r"C:\Users\Work\Claude Projects\AppyHour\AppyHourMCP")
 from utils import get_shopify_auth  # noqa: E402
 
 OUT_DIR = Path(r"C:\Users\Work\Claude Projects\_outputs\reports")
-OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def load_csv(path: Path) -> dict[str, dict]:
@@ -59,6 +58,7 @@ def csv_box_kind(box: str) -> str:
 
 
 def main() -> None:
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
     csv_path = Path(sys.argv[1])
     tag = sys.argv[2]
     csv_rows = load_csv(csv_path)

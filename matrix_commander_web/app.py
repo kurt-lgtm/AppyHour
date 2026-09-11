@@ -122,7 +122,7 @@ SESSION_STATE = {
 _checkpoint = CheckpointStore()
 
 UPLOAD_DIR = Path(__file__).parent / "uploads"
-UPLOAD_DIR.mkdir(exist_ok=True)
+# Created in main(), not at import — importing the app must not touch the filesystem.
 
 # ── Routes ────────────────────────────────────────────────────────────
 
@@ -727,6 +727,7 @@ def run_flask():
 
 
 def main():
+    UPLOAD_DIR.mkdir(exist_ok=True)
     browser_mode = "--browser" in sys.argv
 
     if browser_mode:
