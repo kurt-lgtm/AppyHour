@@ -147,3 +147,88 @@ def test_tab5_lastmile_zip_check_requires_zip_for_veho_ontrac():
     ok, failures = validate(bad, ROUTING_TAB5_SCHEMA)
     assert ok is False
     assert "positive Veho/OnTrac tag" in failures["check"].astype(str).str.cat(sep=" | ")
+
+
+# ── D6: the mirrors qc_schemas.py DECLARES, held verbatim-equal (2026-09-11 dedupe audit item 3) ──
+# qc_schemas restates three ShipRouting facts instead of importing them (it must stay
+# import-side-effect-free): the carrier×hub legality dict (`:63-65` "mirrors ROUTING_RULES §0 … update
+# in the SAME commit"), `_carrier_hub` (`:80` "Mirrors ShipRouting qc_audit.carrier_hub") and the tab1/tab5
+# headers (`:36`, `:53` "copied verbatim from build.py"). Same shape as
+# test_pp_origin.py::test_authority_zips_match_shiprouting_hub_roster: read the authority, assert equal.
+# ShipRouting is READ as source and parsed, never imported — build.py and qc_audit.py hit Shopify /
+# shipping.db on import, and lib.features reads Kori settings.
+import ast  # noqa: E402
+import os  # noqa: E402
+
+import qc_schemas  # noqa: E402
+
+_SR_ROOT = Path(os.environ.get("SHIPROUTING_ROOT") or r"C:/Users/Work/Claude Projects/ShipRouting")
+_sr_present = pytest.mark.skipif(not (_SR_ROOT / "lib" / "features.py").exists(),
+                                 reason=f"ShipRouting checkout not present at {_SR_ROOT}")
+
+
+def _module_level_literal(path: Path, name: str):
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                and isinstance(node.targets[0], ast.Name) and node.targets[0].id == name:
+            return ast.literal_eval(node.value)
+    raise AssertionError(f"{name} not found as a module-level literal in {path}")
+
+
+def _function_level_literal(path: Path, func: str, name: str):
+    """`name = <literal>` inside `def func` — build.py builds its headers inside main()."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for fn in ast.walk(tree):
+        if isinstance(fn, ast.FunctionDef) and fn.name == func:
+            for node in ast.walk(fn):
+                if isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                        and isinstance(node.targets[0], ast.Name) and node.targets[0].id == name:
+                    return ast.literal_eval(node.value)
+    raise AssertionError(f"{name} not found inside {func}() in {path}")
+
+
+@_sr_present
+def test_carrier_hubs_mirror_matches_features_baseline():
+    """🔴 `_CARRIER_HUBS` mirrors ROUTING_RULES §0; `lib/features.CARRIER_HUBS_BASELINE` is §0 in code.
+    Drift here means the LOG-ONLY schema gate judges lanes by a roster the engine no longer runs."""
+    baseline = _module_level_literal(_SR_ROOT / "lib" / "features.py", "CARRIER_HUBS_BASELINE")
+    assert {c: set(h) for c, h in qc_schemas._CARRIER_HUBS.items()} == \
+           {c: set(h) for c, h in baseline.items()}
+
+
+@_sr_present
+def test_carrier_hub_parser_matches_qc_audit():
+    """🔴 `_carrier_hub` mirrors `scripts/qc_audit.carrier_hub`. The reference function is lifted out of
+    qc_audit.py by AST and executed with the real `lib.canon.CARRIERS` (stdlib-only), then both are
+    driven over every tag shape the sheet carries; any token they parse differently is a drift."""
+    src = (_SR_ROOT / "scripts" / "qc_audit.py").read_text(encoding="utf-8")
+    fn = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name == "carrier_hub")
+    canon_src = (_SR_ROOT / "lib" / "canon.py").read_text(encoding="utf-8")
+    canon_ns: dict = {}
+    exec(compile(canon_src, "lib/canon.py", "exec"), canon_ns)                    # noqa: S102 — stdlib-only
+    ref_ns: dict = {"_CANON_CARRIERS": canon_ns["CARRIERS"]}
+    exec(compile(ast.Module(body=[fn], type_ignores=[]), "qc_audit.py", "exec"), ref_ns)  # noqa: S102
+    reference = ref_ns["carrier_hub"]
+
+    tokens = []
+    for carrier, hubs in qc_schemas._CARRIER_HUBS.items():
+        for hub in sorted(hubs) + ["Indianapolis", "Salt Lake City"]:
+            for service in (f"{carrier} Ground", f"{carrier} Home Delivery", f"{carrier} Ground Plus",
+                            f"{carrier} 2Day", f"ANY {carrier}"):
+                tokens += [f"!{service} - {hub}_AHB!", f"!NO {service} - {hub}_AHB!"]
+    tokens += ["!ANY - Dallas_AHB!", "!UPS Ground Dallas!", "", "!ExtraGel48oz!", "!NO OnTrac - Dallas_AHB!"]
+    diffs = [(t, qc_schemas._carrier_hub(t), reference(t)) for t in tokens
+             if qc_schemas._carrier_hub(t) != reference(t)]
+    assert not diffs, f"_carrier_hub disagrees with qc_audit.carrier_hub on: {diffs}"
+
+
+@_sr_present
+def test_tab_headers_match_build_py_verbatim():
+    """🔴 tab1/tab5 column names are 'copied verbatim from build.py' — a renamed column there turns every
+    row into a schema failure (or, worse, `strict=False` lets a missing column pass silently)."""
+    build = _SR_ROOT / "build.py"
+    tab1 = _function_level_literal(build, "main", "tab1")[0]
+    tab5 = _function_level_literal(build, "main", "tab5")[0]
+    assert list(ROUTING_TAB1_SCHEMA.columns) == tab1
+    assert list(ROUTING_TAB5_SCHEMA.columns) == tab5
