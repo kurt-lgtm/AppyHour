@@ -53,6 +53,7 @@ def _generate(tmp_path, orders):
         patch.object(mc, "_get_shopify_auth", return_value=("https://shop", {})),
         patch.object(mc, "_fetch_orders_graphql", return_value=orders),
         patch.object(mc, "load_mfg_translations", return_value=_TRANSLATIONS),
+        patch.object(mc, "load_mfg_names", return_value=_TRANSLATIONS),   # rule-21 gate, DB-backed
     ):
         out = mc.generate_matrix_xlsx(
             "RMFG_20260717", ship_date="2026-07-20", output_dir=str(tmp_path)
@@ -78,6 +79,7 @@ def test_unonboarded_sku_rejects_before_any_file_is_written(tmp_path):
         patch.object(mc, "_get_shopify_auth", return_value=("https://shop", {})),
         patch.object(mc, "_fetch_orders_graphql", return_value=orders),
         patch.object(mc, "load_mfg_translations", return_value=_TRANSLATIONS),
+        patch.object(mc, "load_mfg_names", return_value=_TRANSLATIONS),   # rule-21 gate, DB-backed
         _pytest.raises(ValueError, match="MFG onboarding REJECT"),
     ):
         mc.generate_matrix_xlsx("RMFG_20260717", ship_date="2026-07-20", output_dir=str(tmp_path))
@@ -117,6 +119,7 @@ def test_fill_reject_carries_typed_skus_not_just_a_message(tmp_path):
         patch.object(mc, "_get_shopify_auth", return_value=("https://shop", {})),
         patch.object(mc, "_fetch_orders_graphql", return_value=orders),
         patch.object(mc, "load_mfg_translations", return_value=_TRANSLATIONS),
+        patch.object(mc, "load_mfg_names", return_value=_TRANSLATIONS),   # rule-21 gate, DB-backed
         _pytest.raises(mc.MfgOnboardingError) as e,
     ):
         mc.generate_matrix_xlsx("RMFG_20260717", ship_date="2026-07-20", output_dir=str(tmp_path))

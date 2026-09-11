@@ -9,7 +9,7 @@ was still hand-edited in Excel. That is how an invented "Farmstead Smoked Cumin 
 comma'd `Walnut, Honey & …` header (wk0713, 545 units at risk) got written.
 
 Everything authoritative is IMPORTED, never re-typed:
-  MFG names   -> matrix_commander.load_mfg_translations(MFG_AUTHORITATIVE_PATH)  (rules 21/23)
+  MFG names   -> matrix_commander.load_mfg_names()  — the DO table; --authority = test file (rules 21/23)
   name gate   -> matrix_commander.validate_mfg_names / MfgOnboardingError
   gift merge  -> matrix_commander.merge_gift_xlsx                                (rule 20)
 
@@ -61,10 +61,10 @@ import openpyxl  # noqa: E402
 
 import matrix_commander  # noqa: E402
 from matrix_commander import (  # noqa: E402
-    MFG_AUTHORITATIVE_PATH,
     GiftMergeError,
+    MfgAuthorityUnavailable,
     MfgOnboardingError,
-    load_mfg_translations,
+    load_mfg_names,
     merge_gift_xlsx,
     validate_mfg_names,
 )
@@ -254,18 +254,25 @@ class Authority:
     """
 
     def __init__(self, path=None, allow_missing=False):
-        self.path = Path(path) if path else MFG_AUTHORITATIVE_PATH
+        # None = the DO table `mfg_names_authoritative` (the authority, Kurt 2026-09-11); a path is
+        # the EXPLICIT --authority test override and nothing else — never a default csv.
+        self.path = Path(path) if path else None
+        self.label = self.path.name if self.path else "DO table mfg_names_authoritative"
         # 🔴 An authority governs EVERY consumer ([[feedback-reference-file-governs-everything]]):
-        # an --authority override rebinds matrix_commander's module-level path too, so the reused
-        # rule-21 gate below and this class can never read two different files.
-        matrix_commander.MFG_AUTHORITATIVE_PATH = self.path
+        # the override binds matrix_commander's ONE seam too, so the reused rule-21 gate below and
+        # this class can never read two different sources.
+        matrix_commander.MFG_AUTHORITY_OVERRIDE = self.path
         self.allow_missing = allow_missing
-        self.sku_to_name = load_mfg_translations(self.path)
+        try:
+            self.sku_to_name = load_mfg_names()
+        except MfgAuthorityUnavailable as e:
+            print(f"⚠️  {e}")
+            self.sku_to_name = {}
         if not self.sku_to_name:
-            msg = (f"FATAL: MFG authority {self.path} is missing or empty. Every header this tool "
-                   f"writes must come from it verbatim (MATRIX_RULES 24a). Refresh it from a "
-                   f"meal-type export. --allow-missing-authority downgrades this to a warning and "
-                   f"is recorded in the ledger.")
+            msg = (f"FATAL: MFG authority ({self.label}) is missing or empty / unreachable. Every header this "
+                   f"tool writes must come from it verbatim (MATRIX_RULES 24a). Fix the DO "
+                   f"connection / re-upload RMFG's export via the console. --allow-missing-authority "
+                   f"downgrades this to a warning and is recorded in the ledger.")
             if not allow_missing:
                 raise ItemEditRefused(msg)
             print("⚠️  " + msg)
@@ -282,7 +289,7 @@ class Authority:
         name = self.sku_to_name.get(sku.strip())
         if not name:
             raise ItemEditRefused(
-                f"MISSING: {sku!r} has no name in {self.path.name}. Never derive one from a "
+                f"MISSING: {sku!r} has no name in {self.label}. Never derive one from a "
                 f"Shopify title (the 2026-08-04 'Farmstead Smoked Cumin Gouda' class) — onboard "
                 f"it at {MfgOnboardingError.URL} and re-export.")
         return name
@@ -318,7 +325,7 @@ class Authority:
         if not self.names:
             return probs                                   # --allow-missing-authority
         if str(header).strip() not in self.names:
-            probs.append(f"NOT in {self.path.name} — invented/mistyped header. Never hand-edit a "
+            probs.append(f"NOT in {self.label} — invented/mistyped header. Never hand-edit a "
                          f"header to get past this; onboard + re-export ({MfgOnboardingError.URL})")
         return probs
 
@@ -925,7 +932,7 @@ def cmd_validate(args) -> int:
     prod = sheet.product_headers
     print(f"\nvf_items validate — {sheet.path.name} [{sheet.sheet_name}]")
     print(f"  rows: {len(rows)}   columns: {len(sheet.headers)}   product columns: {len(prod)}")
-    print(f"  authority: {auth.path.name} ({len(auth.names)} names)")
+    print(f"  authority: {auth.label} ({len(auth.names)} names)")
 
     bad_headers, unknown_meta = [], []
     for h in sheet.headers:
@@ -1260,7 +1267,9 @@ def build_parser():
     def common(p, write=True, select=False):
         p.add_argument("sheet", help="path to the built vF .xlsx")
         p.add_argument("--sheet-name", default=SHEET)
-        p.add_argument("--authority", default=None, help="override mfg_names_authoritative.csv")
+        p.add_argument("--authority", default=None,
+                       help="TEST override: read MFG names from this csv instead of the DO table "
+                            "mfg_names_authoritative (never a default path)")
         p.add_argument("--allow-missing-authority", action="store_true",
                        help="downgrade a missing/empty authority to a warning (LOGGED)")
         p.add_argument("--guide-policy", default=None,

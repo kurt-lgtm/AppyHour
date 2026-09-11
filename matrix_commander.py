@@ -387,29 +387,38 @@ class MfgOnboardingError(ValueError):
         )
 
 
-# Authoritative RMFG name list (meal-type export, 285 rows as of 2026-07-31). A translation whose
-# NAME is not in this list is as un-pickable as a missing translation — wk0803 an invented header
-# ("Cheese Slice, Frumage L'Ottavio" vs RMFG's "Frumage LOttavio") reached a sent vF on 234 rows.
-# Refresh by replacing this file with a fresh meal-type export; absent file = validation skipped
-# (loud warning), never a hard stop on a machine that lacks the snapshot.
+# 🔴 LOCAL READ-MIRROR of the DO table `mfg_names_authoritative` — NOT the authority (Kurt
+# 2026-09-11: "make sure we have an obsidian entry or another database. not a csv"). The authority
+# is the DO MySQL table, written ONLY by the console upload (`/admin/upload kind=mfg_names` →
+# ShipRouting/server/manual_ingest._h_mfg_names). This file is refreshed cloud→local by
+# `ShipRouting/scripts/sync_local_inputs.py --write`; pushing it the other way clobbered a correct
+# 294-row upload back to 286 on 2026-08-21. Nothing in this module READS it at runtime — it exists
+# for humans, diffs and the `--authority` test override below. A translation whose NAME is not in
+# the table is as un-pickable as a missing translation — wk0803 an invented header ("Cheese Slice,
+# Frumage L'Ottavio" vs RMFG's "Frumage LOttavio") reached a sent vF on 234 rows.
 MFG_AUTHORITATIVE_PATH = Path(__file__).parent / "mfg_names_authoritative.csv"
+
+# The ONE test/override seam (MATRIX_RULES rule 21): an explicit `--authority <csv>` binds this and
+# every reader in this module — and every ShipRouting reader that routes through it — reads that
+# file instead of the DB. None = the DB. Never set it from a default path.
+MFG_AUTHORITY_OVERRIDE: Path | None = None
+
+
+class MfgAuthorityUnavailable(RuntimeError):
+    """The DO MFG-name table could not be read. NEVER caught into a csv fallback: "0 names checked"
+    is indistinguishable from "all names valid" (rule 23's fail-open, closed 2026-09-11)."""
 
 
 def validate_mfg_names(translations: dict[str, str]) -> None:
-    """Raise MfgOnboardingError for any translation whose NAME isn't in the authoritative export.
+    """Raise MfgOnboardingError for any translation whose NAME isn't in the authoritative table.
 
-    MATRIX_RULES rule 21: mfg_translations.csv maps SKU -> name, but nothing stops a hand-added
-    row from inventing a name RMFG's floor has never seen. The meal-type export is the authority;
-    a name outside it = same hard reject as a missing translation (caught BY TYPE per §13.5).
+    MATRIX_RULES rule 21: mfg_translations maps SKU -> name, but nothing stops a hand-added
+    row from inventing a name RMFG's floor has never seen. The DO table `mfg_names_authoritative`
+    (RMFG's meal-type export, console-uploaded) is the authority; a name outside it = same hard
+    reject as a missing translation (caught BY TYPE per §13.5). An UNREACHABLE authority raises
+    MfgAuthorityUnavailable — never a warn-and-skip.
     """
-    # load_mfg_translations is env-first: MySQL replica when ROUTING_INPUTS_DB=1, csv otherwise —
-    # so on a host with the replica, validation runs even when the csv snapshot is absent
-    # (rule-21's silent skip-if-file-missing was itself a stale-baked-file failure mode).
-    authoritative = set(load_mfg_translations(MFG_AUTHORITATIVE_PATH).values())
-    if not authoritative:
-        print(f"  WARNING: {MFG_AUTHORITATIVE_PATH.name} missing/empty (and no db replica) - "
-              f"MFG name validation SKIPPED (refresh from a meal-type export)")
-        return
+    authoritative = set(load_mfg_names().values())
     bad = sorted(sku for sku, name in translations.items() if name not in authoritative)
     if bad:
         raise MfgOnboardingError(bad, reason="carry a translation NAME not in the authoritative "
@@ -676,72 +685,119 @@ def parse_matrix(xlsx_path: str | Path) -> tuple[list[OrderRow], list[str], dict
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def _mfg_db_table(path: Path) -> str:
-    """Which MySQL replica table backs this csv path (retirement step 2)."""
-    return "mfg_names_authoritative" if path == MFG_AUTHORITATIVE_PATH else "mfg_translations"
+MFG_TABLES = ("mfg_names_authoritative", "mfg_translations")
 
 
-def _mfg_from_db(path: Path) -> dict[str, str] | None:
-    """Env-first MySQL replica read (ShipRouting/server/DATA_CANON_RULES.md "Small inputs").
+def _mfg_database_url() -> str | None:
+    """The cloud credential, through the ONE resolver (`appyhour_lib.cloud_db.database_url`;
+    `cloud_reads._database_url` is the pre-dedupe twin and answers identically). 🔴 Under pytest the
+    credential FILE is never consulted — only an explicit env DATABASE_URL — so an unpatched test
+    can never reach production through Kurt's ACL'd file (the durable_store lesson, 2026-08-19)."""
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return os.environ.get("DATABASE_URL", "").strip() or None
+    try:
+        from appyhour_lib.cloud_db import database_url
+    except ImportError:                                   # cloud_db not landed on this checkout yet
+        from appyhour_lib.cloud_reads import _database_url as database_url
+    return database_url()
 
-    ROUTING_INPUTS_DB=1 AND DATABASE_URL → read the replica table; anything else → None (csv, the
-    default — byte-identical local behavior). The CSVs stay the AUTHORITY; tables are replicas
-    (etl_history.py --load-inputs). Empty table → loud None (falls back to csv). This is what makes
-    RMFG onboarding take effect on a cloud host WITHOUT a redeploy, and it removes rule-21's
-    silent skip-if-file-missing on hosts that lack the csv snapshot.
-    """
-    if os.environ.get("ROUTING_INPUTS_DB") != "1":
-        return None
-    url = os.environ.get("DATABASE_URL", "")
+
+def mfg_db_connect():
+    """The ONE pymysql connection for the MFG tables (read AND the onboarding INSERT).
+    Raises MfgAuthorityUnavailable with the credential hint; never returns None."""
+    url = _mfg_database_url()
+    if not url:
+        raise MfgAuthorityUnavailable(
+            "MFG name authority is the DO MySQL tables mfg_names_authoritative / mfg_translations "
+            "and no cloud credential is configured: set DATABASE_URL or create "
+            r"%APPDATA%\AppyHour\database_url.txt from a REAL terminal. The local csv is a "
+            "read-mirror, never a fallback (MATRIX_RULES rule 21).")
     m = re.match(r"mysql(?:\+\w+)?://([^:]+):([^@]+)@([^:/]+):(\d+)/([^?]+)", url)
     if not m:
-        print("WARNING: ROUTING_INPUTS_DB=1 but DATABASE_URL missing/unparseable - using csv")
-        return None
+        raise MfgAuthorityUnavailable("DATABASE_URL unparseable (expected mysql://user:pw@host:port/db)")
     import pymysql
     usr, pw, host, port, db = m.groups()
-    table = _mfg_db_table(path)
     try:
-        con = pymysql.connect(host=host, port=int(port), user=usr, password=pw,
-                              database=db, ssl={"ssl": {}})
+        return pymysql.connect(host=host, port=int(port), user=usr, password=pw,
+                               database=db, ssl={"ssl": {}})
+    except Exception as e:                                # noqa: BLE001 — re-raised BY NAME
+        raise MfgAuthorityUnavailable(
+            f"cannot connect to the DO database for the MFG name tables "
+            f"({type(e).__name__}: {e}) — no csv fallback; fix the connection") from e
+
+
+def _mfg_from_db(table: str = "mfg_names_authoritative") -> dict[str, str]:
+    """THE MFG-name reader — the ONE DB read path both repos use (AppyHour consumers directly,
+    ShipRouting via `lib.authorities.load_mfg_names`). SKU -> "AHB (S_REG): <name>".
+
+    🔴 The DO table IS the authority (Kurt 2026-09-11). Formerly gated on ROUTING_INPUTS_DB=1 with a
+    silent csv fallback on any failure — that is how presend read a csv BAKED INTO THE IMAGE while
+    Kurt uploaded RMFG's export to the console four times (Friday 2026-08-21), and how a local
+    mirror silently disagreed with the cloud. Unreachable / empty / unknown table → raises
+    MfgAuthorityUnavailable naming the table. Never a csv.
+    """
+    if table not in MFG_TABLES:
+        raise MfgAuthorityUnavailable(f"unknown MFG table {table!r} (valid: {MFG_TABLES})")
+    con = mfg_db_connect()
+    try:
+        cur = con.cursor()
+        cur.execute(f"SELECT sku, mfg_name FROM {table}")  # noqa: S608 — table from the closed tuple
+        rows = cur.fetchall()
+    except Exception as e:                                # noqa: BLE001 — re-raised BY NAME
+        raise MfgAuthorityUnavailable(
+            f"DO table {table} read failed ({type(e).__name__}: {e}) — no csv fallback") from e
+    finally:
         try:
-            cur = con.cursor()
-            cur.execute(f"SELECT sku, mfg_name FROM {table}")  # noqa: S608 — table from closed map above
-            rows = cur.fetchall()
-        finally:
             con.close()
-    except Exception as e:
-        # Transient db failure must not kill the matrix run — the csv authority is right there.
-        print(f"WARNING: {table} db read failed ({type(e).__name__}: {e}) - using csv")
-        return None
-    if not rows:
-        print(f"{table} db replica EMPTY - falling back to csv")
-        return None
-    print(f"{table}: db replica, {len(rows)} rows")
-    return {sku.strip(): name.strip() for sku, name in rows if sku and sku.strip()}
+        except Exception:                                 # noqa: BLE001
+            pass
+    out = {str(sku).strip(): str(name).strip() for sku, name in rows if sku and str(sku).strip()}
+    if not out:
+        raise MfgAuthorityUnavailable(
+            f"DO table {table} is EMPTY — every MFG name would be unvalidated (the invented-name "
+            f"class). Re-upload RMFG's meal-type export via the console (kind=mfg_names).")
+    print(f"{table}: DO authority, {len(out)} rows")
+    return out
+
+
+def _read_mfg_csv(path: str | Path) -> dict[str, str]:
+    """Headerless `SKU,"AHB (S_REG): name"` reader — for an EXPLICIT file only (an uploaded export
+    being ingested, or the `--authority` test override). Never a default, never a fallback."""
+    p = Path(path)
+    if not p.exists():
+        return {}
+    out: dict[str, str] = {}
+    with open(str(p), newline="", encoding="utf-8-sig") as f:
+        for row in csv.reader(f):
+            if len(row) >= 2 and row[0].strip():
+                out[row[0].strip()] = row[1].strip()
+    return out
+
+
+def load_mfg_names(table: str = "mfg_names_authoritative") -> dict[str, str]:
+    """SKU -> MFG name from the authority: the `--authority` override file when one is bound
+    (tests), else the DO table. This is the function every consumer calls."""
+    if MFG_AUTHORITY_OVERRIDE is not None:
+        return _read_mfg_csv(MFG_AUTHORITY_OVERRIDE)
+    return _mfg_from_db(table)
 
 
 def load_mfg_translations(csv_path: str | Path | None = None) -> dict[str, str]:
-    """Load MFG translations: SKU -> MFG Name.
+    """SKU -> MFG name for the matrix build (table `mfg_translations`).
 
-    CSV format (no header): SKU,"AHB (S_REG): Product Name"
-    Exported from https://translator.robbinsmfginc.com/
+    No argument = the authority (override file or DO table). An EXPLICIT path = read THAT file —
+    used only by the console ingest (parsing the uploaded export before it becomes the table) and
+    by tests. Passing the local mirror path is refused: the mirror is not the authority.
     """
-    path = Path(csv_path) if csv_path else MFG_TRANSLATIONS_PATH
-    from_db = _mfg_from_db(path)
-    if from_db is not None:
-        return from_db
-    if not path.exists():
-        return {}
-    translations: dict[str, str] = {}
-    with open(str(path), newline="", encoding="utf-8-sig") as f:
-        reader = csv.reader(f)
-        for row in reader:
-            if len(row) >= 2:
-                sku = row[0].strip()
-                mfg_name = row[1].strip()
-                if sku:
-                    translations[sku] = mfg_name
-    return translations
+    if csv_path is None:
+        return load_mfg_names("mfg_translations")
+    p = Path(csv_path)
+    if p in (MFG_TRANSLATIONS_PATH, MFG_AUTHORITATIVE_PATH):
+        raise MfgAuthorityUnavailable(
+            f"{p.name} is a local READ-MIRROR, not the authority — call load_mfg_names() / "
+            f"load_mfg_translations() with no path (DO table), or bind MFG_AUTHORITY_OVERRIDE "
+            f"for a test (MATRIX_RULES rule 21).")
+    return _read_mfg_csv(p)
 
 
 def load_inventory_csv(csv_path: str | Path) -> dict[str, float]:
@@ -2667,7 +2723,7 @@ def merge_gift_xlsx(
     authoritative = {
         _normalize_name(_mfg_name_from_header(_normalize_rule15b_header(name))
                         or _normalize_rule15b_header(name))
-        for name in load_mfg_translations(MFG_AUTHORITATIVE_PATH).values() if name
+        for name in load_mfg_names().values() if name
     }
     if not authoritative:
         main_wb.close()

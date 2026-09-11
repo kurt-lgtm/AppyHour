@@ -45,27 +45,21 @@ def load_sheet(path: str, tab: str | None = None):
     return out
 
 
-MFG_AUTHORITY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                             "mfg_names_authoritative.csv")
+def _mfg_authority():
+    """{SKU: 'AHB (S_REG): <MFG name>'} from the DO table `mfg_names_authoritative`, through the
+    ONE resolver (`matrix_commander.load_mfg_names`; `--authority` test override honoured there).
 
-
-def _mfg_authority(path: str = MFG_AUTHORITY):
-    """{SKU: 'AHB (S_REG): <MFG name>'} from the meal-type export. Headerless, 2 cols.
-
-    🔴 This CSV is a local READ-MIRROR of the DO tables `mfg_names_authoritative` /
-    `mfg_translations`, which are the authority; refresh it with
-    `ShipRouting/scripts/sync_local_inputs.py --write`, never by dropping an export on top
-    of it (Kurt 2026-09-11). The names are RMFG's, never ours to rename
-    ([[mfg-names-are-rmfgs-never-rename]]). A missing file is loud: an empty mirror
+    🔴 The csv beside the code is a local READ-MIRROR, never read here (Kurt 2026-09-11: "not a
+    csv"); the names are RMFG's, never ours to rename ([[mfg-names-are-rmfgs-never-rename]]).
+    An unreachable table raises MfgAuthorityUnavailable — loud, because an empty authority
     silently re-opens the fuzzy-match path.
     """
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"MFG name authority missing: {path}")
-    with io.open(path, encoding="utf-8-sig", newline="") as fh:
-        out = {r[0].strip(): r[1].strip() for r in csv.reader(fh) if len(r) > 1 and r[0].strip()}
-    if not out:
-        raise ValueError(f"MFG name authority parsed 0 rows: {path}")
-    return out
+    import sys
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from matrix_commander import load_mfg_names
+    return load_mfg_names()
 
 
 def resolve_columns(sheet: dict, orders: dict):

@@ -2,26 +2,53 @@
 
 Both failures below were live on RMFG_20260908:
 
-  * 'Maple Frais Fromage' / 'Sottocenere with Truffles' sat in mfg_names_authoritative.csv
-    the whole time and still came back UNMATCHED, because nothing read the file. An
-    unmatched column is SILENTLY DROPPED from columns_sku, so every order carrying it
-    compared clean -- the check reported 0 where it could not see.
+  * 'Maple Frais Fromage' / 'Sottocenere with Truffles' sat in the MFG authority the whole time
+    and still came back UNMATCHED, because nothing read it. An unmatched column is SILENTLY
+    DROPPED from columns_sku, so every order carrying it compared clean -- the check reported 0
+    where it could not see.
   * The authority carries two SKUs whose names differ only by a trailing period,
     CH-BRZ 'Prairie Breeze' and CH-PRBZ 'Prairie Breeze.'. Folded by clean_title(), a
     last-write-wins reverse map chose CH-PRBZ and turned 26 correct orders into c2 diffs.
     An ambiguous name must resolve to NOTHING and defer to the live line items.
+
+🔴 The authority is the DO table `mfg_names_authoritative` via `matrix_commander.load_mfg_names`
+(2026-09-11) — faked here; no csv, no credential.
 """
+import pytest
+
+import matrix_commander as mc
+from order_checks import sheet as sheet_mod
 from order_checks.sheet import _mfg_authority, resolve_columns
+
+P = "AHB (S_REG): "
+AUTH = {"CH-BRZ": P + "Prairie Breeze", "CH-PRBZ": P + "Prairie Breeze.",
+        "CH-SOT": P + "Sottocenere with Truffles", "CH-NMMAP": P + "Maple Frais Fromage",
+        "MT-PRO": P + "Prosciutto"}
+
+
+@pytest.fixture(autouse=True)
+def _fake_authority(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(mc, "MFG_AUTHORITY_OVERRIDE", None)
+    monkeypatch.setattr(mc, "_mfg_from_db", lambda table="mfg_names_authoritative": dict(AUTH))
 
 
 def _order(*pairs):
     return {"lineItems": {"edges": [{"node": {"sku": s, "title": t}} for s, t in pairs]}}
 
 
-def test_authority_has_both_prairie_breeze_skus():
+def test_authority_comes_from_the_one_resolver_and_has_both_prairie_breeze_skus():
     a = _mfg_authority()
     assert a["CH-BRZ"] == "AHB (S_REG): Prairie Breeze"
     assert a["CH-PRBZ"] == "AHB (S_REG): Prairie Breeze."
+
+
+def test_unreachable_authority_is_loud_not_a_csv(monkeypatch):
+    def boom(table="mfg_names_authoritative"):
+        raise mc.MfgAuthorityUnavailable("DO table mfg_names_authoritative unreachable")
+    monkeypatch.setattr(mc, "_mfg_from_db", boom)
+    with pytest.raises(mc.MfgAuthorityUnavailable):
+        sheet_mod._mfg_authority()
 
 
 def test_duplicate_mfg_name_never_picks_a_winner():

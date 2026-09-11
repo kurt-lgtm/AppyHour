@@ -29,7 +29,9 @@ import openpyxl
 
 AH = Path(r"C:\Users\Work\Claude Projects\AppyHour")
 sys.path.insert(0, str(AH))
-from matrix_commander import MFG_AUTHORITATIVE_PATH, load_mfg_translations  # noqa: E402
+from matrix_commander import MfgAuthorityUnavailable, load_mfg_names  # noqa: E402
+
+AUTHORITY_LABEL = "DO table mfg_names_authoritative"
 
 FIXED_COLS = ["OrderID", "Name", "Distribution Type", "Total", "Phone Number", "Email",
               "Address", "Address 2", "City", "State", "Zip", "Tags", "Notes", "ProductionDay"]
@@ -79,19 +81,21 @@ def main():
     if len(hdr_norm) > 13 and hdr_norm[13] != "ProductionDay":
         fails.append(("Structure", f"col N (14) is '{hdr_norm[13]}', expected 'ProductionDay'"))
 
-    # NAMES — every AHB (S_REG): header must be in the authoritative export
-    authoritative = set(load_mfg_translations(MFG_AUTHORITATIVE_PATH).values())
-    if not authoritative:
-        print(f"WARNING: {MFG_AUTHORITATIVE_PATH.name} missing/empty — NAME check SKIPPED")
-    else:
-        for h in header:
-            if h is None:
-                continue
-            hs = str(h).strip()
-            if hs.startswith(HDR_PREFIX) and hs not in authoritative:
-                fails.append(("MFG Name (INVENTED?)",
-                              f"header '{hs}' not in {MFG_AUTHORITATIVE_PATH.name} — "
-                              f"fabricated/mistyped; look up the real name, never guess"))
+    # NAMES — every AHB (S_REG): header must be in the DO authority table. 🔴 An unreachable
+    # authority is a FAIL, never a skipped check (rule 23's fail-open, closed 2026-09-11).
+    try:
+        authoritative = set(load_mfg_names().values())
+    except MfgAuthorityUnavailable as e:
+        authoritative = set()
+        fails.append(("MFG Authority", f"{AUTHORITY_LABEL} unreachable — NAME check could not run: {e}"))
+    for h in header:
+        if h is None or not authoritative:
+            continue
+        hs = str(h).strip()
+        if hs.startswith(HDR_PREFIX) and hs not in authoritative:
+            fails.append(("MFG Name (INVENTED?)",
+                          f"header '{hs}' not in {AUTHORITY_LABEL} — "
+                          f"fabricated/mistyped; look up the real name, never guess"))
 
     # row scan: names done; now PO box, zip, dupes, sort, productionday, low-item
     oi, ti = cm.get("order_id"), cm.get("tags")

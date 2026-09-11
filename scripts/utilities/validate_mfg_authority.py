@@ -2,13 +2,17 @@
 # requires-python = ">=3.10"
 # dependencies = []
 # ///
-"""Validate the MFG-name AUTHORITY FILE ITSELF — the one thing every other guard assumes is clean.
+"""Validate the MFG-name AUTHORITY ITSELF — the one thing every other guard assumes is clean.
 
-🔴 WHY THIS EXISTS. `matrix_commander.validate_mfg_names` checks translations *against*
-`mfg_names_authoritative.csv`. Nothing checks the csv. That is the authority-registry meta-rule
-again: **a guard that reads the source it is guarding validates nothing about that source.** Every
-downstream check inherits whatever is in this file, so a polluted row is not caught anywhere — it
-becomes the authority and validates itself.
+🔴 THE AUTHORITY IS THE DO TABLE `mfg_names_authoritative` (Kurt 2026-09-11: "not a csv"), read
+through the ONE resolver `matrix_commander.load_mfg_names`. The csv beside the code is a local
+read-mirror; `--path` reads a FILE only as an explicit test override.
+
+🔴 WHY THIS EXISTS. `matrix_commander.validate_mfg_names` checks translations *against* the
+authority. Nothing checks the authority. That is the authority-registry meta-rule again: **a guard
+that reads the source it is guarding validates nothing about that source.** Every downstream check
+inherits whatever is in the table, so a polluted row is not caught anywhere — it becomes the
+authority and validates itself.
 
 Kurt 2026-08-09: *"we also have to take care to separate mfg names from other shit as to not
 pollute our export when we add to mfg names."* The risk is at the ADD, not the read.
@@ -17,18 +21,18 @@ pollute our export when we add to mfg names."* The risk is at the ADD, not the r
   - A name pasted from a screenshot / Shopify title / meal-type PDF instead of the export — the
     wk0803 "Frumage L'Ottavio" class. A curly apostrophe or a stray label word is invisible in a
     csv and reaches a SENT vF as a column header RMFG's floor cannot pick (234 count rows).
-  - An extra column (notes, classification, count, source_file) appended "just for reference".
-    The loader reads col[1]; a shifted or third column silently changes what a name IS.
-  - The same SKU added twice with two spellings — the loader's dict build keeps the LAST one, so
-    which name wins depends on row order. Silent, order-dependent authority.
+  - The same NAME on two SKUs — a reverse map picks one silently (the CH-BRZ/CH-PRBZ class is
+    DIFFERENT names; an exact duplicate is a real defect).
   - A blind overwrite with a fresh export that DROPPED items — pollution's mirror image. Additions
     must be reviewed as a DELTA, never as a file swap (see --diff-against).
 
-🔴 THIS SCRIPT NEVER WRITES THE AUTHORITY. It validates and it diffs. Additions still come from a
-fresh meal-type export (MATRIX_RULES rule 21); this makes that step reviewable instead of blind.
+🔴 THIS SCRIPT NEVER WRITES THE AUTHORITY. It validates and it diffs. The table is written ONLY by
+the console upload (`/admin/upload kind=mfg_names`, MATRIX_RULES rule 21); this makes that step
+reviewable instead of blind.
 
     python scripts/utilities/validate_mfg_authority.py
     python scripts/utilities/validate_mfg_authority.py --diff-against ~/Downloads/meal_type_export.csv
+    python scripts/utilities/validate_mfg_authority.py --path <test.csv>      # explicit file override
 """
 import argparse
 import csv
@@ -44,7 +48,8 @@ from pathlib import Path
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-AUTHORITY = Path(__file__).resolve().parents[2] / "mfg_names_authoritative.csv"
+APPYHOUR = Path(__file__).resolve().parents[2]
+AUTHORITY_LABEL = "DO table mfg_names_authoritative"
 
 # Grammar measured across all 285 rows on 2026-08-09: every name is "AHB (S_REG): <name>".
 # Asserted, not assumed — if RMFG ever issues a second prefix this fails LOUDLY and the rule gets
@@ -57,22 +62,30 @@ KNOWN_PREFIXES = {"AC", "CH", "CHW", "MT", "PK", "EX", "PR", "TR", "MR", "BL", "
 
 # Characters that mean "this was pasted from a rendered document, not exported".
 # The wk0803 burn came in as a curly apostrophe. Straight ASCII punctuation only.
-SMART = {"‘", "’", "“", "”", "–", "—", "…", " "}
+SMART = {"‘", "’", "“", "”", "–", "—", "…", " "}
 
 
 def read_rows(path):
+    """A FILE's rows — for --diff-against (a fresh export) and the --path test override only."""
     with open(path, newline="", encoding="utf-8-sig") as f:
         return [r for r in csv.reader(f) if any((c or "").strip() for c in r)]
 
 
-def validate(path):
+def authority_rows():
+    """The authority's rows as [sku, name] pairs, through the ONE resolver (never a csv)."""
+    if str(APPYHOUR) not in sys.path:
+        sys.path.insert(0, str(APPYHOUR))
+    from matrix_commander import load_mfg_names
+    return [[sku, name] for sku, name in load_mfg_names().items()]
+
+
+def validate(rows, label=AUTHORITY_LABEL):
     """-> list of violation strings. Empty list = clean."""
     bad = []
-    rows = read_rows(path)
     if not rows:
-        return [f"{path.name} is EMPTY — every downstream name check fails OPEN on an empty "
-                f"authority (matrix_commander.py:401, validate_vf_sheet.py:85), so an empty file "
-                f"is MORE dangerous than a missing one"]
+        return [f"{label} is EMPTY — every downstream name check now FAILS CLOSED on it "
+                f"(MfgAuthorityUnavailable), so the matrix and every vF tool are blocked until "
+                f"RMFG's export is re-uploaded via the console (kind=mfg_names)"]
 
     for i, r in enumerate(rows, 1):
         if len(r) != 2:
@@ -99,17 +112,18 @@ def validate(path):
                 break
 
     two = [r for r in rows if len(r) == 2]
-    for label, idx in (("SKU", 0), ("name", 1)):
+    for lbl, idx in (("SKU", 0), ("name", 1)):
         dupes = {v: n for v, n in Counter(r[idx].strip() for r in two).items() if n > 1}
         for v, n in sorted(dupes.items()):
-            bad.append(f"duplicate {label} {v!r} appears {n}× — the loader builds a dict, so the "
-                       f"LAST row silently wins and the authority becomes row-order dependent")
+            bad.append(f"duplicate {lbl} {v!r} appears {n}× — a reverse map picks one silently "
+                       f"(the table's SKU is its PRIMARY KEY, so a duplicate SKU means a corrupt "
+                       f"override file, never the table)")
     return bad
 
 
-def diff(path, fresh):
+def diff(cur_rows, fresh):
     """Show the ADD/DROP/CHANGE delta so an addition is reviewed, never a blind file swap."""
-    cur = {r[0].strip(): r[1].strip() for r in read_rows(path) if len(r) == 2}
+    cur = {r[0].strip(): r[1].strip() for r in cur_rows if len(r) == 2}
     new = {r[0].strip(): r[1].strip() for r in read_rows(fresh) if len(r) == 2}
     added = sorted(set(new) - set(cur))
     dropped = sorted(set(cur) - set(new))
@@ -125,26 +139,34 @@ def diff(path, fresh):
     if dropped or changed:
         print("\n🔴 Drops and renames are NOT automatically safe. A rename mid-cohort changes a vF "
               "header RMFG is already picking from. Confirm with the export's owner before "
-              "replacing the snapshot.")
+              "uploading the export to the console.")
     return added, dropped, changed
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--path", default=str(AUTHORITY))
+    ap.add_argument("--path", default=None,
+                    help="TEST override: validate this csv instead of the DO table")
     ap.add_argument("--diff-against", default=None,
                     help="a FRESH meal-type export; prints the add/drop/rename delta to review "
-                         "BEFORE replacing the snapshot")
-    a = ap.parse_args()
+                         "BEFORE uploading it to the console")
+    a = ap.parse_args(argv)
 
-    p = Path(a.path)
-    if not p.exists():
-        print(f"🔴 authority file not found: {p}")
-        return 1
+    if a.path:
+        p = Path(a.path)
+        if not p.exists():
+            print(f"🔴 override file not found: {p}")
+            return 1
+        rows, label = read_rows(p), str(p)
+    else:
+        try:
+            rows, label = authority_rows(), AUTHORITY_LABEL
+        except Exception as e:                                       # noqa: BLE001 — named below
+            print(f"🔴 {AUTHORITY_LABEL} unreachable ({type(e).__name__}: {e}) — nothing validated")
+            return 1
 
-    rows = read_rows(p)
-    bad = validate(p)
-    print(f"MFG AUTHORITY — {p}")
+    bad = validate(rows, label)
+    print(f"MFG AUTHORITY — {label}")
     print(f"  {len(rows)} rows")
     if bad:
         print(f"\n🔴 {len(bad)} VIOLATION(S):")
@@ -158,13 +180,13 @@ def main():
         if not fresh.exists():
             print(f"\n🔴 --diff-against file not found: {fresh}")
             return 1
-        fbad = validate(fresh)
+        fbad = validate(read_rows(fresh), str(fresh))
         if fbad:
-            print(f"\n🔴 the FRESH export itself has {len(fbad)} violation(s) — do NOT promote it:")
+            print(f"\n🔴 the FRESH export itself has {len(fbad)} violation(s) — do NOT upload it:")
             for b in fbad:
                 print(f"  - {b}")
             return 1
-        diff(p, fresh)
+        diff(rows, fresh)
 
     return 1 if bad else 0
 

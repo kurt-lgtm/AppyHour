@@ -294,12 +294,27 @@ Output: the xlsx Tommy/RMFG picks from — errors here become wrong physical box
     screenshot ("Cheese Slice, Frumage L'Ottavio" vs RMFG's actual "Frumage LOttavio") and the
     invented header reached a SENT vF on 234 count rows — un-pickable on RMFG's floor, caught only
     by Kurt's review. **Rule:** `validate_mfg_names()` runs at matrix generate; any translation name
-    not in `mfg_names_authoritative.csv` (a committed snapshot of the meal-type export) raises
+    not in the **DO MySQL table `mfg_names_authoritative`** raises
     `MfgOnboardingError` (BY TYPE, §13.5 semantics — sheet blocked, routing unaffected). MFG names
     are sourced ONLY from the meal-type export, never from sheet labels, screenshots, or memory.
-    Refresh the snapshot by replacing the file with a fresh export; snapshot absent = loud
-    validation-skipped warning (not a hard stop on machines without it).
-    ✅ Enforced 2026-07-31: `matrix_commander.validate_mfg_names` + `tests/test_mfg_name_validation.py`.
+    **🔴 The authority is the DO table, never a csv (Kurt 2026-09-11: "not a csv").** The tables
+    `mfg_names_authoritative` + `mfg_translations` (302 rows) are written ONLY by the console upload
+    (`/admin/upload kind=mfg_names` → `ShipRouting/server/manual_ingest._h_mfg_names`); the csvs
+    beside the code are local READ-MIRRORS pulled by `ShipRouting/scripts/sync_local_inputs.py
+    --write` and are read by NOTHING at runtime. **ONE resolver:** `matrix_commander._mfg_from_db`
+    (exposed as `load_mfg_names()` / `load_mfg_translations()`), which every AppyHour consumer
+    (`validate_mfg_names`, `vf_items.Authority`, `order_checks.sheet._mfg_authority`,
+    `validate_vf_sheet`, `validate_mfg_authority`, `merge_gift_xlsx`) and every ShipRouting
+    consumer (`lib.authorities.load_mfg_names` → presend/vf_tags/vf_edit/vf_checks/onboard/run_vf)
+    routes through. A file path is accepted ONLY as an explicit `--authority <csv>` test override
+    (binds `MFG_AUTHORITY_OVERRIDE`, which governs every reader in the process). **DB unreachable or
+    table EMPTY = `MfgAuthorityUnavailable`, loud, naming the table — never a silent csv fallback**:
+    the old `ROUTING_INPUTS_DB`-gated read with csv fallback is how presend validated against a csv
+    BAKED INTO THE IMAGE while Kurt uploaded RMFG's export to the console four times (2026-08-21),
+    and how a mirror pushed the wrong way clobbered a correct 294-row table back to 286. This also
+    closes rule 23's fail-open: an empty authority no longer prints a warning and skips.
+    ✅ Enforced 2026-07-31: `matrix_commander.validate_mfg_names` + `tests/test_mfg_name_validation.py`
+    (rewritten 2026-09-11 to the DB contract with a fake connection; creds-free).
 
 22. **Zips and tracking numbers are TEXT everywhere — leading-zero loss recurred FOUR times**
     (07-03 matrix, 07-17 second writer, 07-29 Kurt caught it in a report, 07-31 vFGR + FedEx

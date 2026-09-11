@@ -308,7 +308,11 @@ def check_sync_heartbeat(findings: list[str]) -> None:
         # `_partial_since` joined this list 2026-09-07 for the SAME reason as `_last_attempt`:
         # it is a marker of unfinished work, not evidence the ingest is alive. Counting it in
         # `newest` would let a leg stuck partial hold the 48h gate green off its own backlog stamp.
-        if key.endswith(("_status", "_last_attempt", "_partial_since")):
+        # `_last_progress` joined 2026-09-11 for the same reason again: it says a partial leg
+        # banked rows, which grades THAT leg (below), but it is not a leg finishing — counting it
+        # in this cross-leg max() would let one draining backlog hold the 48h gate green for every
+        # other frozen leg.
+        if key.endswith(("_status", "_last_attempt", "_partial_since", "_last_progress")):
             continue
         try:
             ts = datetime.fromisoformat(str(val))
@@ -344,10 +348,31 @@ def _grade_partial_legs(data: dict, findings: list[str], now: datetime | None = 
     has an `ok` inside SYNC_PARTIAL_ESCALATE_H; 🔴 CRITICAL once it does not.
 
     🔴 Recency is the OLDEST OUTSTANDING WORK, never "now". Three cases, in order:
-      1. the leg HAS an `ok` (`<name>`)   -> measure from that success.
-      2. no `ok`, but `<name>_partial_since` -> measure from the FIRST incomplete attempt.
-      3. no `ok` and no `_partial_since`  -> the leg has never started a tracked backlog: grade
-         from its attempt stamp (age ~0, info) and SAY the stamp is absent.
+      1. the leg has an `ok` (`<name>`) or `<name>_last_progress` -> measure from the NEWER of
+         them: a run that finished, or a bounded run that COMMITTED ROWS.
+      2. neither, but `<name>_partial_since` -> measure from the FIRST incomplete attempt.
+      3. none of the three -> the leg has never started a tracked backlog: grade from its attempt
+         stamp (age ~0, info) and SAY the stamp is absent.
+
+    🔴 WHY `_last_progress` IS IN CASE 1 (2026-09-11). A BUDGETED leg exits `partial:` on every
+    normal run BY DESIGN, so it can never stamp `ok`, so an `ok`-only reference made its alarm
+    UNSATISFIABLE — it escalated at 36h and would escalate forever no matter how well the leg
+    performed. Measured 2026-09-10: `delivery_poll` reported "PARTIAL with no ok for 53h
+    (measured from NEVER succeeded)" while the queue was draining normally — 196 orders due, all
+    at attempts=3 (mid backoff-ladder, none never-asked, none at the end), 756 rows committed in
+    the 480s budget, `retired 0` correct because no tail had formed. An alarm that cannot be
+    satisfied gets muted by its reader, which is strictly worse than no alarm (rule 4).
+
+    🔴 AND THE FLOOR THAT KEEPS IT AN ALARM: `_last_progress` is written ONLY for a `partial:`
+    that committed rows (`sync_logon._stamp(name, status, progress)`, progress > 0, counted after
+    `commit()`). A partial that banked ZERO writes nothing, so a leg polling and committing
+    nothing still falls through to `_partial_since` and still escalates. Without that floor this
+    change converts a real outage into silence — the opposite of the bug it fixes.
+
+    ⚠️ RESIDUAL, accepted and stated: a leg that commits rows every run while its backlog GROWS
+    now grades green here. This checker watches the STAMP, not the queue; the queue numbers ride
+    in the stamp text (`N due remaining of M unresolved; oldest due Xd`) and a second, competing
+    queue-age alarm was deliberately not added (rule 4). Revisit only with a measured instance.
 
     🔴 THE BUG THIS SHAPE EXISTS TO STOP (Codex audit, 2026-09-07). Case 2 did not exist: a leg
     with no `ok` fell straight to `sync_stamp_time`, i.e. its LATEST attempt. A leg that has never
@@ -401,8 +426,17 @@ def _partial_reference(data: dict, name: str) -> tuple[datetime, str]:
             return None
 
     ok = _parse(data.get(name))
-    if ok is not None:
-        return ok, "last ok"
+    progress = _parse(data.get(f"{name}_last_progress"))
+    if ok is not None or progress is not None:
+        # 🔴 NEWEST of the two, not "ok first" (2026-09-11). A BUDGETED leg exits `partial:` on
+        # every normal run by design and can never stamp `ok`, so an `ok`-only reference made its
+        # alarm unsatisfiable — `delivery_poll` fired "PARTIAL with no ok for 53h ... measured
+        # from NEVER succeeded" on 2026-09-10 while the queue was draining normally (196 due, all
+        # mid-backoff-ladder, 756 rows committed in the 480s budget). An alarm no amount of health
+        # can clear gets muted, and a muted alarm is worse than none (rule 4).
+        if progress is not None and (ok is None or progress > ok):
+            return progress, "last committed rows"
+        return ok, "last ok"                                    # type: ignore[return-value]
     since = _parse(data.get(f"{name}_partial_since"))
     if since is not None:
         return since, "NEVER succeeded; oldest outstanding work"

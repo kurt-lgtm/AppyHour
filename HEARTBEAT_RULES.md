@@ -568,6 +568,46 @@ TASK 4.1 (healthchecks dead-man-switch pattern, local variant).
      would reset to 0 every run), and **clears it on `ok`**. Tests: `tests/
      test_automation_health_dispatch.py::PartialLegEscalationTest` (day 0 info / day 2 CRITICAL /
      day 7 CRITICAL) and `::StampPartialSinceTest` (set-once, never-refreshed, cleared-on-ok).
+   - **🔴 AMENDMENT 2026-09-11 — AN ALARM A HEALTHY LEG CANNOT SATISFY IS A BUG IN THE ALARM. A
+     `partial:` that COMMITTED ROWS counts as the leg being alive; only ZERO progress keeps
+     escalating.** The 09-07 amendment above assumed every `partial:` is an unfinished exception.
+     It is not: a BUDGETED poller exits `partial:` on every normal run BY DESIGN, therefore never
+     writes an `ok`, therefore "no `ok` since `_partial_since`" grows without bound. Measured
+     2026-09-10 (read-only, via `delivery_window.due_work_list_sql()`): `automation_health` fired
+     **"ingest leg delivery_poll PARTIAL with no ok for 53h (max 36h, measured from NEVER
+     succeeded)"** while the leg was HEALTHY — **196** orders due, **all** at `attempts=3` (mid
+     `POLL_BACKOFF_HOURS` ladder; zero never-asked, zero at the end of the ladder), **756** rows
+     committed inside the 480s `DELIVERY_POLL_BUDGET_S` (≈ the 100/min ParcelPanel target), and
+     `retired 0` correct because no aged-out tail had formed. The queue was draining; the alarm
+     could not say so and could never stop. That is rule 4's failure mode (an expectation nobody
+     can satisfy trains alarm-deafness), reached from the opposite direction to rule 1's.
+     `sync_logon._stamp(name, status, progress)` now writes **`<name>_last_progress`** on a
+     `partial:` with `progress > 0`, refreshed every such run and cleared on `ok`;
+     `_partial_reference` grades case 1 from the NEWER of `<name>` and `<name>_last_progress`.
+     NEGATIVES:
+     - **🔴 `progress` is COMMITTED ROWS. Never an attempt, never rows fetched, never "the stage
+       ran".** `CancelToken.progress` counts only after `commit()`; `delivery_poll` passes
+       `res["written"]`, which `backfill_sync._flush` increments only after `wc.commit()`. Reading
+       anything looser re-creates the exact trap this rule has now hit **four** times — rule 3b(c),
+       the `_last_attempt` exclusion, the 09-07 inversion, and this one: *treating evidence that
+       work was ATTEMPTED as evidence it is HEALTHY*.
+     - **🔴 A `partial:` with ZERO committed rows writes NO `_last_progress` and MUST still
+       escalate.** This floor is the whole point: without it the change converts a real outage
+       (feed dead, every poll answering nothing) into silence, which is worse than the false alarm
+       it removes. Test: `tests/test_sync_logon_partial_and_lock.py::
+       test_zero_progress_partial_writes_no_last_progress_and_still_escalates`.
+     - **🔴 `_last_progress` is NOT a freshness signal for the cross-leg 48h gate** — it is in
+       `check_sync_heartbeat`'s excluded-suffix tuple beside `_last_attempt`/`_partial_since`. One
+       draining backlog must not hold that gate green for every other frozen leg.
+     - **`partial:` still does NOT advance `<name>`** — the 12h throttle stays armed-off so the
+       next logon drains the remainder. This amendment changes only how the CHECKER grades, never
+       `_should_run`. Do not "simplify" it by stamping a literal `ok` on a progressing partial:
+       that would advance last-success and put a leg with a live backlog to sleep for 12h, which
+       is the 2026-07-27 bug again.
+     - **⚠️ ACCEPTED RESIDUAL:** a leg that commits rows every run while its backlog GROWS grades
+       green here. This checker watches the stamp, not the queue; `remaining` / `oldest due Xd`
+       ride in the stamp text for a human. A second queue-age alarm was deliberately NOT added —
+       two alarms on one leg is how both get muted. Revisit on a measured instance, not a theory.
      NEGATIVES:
      - **🔴 Do NOT fix this with "no `ok` → always CRITICAL".** A leg that has legitimately never
        run yet (a new leg, a rebuilt machine, a first deploy) would page on its very first partial,

@@ -42,15 +42,16 @@ H_TETI, H_ETX, H_WWHO, H_CARO, H_WALN, H_CUMIN = (AUTH[s] for s in
 
 @pytest.fixture(autouse=True)
 def _no_db(monkeypatch):
-    """load_mfg_translations is env-first; keep tests on the csv path.
+    """The authority is the DO table; these tests bind an explicit --authority csv (the ONE test
+    seam, MATRIX_RULES rule 21) and never touch a database.
 
-    Also RESTORE matrix_commander.MFG_AUTHORITATIVE_PATH: Authority rebinds it so every consumer
-    reads one authority, and a leaked tmp path would silently re-point other modules' tests.
+    RESTORE matrix_commander.MFG_AUTHORITY_OVERRIDE: Authority binds it so every consumer reads one
+    source, and a leaked tmp path would silently re-point other modules' tests. DATABASE_URL is
+    cleared so an Authority() with no path fails LOUD (MfgAuthorityUnavailable), never reaches prod.
     """
-    monkeypatch.delenv("ROUTING_INPUTS_DB", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     import matrix_commander
-    monkeypatch.setattr(matrix_commander, "MFG_AUTHORITATIVE_PATH",
-                        matrix_commander.MFG_AUTHORITATIVE_PATH)
+    monkeypatch.setattr(matrix_commander, "MFG_AUTHORITY_OVERRIDE", None)
 
 
 @pytest.fixture

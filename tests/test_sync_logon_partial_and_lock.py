@@ -174,3 +174,97 @@ def test_release_never_deletes_a_successors_lock(tmp_path):
     lock.write_text(json.dumps({"pid": 4242, "started_at": "x"}), encoding="utf-8")
     sync_logon._release_lock(lock)
     assert lock.exists()
+
+
+# rule 18 amendment 2026-09-11: a budgeted partial that COMMITTED ROWS is aliveâ”€â”€â”€â”€â”€
+# A budgeted poller exits `partial:` on every normal run by design, so an `ok`-only reference
+# made its escalation unsatisfiable (delivery_poll, 53h, queue draining normally, 2026-09-10).
+# The floor: only a partial with progress > 0 clears it; zero progress must still page.
+
+def _ago(hours_ago: float) -> str:
+    return (datetime.now() - timedelta(hours=hours_ago)).isoformat(timespec="seconds")
+
+
+def test_progressing_partial_writes_last_progress(hb):
+    sync_logon._stamp("delivery_poll", "partial:elapsed-budget:756 delivery rows committed", 756)
+    h = json.loads(hb.read_text(encoding="utf-8"))
+    assert h["delivery_poll_last_progress"], "committed rows left no progress stamp"
+    assert "delivery_poll" not in h, "partial: must NOT advance last-success (12h throttle)"
+    assert sync_logon._should_run("delivery_poll")
+
+
+def test_zero_progress_partial_writes_no_last_progress_and_still_escalates(hb):
+    """THE FLOOR. A partial that banked nothing is an outage, not a backlog."""
+    sync_heartbeat.write({"delivery_poll_partial_since": _ago(53)})
+    sync_logon._stamp("delivery_poll", "partial:elapsed-budget:0 delivery rows committed", 0)
+    h = json.loads(hb.read_text(encoding="utf-8"))
+    assert "delivery_poll_last_progress" not in h, "zero committed rows must not look like progress"
+    findings: list[str] = []
+    ah._grade_partial_legs(h, findings)
+    assert findings and "PARTIAL with no ok" in findings[0], "zero-progress partial went silent"
+
+
+def test_progressing_partial_does_not_escalate_past_36h(hb):
+    """The 2026-09-10 measurement: 53h of by-design partials, queue draining, must be info."""
+    sync_heartbeat.write({"delivery_poll_partial_since": _ago(53)})
+    sync_logon._stamp("delivery_poll", "partial:elapsed-budget:756 delivery rows committed; "
+                      "196 due remaining of 2576 unresolved; oldest due 3d; retired 0", 756)
+    h = json.loads(hb.read_text(encoding="utf-8"))
+    findings: list[str] = []
+    ah._grade_partial_legs(h, findings)
+    assert findings == [], f"healthy draining leg still paged: {findings}"
+    ref, basis = ah._partial_reference(h, "delivery_poll")
+    assert basis == "last committed rows"
+
+
+def test_stale_progress_re_escalates(hb):
+    """Progress is not a free pass: rows committed 53h ago and nothing since still pages."""
+    h = {"delivery_poll_status": "partial:elapsed-budget:1 delivery rows committed",
+         "delivery_poll_partial_since": _ago(90), "delivery_poll_last_progress": _ago(53)}
+    findings: list[str] = []
+    ah._grade_partial_legs(h, findings)
+    assert findings and "measured from last committed rows" in findings[0]
+
+
+def test_ok_wins_when_newer_than_progress(hb):
+    h = {"delivery_poll_status": "partial:elapsed-budget:5 delivery rows committed",
+         "delivery_poll": _ago(2), "delivery_poll_last_progress": _ago(40)}
+    ref, basis = ah._partial_reference(h, "delivery_poll")
+    assert basis == "last ok"
+
+
+def test_ok_clears_last_progress_and_partial_since(hb):
+    sync_heartbeat.write({"delivery_poll_partial_since": _ago(53),
+                          "delivery_poll_last_progress": _ago(1)})
+    sync_logon._stamp("delivery_poll", "ok:12 delivery rows; 0 due remaining", 12)
+    h = json.loads(hb.read_text(encoding="utf-8"))
+    assert "delivery_poll_last_progress" not in h
+    assert "delivery_poll_partial_since" not in h
+    assert h["delivery_poll"]
+
+
+def test_last_progress_is_refreshed_unlike_partial_since(hb):
+    sync_heartbeat.write({"delivery_poll_partial_since": _ago(53),
+                          "delivery_poll_last_progress": _ago(53)})
+    sync_logon._stamp("delivery_poll", "partial:elapsed-budget:756 rows committed", 756)
+    h = json.loads(hb.read_text(encoding="utf-8"))
+    assert datetime.fromisoformat(h["delivery_poll_partial_since"]) < datetime.now() - timedelta(hours=50)
+    assert datetime.fromisoformat(h["delivery_poll_last_progress"]) > datetime.now() - timedelta(minutes=5)
+
+
+def test_last_progress_does_not_hold_the_cross_leg_48h_gate_green(hb):
+    """One draining backlog must not mask every other frozen leg."""
+    sync_heartbeat.write({"carriers": _ago(200), "delivery_poll_last_progress": _ago(0.1),
+                          "delivery_poll_status": "partial:elapsed-budget:756 rows committed"})
+    findings: list[str] = []
+    ah.check_sync_heartbeat(findings)
+    assert any("ingest sync heartbeat stale" in f for f in findings), findings
+
+
+def test_delivery_poll_budget_exit_is_partial_with_a_committed_count():
+    res = {"written": 756, "complete": False, "stop_reason": "elapsed-budget",
+           "remaining": 196, "unresolved": 2576, "oldest_due_days": 3, "retired": 0}
+    s = sync_logon._delivery_poll_stamp(res)
+    assert s.startswith("partial:elapsed-budget:756 delivery rows committed")
+    assert "oldest due 3d" in s
+
