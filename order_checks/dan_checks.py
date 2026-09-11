@@ -102,7 +102,8 @@ def run(orders, sheet, rules, rmfg_tag, ship_tag):
         # a bare CEX- slot or a sheet/Shopify disagreement on a gift means nothing --
         # every one of the 10 c1_unresolved and all 19 c2 rows on RMFG_20260828 were
         # gifts, and none was actionable. Out of checks 1, 2 and 3; verify via Matrixify.
-        is_gift = any("gift redemption" in t.lower() for t in tags)
+        is_gift = (any("gift redemption" in t.lower() for t in tags)
+                   or "recharge_credits" in (o.get("paymentGatewayNames") or []))
 
         items_all = [e["node"] for e in o["lineItems"]["edges"]]
         # Scope test runs on ALL lines, not just live ones: Simple Bundles zeroes a paid

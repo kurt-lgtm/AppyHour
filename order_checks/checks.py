@@ -37,6 +37,11 @@ def in_scope(o):
     """Reship / Gift Redemption / PR box / cancelled are out of SKU-count checks."""
     ts = [t.lower() for t in tags(o)]
     if any(t.startswith("reship") for t in ts):   return False, "reship"
+    # 🔴 The 'Gift Redemption' TAG is not always present; the gateway is the reliable
+    # half ([[gift-redemption-orders-uneditable]]). Shopify refuses to edit these and
+    # their line items are stale by construction -- the vF sheet is item-truth.
+    if "recharge_credits" in (o.get("paymentGatewayNames") or []):
+        return False, "gift redemption"
     for t in EXCLUDED_TAGS:
         if t in ts:                               return False, t
     if o.get("cancelled_at"):                     return False, "cancelled"

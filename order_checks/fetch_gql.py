@@ -20,7 +20,7 @@ import requests
 
 API = "2025-01"
 Q = """query($q:String!){orders(first:60, query:$q){edges{node{
-  id name createdAt cancelledAt tags note displayFulfillmentStatus
+  id name createdAt cancelledAt tags note displayFulfillmentStatus paymentGatewayNames
   customer{id email tags}
   shippingAddress{address1 city province provinceCode zip country}
   currentTotalPriceSet{shopMoney{amount}}

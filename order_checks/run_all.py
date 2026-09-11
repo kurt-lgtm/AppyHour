@@ -44,6 +44,7 @@ DEFAULT_RULESET = os.path.expanduser(r"~\Downloads\ALLFULFILLMENTS_RuleSet_Order
 def _rest_shape(node):
     """GraphQL node -> the dict shape the older per-order checks expect."""
     return {"tags": ",".join(node.get("tags") or []),
+            "paymentGatewayNames": node.get("paymentGatewayNames") or [],
             "line_items": [{**e["node"], "sku": e["node"]["sku"],
                             "current_quantity": e["node"]["currentQuantity"],
                             "quantity": e["node"]["quantity"],
@@ -138,6 +139,11 @@ def main(argv=None):
     ap.add_argument("--allow-stale", action="store_true",
                     help="run even though the store is behind the cohort. The guardrail "
                          "output is then a FLOOR and must be labelled as such.")
+    ap.add_argument("--exclude-tag", action="append", default=[], metavar="TAG",
+                    help="hold out orders carrying TAG before any check (repeatable). For a "
+                         "phase whose child SKUs are not added yet -- P2 on RMFG_20260911 -- "
+                         "every count check would flag it short. Held-out orders are COUNTED "
+                         "and printed, never silently dropped.")
     ap.add_argument("--ruleset", default=DEFAULT_RULESET)
     ap.add_argument("--cache")
     ap.add_argument("--out", default=".")
@@ -167,6 +173,13 @@ def main(argv=None):
         sheet = {}
         orders = fetch_by_tag(a.tag, cache=a.cache)
         print("  no sheet given -- cohort by tag. c2 and the swap caps are SKIPPED.")
+
+    if a.exclude_tag:
+        held = {k for k, o in orders.items() if set(a.exclude_tag) & set(o.get("tags") or [])}
+        print(f"  --exclude-tag {a.exclude_tag}: {len(held)} orders HELD OUT, "
+              f"{len(orders) - len(held)} checked")
+        orders = {k: o for k, o in orders.items() if k not in held}
+        sheet = {k: v for k, v in sheet.items() if k not in held}
 
     print("\n-- counts (checks 1/2/3/5/6/8) --")
     R = dan_run(orders, sheet, load_rules(a.ruleset), a.tag, a.ship)

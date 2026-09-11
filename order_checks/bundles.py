@@ -44,14 +44,18 @@ RECIPE_Q = ('query($id:ID!){node(id:$id){... on ProductVariant{sku title '
 # 'Medium (Serves 2-4)' sits beside AHB-MED; #181557 Large beside AHB-LGE. That is
 # correct, not a miss -- but if the matching AHB parent is ABSENT the box has no parent
 # at all, which no SKU-keyed check can see.
-OFFER_PARENT = {"medium": "AHB-MED", "large": "AHB-LGE"}
+#
+# AHB-CMED is ALSO a valid Medium parent (Kurt 2026-09-11, #183392) -- a single-SKU map
+# called that order "offer with NO AHB parent" when its parent was right there.
+OFFER_PARENT = {"medium": ("AHB-MED", "AHB-CMED"), "large": ("AHB-LGE",)}
 
 
 def _offer_parent(variant_title):
+    """-> tuple of AHB parents that satisfy this box offer, or None."""
     t = (variant_title or "").strip().lower()
-    for k, sku in OFFER_PARENT.items():
+    for k, skus in OFFER_PARENT.items():
         if t.startswith(k):
-            return sku
+            return skus
     return None
 
 
@@ -88,7 +92,13 @@ def bundle_check(orders, base=None, headers=None, verbose=True):
         from appyhour_lib.credentials import get_shopify_auth
         base, headers = get_shopify_auth()
     cache, rows, seen = {}, [], 0
+    from .checks import in_scope
     for o in orders.values():
+        # Gift / PR box / reship / cancelled: a gift's Shopify lines are stale by
+        # construction (Kurt 2026-09-11, "they won't be in shopify") -- a missing bundle
+        # component on one is expected, not a finding.
+        if not in_scope(o)[0]:
+            continue
         live, cand = set(), []
         for e in o["lineItems"]["edges"]:
             n = e["node"]
@@ -111,10 +121,10 @@ def bundle_check(orders, base=None, headers=None, verbose=True):
             if not rec:
                 parent = _offer_parent(vtitle) if not sk else None
                 if parent:
-                    if parent in live:
+                    if any(p in live for p in parent):
                         continue        # box offer, real AHB parent present -- correct
                     rows.append({**row, "state": "🔴 box offer, NO AHB parent",
-                                 "missing": parent})
+                                 "missing": "/".join(parent)})
                 else:
                     rows.append({**row, "state": "no recipe", "missing": ""})
                 continue

@@ -25,6 +25,7 @@ def test_cex_and_ex_are_the_same_slot():
 
 
 def test_box_offer_variant_title_maps_to_its_ahb_parent():
-    assert _offer_parent("Medium (Serves 2-4)") == "AHB-MED"
-    assert _offer_parent("Large (Serves 4-6)") == "AHB-LGE"
+    # AHB-CMED is also a Medium parent (Kurt 2026-09-11, #183392)
+    assert _offer_parent("Medium (Serves 2-4)") == ("AHB-MED", "AHB-CMED")
+    assert _offer_parent("Large (Serves 4-6)") == ("AHB-LGE",)
     assert _offer_parent("Summer Cookout") is None
