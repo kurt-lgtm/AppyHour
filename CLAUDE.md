@@ -56,9 +56,10 @@ Original 386-line CLAUDE.md preserved as `_CLAUDE-original-2026-05-10.md` (ledge
 ## Box Sizing — DistVol (canonical fact)
 
 **DistVol** = AppyHour's per-SKU volumetric unit. `box_simulation.py` sums each order's DistVol → assigns a box size (`SMALL` ≤ 2.99, `LARGE` ≤ 6.7; rate `105.3` cu-in per 1.00 DistVol).
-- **Source of truth** = the `DistVol` column in `C:\Users\Work\Desktop\Onboarded Items with DistVol - Updated.xlsx` (hardcoded `box_simulation.py:20`). Single-copy on Desktop — in the backup rescue set.
-- Fallbacks when a SKU isn't in the xlsx: `PREFIX_DEFAULTS` (AC .12 / CH .20 / MT .07 / PK 0 / TR 1.0) + `MANUAL_OVERRIDES` in `box_simulation.py`.
-- Tools: `box_simulation.py [SHIP_TAG]` (compute), `audit_distvol_drift.py` (re-derive lookup vs CSV), `_outputs/box_distvol.db` + `_outputs/cache/sku_distvol_map.json` (cached map). See `TOOL_REGISTRY.md`.
+- **🔴 Source of truth = the DO MySQL table `distvol`** (`sku, distvol, source, updated_at`; 252 rows 2026-09-11) read by the ONE reader `box_simulation._distvol_db()` via `build_lookup()`. Unreachable / empty / half-loaded (< 200 rows) = `DistVolUnavailable`, loud — **no file fallback**. The Desktop xlsx `Onboarded Items with DistVol - Updated.xlsx` and the `DISTVOL_XLSX` env were RETIRED as sources 2026-09-11 (Kurt: "not a csv"); an xlsx is read only via an explicit `--distvol PATH` / `build_lookup(xlsx_path)` (the console ingest parsing an upload, or a test).
+- **Writing a DistVol** = a row in the table: the console upload (`/admin/upload kind=distvol` → `ShipRouting/server/manual_ingest._h_distvol`) replaces the xlsx-sourced rows and **preserves every row whose `source` starts `manual`** unless the upload carries that SKU; a hand-supplied value is inserted with `source='manual-<who>-<date>'` (12 such rows landed 2026-09-11). `MANUAL_OVERRIDES` in code still win on top between loads.
+- **A SKU with no `distvol` row is a named WARNING, never silent**: `resolve_distvol()` falls back to `PREFIX_DEFAULTS` (AC .12 / CH .20 / MT .07 / PK 0 / TR 1.0) and `simulate()` prints `WARNING: DistVol MISSING for <sku> - <n> order(s) sized on PREFIX_DEFAULT …` per SKU (`report_missing_distvol`). 18 cohort SKUs sat silently on prefix defaults the week of 2026-09-07 because the flag only reached the xlsx summary tab. MFG-acceptance without DistVol is incomplete onboarding.
+- Tools: `box_simulation.py [SHIP_TAG]` (compute), `audit_distvol_drift.py` (re-derive lookup vs CSV), `_outputs/box_distvol.db` + `_outputs/cache/sku_distvol_map.json` (cached map). See `TOOL_REGISTRY.md`. Tests: `tests/test_box_simulation_distvol.py` (fake connection, creds-free).
 
 ## Run
 

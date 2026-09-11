@@ -2,6 +2,10 @@
 
 Usage: python box_simulation.py [SHIP_TAG] [--refresh] [--distvol PATH]
 Default SHIP_TAG: _SHIP_2026-04-27
+
+DistVol authority = the DO MySQL table `distvol` (`build_lookup()` → `_distvol_db`, the ONE reader).
+`--distvol PATH` is the only file path and is an explicit override. A cohort SKU with no `distvol`
+row is sized on a PREFIX DEFAULT and is reported by name (`report_missing_distvol`) — never silent.
 """
 from __future__ import annotations
 
@@ -19,12 +23,11 @@ from utils import get_shopify_auth, shopify_graphql  # noqa: E402
 
 from openpyxl import Workbook, load_workbook  # noqa: E402
 
-# DISTVOL_XLSX env override (P7 portability 2026-07-27) — unset resolves to the same Desktop literal,
-# so Windows behavior is byte-identical. 🔴 This file is the DistVol source of truth AND a single copy
-# on the Desktop; the env hook is what lets a non-Windows host (the DO droplet) point at its own copy
-# until the `distvol` table replaces it.
-XLSX_LOOKUP = Path(os.environ.get("DISTVOL_XLSX")
-                   or r"C:\Users\Work\Desktop\Onboarded Items with DistVol - Updated.xlsx")
+# 🔴 The DistVol source of truth is the DO MySQL table `distvol` (252 rows; Kurt 2026-09-11: "not a
+# csv"). The Desktop xlsx and the DISTVOL_XLSX env hook were RETIRED as sources the same day — an
+# xlsx is read ONLY when a caller passes an explicit path (`--distvol PATH`, or the console ingest
+# parsing an upload before it becomes the table). Onboarding a DistVol = a row in the table
+# (source 'manual-<who>-<date>' for a hand-supplied value; the console upload preserves those).
 OUT_DIR = Path(r"C:\Users\Work\Desktop")
 
 SMALL_MAX = 2.99
@@ -112,58 +115,92 @@ def _resolve_ci_column(ws, ci_col_letter: str) -> dict[int, float]:
     return ci
 
 
-# ── MySQL `distvol` replica read path (retirement step 2, ShipRouting/server/DATA_CANON_RULES.md).
-# Env-first: ROUTING_INPUTS_DB=1 AND DATABASE_URL → read the table; default = the Desktop xlsx,
-# byte-identical. The xlsx STAYS the authority; the table is a replica (etl_history --load-inputs).
-# Empty table → loud fallback to xlsx; half-loaded (< floor) → RAISE, never serve a shrunken map.
-DB_DISTVOL_MIN_ROWS = 200      # healthy replica ≈239 skus (2026-08-05 load)
+# ── THE DistVol read path: the DO MySQL table `distvol` (sku, distvol, source, updated_at).
+# 🔴 Formerly gated on ROUTING_INPUTS_DB=1 with a silent xlsx fallback on ANY failure — the
+# silent-degrade class (a local build and the cloud could size the same cohort off two sources).
+# Now: unreachable / empty → RAISE naming the table; half-loaded (< floor) → RAISE, never serve a
+# shrunken map. No xlsx fallback exists. The ONE reader; ShipRouting's build imports it.
+DB_DISTVOL_MIN_ROWS = 200      # healthy table ≈252 skus (2026-09-11)
 
 
-def _distvol_db() -> dict[str, float] | None:
-    if os.environ.get("ROUTING_INPUTS_DB") != "1":
-        return None
-    url = os.environ.get("DATABASE_URL", "")
+class DistVolUnavailable(RuntimeError):
+    """The DO `distvol` table could not be read. Never caught into an xlsx fallback."""
+
+
+def _distvol_database_url() -> str | None:
+    """Cloud credential through the ONE resolver (`appyhour_lib.cloud_db.database_url`; the
+    pre-dedupe `cloud_reads._database_url` answers identically). 🔴 Under pytest only an explicit
+    env DATABASE_URL counts — the credential FILE is never consulted, so an unpatched test cannot
+    reach production."""
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return os.environ.get("DATABASE_URL", "").strip() or None
+    try:
+        from appyhour_lib.cloud_db import database_url
+    except ImportError:                                   # cloud_db not landed on this checkout yet
+        from appyhour_lib.cloud_reads import _database_url as database_url
+    return database_url()
+
+
+def distvol_db_connect():
+    """pymysql connection for the `distvol` table; raises DistVolUnavailable with the fix."""
+    url = _distvol_database_url()
+    if not url:
+        raise DistVolUnavailable(
+            "DistVol authority is the DO MySQL table `distvol` and no cloud credential is "
+            r"configured: set DATABASE_URL or create %APPDATA%\AppyHour\database_url.txt from a "
+            "REAL terminal. The Desktop xlsx is retired; there is no file fallback.")
     m = re.match(r"mysql(?:\+\w+)?://([^:]+):([^@]+)@([^:/]+):(\d+)/([^?]+)", url)
     if not m:
-        print("WARNING: ROUTING_INPUTS_DB=1 but DATABASE_URL missing/unparseable - using xlsx")
-        return None
+        raise DistVolUnavailable("DATABASE_URL unparseable (expected mysql://user:pw@host:port/db)")
     import pymysql
     usr, pw, host, port, db = m.groups()
     try:
-        con = pymysql.connect(host=host, port=int(port), user=usr, password=pw,
-                              database=db, ssl={"ssl": {}})
+        return pymysql.connect(host=host, port=int(port), user=usr, password=pw,
+                               database=db, ssl={"ssl": {}})
+    except Exception as e:                                # noqa: BLE001 — re-raised BY NAME
+        raise DistVolUnavailable(
+            f"cannot connect to the DO database for table `distvol` "
+            f"({type(e).__name__}: {e}) — no xlsx fallback; fix the connection") from e
+
+
+def _distvol_db() -> dict[str, float]:
+    """sku -> DistVol from the DO table. Raises DistVolUnavailable; never returns None/partial."""
+    con = distvol_db_connect()
+    try:
+        cur = con.cursor()
+        cur.execute("SELECT sku, distvol FROM distvol")
+        rows = cur.fetchall()
+    except Exception as e:                                # noqa: BLE001 — re-raised BY NAME
+        raise DistVolUnavailable(
+            f"DO table `distvol` read failed ({type(e).__name__}: {e}) — no xlsx fallback") from e
+    finally:
         try:
-            cur = con.cursor()
-            cur.execute("SELECT sku, distvol FROM distvol")
-            rows = cur.fetchall()
-        finally:
             con.close()
-    except Exception as e:
-        # Transient db failure must not kill box sizing — the xlsx authority is right there.
-        print(f"WARNING: distvol db read failed ({type(e).__name__}: {e}) - using xlsx")
-        return None
+        except Exception:                                 # noqa: BLE001
+            pass
     if not rows:
-        print("distvol db replica EMPTY - falling back to xlsx")
-        return None
+        raise DistVolUnavailable(
+            "DO table `distvol` is EMPTY — every SKU would size on a prefix default. Re-upload the "
+            "DistVol xlsx via the console (kind=distvol).")
     if len(rows) < DB_DISTVOL_MIN_ROWS:
-        raise RuntimeError(
-            f"distvol table has only {len(rows)} rows (< {DB_DISTVOL_MIN_ROWS}) - refusing a "
-            f"half-loaded replica. Re-run etl_history.py --load-inputs --tables distvol.")
-    print(f"distvol: db replica, {len(rows)} skus")
-    return {sku: float(dv) for sku, dv in rows}
+        raise DistVolUnavailable(
+            f"DO table `distvol` has only {len(rows)} rows (< {DB_DISTVOL_MIN_ROWS}) - refusing a "
+            f"half-loaded table. Re-upload the DistVol xlsx via the console (kind=distvol).")
+    print(f"distvol: DO authority, {len(rows)} skus")
+    return {str(sku).strip(): float(dv) for sku, dv in rows if sku and str(sku).strip()}
 
 
 def build_lookup(xlsx_path=None) -> dict[str, float]:
-    # Explicit xlsx_path (manual-upload ingest, phase 2b) bypasses the db-replica branch on
-    # purpose — an upload is being validated/loaded, so it must read the given file.
+    """sku -> DistVol. No path = the DO table (raises DistVolUnavailable, never falls back).
+    An EXPLICIT xlsx_path = read THAT file: the console ingest validating an upload before it
+    becomes the table, or a `--distvol PATH` test override. Never a default path."""
     if xlsx_path is None:
         db_lookup = _distvol_db()
-        if db_lookup is not None:
-            # MANUAL_OVERRIDES still win on top — same semantics as the xlsx path below, and the code
-            # dict is the fresher authority between loads (wk0803 pattern: override lands in code first).
-            db_lookup.update(MANUAL_OVERRIDES)
-            return db_lookup
-    wb = load_workbook(xlsx_path or XLSX_LOOKUP)
+        # MANUAL_OVERRIDES still win on top — same semantics as the xlsx path below, and the code
+        # dict is the fresher authority between loads (wk0803 pattern: override lands in code first).
+        db_lookup.update(MANUAL_OVERRIDES)
+        return db_lookup
+    wb = load_workbook(xlsx_path)
     ws = wb["Sheet1"]
     lookup: dict[str, float] = {}
     header = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
@@ -190,13 +227,38 @@ def build_lookup(xlsx_path=None) -> dict[str, float]:
 
 
 def resolve_distvol(sku: str, lookup: dict[str, float]) -> tuple[float, bool]:
-    """Return (distvol, flagged). Flag = not present in xlsx reference.
+    """Return (distvol, flagged). Flag = no `distvol` row for this SKU — it is being sized on a
+    PREFIX DEFAULT, which is a guess. 🔴 The caller MUST surface every flagged SKU by name
+    (`report_missing_distvol`); the flag alone stayed inside the xlsx summary tab and 18 cohort
+    SKUs sat silently on prefix defaults for a week (2026-09-11). Sizing itself is unchanged.
     DV always rounded to 2 decimals (per user pref 2026-04-29)."""
     s = sku.strip()
     if s in lookup:
         return (round(lookup[s], 2), False)
     prefix = s.split("-", 1)[0] if "-" in s else s
     return (round(PREFIX_DEFAULTS.get(prefix, 0.10), 2), True)
+
+
+def report_missing_distvol(results: list[dict]) -> dict[str, int]:
+    """{sku: order_count} for every SKU sized on a prefix default, printed as ONE NAMED WARNING LINE
+    PER SKU into the run log. 🔴 Never silent: "MFG-acceptance without DistVol is incomplete
+    onboarding" (MANUAL_OVERRIDES note, AC-FCROSE class) — the fix is a `distvol` row, and until it
+    lands every order carrying the SKU is sized on a guess (0.12/0.20/0.07/1.00 by prefix)."""
+    counts: Counter = Counter()
+    for r in results:
+        for sku in (r.get("Flagged SKUs") or "").split(", "):
+            if sku:
+                counts[sku] += 1
+    for sku, n in counts.most_common():
+        prefix = sku.split("-", 1)[0] if "-" in sku else sku
+        print(f"WARNING: DistVol MISSING for {sku} - {n} order(s) sized on PREFIX_DEFAULT "
+              f"{PREFIX_DEFAULTS.get(prefix, 0.10):.2f} (no `distvol` row; onboarding incomplete - "
+              f"insert the canonical value into the DO table)", flush=True)
+    if counts:
+        print(f"WARNING: {len(counts)} SKU(s) without a DistVol row across "
+              f"{sum(counts.values())} order-lines - box sizes for those orders are GUESSES",
+              flush=True)
+    return dict(counts)
 
 
 QUERY = """
@@ -391,6 +453,7 @@ def simulate(orders: list[dict], lookup: dict[str, float]) -> list[dict]:
             "Over Capacity?": over,
             "Flagged SKUs": ", ".join(sorted(set(flagged))),
         })
+    report_missing_distvol(results)
     return results
 
 
@@ -469,16 +532,15 @@ def main(argv=None) -> None:
     ap.add_argument("--refresh", action="store_true",
                     help="refetch orders from Shopify, ignoring the cohort cache")
     ap.add_argument("--distvol", metavar="PATH",
-                    help="DistVol xlsx for THIS run (precedence: --distvol > DISTVOL_XLSX "
-                         "env > Desktop default)")
+                    help="TEST/INGEST override: size THIS run from an xlsx instead of the DO "
+                         "table `distvol` (the authority; never a default path)")
     a = ap.parse_args(argv)
     tag = a.ship_tag
     force_refresh = a.refresh
     if a.distvol and not os.path.exists(a.distvol):
         sys.exit(f"box_simulation: --distvol file not found: {a.distvol}")
     cache_path = Path(rf"C:\Users\Work\box_sim_cache_{tag}.json")
-    # Explicit --distvol bypasses the db-replica branch on purpose (same semantics as
-    # build_lookup's xlsx_path contract); None keeps today's env/Desktop resolution.
+    # Explicit --distvol reads that file (build_lookup's xlsx_path contract); None = the DO table.
     lookup = build_lookup(a.distvol)
     print(f"Loaded {len(lookup)} SKUs from lookup"
           + (f" ({a.distvol})" if a.distvol else "") + ".")
