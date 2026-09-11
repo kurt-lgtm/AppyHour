@@ -5108,12 +5108,13 @@ def swap_matrix_upload():
         if skus:
             matrix[oid] = skus
 
-    # Fetch Shopify orders for this ship tag
-    s = _s()
-    store = s.get("shopify_store_url", "")
-    token = s.get("shopify_access_token", "")
-    base = f"https://{store}.myshopify.com/admin/api/2026-04"
-    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+    # Fetch Shopify orders for this ship tag — canonical auth (appyhour_lib.credentials).
+    from appyhour_lib.credentials import get_shopify_auth, get_shopify_credentials
+    try:
+        store, token = get_shopify_credentials()
+        base, headers = get_shopify_auth()
+    except RuntimeError:
+        return jsonify({"error": "Shopify credentials not configured"}), 400
 
     orders = []
     if _s().get("fulfillment_use_graphql_tag_query", False):
@@ -5411,13 +5412,12 @@ def swap_tag_skus():
         return jsonify({"error": "ship_tag required"}), 400
 
     s = _s()
-    store = s.get("shopify_store_url", "")
-    token = s.get("shopify_access_token", "")
-    if not store or not token:
+    from appyhour_lib.credentials import get_shopify_auth, get_shopify_credentials
+    try:
+        store, token = get_shopify_credentials()
+        base, headers = get_shopify_auth()
+    except RuntimeError:
         return jsonify({"error": "Shopify credentials not configured"}), 400
-
-    base = f"https://{store}.myshopify.com/admin/api/2026-04"
-    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
 
     # Fetch unfulfilled orders, filter by tag
     sku_data = defaultdict(lambda: {"qty": 0, "orders": set()})
