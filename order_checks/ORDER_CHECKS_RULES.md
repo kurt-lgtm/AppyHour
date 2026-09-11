@@ -65,6 +65,22 @@ Runs AFTER child SKUs are applied. An order with zero children is UNBUILT, not s
 ### Out of scope entirely
 
 - `Reship*`, `Gift Redemption`, `PR box` (internal sample, no `AHB-` parent, #175430), cancelled.
+
+  🔴 **Detect a gift by GATEWAY, not by the tag** (2026-09-11). The `Gift Redemption`
+  tag is not always present; `paymentGatewayNames == ["recharge_credits"]` is the reliable
+  half ([[gift-redemption-orders-uneditable]]). `fetch_gql` selects it; `in_scope` and
+  `dan_checks` exclude on EITHER signal.
+
+  🔴 **Cancelled means BOTH spellings.** `in_scope` read only the REST key
+  `cancelled_at`; GraphQL nodes say `cancelledAt`, so cancelled orders still carrying the
+  RMFG tag walked into the checks. #182212 and #183799 (cancelled 2026-09-11, every line at
+  0) surfaced as "no tasting guide" and a guide was nearly added to both. Kurt: *"they
+  shouldn't even be on this list."* `dan_checks` skips them up front into
+  `cancelled_excluded`.
+
+  🔴 **A phase whose child SKUs are not added yet is HELD OUT, not checked** --
+  `--exclude-tag P2`. Every count check would read those orders as short. Held-out orders
+  are counted and printed, never dropped silently (RMFG_20260911: 43 of 2,322).
   🔴 `Gift Redemption` -- **the Shopify order is NOT the authority for a gift.** Kurt
   2026-08-28: *"those are not worth looking at for unfilled cex slots on shopify. you have
   to check those on matrixify."* A gift's contents live in the Matrixify import, so a bare
@@ -92,6 +108,29 @@ Runs AFTER child SKUs are applied. An order with zero children is UNBUILT, not s
   Phase D.
 - **Any add resolves to the $0.00 variant.** `AC-TOK` has both $0.00 (in-box) and $5.50 (paid).
   Use the `gid_zero()` resolver in the `shopify-api` skill; ABORT if no $0 variant exists.
+
+## BUNDLES (`bundles.py`)
+
+A Simple Bundles parent can carry **NO SKU AT ALL** -- #178568, $28 "Ultimate Add-on
+Package: Summer Cookout", `sku=None`. Every other check keys on SKU, so that line counted 0
+children, matched no rule, resolved to no parent, and was invisible; Kurt found it by eye
+while the suite called the order clean. 262 such lines were live on RMFG_20260828.
+
+- Parents are identified by **variant id**, and the recipe comes from the variant's
+  `simple_bundles.bundled_variants` metafield -- the same authority
+  `InventoryReorder._get_bundle_recipe` reads. `fetch_gql` must select `variant{id}`;
+  without it the audit returns a confident zero. Never infer a recipe from a title.
+- **`CEX-<slot>` satisfies an `EX-<slot>` component and vice versa** (`rules.slot_key`).
+  Kurt 2026-09-11: the recipe says `EX-EA`, the order carries `CEX-EA`, "effectively the
+  same". Comparing raw strings called #181468 and #181629 un-exploded when both were whole.
+- A null-SKU line with **no recipe** is a box OFFER, not a bundle: its variant title is the
+  box size and the real parent is a separate `AHB-MED` / `AHB-CMED` / `AHB-LGE` line on the
+  same order. Correct when that parent is present, loud when it is not.
+- 🔴 **The metafield recipe is TODAY'S recipe.** A box built months ago is judged
+  against it and reads as missing components. The 8 `AHB-XMONG` orders (placed 2026-03-30)
+  and the 21 `MT-SFEN` rows on RMFG_20260911 were all complete -- the SFEN line had been
+  zeroed by an edit with `MT-CCCS` put in its place. Treat a missing component on an old
+  order, or one whose line was zeroed and replaced, as a question, not a defect.
 
 ## CRACKER SLOT
 
@@ -150,6 +189,27 @@ Require ≥8 peers before judging a group.
 
 ## SHEET ↔ SHOPIFY
 
+🔴 **The TAG is the cohort; the sheet only adds rows that lost the tag**
+(2026-09-11). With a sheet the cohort used to be fetched by sheet order NAME, which could
+never surface a real drift-in -- a tagged order missing from the sheet is never requested.
+Shopify's name search also PREFIX-matches: sheet order 182723 returned #182723A too, a gift
+twin carrying no RMFG/_SHIP tag, reported as "tagged but NOT on the sheet". It was neither.
+Fetch by tag, then fetch only the sheet rows that lost the tag, keeping exact names.
+Drift-in = tagged, absent from the sheet, NOT cancelled.
+
+🔴 **The MFG-name authority is read, and an ambiguous name resolves to NOTHING.**
+`resolve_columns` consults `mfg_names_authoritative.csv` -- but only AFTER the live line
+items, and never when the cleaned name is ambiguous. Both failures were live on
+RMFG_20260908: the file was never read at all, so 'Maple Frais Fromage' and 'Sottocenere
+with Truffles' came back UNMATCHED and were silently dropped from `columns_sku` (every order
+carrying one then compared clean); and the file holds two SKUs whose names differ only by a
+trailing period -- CH-BRZ 'Prairie Breeze' and CH-PRBZ 'Prairie Breeze.' -- so a
+last-write-wins reverse map chose CH-PRBZ and turned 26 correct orders into c2 diffs.
+
+🔴 **Gift / reship / PR / cancelled are excluded from the sheet-vs-Shopify
+comparison.** Shopify is not editable for a gift, so a delta on one is never actionable and
+buries the ones that are.
+
 The sheet is the pick list of record; compare its per-order item total against live Shopify children.
 Two real defects found this way, both sheet-side: #175526 carried BOTH the live 10 trays and the 10
 removed originals (20); #174939 omitted `AC-KETT` ×2, a paid `BL-4USA` board component (15 vs 17).
@@ -197,6 +257,20 @@ this package produced. A `vf_edit sub` picks rows by SKU with no tag awareness, 
 
 ## Substitute selection
 
+**Klaviyo opens rank the pool, they never gate it** (`klaviyo_opens.py`,
+INVENTORY_COORDINATOR rule 9): no `Opened Email` in 90d first, then newest order. The
+login-OR-customize gate already decided who is swappable; an open does not make a customer
+unswappable and no-open does not clear one. An API error is its own state (`ERR<code>`),
+never folded into "no open" -- a 429 read as zero would push an engaged customer to the
+front of the line. The metric is looked up by NAME; if it is absent, abort rather than guess
+an id.
+
+**Dan's scope is WIDER than ours, deliberately** (his `RUN_2026-08-25` package): every sheet
+row minus `Reship*` and `AHB-X`/`BL-` parents -- no box-type filter, no login guard, no
+failed-charge gate; his only gate is the human-edit one. Ours adds `ELIGIBLE_BOX_SUFFIX`
+(Kurt 2026-09-04), the login half, and the charge-failed half. On RMFG_20260911 the login
+guard alone held back 1,129 orders. Do not "fix" ours toward his.
+
 - **Same type, and CRACKERS ARE THEIR OWN TYPE.** `AC-FCFIGO` was proposed for `AC-MISS`
   (figs) and `AC-QUIC` (nuts) — *"we can't do AC-FCFIGO, because those are crackers."*
   Derived from product titles, plus `AC-TOK` which has no cracker word in its.
@@ -224,6 +298,18 @@ HAVE comes from the cut's own file (`Orders RMFG_<date>`), never MCP
 = 21 against the export's 19). 🔴 Overrides are WEEK-SCOPED corrections — review them when
 the week's HAVE file changes, or last week's correction silently lands on this week's count
 (they are printed with the resolved HAVE path on every run so they can't apply invisibly).
+
+## HAVE = Shopify AVAILABLE (`--have-is-available`, 2026-09-11)
+
+Kurt: *"available is correct on shopify."* Shopify's available count already nets out every
+unfulfilled order's allocation, so this run's demand is IN it. `remaining = HAVE -
+committed` would subtract that demand a second time and starve the substitute pool -- pass
+`--have-is-available` and `committed` is zeroed instead.
+
+🔴 Build the file from the **$0 in-box variant**, never the max across variants.
+Paid and $0 variants are separate inventory items: on 2026-09-11, 143 SKUs had both and 99
+disagreed (CH-BRIE: paid 21,205 against a $0 variant holding 2). A swap draws from the $0
+variant. A SKU with more than one $0 variant is ambiguous -- leave it out rather than guess.
 
 ## 🔴 The HAVE file is passed per run — no baked-in path (2026-08-29)
 
