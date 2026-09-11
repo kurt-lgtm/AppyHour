@@ -144,9 +144,14 @@ def _session():
 
 
 def _api():
-    settings = json.loads(SETTINGS.read_text(encoding="utf-8"))
-    base = f"https://{settings['shopify_store_url']}.myshopify.com/admin/api/2024-01"
-    headers = {"X-Shopify-Access-Token": settings["shopify_access_token"], "Content-Type": "application/json"}
+    # Canonical creds (appyhour_lib.credentials): env first, canonical settings as the fallback.
+    # 🔴 The API VERSION stays the 2024-01 literal and does NOT come from get_shopify_auth(),
+    # which defaults to 2026-04. This path issues refunds; a version bump is a money-behaviour
+    # change and belongs in its own reviewed commit, not in a credentials cleanup.
+    from appyhour_lib.credentials import get_shopify_credentials
+    store, token = get_shopify_credentials()
+    base = f"https://{store}.myshopify.com/admin/api/2024-01"
+    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
     return _session(), base, headers
 
 
