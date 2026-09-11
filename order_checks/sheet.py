@@ -52,8 +52,12 @@ MFG_AUTHORITY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__f
 def _mfg_authority(path: str = MFG_AUTHORITY):
     """{SKU: 'AHB (S_REG): <MFG name>'} from the meal-type export. Headerless, 2 cols.
 
-    🔴 This file is RMFG's, never ours to rename ([[mfg-names-are-rmfgs-never-rename]]).
-    A missing file is loud: an empty authority silently re-opens the fuzzy-match path.
+    🔴 This CSV is a local READ-MIRROR of the DO tables `mfg_names_authoritative` /
+    `mfg_translations`, which are the authority; refresh it with
+    `ShipRouting/scripts/sync_local_inputs.py --write`, never by dropping an export on top
+    of it (Kurt 2026-09-11). The names are RMFG's, never ours to rename
+    ([[mfg-names-are-rmfgs-never-rename]]). A missing file is loud: an empty mirror
+    silently re-opens the fuzzy-match path.
     """
     if not os.path.exists(path):
         raise FileNotFoundError(f"MFG name authority missing: {path}")

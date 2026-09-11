@@ -197,7 +197,9 @@ twin carrying no RMFG/_SHIP tag, reported as "tagged but NOT on the sheet". It w
 Fetch by tag, then fetch only the sheet rows that lost the tag, keeping exact names.
 Drift-in = tagged, absent from the sheet, NOT cancelled.
 
-🔴 **The MFG-name authority is read, and an ambiguous name resolves to NOTHING.**
+🔴 **The MFG-name mirror is read, and an ambiguous name resolves to NOTHING.** (The CSV is a
+local read-mirror of the DO `mfg_names_authoritative` table -- refresh via
+`sync_local_inputs.py --write`, never by copying an export over it.)
 `resolve_columns` consults `mfg_names_authoritative.csv` -- but only AFTER the live line
 items, and never when the cleaned name is ambiguous. Both failures were live on
 RMFG_20260908: the file was never read at all, so 'Maple Frais Fromage' and 'Sottocenere
