@@ -87,6 +87,12 @@ def run(orders, sheet, rules, rmfg_tag, ship_tag):
 
     for oid, o in sorted(orders.items()):
         tags = o.get("tags") or []
+        # 🔴 A cancelled order is not a box. fetch_by_tag returns cancelled orders that
+        # still carry the RMFG tag; #182212 and #183799 (cancelled 2026-09-11, every line
+        # at 0) reached c3 as "no tasting guide" and a guide was nearly added to them.
+        if o.get("cancelledAt") or o.get("cancelled_at"):
+            R.setdefault("cancelled_excluded", []).append({"order": oid})
+            continue
         srow = sheet.get(oid) or {}
         sheet_tags = [t.strip() for t in str(srow.get("tags") or "").split(",") if t.strip()]
         # 🔴 Reship is checked on the ORDER tags AND the SHEET tags. They agreed on all

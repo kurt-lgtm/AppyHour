@@ -44,7 +44,10 @@ def in_scope(o):
         return False, "gift redemption"
     for t in EXCLUDED_TAGS:
         if t in ts:                               return False, t
-    if o.get("cancelled_at"):                     return False, "cancelled"
+    # 🔴 GraphQL says cancelledAt, REST says cancelled_at. Reading only the REST key let
+    # #182212 and #183799 (cancelled 2026-09-11, all lines at 0) into c3 as "no tasting
+    # guide" -- one guide was nearly added to a cancelled order.
+    if o.get("cancelled_at") or o.get("cancelledAt"): return False, "cancelled"
     return True, ""
 
 

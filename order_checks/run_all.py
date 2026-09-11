@@ -45,6 +45,7 @@ def _rest_shape(node):
     """GraphQL node -> the dict shape the older per-order checks expect."""
     return {"tags": ",".join(node.get("tags") or []),
             "paymentGatewayNames": node.get("paymentGatewayNames") or [],
+            "cancelled_at": node.get("cancelledAt"),
             "line_items": [{**e["node"], "sku": e["node"]["sku"],
                             "current_quantity": e["node"]["currentQuantity"],
                             "quantity": e["node"]["quantity"],
