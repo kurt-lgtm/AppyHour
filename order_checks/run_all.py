@@ -163,13 +163,26 @@ def main(argv=None):
     # still run in full; only c2 and the swap caps are skipped.
     if a.sheet:
         sheet = sheetmod.load_sheet(a.sheet)
-        orders = fetch_by_name(list(sheet), cache=a.cache)
+        # 🔴 The TAG is the cohort; the sheet only adds rows that lost the tag. Fetching by
+        # sheet name alone could never see a real drift-in (a tagged order absent from the
+        # sheet is never requested), and Shopify's name search prefix-matches: sheet order
+        # 182723 also returned #182723A, a gift twin with no RMFG/_SHIP tag, which was then
+        # reported as "tagged but NOT on the sheet". It was neither.
+        orders = fetch_by_tag(a.tag, cache=a.cache)
+        untagged = [k for k in sheet if k not in orders]
+        if untagged:
+            orders.update({k: o for k, o in fetch_by_name(untagged).items() if k in sheet})
         cs, unmatched = sheetmod.resolve_columns(sheet, orders)
         print(f"  sheet {len(sheet)} rows · {len(cs)} columns resolved"
               + (f" · 🔴 UNMATCHED {unmatched}" if unmatched else ""))
-        drift = sorted(set(orders) - set(sheet))
+        drift = sorted(k for k, o in orders.items()
+                       if k not in sheet and a.tag in (o.get("tags") or [])
+                       and not o.get("cancelledAt"))
         if drift:
             print(f"  🔴 DRIFT-IN: {len(drift)} tagged but NOT on the sheet: {drift[:8]}")
+        if untagged:
+            print(f"  🟡 {len(untagged)} sheet rows WITHOUT {a.tag} (check 6 reports them): "
+                  f"{untagged[:8]}")
     else:
         sheet = {}
         orders = fetch_by_tag(a.tag, cache=a.cache)
