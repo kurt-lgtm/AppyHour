@@ -340,17 +340,34 @@ for _fam, _skus in SUBSTITUTION_FAMILIES.items():
 # Non-pickable prefixes — not food, skip in demand counts
 SKIP_PREFIXES = ("AHB-", "BL-", "PK-", "TR-", "EX-", "PR-CJAM", "CEX-E")
 
-# Settings JSON path (inventory + curation config).
+# Settings JSON path (inventory + curation config) — resolved LAZILY, on first use.
 # 🔴 NOT the repo `dist/` copy (through 2026-08-31) — that was one of THREE live copies, and
 # the one no other tool read first. Canonical is C:\AppyHourData; appyhour_lib.paths keeps a
 # loud legacy fallback for one deprecation cycle. Falls back to the old literal only if
 # appyhour_lib is unimportable, so a trimmed/frozen tree still resolves something.
-try:
-    from appyhour_lib.paths import inventory_settings_path as _inv_settings_path
+# 🔴 NEVER resolve this at module import (separation §0.3 / plan R-13, R-25): through 2026-09-03
+# this was a module-level `SETTINGS_PATH = inventory_settings_path(for_write=True)`, and that
+# helper mkdirs C:\AppyHourData — on the Linux console image that is a RELATIVE directory created
+# in the cwd, which ShipRouting's cache resolver then selected by existence (four blind runs,
+# ShipRouting BUG_LOG 2026-09-08). `tests/test_no_filesystem_work_at_import.py` enforces this.
+_SETTINGS_PATH_FALLBACK = Path(__file__).parent / "InventoryReorder" / "dist" / "inventory_reorder_settings.json"
 
-    SETTINGS_PATH = _inv_settings_path(for_write=True)
-except ImportError:  # pragma: no cover — frozen/trimmed tree
-    SETTINGS_PATH = Path(__file__).parent / "InventoryReorder" / "dist" / "inventory_reorder_settings.json"
+
+def settings_path() -> Path:
+    r"""Return the inventory settings JSON path (canonical C:\AppyHourData; for_write semantics)."""
+    try:
+        from appyhour_lib.paths import inventory_settings_path as _inv_settings_path
+    except ImportError:  # pragma: no cover — frozen/trimmed tree
+        return _SETTINGS_PATH_FALLBACK
+    return _inv_settings_path(for_write=True)
+
+
+def __getattr__(name: str):
+    # `matrix_commander.SETTINGS_PATH` keeps working for any external reader — resolved on access,
+    # never at import (PEP 562).
+    if name == "SETTINGS_PATH":
+        return settings_path()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # MFG translations CSV (exported from RMFG Translator portal)
 MFG_TRANSLATIONS_PATH = Path(__file__).parent / "mfg_translations.csv"
@@ -818,9 +835,10 @@ def load_inventory_csv(csv_path: str | Path) -> dict[str, float]:
 
 def load_inventory_settings() -> dict[str, float]:
     """Load inventory from the fulfillment app settings JSON."""
-    if not SETTINGS_PATH.exists():
+    path = settings_path()
+    if not path.exists():
         return {}
-    with open(SETTINGS_PATH, encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         settings = json.load(f)
     raw = settings.get("inventory", {})
     return {sku: data.get("qty", 0.0) for sku, data in raw.items()}
@@ -828,9 +846,10 @@ def load_inventory_settings() -> dict[str, float]:
 
 def load_settings_config() -> dict:
     """Load PR-CJAM, CEX-EC, and splits config from settings."""
-    if not SETTINGS_PATH.exists():
+    path = settings_path()
+    if not path.exists():
         return {}
-    with open(SETTINGS_PATH, encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 

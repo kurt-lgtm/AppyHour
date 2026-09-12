@@ -25,8 +25,9 @@ Deliberately OUT: dated run-once CLI probes (InventoryReorder/Errors/*, scripts/
 incident-fixes,swaps,utilities}) — never imported, and a `requests.get` at their top level is the
 one-shot idiom, not an import hazard; tests/ and conftest.py (pytest's own idiom).
 
-The two known offenders are STRICT xfails below, not allowlist rows: the day they are fixed the
-xfail XPASSes, the test fails, and the marks come off — the fix cannot land unnoticed.
+The two 09-03 offenders were STRICT xfails below until plan R-25 (2026-09-12) made
+`matrix_commander.SETTINGS_PATH` lazy (`settings_path()` + PEP 562 `__getattr__`); they are now
+plain passing tests so the regression cannot come back unnoticed.
 """
 import ast
 import importlib
@@ -61,7 +62,7 @@ KNOWN_IO_HELPERS = {
 }
 
 # Each entry needs a reason and must still trip the scanner (hygiene test). The two 09-03 offenders
-# are NOT here — they are strict xfails below so the fix cannot land unnoticed.
+# are NOT here — they are fixed (R-25) and guarded by the two named tests below.
 ALLOWED: dict[str, str] = {
     "InventoryReorder/fulfillment_web/_check_demand.py":
         "leading-underscore run-once probe (module-level requests.post at :9), never imported; "
@@ -69,9 +70,9 @@ ALLOWED: dict[str, str] = {
         "found by R-13 2026-09-11, reported, not fixed here; that session moves it into main() or "
         "out of the app tree, then drops this row",
 }
-# Files whose offence is one of the strict xfails below (excluded from the repo-wide assertion so the
-# xfail is the ONE place that names them; drop the row when the xfail comes off).
-XFAIL_PENDING = {"matrix_commander.py"}
+# Files whose offence is a strict xfail below (excluded from the repo-wide assertion so the xfail is
+# the ONE place that names them; drop the row when the xfail comes off). Empty since R-25.
+XFAIL_PENDING: set[str] = set()
 
 
 def _dotted(node):
@@ -204,19 +205,13 @@ def test_allowlist_names_only_files_that_still_trip_the_scanner():
         assert _scan(rel, p), f"entry {rel} no longer does import-time I/O — drop it"
 
 
-# ------------------------------------------------------------------ the two known offenders
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="R-13 fix pending — separation §0.3: matrix_commander.py:351 calls "
-                          "inventory_settings_path(for_write=True) at import")
+# ------------------------------------------- the two 09-03 offenders (fixed R-25, kept as guards)
 def test_matrix_commander_resolves_its_settings_path_lazily():
     hits = _scan("matrix_commander.py", ROOT / "matrix_commander.py")
     assert not hits, "matrix_commander.py does import-time I/O:\n  " + "\n  ".join(
         f"matrix_commander.py:{line}: {what}" for line, what in hits)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError,
-                   reason="R-13 fix pending — separation §0.3: appyhour_lib/paths.py:287 mkdirs "
-                          "DATA_ROOT (C:\\AppyHourData, relative on Linux) when matrix_commander is imported")
 def test_importing_matrix_commander_creates_no_directory(monkeypatch):
     """Behavioural half: the 09-03 burn end to end. Import matrix_commander fresh with every mkdir
     recorded; the import must create nothing. (DATA_ROOT is a literal with no env override, so the
