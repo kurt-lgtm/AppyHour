@@ -33,6 +33,7 @@ import datetime
 import json
 import os
 import re
+from pathlib import Path
 import time
 from typing import Callable
 
@@ -88,10 +89,24 @@ _TRANSIENT_RE = re.compile(
 # used to skip swaps. If an item is on a dietary order, it's safe to swap.
 DIETARY_RESTRICTION_FRAGMENTS = ("NNRS", "CORS", "NCRS")
 
+API_VERSION = "2026-04"
+
+
+def _admin(store_url: str, token: str, path: str) -> tuple[str, dict]:
+    """(url, headers) for one Admin API path.
+
+    The callers pass their own store/token — this module is a library and does not resolve
+    credentials for them — so the dedupe here is the URL shape, the version and the header
+    dict, which lived in three copies. Sessions that own their credentials should get them
+    from appyhour_lib.credentials.get_shopify_credentials and pass them in.
+    """
+    return (f"https://{store_url}.myshopify.com/admin/api/{API_VERSION}/{path}",
+            {"X-Shopify-Access-Token": token, "Content-Type": "application/json"})
+
+
 def _gql(store_url: str, token: str, query: str, variables: dict | None = None) -> dict:
     """Execute a Shopify Admin GraphQL query."""
-    url = f"https://{store_url}.myshopify.com/admin/api/2026-04/graphql.json"
-    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+    url, headers = _admin(store_url, token, "graphql.json")
     payload = {"query": query}
     if variables:
         payload["variables"] = variables
@@ -104,15 +119,16 @@ def _gql(store_url: str, token: str, query: str, variables: dict | None = None) 
 
 def _rest_get(store_url: str, token: str, path: str, params: dict | None = None) -> requests.Response:
     """Execute a Shopify Admin REST GET request."""
-    url = f"https://{store_url}.myshopify.com/admin/api/2026-04/{path}"
-    headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+    url, headers = _admin(store_url, token, path)
     resp = _SESSION.get(url, headers=headers, params=params, timeout=30)
     resp.raise_for_status()
     return resp
 
 # Pattern-resolution cache (24h TTL) — the catalog walk is the slow part.
-_SKU_CATALOG_CACHE = os.path.join(
-    r"C:\Users\Work\Claude Projects\_outputs\cache", "sku_variant_catalog.json"
+# Resolved from this file, not a machine-specific literal: fulfillment_web -> InventoryReorder ->
+# AppyHour -> the workspace root that owns _outputs/. Same directory the literal pointed at.
+_SKU_CATALOG_CACHE = str(
+    Path(__file__).resolve().parents[3] / "_outputs" / "cache" / "sku_variant_catalog.json"
 )
 _SKU_CACHE_TTL_S = 24 * 3600
 
@@ -269,8 +285,8 @@ def find_swap_targets(
         if page == 1:
             resp = _rest_get(store_url, token, url, params)
         else:
-            # Pagination URL is absolute
-            headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
+            # Pagination URL is absolute — only the headers come from _admin here.
+            _, headers = _admin(store_url, token, "")
             resp = _SESSION.get(url, headers=headers, timeout=30)
             resp.raise_for_status()
 
