@@ -15,6 +15,16 @@ TWO HARD RULES (Kurt 2026-06; enforced here so callers can't skip them):
 2. COUNT WITH fulfillableQuantity, NEVER quantity — a removed/zeroed line still reports
    its original `quantity`, so counting `quantity` double-counts items already swapped
    out. Any demand/inventory count over orders MUST use fulfillableQuantity.
+
+Performance (2026-08-08):
+- find_swap_targets passes the ship tag server-side (orders.json `tag` param) so only
+  tagged orders paginate; the exact client-side tag check is KEPT as the authority.
+- execute_bulk_swap fans out over ThreadPoolExecutor(max_workers=8) (mirrors
+  AppyHourMCP/tools/order_edit.py); per-order rate-limit sleeps stay inside the worker.
+- All HTTP goes through one module requests.Session (pool_maxsize=16, retry on 429/5xx).
+- lookup_variant_gid memoized per (store_url, sku).
+- find_skus_matching caches resolved patterns to _outputs/cache/sku_variant_catalog.json
+  (24h TTL); bypass via no_cache=True or env SKU_CATALOG_NO_CACHE=1.
 """
 
 from __future__ import annotations
@@ -27,6 +37,27 @@ import time
 from typing import Callable
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+# One pooled session for the whole module — connection reuse + retry on 429/5xx.
+_SESSION = requests.Session()
+_adapter = HTTPAdapter(
+    pool_maxsize=16,
+    max_retries=Retry(
+        total=3, backoff_factor=1.0,
+        status_forcelist=(429, 502, 503, 504),
+        allowed_methods=frozenset({"GET", "POST"}),
+        # 🔴 FALSE, deliberately (2026-08-25). Shopify answers a 429 with a FRACTIONAL
+        # Retry-After ("4.0"); urllib3 parses that header as an int and raises
+        # InvalidHeader, which surfaces as a hard crash mid-run instead of a retry.
+        # Killed a shorts_pass plan phase on _SHIP_2026-08-31. backoff_factor already
+        # spaces the retries, so honouring the header buys nothing worth that risk.
+        respect_retry_after_header=False,
+    ),
+)
+_SESSION.mount("https://", _adapter)
+_SESSION.mount("http://", _adapter)
 
 # Append-only audit log so EVERY swap is revertible (order, from->to, qty, ts, result).
 # Kurt 2026-06-19: never run a swap without a revert log. Built into the canonical
@@ -64,7 +95,7 @@ def _gql(store_url: str, token: str, query: str, variables: dict | None = None) 
     payload = {"query": query}
     if variables:
         payload["variables"] = variables
-    resp = requests.post(url, headers=headers, json=payload, timeout=30)
+    resp = _SESSION.post(url, headers=headers, json=payload, timeout=30)
     resp.raise_for_status()
     data = resp.json()
     if data.get("errors"):
@@ -75,22 +106,56 @@ def _rest_get(store_url: str, token: str, path: str, params: dict | None = None)
     """Execute a Shopify Admin REST GET request."""
     url = f"https://{store_url}.myshopify.com/admin/api/2026-04/{path}"
     headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
-    resp = requests.get(url, headers=headers, params=params, timeout=30)
+    resp = _SESSION.get(url, headers=headers, params=params, timeout=30)
     resp.raise_for_status()
     return resp
 
-def find_skus_matching(store_url: str, token: str, pattern: str, max_results: int = 1000) -> list[str]:
+# Pattern-resolution cache (24h TTL) — the catalog walk is the slow part.
+_SKU_CATALOG_CACHE = os.path.join(
+    r"C:\Users\Work\Claude Projects\_outputs\cache", "sku_variant_catalog.json"
+)
+_SKU_CACHE_TTL_S = 24 * 3600
+
+
+def _sku_cache_load() -> dict:
+    try:
+        with open(_SKU_CATALOG_CACHE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _sku_cache_save(cache: dict) -> None:
+    try:
+        os.makedirs(os.path.dirname(_SKU_CATALOG_CACHE), exist_ok=True)
+        with open(_SKU_CATALOG_CACHE, "w", encoding="utf-8") as f:
+            json.dump(cache, f)
+    except Exception:
+        pass  # cache write must never break a lookup
+
+
+def find_skus_matching(store_url: str, token: str, pattern: str, max_results: int = 1000,
+                       no_cache: bool = False) -> list[str]:
     """Resolve wildcard SKU pattern to concrete SKU list.
 
     Patterns: '*-HHIGH' (suffix), 'TR-*' (prefix), '*BIX*' (substring), or exact (no `*`).
     Uses fnmatch for matching. Paginates productVariants and post-filters.
     Caps at max_results to prevent runaway scans.
+    Results cached 24h in _outputs/cache/sku_variant_catalog.json; bypass with
+    no_cache=True or env SKU_CATALOG_NO_CACHE=1.
     """
     import fnmatch
     if not pattern:
         return []
     if "*" not in pattern:
         return [pattern]
+
+    use_cache = not (no_cache or os.environ.get("SKU_CATALOG_NO_CACHE") == "1")
+    cache_key = f"{store_url}|{pattern}|{max_results}"
+    if use_cache:
+        entry = _sku_cache_load().get(cache_key)
+        if entry and (time.time() - entry.get("ts", 0)) < _SKU_CACHE_TTL_S:
+            return list(entry["skus"])
 
     # Extract longest non-* token for Shopify text search (cheap pre-filter)
     parts = [p for p in pattern.split("*") if p]
@@ -119,11 +184,24 @@ def find_skus_matching(store_url: str, token: str, pattern: str, max_results: in
         cursor = pv["pageInfo"]["endCursor"]
         time.sleep(0.1)
 
-    return sorted(matches)
+    result = sorted(matches)
+    if use_cache:
+        cache = _sku_cache_load()
+        cache[cache_key] = {"ts": time.time(), "skus": result}
+        _sku_cache_save(cache)
+    return result
+
+
+# Module-level variant GID memo — same SKUs get looked up every swap run
+# (same pattern as AppyHourMCP/tools/order_edit.py::_variant_gid_cache).
+_variant_gid_cache: dict[tuple[str, str], str] = {}
 
 
 def lookup_variant_gid(store_url: str, token: str, sku: str) -> str | None:
-    """Find the $0 variant GID for a SKU. Returns None if not found."""
+    """Find the $0 variant GID for a SKU. Returns None if not found. Memoized."""
+    memo_key = (store_url, sku)
+    if memo_key in _variant_gid_cache:
+        return _variant_gid_cache[memo_key]
     # Escape double quotes in SKU to prevent GraphQL injection
     safe_sku = sku.replace('"', '\\"')
     query = f'{{ productVariants(first: 5, query: "sku:{safe_sku}") {{ edges {{ node {{ id sku price }} }} }} }}'
@@ -137,7 +215,13 @@ def lookup_variant_gid(store_url: str, token: str, sku: str) -> str | None:
         return None
     # Prefer $0 variant (used for curation swaps)
     variants.sort(key=lambda v: float(v["price"]))
-    return variants[0]["id"]
+    gid = variants[0]["id"]
+    _variant_gid_cache[memo_key] = gid
+    return gid
+
+UNTAGGED_SENTINEL = "__UNTAGGED__"
+_SHIP_TAG_RE = re.compile(r"^_SHIP_\d{4}-\d{2}-\d{2}$")
+
 
 def find_swap_targets(
     store_url: str,
@@ -163,7 +247,18 @@ def find_swap_targets(
         "fulfillment_status": "unfulfilled",
         "limit": 250,
         "fields": "id,name,tags,line_items",
+        # Server-side tag pre-filter (2026-08-08) — only tagged orders paginate.
+        # The exact client-side `ship_tag in tags` check below stays the authority
+        # (Shopify tag matching is loose on case/whitespace).
+        "tag": ship_tag,
     }
+    # UNTAGGED mode (Kurt 2026-09-09): orders not yet in ANY ship cohort. There is no
+    # server-side "absent tag" filter, so the pre-filter is dropped and every open
+    # unfulfilled order paginates; the client-side check below inverts to "carries no
+    # _SHIP_ tag". Kurt's constraint was explicit — swap them WITHOUT tagging them.
+    untagged_mode = ship_tag == UNTAGGED_SENTINEL
+    if untagged_mode:
+        params.pop("tag")
     page = 0
 
     while url:
@@ -176,12 +271,15 @@ def find_swap_targets(
         else:
             # Pagination URL is absolute
             headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
-            resp = requests.get(url, headers=headers, timeout=30)
+            resp = _SESSION.get(url, headers=headers, timeout=30)
             resp.raise_for_status()
 
         for o in resp.json().get("orders", []):
             tags = [t.strip() for t in (o.get("tags") or "").split(",")]
-            if ship_tag not in tags:
+            if untagged_mode:
+                if any(_SHIP_TAG_RE.match(t) for t in tags):
+                    continue
+            elif ship_tag not in tags:
                 continue
             order_line_items = o.get("line_items", [])
             if box_sku_contains:
@@ -220,8 +318,14 @@ def find_swap_targets(
 def _line_paid_info(store_url: str, token: str, order_gid: str, sku: str) -> list[dict]:
     """Actual-paid + variant identity for every line of `sku` on the order.
 
-    Returns [{"paid": float, "variant_gid": str|None, "qty": int}, ...] using
-    discountedUnitPriceAfterAllDiscountsSet (what the customer really paid).
+    Returns [{"paid": float, "catalog_price": float, "variant_gid": str|None, "qty": int}, ...].
+    `paid` = discountedUnitPriceAfterAllDiscountsSet (actual-paid ON THE SHOPIFY LINE).
+    `catalog_price` = the line's variant catalog price — the rule-12b paid signal.
+
+    🔴 BOTH matter (Kurt 2026-07-21, #163709): a Recharge ONETIME add-on collects the money
+    ($9 MT-CCSP) on the Recharge charge and pushes the Shopify line at $0 — actual-paid
+    alone reads $0 and the guard waves a paid item through. The line carries the PRICED
+    variant, so catalog price > 0 is the detectable half of "customer paid for this".
     """
     data = _gql(store_url, token, """
     query($id: ID!) {
@@ -230,19 +334,38 @@ def _line_paid_info(store_url: str, token: str, order_gid: str, sku: str) -> lis
           nodes {
             sku
             quantity
+            currentQuantity
             discountedUnitPriceAfterAllDiscountsSet { shopMoney { amount } }
-            variant { id }
+            variant { id price }
+            customAttributes { key value }
           }
         }
       }
     }""", {"id": order_gid})
     out = []
     for li in data["order"]["lineItems"]["nodes"]:
+        # 🔴 Removed/refunded lines keep their ORIGINAL `quantity`; only currentQuantity says
+        # what is still on the order. Burn 2026-09-04 #178868: a $9 CH-BLR line refunded on
+        # 9/03 (currentQuantity 0) still tripped the paid guard and blocked the live $0 BLR
+        # swap. Never count a line the customer no longer has (shopify-line-items skill).
+        # An ABSENT key is not a zero: a payload without currentQuantity (older query, a test
+        # fixture, a caller's own selection set) must fall back to quantity, or this guard
+        # fails OPEN and a paid line sails through the refusal below.
+        qty_now = li.get("currentQuantity")
+        if qty_now is None:
+            qty_now = li.get("quantity") or 0
+        if qty_now <= 0:
+            continue
         if (li.get("sku") or "").strip() == sku:
+            v = li.get("variant") or {}
+            props = {p["key"] for p in (li.get("customAttributes") or [])}
             out.append({
                 "paid": float(li["discountedUnitPriceAfterAllDiscountsSet"]["shopMoney"]["amount"]),
-                "variant_gid": (li.get("variant") or {}).get("id"),
+                "catalog_price": float(v.get("price") or 0),
+                "variant_gid": v.get("id"),
                 "qty": li.get("quantity", 0),
+                "rc_bundle": "_rc_bundle" in props,
+                "onetime": ("_parent_subscription_id" in props) or ("Type" in props),
             })
     return out
 
@@ -258,6 +381,13 @@ def execute_swap(
 ) -> dict:
     """Swap old_sku for new variant on a single order via GraphQL order edit.
 
+    LOW-LEVEL PRIMITIVE — NOT AN ENTRY POINT (Kurt 2026-08-08). Batch/shorts work
+    goes through find_swap_targets() + execute_bulk_swap() in THIS module (or the
+    /swap skill), which add per-order accounting (locked/transient/failed classes),
+    the fulfillableQuantity>0 filter, and REST pagination. Hand-rolling a loop
+    around this function produced 34 phantom "successes" on wk0810 (it returns
+    success:False, it does not raise). See TOOL_REGISTRY.md + vault Swap Rules #0.
+
     PAID-ITEM GUARD (Kurt 2026-07-10): a line the customer actually paid for
     (discounted price > $0) is NEVER swapped unless allow_paid=True is passed
     explicitly. Motivator: three paid lines slipped into a wk0713 rotation
@@ -270,14 +400,31 @@ def execute_swap(
     """
     paid_lines = _line_paid_info(store_url, token, order_gid, old_sku)
     old_variant_gids = sorted({p["variant_gid"] for p in paid_lines if p["variant_gid"]})
-    paid_hits = [p for p in paid_lines if p["paid"] > 0]
+    # PAID = actual-paid on the line, OR a priced (catalog > $0) variant on a line that is
+    # actually an add-on. The catalog check catches Recharge-collected money invisible on the
+    # Shopify line (onetime add-ons push at $0 actual-paid — #163709 MT-CCSP, 2026-07-21).
+    #
+    # 🔴 catalog>0 ALONE is NOT a paid signal (Kurt 2026-08-21). A `_rc_bundle` line is box
+    # content: it carries the priced variant because the SKU also sells standalone, but the
+    # customer paid $0 for it. Reading catalog price as paid refused ALL 107 AC-GLAW→AC-PRPE
+    # swaps (paid=0.0 catalog=6.0) on uncustomized subscription first orders — a fail-closed
+    # guard that blocks the exact work it was never meant to touch. The add-on half of the
+    # #163709 case is still caught: a real Recharge onetime carries `_parent_subscription_id`
+    # or `Type`, never `_rc_bundle`.
+    paid_hits = [
+        p for p in paid_lines
+        if p["paid"] > 0
+        or (p["catalog_price"] > 0 and p.get("onetime") and not p.get("rc_bundle"))
+    ]
     if paid_hits and not allow_paid:
+        detail = [f"paid={p['paid']} catalog={p['catalog_price']}" for p in paid_hits]
         _audit({"order_gid": order_gid, "old_sku": old_sku, "new_variant_gid": new_variant_gid,
                 "old_variant_gids": old_variant_gids,
-                "result": f"REFUSED:paid-item-guard paid={[p['paid'] for p in paid_hits]}"})
+                "result": f"REFUSED:paid-item-guard {detail}"})
         return {"success": False,
-                "error": f"paid-item guard: {old_sku} paid line(s) {[p['paid'] for p in paid_hits]} — "
-                         f"customer keeps what they paid for (pass allow_paid=True only with Kurt's explicit OK)"}
+                "error": f"paid-item guard: {old_sku} paid/priced line(s) {detail} — "
+                         f"customer keeps what they paid for (Recharge may hold the money even when the "
+                         f"Shopify line reads $0; pass allow_paid=True only with Kurt's explicit OK)"}
     # Step 1: Begin edit
     data = _gql(store_url, token, """
     mutation orderEditBegin($id: ID!) {
@@ -383,6 +530,7 @@ def execute_bulk_swap(
     dry_run: bool = True,
     progress_callback: Callable[[str], None] | None = None,
     cancel_flag: list | None = None,
+    guard_report: dict | None = None,
 ) -> dict:
     """Execute swap on multiple orders.
 
@@ -400,6 +548,21 @@ def execute_bulk_swap(
          successful_orders}
     """
     total = len(targets)
+
+    # 🔴 GUARD GATE (Kurt 2026-08-25: "fix it so it never happens again unless I say so").
+    # A live multi-order batch must carry the report from swap_provenance.guard_batch(),
+    # which proves the login+customize scans ran and the per-order cap was applied. Missing
+    # evidence is not permission. wk0817: 201 tray swaps ran with the login column dropped
+    # and 42 customized rows included; one customer got 5 swaps in 28 seconds.
+    if not dry_run and total > 1:
+        ok = isinstance(guard_report, dict) and (
+            (guard_report.get("login_scan_ran") and guard_report.get("customize_scan_ran"))
+            or guard_report.get("kurt_override"))
+        if not ok:
+            raise RuntimeError(
+                "execute_bulk_swap refused: pass guard_report from "
+                "swap_provenance.guard_batch(...) proving the login-OR-customize scans ran "
+                "(or carrying kurt_override). See AppyHour/swap_provenance.py.")
 
     if dry_run:
         return {
@@ -426,18 +589,33 @@ def execute_bulk_swap(
     other: list[dict] = []
     successful_orders: list[str] = []
 
-    for i, t in enumerate(targets, 1):
+    # Parallel fan-out (2026-08-08) — mirrors AppyHourMCP/tools/order_edit.py.
+    # GraphQL rate-limit sleeps live INSIDE execute_swap (per-order pacing);
+    # accounting shape below is unchanged. Results aggregated in target order.
+    from concurrent.futures import ThreadPoolExecutor
+
+    done_count = [0]
+
+    def _do_swap(t: dict):
         if cancel_flag and cancel_flag[0]:
-            errors.append("Cancelled by user")
-            break
-
-        if progress_callback:
-            progress_callback(f"Swapping {i}/{total}: {t['order_name']}...")
-
+            return "cancelled"
         result = execute_swap(
             store_url, token, t["order_gid"], old_sku, new_variant_gid, staff_note
         )
+        done_count[0] += 1
+        if progress_callback:
+            progress_callback(f"Swapping {done_count[0]}/{total}: {t['order_name']}...")
+        time.sleep(0.1)
+        return result
 
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(_do_swap, targets))
+
+    cancelled = False
+    for t, result in zip(targets, results):
+        if result == "cancelled":
+            cancelled = True
+            continue
         if result["success"]:
             success += 1
             successful_orders.append(t["order_name"])
@@ -452,8 +630,8 @@ def execute_bulk_swap(
                 transient.append(item)
             else:
                 other.append(item)
-
-        time.sleep(0.1)
+    if cancelled:
+        errors.append("Cancelled by user")
 
     return {
         "total": total,
@@ -503,6 +681,7 @@ def execute_conditional_swap(
     adds: list[tuple[str, int]],
     staff_note: str = "",
     dry_run: bool = True,
+    allow_paid: bool = False,
 ) -> dict:
     """Multi-remove + multi-add on ONE order via Shopify order edit.
 
@@ -523,6 +702,21 @@ def execute_conditional_swap(
     if dry_run:
         return {"success": True, "dry_run": True, "removes": list(removes),
                 "adds": list(adds), "order_gid": order_gid, "error": None}
+
+    # PAID-ITEM GUARD (parity with execute_swap; Kurt 2026-07-21 #163709): refuse any
+    # remove whose line has actual-paid > 0 OR a priced (catalog > $0) variant — Recharge
+    # onetime add-ons collect the money off-Shopify and push the line at $0.
+    if not allow_paid:
+        for rsku in removes:
+            hits = [p for p in _line_paid_info(store_url, token, order_gid, rsku)
+                    if p["paid"] > 0 or p["catalog_price"] > 0]
+            if hits:
+                detail = [f"paid={p['paid']} catalog={p['catalog_price']}" for p in hits]
+                _audit({"order_gid": order_gid, "old_sku": rsku,
+                        "result": f"REFUSED:paid-item-guard(conditional) {detail}"})
+                return {"success": False, "dry_run": False,
+                        "error": f"paid-item guard: {rsku} paid/priced line(s) {detail} — "
+                                 f"pass allow_paid=True only with Kurt's explicit OK"}
 
     # Step 1: begin edit (snapshot line items)
     data = _gql(store_url, token, """
