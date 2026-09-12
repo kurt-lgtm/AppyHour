@@ -3459,7 +3459,14 @@ def compute_allocation(rmfg_tag: str, have: dict[str, float],
         if catalog_price.get(vid, 0) > 0:
             paid[vsku[vid]] = paid.get(vsku[vid], 0) + u
 
-    zv = _zero_variant_items(base, headers, set(have))
+    # 🔴 The universe is HAVE ∪ DEMANDED, never HAVE alone (Kurt 2026-09-11). A SKU the cohort
+    # demands but the HAVE file never lists means we have ZERO of it — the most urgent short
+    # there is — yet scoping on `have` made it invisible: no row, no shortage, and its Shopify
+    # available never pushed to 0, so customers could keep ordering it. Burn: _SHIP_2026-09-14
+    # reported "nothing short" while 10 absent SKUs (CH-BLR, MT-IBRES, AC-WASP, MT-PSS,
+    # AC-ACRISP, CH-QOTA, CH-TOPR, CH-BBLUE, AC-PMULB, AC-RBOL) were short on the vF.
+    demand_only = sorted(s for s in need if s not in have and not s.startswith(("PK-", "MR-", "TR-")))
+    zv = _zero_variant_items(base, headers, set(have) | set(demand_only))
 
     # PK-/MR- = 0-DistVol structural inserts/journal, TR- = trays assembled from bulk — all
     # made-to-order, so no meaningful per-SKU HAVE row exists. NEVER cap their inventory.
@@ -3484,9 +3491,12 @@ def compute_allocation(rmfg_tag: str, have: dict[str, float],
         "paid_sku_count": len(paid),
         "have_sku_count": len(have),
         "zero_variant_count": len(zv),
-        "no_variant_count": len(have) - len(zv),
+        "no_variant_count": max(0, len(set(have) | set(demand_only)) - len(zv)),
         "rows": rows,
         "shorts": shorts,
+        # Demanded by the cohort, absent from the HAVE file -> treated as HAVE 0. Surfaced so a
+        # caller can say "these were never counted" instead of silently reporting no shortage.
+        "demand_only_skus": demand_only,
         "skipped_structural": skipped_structural,
         "all_covered": not shorts,
     }
