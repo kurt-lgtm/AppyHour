@@ -238,7 +238,17 @@ def _fetch_all_data(settings: dict) -> dict:
     if os.path.exists(_sku_db_path):
         try:
             with open(_sku_db_path, encoding="utf-8") as _sdf:
-                shopify_sku_names = json.load(_sdf)
+                _raw = json.load(_sdf)
+            # sku_database.json v2: {sku: {sku, mfg_name, shopify_name}}.
+            # mfg_name (RMFG authority) wins; fall back to shopify_name.
+            # Plain-string values are the legacy v1 shape.
+            for _sku, _v in _raw.items():
+                if isinstance(_v, str):
+                    shopify_sku_names[_sku] = _v
+                else:
+                    _n = _v.get("mfg_name") or _v.get("shopify_name") or ""
+                    if _n:
+                        shopify_sku_names[_sku] = _n
         except Exception:
             pass
 
