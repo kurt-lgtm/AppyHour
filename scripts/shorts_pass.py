@@ -1,4 +1,4 @@
-"""shorts_pass.py — weekly shorts→swap orchestrator (canonical).
+﻿"""shorts_pass.py â€” weekly shortsâ†’swap orchestrator (canonical).
 
 Usage:
     python scripts/shorts_pass.py SHIP_TAG --pairs pairs.csv [--apply] [--limit N]
@@ -6,15 +6,15 @@ Usage:
 
 pairs.csv columns: old_sku,new_sku,count
 
-🔴 Constraints SSOT: scripts/SHORTS_PASS_RULES.md — read BEFORE changing this file.
-Motivating burn: wk0810 hand-rolled loops counted calls as successes → 34 phantom
+ðŸ”´ Constraints SSOT: scripts/SHORTS_PASS_RULES.md â€” read BEFORE changing this file.
+Motivating burn: wk0810 hand-rolled loops counted calls as successes â†’ 34 phantom
 swaps (execute_swap returns success:False, it does not raise). This tool:
-  plan    — find_swap_targets (fulfillable>0, _rc_bundle only) + login-OR-customize
+  plan    â€” find_swap_targets (fulfillable>0, _rc_bundle only) + login-OR-customize
             exclusion (Recharge /events?verb=login + bundle_selections), cap at count
-  preview — per-pair table: eligible / planned / excluded + why
-  apply   — order_edit._swap_order_skus module path ONLY (balance invariant,
+  preview â€” per-pair table: eligible / planned / excluded + why
+  apply   â€” order_edit._swap_order_skus module path ONLY (balance invariant,
             swap_audit.jsonl, paid-item guard, variant-GID cache)
-  verify  — re-fetch tag, re-count fulfillable_quantity old/new, diff vs plan;
+  verify  â€” re-fetch tag, re-count fulfillable_quantity old/new, diff vs plan;
             NONZERO EXIT on mismatch. Success is never call-count.
 Dry-run is the default; --apply required for writes. Every run appends a JSONL
 log under _outputs/logs/ (never overwrites).
@@ -41,15 +41,19 @@ for p in (_APPYHOUR, _APPYHOUR / "AppyHourMCP", _APPYHOUR / "InventoryReorder" /
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
-from appyhour_lib.credentials import get_shopify_auth, get_shopify_credentials  # noqa: E402
+from appyhour_lib.credentials import (  # noqa: E402
+    DEFAULT_API_VERSION,
+    get_shopify_auth,
+    get_shopify_credentials,
+)
 from cut_order_server.app.creds import get_recharge_token  # noqa: E402
-import shopify_swap  # noqa: E402  (fulfillment_web — find_swap_targets et al.)
+import shopify_swap  # noqa: E402  (fulfillment_web â€” find_swap_targets et al.)
 
-# Canonical execution module — NEVER reimplement GraphQL edits (SHORTS_PASS_RULES #1).
+# Canonical execution module â€” NEVER reimplement GraphQL edits (SHORTS_PASS_RULES #1).
 sys.path.insert(0, str(_APPYHOUR / "AppyHourMCP" / "tools"))
 import order_edit  # noqa: E402
 
-# 🔴 Windows cp1252 kills any non-ASCII print (arrows, emoji) MID-RUN — for a --apply tool that
+# ðŸ”´ Windows cp1252 kills any non-ASCII print (arrows, emoji) MID-RUN â€” for a --apply tool that
 # means a crash BETWEEN mutations, leaving the batch half-applied. Wrap stdout before anything
 # prints, including argparse --help. (Live 2026-08-09: shorts_pass.py --help died on U+2192.)
 if hasattr(sys.stdout, "buffer"):
@@ -57,7 +61,9 @@ if hasattr(sys.stdout, "buffer"):
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 
-LOG_DIR = Path(r"C:\Users\Work\Claude Projects\_outputs\logs")
+# Resolved from this file (AppyHour/scripts -> AppyHour -> workspace root), not a machine
+# literal: the hardcoded C:\Users\Work path silently wrote nowhere useful on any other machine.
+LOG_DIR = _APPYHOUR.parent / "_outputs" / "logs"
 
 RC_HEADERS = None  # built lazily
 
@@ -85,7 +91,7 @@ def rc_get(session: requests.Session, path: str, params: dict | None = None, ret
                 continue
             r.raise_for_status()
             return r.json()
-        except Exception as e:  # noqa: BLE001 — retried, re-raised after retries
+        except Exception as e:  # noqa: BLE001 â€” retried, re-raised after retries
             last = e
             time.sleep(2 * (attempt + 1))
     raise RuntimeError(f"Recharge GET {path} failed after {retries} tries: {last}")
@@ -99,16 +105,19 @@ def fetch_tag_orders(session: requests.Session, store: str, token: str, ship_tag
     Single pass reused for exclusion mapping and verification counts.
     """
     out: list[dict] = []
-    url = f"https://{store}.myshopify.com/admin/api/2026-04/orders.json"
+    # Version from the canonical constant, not a second copy of the string. The header still
+    # carries the token this function was PASSED - callers own their credentials here, and
+    # silently swapping in whatever the environment resolves would be a different bug.
+    url = f"https://{store}.myshopify.com/admin/api/{DEFAULT_API_VERSION}/orders.json"
     headers = {"X-Shopify-Access-Token": token, "Content-Type": "application/json"}
     params: dict | None = {
         "status": "open", "fulfillment_status": "unfulfilled", "limit": 250,
         "fields": "id,name,tags,line_items,email,customer",
     }
     while url:
-        # 🔴 429 retry (2026-08-25). This paginates ~2,500 orders at 250/page; a single
+        # ðŸ”´ 429 retry (2026-08-25). This paginates ~2,500 orders at 250/page; a single
         # unretried 429 aborted the whole plan phase mid-cohort. Shopify may answer with a
-        # FRACTIONAL Retry-After ("4.0") — parse as float, never int.
+        # FRACTIONAL Retry-After ("4.0") â€” parse as float, never int.
         for attempt in range(6):
             resp = session.get(url, headers=headers, params=params, timeout=30)
             if resp.status_code != 429:
@@ -119,7 +128,12 @@ def fetch_tag_orders(session: requests.Session, store: str, token: str, ship_tag
         resp.raise_for_status()
         for o in resp.json().get("orders", []):
             tags = [t.strip() for t in (o.get("tags") or "").split(",")]
-            if ship_tag in tags:
+            if ship_tag == shopify_swap.UNTAGGED_SENTINEL:
+                # UNTAGGED mode: orders not yet in any ship cohort (Kurt 2026-09-09 â€”
+                # swap them WITHOUT tagging). Same guards, inverted selector.
+                if not any(shopify_swap._SHIP_TAG_RE.match(t) for t in tags):
+                    out.append(o)
+            elif ship_tag in tags:
                 out.append(o)
         link = resp.headers.get("Link", "")
         url, params = None, None
@@ -132,7 +146,7 @@ def fetch_tag_orders(session: requests.Session, store: str, token: str, ship_tag
 
 
 def count_fulfillable(orders: list[dict], sku: str) -> int:
-    """Fulfillable-only count (SHORTS_PASS_RULES #3 — never `quantity`)."""
+    """Fulfillable-only count (SHORTS_PASS_RULES #3 â€” never `quantity`)."""
     total = 0
     for o in orders:
         for li in o.get("line_items", []):
@@ -142,7 +156,7 @@ def count_fulfillable(orders: list[dict], sku: str) -> int:
 
 
 def cohort_skus(orders: list[dict]) -> set[str]:
-    """Union of fulfillable SKUs on the tag — same fulfillable-only rule as count_fulfillable (#3)."""
+    """Union of fulfillable SKUs on the tag â€” same fulfillable-only rule as count_fulfillable (#3)."""
     present: set[str] = set()
     for o in orders:
         for li in o.get("line_items", []):
@@ -159,9 +173,9 @@ def near_miss_candidates(sku: str, present: set[str]) -> list[str]:
 
 
 def absent_pair_refusals(pairs: list[dict], present: set[str]) -> list[str]:
-    """🔴 Join-zero guard (2026-08-08 live smoke test: `PR-CJAM` matched 0 of 2321 orders because
+    """ðŸ”´ Join-zero guard (2026-08-08 live smoke test: `PR-CJAM` matched 0 of 2321 orders because
     the real SKU is PR-CJAM-GEN). An old_sku on ZERO cohort orders is a TYPO in pairs.csv, not a
-    pair with nothing to do — and it renders as an innocuous `elig 0 / plan 0` row in the preview
+    pair with nothing to do â€” and it renders as an innocuous `elig 0 / plan 0` row in the preview
     table, exactly the silent zero that hides a bad week's shorts file. Returns one loud message
     per bad pair; empty list = every old_sku is really on the cohort."""
     out = []
@@ -178,7 +192,7 @@ def absent_pair_refusals(pairs: list[dict], present: set[str]) -> list[str]:
 
 def fetch_login_customer_ids(session: requests.Session, since_iso: str) -> set[int]:
     """Recharge customer_ids with a portal login since `since_iso` (/events?verb=login,
-    newest-first, stop at cutoff — same pattern as scripts/traaab_logins_join.py)."""
+    newest-first, stop at cutoff â€” same pattern as scripts/traaab_logins_join.py)."""
     ids: set[int] = set()
     params: dict | None = {"verb": "login", "sort_by": "created_at-desc", "limit": 250}
     while True:
@@ -231,11 +245,11 @@ def _bundle_edit_delta_s(bs_row: dict) -> float:
 def rc_customized(session: requests.Session, customer_id: int) -> bool:
     """True if the customer has MODIFIED a bundle selection in the portal.
 
-    🔴 PRESENCE IS NOT CUSTOMIZATION (live finding 2026-08-09). Recharge writes a
+    ðŸ”´ PRESENCE IS NOT CUSTOMIZATION (live finding 2026-08-09). Recharge writes a
     bundle_selection for EVERY bundle subscription by default, so the old
     `if bs.get("bundle_selections"): return True` flagged essentially every subscriber.
     Measured on `_SHIP_2026-08-10`: 44 of 67 CH-CONI candidates excluded as "customized";
-    a per-order re-check of 10 of them found delta = 0s on all 10 — every one a false
+    a per-order re-check of 10 of them found delta = 0s on all 10 â€” every one a false
     positive. Effect was silent, not loud: the pass planned 1 swap where ~45 were
     available, and the rule-2 verify still passed (plan 1 == actual 1), so a week's
     shorts would quietly go unresolved. The real signal is
@@ -245,7 +259,7 @@ def rc_customized(session: requests.Session, customer_id: int) -> bool:
     line purchase_item_id -> /bundle_selections?purchase_item_ids=) instead of the
     customer's active subscriptions. Customer scope over-protects (an edit on any
     subscription flags them) which is the SAFE direction, but it is not the question we
-    mean. Needs the caller to pass order id, not just email — Kurt's go before changing.
+    mean. Needs the caller to pass order id, not just email â€” Kurt's go before changing.
     """
     subs = rc_get(session, "/subscriptions",
                   {"customer_id": customer_id, "status": "active", "limit": 250})
@@ -271,14 +285,14 @@ def exclusion_reason(session: requests.Session, email: str,
     try:
         cid = rc_customer_id(session, email)
         if cid is None:
-            reason = None  # no Recharge customer → no portal to log into / customize
+            reason = None  # no Recharge customer â†’ no portal to log into / customize
         elif cid in login_ids:
             reason = "logged_in"
         elif rc_customized(session, cid):
             reason = "customized"
         else:
             reason = None
-    except Exception as e:  # noqa: BLE001 — unknown = NOT cleared; exclude, never guess
+    except Exception as e:  # noqa: BLE001 â€” unknown = NOT cleared; exclude, never guess
         reason = f"rc_lookup_failed:{e}"
     cache[key] = reason
     return reason
@@ -307,7 +321,7 @@ def is_silent(pair: dict) -> bool:
     return str(pair.get("silent", "")).strip().lower() in ("1", "y", "yes", "true")
 
 
-# 🔴 Guard constants (Kurt 2026-08-25). SSOT: AppyHour/swap_provenance.py.
+# ðŸ”´ Guard constants (Kurt 2026-08-25). SSOT: AppyHour/swap_provenance.py.
 PER_ORDER_SKU_CAP = 2
 NEVER_SWAP_TAGS = {"pr box"}
 
@@ -315,7 +329,7 @@ NEVER_SWAP_TAGS = {"pr box"}
 def plan_pair(store: str, token: str, ship_tag: str, pair: dict,
               email_by_order: dict, rc_session: requests.Session,
               login_ids: set[int], excl_cache: dict, limit: int | None) -> dict:
-    # Eligibility: canonical finder — fulfillable>0 + _rc_bundle only (paid lines out).
+    # Eligibility: canonical finder â€” fulfillable>0 + _rc_bundle only (paid lines out).
     # silent pair -> also reach lines with no _rc_bundle prop (2 AC-RBOL orders were
     # invisible to a bundle_only finder and failed at commit).
     targets = shopify_swap.find_swap_targets(store, token, ship_tag, pair["old_sku"],
@@ -330,7 +344,7 @@ def plan_pair(store: str, token: str, ship_tag: str, pair: dict,
         if len(planned) >= cap:
             break
         oid = str(t.get("order_id") or t.get("order_name") or "")
-        # 🔴 "PR box" is never swappable — a short there is escalated to Kurt, not filled.
+        # ðŸ”´ "PR box" is never swappable â€” a short there is escalated to Kurt, not filled.
         tags = t.get("tags")
         if tags is not None and {str(x).strip().lower() for x in tags} & NEVER_SWAP_TAGS:
             excluded.append({**t, "why": "PR box (never swap - report as real short)"})
@@ -361,7 +375,7 @@ plan_pair.swaps_by_order = {}
 def execute_plans(plans: list[dict]) -> list[dict]:
     """Execute via the canonical order_edit module path. Returns per-order results.
 
-    NEVER counts calls as success — results feed the verify phase, which is the
+    NEVER counts calls as success â€” results feed the verify phase, which is the
     only success authority (SHORTS_PASS_RULES #2)."""
     base, headers = get_shopify_auth()
     all_skus = {p["old_sku"] for p in plans} | {p["new_sku"] for p in plans}
@@ -383,7 +397,7 @@ def execute_plans(plans: list[dict]) -> list[dict]:
                 rc_bundle_only=not silent, allow_paid=silent)
             return {"order": t["order_name"], "old": old_sku, "new": new_sku,
                     "swapped": swapped, "ok": bool(swapped)}
-        except Exception as e:  # noqa: BLE001 — recorded per-order, run continues
+        except Exception as e:  # noqa: BLE001 â€” recorded per-order, run continues
             return {"order": t["order_name"], "old": old_sku, "new": new_sku,
                     "error": str(e), "ok": False}
 
@@ -399,7 +413,9 @@ def execute_plans(plans: list[dict]) -> list[dict]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("ship_tag")
+    ap.add_argument("ship_tag",
+                    help="_SHIP_YYYY-MM-DD cohort tag, or __UNTAGGED__ for open unfulfilled "
+                         "orders carrying no _SHIP_ tag (SHORTS_PASS_RULES #13)")
     ap.add_argument("--pairs", required=True, type=Path)
     ap.add_argument("--apply", action="store_true", help="execute writes (default: dry-run)")
     ap.add_argument("--limit", type=int, default=None, help="max swaps per pair (test cap)")
@@ -422,13 +438,13 @@ def main() -> int:
                       for o in orders}
     since = (dt.datetime.now(dt.timezone.utc)
              - dt.timedelta(days=args.login_window_days)).strftime("%Y-%m-%dT%H:%M:%S")
-    # 🔴 Join-zero guard BEFORE the (slow) Recharge pass — a typo'd old_sku otherwise renders as
+    # ðŸ”´ Join-zero guard BEFORE the (slow) Recharge pass â€” a typo'd old_sku otherwise renders as
     # a harmless `elig 0 / plan 0` preview row instead of a bad pairs.csv (SHORTS_PASS_RULES #12).
     if not args.allow_absent_sku:
         bad = absent_pair_refusals(pairs, cohort_skus(orders))
         if bad:
-            print(f"\n🔴 REFUSED: pairs.csv old_sku(s) appear on ZERO of {len(orders)} orders on "
-                  f"{args.ship_tag} — a wrong SKU, not an empty pair:")
+            print(f"\nðŸ”´ REFUSED: pairs.csv old_sku(s) appear on ZERO of {len(orders)} orders on "
+                  f"{args.ship_tag} â€” a wrong SKU, not an empty pair:")
             print("\n".join(bad))
             print("  Re-run with --allow-absent-sku only if you truly expect it to be absent.")
             return 2
@@ -482,21 +498,41 @@ def main() -> int:
     print("\n[verify] re-fetching tag and re-counting fulfillable quantities...")
     post_orders = fetch_tag_orders(sess, store, token, args.ship_tag)
     mismatches = []
-    for p in plans:
-        n = len(p["planned"])
-        for sku, delta in ((p["old_sku"], -n), (p["new_sku"], +n)):
-            expected = pre_counts[sku] + delta
-            actual = count_fulfillable(post_orders, sku)
-            status = "OK" if actual == expected else "MISMATCH"
-            print(f"  {sku:16} pre={pre_counts[sku]:>4} expected={expected:>4} "
-                  f"actual={actual:>4}  {status}")
-            if actual != expected:
-                mismatches.append({"sku": sku, "expected": expected, "actual": actual})
+    # UNTAGGED mode verifies the PLANNED ORDERS, not the population (SHORTS_PASS_RULES #14).
+    # `__UNTAGGED__` is not a stable set: an order that gains a _SHIP_ tag (or is fulfilled)
+    # between the pre-count and this re-fetch silently LEAVES it, taking its counts along --
+    # which on 2026-09-09 rendered 3 false MISMATCHes while every order had swapped correctly.
+    if args.ship_tag == shopify_swap.UNTAGGED_SENTINEL:
+        by_id = {str(o["id"]): o for o in post_orders}
+        for p_ in plans:
+            bad = []
+            for t in p_["planned"]:
+                o = by_id.get(str(t.get("order_id")))
+                if o is None:
+                    bad.append({"order": t.get("order_name"), "why": "left the untagged set"})
+                elif count_fulfillable([o], p_["old_sku"]) > 0:
+                    bad.append({"order": t.get("order_name"), "why": "old_sku still fulfillable"})
+            print(f"  {p_['old_sku']:16} -> {p_['new_sku']:16} planned={len(p_['planned']):>4} "
+                  f"unverified={len(bad):>4}  {'OK' if not bad else 'MISMATCH'}")
+            for b in bad:
+                print(f"      {b['order']}: {b['why']}")
+            mismatches.extend([{"sku": p_["old_sku"], **b} for b in bad])
+    else:
+        for p_ in plans:
+            n = len(p_["planned"])
+            for sku, delta in ((p_["old_sku"], -n), (p_["new_sku"], +n)):
+                expected = pre_counts[sku] + delta
+                actual = count_fulfillable(post_orders, sku)
+                status = "OK" if actual == expected else "MISMATCH"
+                print(f"  {sku:16} pre={pre_counts[sku]:>4} expected={expected:>4} "
+                      f"actual={actual:>4}  {status}")
+                if actual != expected:
+                    mismatches.append({"sku": sku, "expected": expected, "actual": actual})
     log({"phase": "verify", "mismatches": mismatches})
     if mismatches:
-        print(f"\nVERIFY FAILED — {len(mismatches)} sku count mismatch(es). Log: {log_path}")
+        print(f"\nVERIFY FAILED â€” {len(mismatches)} sku count mismatch(es). Log: {log_path}")
         return 1
-    print(f"\nVERIFY OK — plan matches actual. Log: {log_path}")
+    print(f"\nVERIFY OK â€” plan matches actual. Log: {log_path}")
     return 0
 
 
