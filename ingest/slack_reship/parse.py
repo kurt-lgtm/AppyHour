@@ -157,7 +157,23 @@ def parse_detailed_blob(blob: str) -> list[ReshipRecord]:
     This is the canonical no-token path: paste the plugin output to a file, run.
     """
     records: list[ReshipRecord] = []
-    blocks = re.split(r"^=== Message at .*? ===\s*$", blob, flags=re.MULTILINE)
+    # 🔴 2026-08-28: the Slack MCP now emits `=== Message from <name> <email> (UID...) at
+    # <ts> ===`. The old `=== Message at ` literal cannot match that, and a regex that matches
+    # nothing does not raise — `re.split` just returns the whole blob as ONE block.
+    #
+    # Measured across all 11 detailed fixtures (2026-09-12), and there are TWO failure modes:
+    #   * TOTAL blindness — 08-17, 08-24, 08-31 are pure new-dialect: OLD yields 1 block vs
+    #     NEW's 48 / 35 / 41. One block parses to ~1 record, i.e. a near-zero week.
+    #   * 🔴 PARTIAL undercount, the nastier one — a file carrying BOTH header spellings loses
+    #     only the new-dialect messages: 06-29 127 vs 151, 07-06 63 vs 72, 07-13 43 vs 46,
+    #     07-20 85 vs 87, 08-03 58 vs 61, 08-10 30 vs 32. A near-zero week is obviously broken
+    #     and gets investigated; a week that is quietly 16% short looks like a real number and
+    #     publishes. Pure old-dialect files (06-22, 07-27) are identical under both patterns,
+    #     so accepting both is strictly additive — no existing week moves.
+    #
+    # `(?:from .*? )?` is optional on purpose: both spellings stay valid forever, because the
+    # fixtures prove the vendor changed this once without notice and may again.
+    blocks = re.split(r"^=== Message (?:from .*? )?at .*? ===\s*$", blob, flags=re.MULTILINE)
     for b in blocks:
         b = b.strip()
         if not b:
