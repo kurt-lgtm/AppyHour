@@ -1,551 +1,2892 @@
 {
-  "AC-ACJ": "Cranberry & Apple Jam",
-  "AC-ACRISP": "Artisan Crisps - Apricot, Pistachio & Brandy",
-  "AC-APMB": "Apple Maple Butter Mini",
-  "AC-APOH": "Apricot with Orange & Honey Mini Jam",
-  "AC-APR": "Dried Apricots",
-  "AC-BACO": "Bacon Marmalade *",
-  "AC-BALSON": "Balsamic Caramelized Onion Jam",
-  "AC-BBALS": "Blackberry Balsamic Jam",
-  "AC-BBB": "Blackberry, Blueberry and Balsamic Jam",
-  "AC-BLBALS": "Blackberry Balsamic Jam",
-  "AC-BLUCAR": "Blueberry Cardamom Preserves",
-  "AC-BLUTH": "Wild Blueberry Thyme Jam *",
-  "AC-BRJ": "Blackberry Rosemary Jam",
-  "AC-BRJA": "Blackberry Rosemary Jam",
-  "AC-CAOL": "Castelvetrano Olives",
-  "AC-CARM": "Caramelized Onion Jam",
-  "AC-CBIS": "Buttermilk Biscuit Crackers",
-  "AC-CFPH": "Caramelized Fig Jam with Pear & Honey *",
-  "AC-COCO": "Coconut Cashews *",
-  "AC-CROS": "Rustic Bakery Organic Sourdough Rosemary Flatbread Bites",
-  "AC-DALM": "Dark Chocolate Covered Almonds",
-  "AC-DCRAN": "Dark Chocolate Covered Cranberries*",
-  "AC-DPAP": "Dried Papaya",
-  "AC-DPEC": "Dried Peaches *",
-  "AC-DPIC": "Dilly Pickle Bites",
-  "AC-DTCH": "Dried Tart Cherries *",
-  "AC-EFLAT": "Everything Flatbread Crackers",
-  "AC-FALD": "French Honey Balsamic Dijon Mustard *",
-  "AC-FALM": "French Tarragon Dijon Mustard *",
-  "AC-FCCRAN": "Cranberry Sour Cherry & Extra Virgin Olive Oil Crackers",
-  "AC-FCEVOO": "Extra Virgin Olive OIl & Sea Salt Crackers",
-  "AC-FCWALN": "Walnut, Honey & Extra Virgin Olive Oil Crackers",
-  "AC-FHOO": "Firehook Crackers",
-  "AC-FIGA": "Fig & Almond Cake *",
-  "AC-FLH": "Fig, Meyer Lemon & Honey Jam",
-  "AC-FOJ": "French Onion Rosemary Jam Mini *",
-  "AC-FRESC": "Pitted Frescatrano Olives",
-  "AC-GAL": "Garlic Almonds",
-  "AC-GBEF": "Gooseberry Elderflower Mini Jam",
-  "AC-GLAW": "Candied Glazed Walnuts",
-  "AC-HAZ": "IGP Piedmonte Hazelnuts *",
-  "AC-HON": "Raw Honey with Comb  *",
-  "AC-KETT": "America's 250th Anniversary Kettle Corn",
-  "AC-LFOLIVE": "Lemon, Feta & Olive Mix*",
-  "AC-MAME": "Edamame, Roasted & Salted",
-  "AC-MANG": "Dried Mango",
-  "AC-MARC": "Spanish Salted Marcona Almonds*",
-  "AC-MARC2": "Spanish Salted Marcona Almonds - Halves*",
-  "AC-MARC3": "Raw Marcona Almonds",
-  "AC-MCP": "Milk Chocolate Covered Pretzels*",
-  "AC-MEDO": "Mediterranean Olives & Herb Medley  *",
-  "AC-MEMB": "Membrillo Quince Paste *",
-  "AC-MISS": "Black Mission Figs",
-  "AC-MPTZ8": "Martin's Handmade Pretzels 8oz",
-  "AC-MUSTCH": "Stone Ground Mustard*",
-  "AC-NECT": "Dried Nectarines",
-  "AC-PBLINI": "Peach Bellini Preserves*",
-  "AC-PCRISP": "Artisan Crisps - Pumpkin Spice",
-  "AC-PCSC": "Pistachio Cherry Shortbread Cookies",
-  "AC-PFLAT": "Sesame Pretzel Flatbreads",
-  "AC-PINA": "Pineapple Rings",
-  "AC-PIST": "Whole Colossal Pistachios, Roasted & Salted",
-  "AC-PMULB": "Purple Mulberries",
-  "AC-PPCM": "Piri Piri Cocktail Mix*",
-  "AC-PRPE": "Praline Pecans *",
-  "AC-QUIC": "Quicos (Giant Crunchy Corn_",
-  "AC-RBBS": "Rustic Bakery Organic Sesame Flatbread Bites",
-  "AC-RBOL": "Organic Sourdough Flatbread Bites - Olive Oil & Sel Gris*",
-  "AC-RBOL-BULK": "AC-RBOL_BULK_TRAYS",
-  "AC-RCEVY": "Rustic Crackers - Everything Bites",
-  "AC-RHAZ": "Raw Hazelnuts*",
-  "AC-RHB": "Raspberry Hibiscus Jam",
-  "AC-RPJ": "Red Pepper Jelly Mini *",
-  "AC-RSPM": "Raspberry Mostarda Mini Jam 1.5oz",
-  "AC-SBPBJ": "Spiced Peach Bourbon Jam*",
-  "AC-SCNM": "Spanish Cocktail Nut Mix",
-  "AC-SCP": "Spiced Caramel Pear Jam",
-  "AC-SDF": "Dried Sierra Figs",
-  "AC-SLL": "Strawberry Lemon Lavender Preserves*",
-  "AC-SMAL": "Sweet & Smoky Almonds*",
-  "AC-SRHUB": "Strawberry Rhubarb Mini Jam*",
-  "AC-STRAW": "Dried Chocolate Covered Strawberries",
-  "AC-TCP": "Tart Cherry with Cardamom & Port Mini Jam",
-  "AC-TCRISP": "Artisan Crisps - Tart Cherry, Cacao Nib, & Almond*",
-  "AC-TOK": "Toketti",
-  "AC-VMOJ": "Valencian Mandarin Orange Jam",
-  "AC-WAL": "Glazed Walnuts",
-  "AC-WASP": "Wasabi Peas",
-  "AC-WASP2": "Wasabi Peas, All-Natural",
-  "AC-WBLUE": "Wild Blueberry with Thyme Jam",
-  "AC-WMULB": "White Mulberries",
-  "AHB-BLGE": "AppyHour Box + Free Brie for a Year",
-  "AHB-BMED": "AppyHour Box + Free Brie for a Year",
-  "AHB-BVAL": "Ultimate Add-on Package: The Sweet & Savory Upgrade",
-  "AHB-CBMED": "AppyHour Cheese Box + Free Brie for a Year",
-  "AHB-CMED": "AppyHour Cheese Box",
-  "AHB-CPMED": "AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-CUR-MS": "Monthly Curation",
-  "AHB-CUR-NMS": "Monthly Curation",
-  "AHB-FATH": "Limited-Release: Father's Day Feast Box",
-  "AHB-GAME": "Limited-Release: Game Day Bites Cheese & Charcuterie Box",
-  "AHB-GLGE": "AppyHour Gift Box",
-  "AHB-GMED": "AppyHour Gift Box",
-  "AHB-INDP": "Limited-Release: Independence Day Box",
-  "AHB-LCUST-ALPN": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *",
-  "AHB-LCUST-BYO": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *",
-  "AHB-LCUST-CO-MDT": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life [No Nuts] *",
-  "AHB-LCUST-CO-MONG": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life [No Nuts] *",
-  "AHB-LCUST-CO-OWC": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life [No Nuts] *",
-  "AHB-LCUST-CO-SPN": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life [No Nuts] *",
-  "AHB-LCUST-COFS-HHIGH": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-COFS-MDT": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-COFS-MONG": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-COFS-MS": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-COFS-OWC": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-COFS-SPN": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-COFS-SS": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-CORS-BYO": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-CORS-HHIGH": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-CORS-MDT": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-CORS-MONG": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-CORS-MS": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-CORS-NMS": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-CORS-OWC": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-CORS-SPN": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-CORS-SS": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-HHIGH": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *",
-  "AHB-LCUST-ISUN": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *",
-  "AHB-LCUST-MDT": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *",
-  "AHB-LCUST-MONG": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *",
-  "AHB-LCUST-MS": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *",
-  "AHB-LCUST-NCFS-BYO": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NCFS-HHIGH": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NCFS-MDT": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NCFS-MONG": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NCFS-NMS": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NCFS-OWC": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NCFS-SPN": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NCFS-SS": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NCRS-BYO": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NCRS-HHIGH": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NCRS-MDT": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NCRS-MONG": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NCRS-MS": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NCRS-NMS": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NCRS-OWC": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NCRS-SPN": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NCRS-SS": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NMS": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *",
-  "AHB-LCUST-NNFS-BYO": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NNFS-HHIGH": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NNFS-MDT": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NNFS-MONG": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NNFS-MS": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NNFS-NMS": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NNFS-OWC": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NNFS-SPN": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NNFS-SS": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NNRS-BYO": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NNRS-HHIGH": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NNRS-MDT": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NNRS-MONG": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NNRS-MS": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NNRS-NMS": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NNRS-OWC": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NNRS-SPN": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-NNRS-SS": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-LCUST-OWC": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *",
-  "AHB-LCUST-SPN": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *",
-  "AHB-LCUST-SS": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *",
-  "AHB-LGE": "AppyHour Box",
-  "AHB-MCUR-TRAY": "AppyHour Gourmet Bites Snack Trays",
-  "AHB-MCUR-TRAY2": "AppyHour Gourmet Bites",
-  "AHB-MCUR-TRAY3": "AppyHour Gourmet Bites*",
-  "AHB-MCUST-ALPN": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *",
-  "AHB-MCUST-BYO": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *",
-  "AHB-MCUST-CO-MDT": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life [No Nuts] *",
-  "AHB-MCUST-CO-MONG": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life [No Nuts] *",
-  "AHB-MCUST-CO-OWC": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life [No Nuts] *",
-  "AHB-MCUST-CO-SPN": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life [No Nuts] *",
-  "AHB-MCUST-COFS-BYO": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-COFS-HHIGH": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-COFS-MDT": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-COFS-MONG": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-COFS-MS": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-COFS-OWC": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-COFS-SPN": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-COFS-SS": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-CORS-BYO": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-CORS-HHIGH": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-CORS-MDT": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-CORS-MONG": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-CORS-MS": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-CORS-NMS": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-CORS-OWC": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-CORS-SPN": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-CORS-SS": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-HHIGH": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *",
-  "AHB-MCUST-ISUN": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *",
-  "AHB-MCUST-MDT": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *",
-  "AHB-MCUST-MONG": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *",
-  "AHB-MCUST-MS": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *",
-  "AHB-MCUST-NCFS-BYO": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NCFS-HHIGH": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NCFS-MDT": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NCFS-MONG": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NCFS-NMS": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NCFS-OWC": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NCFS-SPN": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NCFS-SS": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NCRS-BYO": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NCRS-HHIGH": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NCRS-MDT": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NCRS-MONG": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NCRS-MS": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NCRS-NMS": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NCRS-OWC": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NCRS-SPN": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NCRS-SS": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NMS": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *",
-  "AHB-MCUST-NN-MONG": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life [No Nuts] *",
-  "AHB-MCUST-NNFS-BYO": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NNFS-HHIGH": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NNFS-MDT": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NNFS-MONG": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NNFS-MS": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NNFS-NMS": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NNFS-OWC": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NNFS-SPN": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NNFS-SS": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NNRS-BYO": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NNRS-HHIGH": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NNRS-MDT": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NNRS-MONG": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NNRS-MS": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NNRS-NMS": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NNRS-OWC": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NNRS-SPN": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-NNRS-SS": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life",
-  "AHB-MCUST-OWC": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *",
-  "AHB-MCUST-SPN": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *",
-  "AHB-MCUST-SS": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *",
-  "AHB-MCUST-TRAY": "AppyHour Gourmet Bites",
-  "AHB-MED": "AppyHour Box",
-  "AHB-MEMD": "Limited-Release: Picnic in Paradise Box",
-  "AHB-MOTH": "Limited-Release: Mother's Day Indulgence Box",
-  "AHB-PLGE": "AppyHour Gift Box",
-  "AHB-PMED": "AppyHour Gift Box",
-  "AHB-SMED": "AppyHour 6-Month Gift Subscription",
-  "AHB-SOIR": "Limited-Release: Summer Soirée Box",
-  "AHB-SPB": "Limited-Release: Summer Picnic Box",
-  "AHB-XBRCH": "Limited-Release: Brunch Cheese & Charcuterie Box",
-  "AHB-XCUR": "Limited-Release: Curator's Choice Artisan Cheese Box",
-  "AHB-XFALL": "Limited-Release: Fall Harvest Cheese & Charcuterie Box",
-  "AHB-XGDAY": "Limited-Release: Game Day Bites Cheese & Charcuterie Box",
-  "AHB-XHWN": "Limited-Release: Haunted Harvest Halloween Cheese & Charcuterie Box",
-  "AHB-XMAS": "Limited-Release: Holiday Feast Cheese & Charcuterie Box",
-  "AHB-XMDT": "Mediterranean Escape - AppyHour Cheese & Charcuterie Gift Box",
-  "AHB-XMONG": "The Monger's Table - AppyHour Cheese & Charcuterie Gift Box",
-  "AHB-XSPN": "Taste of Spain - AppyHour Cheese & Charcuterie Gift Box",
-  "AHB-XSPR": "Limited-Release: Springtime Easter Box",
-  "AHB-XTG": "Limited-Release: Thanksgiving Table Cheese & Charcuterie Box",
-  "AHB-XVAL": "Limited-Release: Valentine's Sweetheart Box",
-  "BL-APRL": "Ultimate Add-on Package: April Showers",
-  "BL-BLR4": "Baked Lemon Ricotta 4-pack with Blackberry Balsamic Jam",
-  "BL-FFJ": "2 Small-Batch Jams - Fruit Flavors",
-  "BL-FSJ": "2 Small-Batch Jams - Fruit & Savory Flavors",
-  "BL-IRE": "Ultimate Add-on Package: Taste of Ireland",
-  "BL-RACL": "Ultimate Add-on Package: Raclette Bundle",
-  "BL-SDB": "Limited-time: Spring Soirée Bundle",
-  "BL-SPAT": "Ultimate Add-on Package: The Brewmaster",
-  "BL-SSJ": "2 Small-Batch Jams - Savory Flavors",
-  "BL-STPD": "St. Patrick's Day Pairing",
-  "CEX-EC": "Seasonal Cheese",
-  "CEX-EC-ALPN": "CEX-EC-ALPN",
-  "CEX-EC-BYO": "CEX-EC-BYO",
-  "CEX-EC-HHIGH": "CEX-EC-HHIGH",
-  "CEX-EC-ISUN": "CEX-EC-ISUN",
-  "CEX-EC-MDT": "CEX-EC-MDT",
-  "CEX-EC-MONG": "CEX-EC-MONG",
-  "CEX-EC-MS": "CEX-EC-MS",
-  "CEX-EC-NMS": "CEX-EC-NMS",
-  "CEX-EC-OWC": "CEX-EC-OWC",
-  "CEX-EC-SPN": "CEX-EC-SPN",
-  "CEX-EC-SS": "CEX-EC-SS",
-  "CEX-EM": "Curator's Choice - Premium Charcuterie",
-  "CH-6COM": "Comte - 6 Months*",
-  "CH-ACAC": "Vault 5 Cave Aged Cheddar",
-  "CH-AGOU": "Dutch Aged Gouda *",
-  "CH-AGUR": "St. Agur",
-  "CH-AJACK": "Adironjack",
-  "CH-ALISOS": "Alisos",
-  "CH-ALMA": "Alma Vrollbergerbergkase",
-  "CH-ALP": "Alp Blossom*",
-  "CH-ALPHA": "Alpha Tolman (Alpine)",
-  "CH-ASHB": "Asher Blue",
-  "CH-ASIAGO": "Asiago*",
-  "CH-ASST": "Asiago Stravecchio DOP 12 mo. Mitica® (Raw) (TriVeneto) 1/18#",
-  "CH-BAP": "Barricato Al Pepe*",
-  "CH-BARI": "Barista*",
-  "CH-BBCOF": "Barely Buzzed Coffee Cheese",
-  "CH-BBLUE": "California Bay Blue*",
-  "CH-BCR": "Baked Chocolate Ricotta",
-  "CH-BLR": "Baked Lemon Ricotta *",
-  "CH-BLUELEM": "Blueberry Lemon Thyme Goat Cheese*",
-  "CH-BOSI": "Robiola Bosina due Latte (Soft, Cow & Sheep's Milk)",
-  "CH-BREK": "Petite Breakfast",
-  "CH-BRIE": "Triple Crème Brie *",
-  "CH-BRZ": "Prairie Breeze Cheddar *",
-  "CH-CABR": "Cabra al Gofio",
-  "CH-CAFE": "Campi Fennel",
-  "CH-CAM": "Petit Camambert",
-  "CH-CAMPO": "Campo de Montalban*",
-  "CH-CARO": "Cacio di Roma",
-  "CH-CCC": "Cabot Clothbound Cheddar (Hard, Creamy, Nutty)",
-  "CH-CFBC": "Cashel Farmhouse Blue Cheese",
-  "CH-CHALLER": "Challerhocker*",
-  "CH-CHAMO": "Pecorino Camomila",
-  "CH-CONI": "Caramelized Onion Cheddar",
-  "CH-COOL": "Coolea",
-  "CH-COSS": "Cossanella",
-  "CH-COWBOY": "Cowboy Coffee",
-  "CH-CRFF": "Cranberry Fromage Frais",
-  "CH-CSGOD": "Beauty Vintage Sharp Cheddar",
-  "CH-CTGOD": "Black Truffle Howling Hound Vintage Cheddar*",
-  "CH-CTUF": "Caciotta Al Tartufo (Truffle)*",
-  "CH-EBCC": "Everything Bagel Cheese Curds*",
-  "CH-EBRIE": "Triple Cream Excellence*",
-  "CH-EMSW": "Imported Emmentaler Swiss*",
-  "CH-ETX": "Etxegarai Smoked (Raw) (Navarra) 2/6#",
-  "CH-FAG": "Farmstead Aged Gouda*",
-  "CH-FDCB": "French Double Cream Brie",
-  "CH-FEMM": "Entrémont Emmentaler",
-  "CH-FENG": "Farmstead Fenugreek Gouda*",
-  "CH-FONT": "Fontina Val D'Aosta DOP (Raw) (Val d'Aosta) 1/18#",
-  "CH-FONTAL": "Fontal (Buttery, Melting)",
-  "CH-FOWC": "Clothbound Cheddar *",
-  "CH-FRMO": "Fresh Mozzarella",
-  "CH-FSRB": "French Soft-Ripened Brie",
-  "CH-GAOP": "Gruyère *",
-  "CH-GEVE": "Everything Bagel Chevre Log",
-  "CH-GFLEECE": "Golden Fleece",
-  "CH-GHCC": "Garlic Habanero Cheese Curds",
-  "CH-GPBRIE": "Petit Garlic & Pepper Triple Cream Brie",
-  "CH-GUUB": "Gubbeen",
-  "CH-HARBM": "Mini Harbison",
-  "CH-HBGG": "Honey Bee Goat Gouda",
-  "CH-HCGU": "Honey Clover Gouda",
-  "CH-HORN": "Hornbacher",
-  "CH-HTG": "Holy Trinity Farmstead Gouda",
-  "CH-IPAC": "Fiddlehead IPA Cheddar*",
-  "CH-IPRW": "Imported Parmigiano Reggiano *",
-  "CH-JRES": "January Box Cheese Replacement",
-  "CH-KM39": "KM39 (Nutty, Hard Cheese)",
-  "CH-KUNIK": "Nettle Meadow Kunik",
-  "CH-LEON": "Leonora*",
-  "CH-LOSC": "Los Cameros Romero (Rosemary, Semi Soft)",
-  "CH-LOU": "Lou Bergier Pichin Tomme*",
-  "CH-LRB": "Le Regal de Bourgogne aux Cranberries*",
-  "CH-MAFT": "Marinated Australian Farmstead Cheese *",
-  "CH-MAHO": "Mahon Menorca *",
-  "CH-MANC": "Manchego Curado *",
-  "CH-MARGOT": "Margot (Washed in Craft Beer)*",
-  "CH-MAU3": "Manchego Aurora *",
-  "CH-MBRIE": "Marin Petit Crème Brie",
-  "CH-MCPC": "McCalls Grassfed Irish Porter Cheddar",
-  "CH-MDAC": "Mini Cranberry Delice D'Argental",
-  "CH-MONET": "Woodside Monet Chevre",
-  "CH-MONT": "Montasio DOP Mezzano Mitica® (Raw) (Friuli) 1/11#",
-  "CH-MOSES": "Moses Reaper*",
-  "CH-MPOLO": "Marco Polo",
-  "CH-MSF": "Mediterranean Style Feta",
-  "CH-MSMG": "Farmstead Smoked Gouda *",
-  "CH-MSWISS": "Mustard Seed Swisserella *",
-  "CH-MTASGO": "Mountain Asiago Fresco",
-  "CH-NMACF": "Apple Cider Fromage Frais*",
-  "CH-NMMAP": "Maple Fromage Frais",
-  "CH-NMPSC": "Pumpkin Spice Fromage Frais",
-  "CH-OFARM": "Old Farmdal",
-  "CH-OGFM": "Organic Grass-Fed Mozzarella *",
-  "CH-OGK": "OG Kristal",
-  "CH-OTTA": "Frumage L'Ottavio (Beer Cheese)",
-  "CH-PARM": "24-Month Aged Raw Milk Parmigiano Reggiano, DOP",
-  "CH-PBGO": "Basil Pesto Gouda*",
-  "CH-PBOO": "Petit Boo Ash-Coated Triple Crème Brie",
-  "CH-PBRIE": "Petit Triple Cream Brie",
-  "CH-PCROT": "Pecorino Crotonese Sfizio Aged (Lazio) 2/5#",
-  "CH-PIAV": "Piave Red Label",
-  "CH-PIMO": "Pimento Cheese",
-  "CH-PLU": "Angelino Plums",
-  "CH-PRAD": "Pradera - Dutch Aged Gouda*",
-  "CH-PUMC": "Pumpkin Spice Chevre",
-  "CH-PVEC": "Piave Vecchio *",
-  "CH-QCAV": "Queso de Murcia al Vino DOP",
-  "CH-QOTA": "Queen of the Alps",
-  "CH-QUEEN": "Queen of the Alps",
-  "CH-RACL": "Raclette Livradois*",
-  "CH-RAG": "CH-BIX",
-  "CH-RAMP": "Entlebucher Barlauchkase - Ramp Cheese (Raw) (1/9#)",
-  "CH-RASHI": "TomaRashi",
-  "CH-ROBI": "Robiola Bosina",
-  "CH-ROMQ": "Romao Queso al Romero (Rosemary)",
-  "CH-RP": "Ragged Point (Soft-Ripened, Bloomy Rind)",
-  "CH-RQCAV": "The Drunken Goat - Reserve",
-  "CH-RRC": "Red Rock Cheddar",
-  "CH-SCMT": "Aged Comté 15-18 Month",
-  "CH-SFG": "Summer Fields Gouda",
-  "CH-SHADOW": "Shadow Blossom",
-  "CH-SJGO": "San Joaquin Gold",
-  "CH-SMCHD": "Smoky Cheddar",
-  "CH-SMG": "Smoking Goat",
-  "CH-SOT": "Sottocenere Al Tartufo (Truffle, Semi Soft)",
-  "CH-SPORT": "Port Salut Semi Soft Cheese",
-  "CH-SSIM": "San Simon DOP Mitica® (Smoked Cow) (Galicia)",
-  "CH-STIL": "Farmstead English Stilton Blue Cheese",
-  "CH-TETI": "Tetilla DOP Mitica® (Cow) (Galicia) 4/2#",
-  "CH-TIP": "Tipperary Brie",
-  "CH-TOMT": "Georgia Tomme *",
-  "CH-TOPR": "Toma Provence *",
-  "CH-TRUSEK": "Truffle Seeker",
-  "CH-TTBRIE": "Petit Truffle Triple Cream Brie",
-  "CH-UBRI": "Ubraico al Prosecco",
-  "CH-UCONE": "Ubriacone*",
-  "CH-UMIN": "Farmstead Smoked Cumin Gouda",
-  "CH-UROSE": "Ubriaco al Pinot Rosé",
-  "CH-VAT": "Vat 17 Cheddar",
-  "CH-VBLUE": "Valdeón Blue*",
-  "CH-WMANG": "Wensleydale with Mango & Ginger",
-  "CH-WRANG": "Wrangeback",
-  "CH-WWBC": "Wooly Wooly Black Garlic*",
-  "CH-WWBG": "Wooly Wooly Black Garlic",
-  "CH-WWDI": "Wooly Wooly Diablo*",
-  "CH-WWHO": "Wooly Wooly® Honey Oregano Semi-Firm Wheel (Castilla-La Mancha)",
-  "CH-YFARM": "Young Farmdal",
-  "EX-CC": "Curator's Choice",
-  "EX-EA": "Member Bonus: Extra Accompaniment",
-  "EX-EC": "Curator's Choice - Artisan Cheese Archived",
-  "EX-EM": "Curator's Choice - Premium Charcuterie Archived",
-  "EX-ICE": "Extra Gel Pack",
-  "EX-PS": "Party Size Upgrade - Curator's Choice",
-  "MT-4JABPC": "Black Pepper & Cherry Prosciutto",
-  "MT-4JAHH": "Honey & Herb Prosciutto - 4 oz",
-  "MT-4PP": "Prosciutto Piccante *",
-  "MT-4PSS": "Sweet & Spicy Prosciutto",
-  "MT-ASPK": "Applewood Smoked Speck *",
-  "MT-BCSC": "Beef Caraway Salami Chub",
-  "MT-BKCO": "Berkshire Coppa",
-  "MT-BKCOP": "Berkshire Coppa",
-  "MT-BPSS": "Black Pepper Summer Salami",
-  "MT-BRAS": "Uncured Wagyu Bresaola",
-  "MT-BSS": "Beefsteak and Goathorn Pepper Salami",
-  "MT-CAPO": "Capocollo*",
-  "MT-CBCO": "Cider Brined Coppa",
-  "MT-CCBS": "Belgian Style Quad Ale Salami",
-  "MT-CCCS": "Chorizo Seco",
-  "MT-CCSP": "Salami Piccante with Cognac",
-  "MT-COPPA": "Coppa Italiana",
-  "MT-EXEM": "MT-EXEM",
-  "MT-FS-4JABPC": "Black Pepper & Cherry Prosciutto F/S",
-  "MT-FS-BRAS": "Bresaola",
-  "MT-FS-COPPA": "Coppa Italiana",
-  "MT-FS-HCOPPA": "Hot Coppa",
-  "MT-FS-HERF": "Heritage Finocchiona",
-  "MT-FS-HERS": "Heritage Sopressata",
-  "MT-FS-ITSPK": "Speck Italiano",
-  "MT-FS-JAHH": "Honey & Herb Prosciutto F/S",
-  "MT-FS-JAMS": "Jamon Serrano",
-  "MT-FS-PRO": "Prosciutto Bulk",
-  "MT-FS-RUST": "Salame Rustico",
-  "MT-FS-SPAN": "Chorizo Español",
-  "MT-FS-TRPR": "Black Truffle Prosciutto F/S",
-  "MT-GEN": "Black Pepper Uncured Genoa Salami",
-  "MT-IBHP": "Jamón Ibérico",
-  "MT-JABPC": "Black Pepper Cherry Prosciutto",
-  "MT-JAHH": "Honey & Herb Prosciutto*",
-  "MT-JAMS": "Jamón Serrano *",
-  "MT-JUNI": "Juniper Salami",
-  "MT-LOMO": "Lomo",
-  "MT-LONZ": "Lonza *",
-  "MT-PARM": "Parm Salami",
-  "MT-PP": "Prosciutto Piccante *",
-  "MT-PRO": "Prosciutto Italiano",
-  "MT-PSS": "Sweet & Spicy Prosciutto",
-  "MT-PTUF": "Black Truffle Prosciutto",
-  "MT-RAMP": "Ramp Salami",
-  "MT-REDW": "Red Wine & Garlic Salami Chub",
-  "MT-SBRES": "Beef Bresaola",
-  "MT-SCHI": "Salami Chianti",
-  "MT-SCHO": "Sliced Chorizo",
-  "MT-SFEN": "Finocchiona *",
-  "MT-SFNL": "Salted Fennel Salami Chub - 5oz",
-  "MT-SLRWG": "Red Wine & Garlic Salami*",
-  "MT-SMASH": "Southern Smash",
-  "MT-SOP": "Uncured Black Pepper Sopressata*",
-  "MT-SPAP": "Smoked Paprika Chorizo*",
-  "MT-SPCE": "Spicebush Salami",
-  "MT-STBC": "Salt & Twine Uncured Bacon& Bourbon Chub",
-  "MT-STCOP": "Southern Coppa",
-  "MT-STCZ": "Southern Chorizo",
-  "MT-STSB": "Classic Bistro Salami Chub - 5oz",
-  "MT-STUF": "Salami Truffle",
-  "MT-TICH": "Spicy Pecan Smoked Chorizo Iberico",
-  "MT-TRPR": "Black Truffle Prosciutto",
-  "MT-TUSC": "Toscano Salame*",
-  "MT-WBEEF": "Wagyu Beef Salami",
-  "PK-BG2416": "Protective Plastic Bag",
-  "PK-BITESGUIDE": "Gourmet Bites - Tasting Guide",
-  "PK-FCUST": "Box 1 Tasting Guide",
-  "PK-TCUST": "Custom Box Tasting Guide",
-  "PK-TMDT": "Mediterranean Escape - Scan QR Code to Get Started",
-  "PK-TSTBL": "AppyHour Box Tasting Guide_BLUE",
-  "PK-TSTBX0": "AppyHour Box Tasting Guide_BOX0",
-  "PK-TSTG": "Food Safety Insert",
-  "PK-TSTOR": "AppyHour Box Tasting Guide_OR",
-  "PR-5CHUB": "Special: Extra 5oz Premium Charcuterie",
-  "PR-ACACBL": "Artisan Cave Aged Cheddar & Blueberry Thyme Jam",
-  "PR-BRIBL": "Triple Creme Brie & Blueberry Thyme Jam",
-  "PR-CJAM-ALPN": "Bonus Artisan Cheese & Jam Pairing",
-  "PR-CJAM-BYO": "Bonus Artisan Cheese & Jam Pairing",
-  "PR-CJAM-GEN": "Bonus Artisan Cheese & Jam Pairing",
-  "PR-CJAM-HHIGH": "Bonus Artisan Cheese & Jam Pairing",
-  "PR-CJAM-ISUN": "Bonus Artisan Cheese & Jam Pairing",
-  "PR-CJAM-MDT": "Bonus Artisan Cheese & Jam Pairing",
-  "PR-CJAM-MONG": "Bonus Artisan Cheese & Jam Pairing",
-  "PR-CJAM-MS": "Bonus Artisan Cheese & Jam Pairing",
-  "PR-CJAM-NMS": "Bonus Artisan Cheese & Jam Pairing",
-  "PR-CJAM-OWC": "Bonus Artisan Cheese & Jam Pairing",
-  "PR-CJAM-SPN": "Bonus Artisan Cheese & Jam Pairing",
-  "PR-CJAM-SS": "Bonus Artisan Cheese & Jam Pairing",
-  "PR-CJAM-STAPLES": "BonusArtisanCheese&Jam",
-  "PR-FCHE": "FREE Cheddar",
-  "PR-GEVEBL": "Everything Bagel Goat Log & Blueberry Thyme Jam",
-  "PR-GRUBLK": "Gruyere AOP & Blackberry Jam",
-  "PR-JAHH": "Special: Honey & Herb Prosciutto",
-  "PR-MAHOCFP": "Mahon Menorca & Carmelized Fig Jam",
-  "PR-MANCOG": "Manchego Curado & Valencia Orange Jam",
-  "PR-MPOLOVMOJ": "Marco Polo & Valencia Orange Jam",
-  "PR-STIBL": "Stilton Blue Cheese & Blueberry Thyme Jam",
-  "PR-VATBLUTH": "Vat 17 Cheddar & Blueberry Thyme Jam",
-  "TR-AAB": "American Artisan Board",
-  "TR-ALPAP": "Alpine Apertivo",
-  "TR-APRES": "Aprés Ski",
-  "TR-DGG": "Dutch Golden Age",
-  "TR-FTC": "From the Cave",
-  "TR-ICTRY": "Italian Countryside",
-  "TR-ROSE": "Rosé All Day",
-  "TR-SFH": "Salt Fat Heat",
-  "TR-TAPAS": "Traditional Tapas",
-  "TR-TRUFF": "Truffle Hunter"
+  "AC-ACJ": {
+    "sku": "AC-ACJ",
+    "mfg_name": null,
+    "shopify_name": "Cranberry & Apple Jam"
+  },
+  "AC-ACRISP": {
+    "sku": "AC-ACRISP",
+    "mfg_name": "Artisan Crisp Apricot Pistachio Brandy",
+    "shopify_name": "Artisan Crisps - Apricot, Pistachio & Brandy"
+  },
+  "AC-APMB": {
+    "sku": "AC-APMB",
+    "mfg_name": "Apple Maple Butter Mini",
+    "shopify_name": "Apple Maple Butter Mini"
+  },
+  "AC-APOH": {
+    "sku": "AC-APOH",
+    "mfg_name": "Apricot with Orange & Honey Mini Jam",
+    "shopify_name": "Apricot with Orange & Honey Mini Jam"
+  },
+  "AC-APR": {
+    "sku": "AC-APR",
+    "mfg_name": "Dried Apricots",
+    "shopify_name": "Dried Apricots"
+  },
+  "AC-BACO": {
+    "sku": "AC-BACO",
+    "mfg_name": "Bacon Marmalade",
+    "shopify_name": "Bacon Marmalade *"
+  },
+  "AC-BALSON": {
+    "sku": "AC-BALSON",
+    "mfg_name": null,
+    "shopify_name": "Balsamic Caramelized Onion Jam"
+  },
+  "AC-BBALS": {
+    "sku": "AC-BBALS",
+    "mfg_name": null,
+    "shopify_name": "Blackberry Balsamic Jam"
+  },
+  "AC-BBB": {
+    "sku": "AC-BBB",
+    "mfg_name": null,
+    "shopify_name": "Blackberry, Blueberry and Balsamic Jam"
+  },
+  "AC-BCM": {
+    "sku": "AC-BCM",
+    "mfg_name": "Blackcurrant Mini Jam",
+    "shopify_name": "Blackcurrant Mini Jam"
+  },
+  "AC-BLBALS": {
+    "sku": "AC-BLBALS",
+    "mfg_name": "Blackberry Balsamic Jam",
+    "shopify_name": "Blackberry Balsamic Jam"
+  },
+  "AC-BLUCAR": {
+    "sku": "AC-BLUCAR",
+    "mfg_name": "Blueberry Cardamom Jam",
+    "shopify_name": "Blueberry Cardamom Preserves"
+  },
+  "AC-BLUTH": {
+    "sku": "AC-BLUTH",
+    "mfg_name": "Blueberry Thyme Jam",
+    "shopify_name": "Wild Blueberry Thyme Jam *"
+  },
+  "AC-BRJ": {
+    "sku": "AC-BRJ",
+    "mfg_name": null,
+    "shopify_name": "Blackberry Rosemary Jam"
+  },
+  "AC-BRJA": {
+    "sku": "AC-BRJA",
+    "mfg_name": "Blackberry Rosemary Jam",
+    "shopify_name": "Blackberry Rosemary Jam"
+  },
+  "AC-CAOL": {
+    "sku": "AC-CAOL",
+    "mfg_name": "Castelvetrano Olives",
+    "shopify_name": "Castelvetrano Olives"
+  },
+  "AC-CARM": {
+    "sku": "AC-CARM",
+    "mfg_name": "Caramelized Onions",
+    "shopify_name": "Caramelized Onion Jam"
+  },
+  "AC-CBIS": {
+    "sku": "AC-CBIS",
+    "mfg_name": "Buttermilk Biscuit Crackers",
+    "shopify_name": "Buttermilk Biscuit Crackers"
+  },
+  "AC-CFPH": {
+    "sku": "AC-CFPH",
+    "mfg_name": "Caramelized Fig & Pear with Honey Mini Jam",
+    "shopify_name": "Caramelized Fig Jam with Pear & Honey *"
+  },
+  "AC-COCO": {
+    "sku": "AC-COCO",
+    "mfg_name": "Coconut Cashews",
+    "shopify_name": "Coconut Cashews *"
+  },
+  "AC-CROS": {
+    "sku": "AC-CROS",
+    "mfg_name": "Rustic Bakery Organic Sourdough Rosemary Flatbread Bites",
+    "shopify_name": "Rustic Bakery Organic Sourdough Rosemary Flatbread Bites"
+  },
+  "AC-DALM": {
+    "sku": "AC-DALM",
+    "mfg_name": "Dark Chocolate Covered Almonds",
+    "shopify_name": "Dark Chocolate Covered Almonds"
+  },
+  "AC-DCRAN": {
+    "sku": "AC-DCRAN",
+    "mfg_name": "Dark Chocolate Covered Cranberries",
+    "shopify_name": "Dark Chocolate Covered Cranberries*"
+  },
+  "AC-DPAP": {
+    "sku": "AC-DPAP",
+    "mfg_name": "Dried Papaya",
+    "shopify_name": "Dried Papaya"
+  },
+  "AC-DPEC": {
+    "sku": "AC-DPEC",
+    "mfg_name": "Dried Peaches",
+    "shopify_name": "Dried Peaches *"
+  },
+  "AC-DPIC": {
+    "sku": "AC-DPIC",
+    "mfg_name": "Oh Snap Dilly Pickle Bites",
+    "shopify_name": "Dilly Pickle Bites"
+  },
+  "AC-DTCH": {
+    "sku": "AC-DTCH",
+    "mfg_name": "Dried Tart Cherries",
+    "shopify_name": "Dried Tart Cherries *"
+  },
+  "AC-EFLAT": {
+    "sku": "AC-EFLAT",
+    "mfg_name": "Everything Flatbreads",
+    "shopify_name": "Everything Flatbread Crackers"
+  },
+  "AC-FALD": {
+    "sku": "AC-FALD",
+    "mfg_name": "French Honey Balsamic Dijon Mustard",
+    "shopify_name": "French Honey Balsamic Dijon Mustard *"
+  },
+  "AC-FALM": {
+    "sku": "AC-FALM",
+    "mfg_name": "French Tarragon Dijon Mustard",
+    "shopify_name": "French Tarragon Dijon Mustard *"
+  },
+  "AC-FCCRAN": {
+    "sku": "AC-FCCRAN",
+    "mfg_name": "Cranberry Sour Cherry & Extra Virgin Olive Oil Cracker",
+    "shopify_name": "Cranberry Sour Cherry & Extra Virgin Olive Oil Crackers"
+  },
+  "AC-FCEVOO": {
+    "sku": "AC-FCEVOO",
+    "mfg_name": "Extra Virgin Olive Oil & Sea Salt Crackers",
+    "shopify_name": "Extra Virgin Olive OIl & Sea Salt Crackers"
+  },
+  "AC-FCFIGO": {
+    "sku": "AC-FCFIGO",
+    "mfg_name": "Fig Honey & Extra Virgin Olive Oil Crackers",
+    "shopify_name": "Fig Honey & Extra Virgin Olive Oil Crackers"
+  },
+  "AC-FCROSE": {
+    "sku": "AC-FCROSE",
+    "mfg_name": "Rosemary & Extra Virgin Olive Oil Crackers",
+    "shopify_name": "Rosemary & Extra Virgin Olive Oil Crackers"
+  },
+  "AC-FCWALN": {
+    "sku": "AC-FCWALN",
+    "mfg_name": "Walnut Honey & Extra Virgin Olive Oil Crackers",
+    "shopify_name": "Walnut, Honey & Extra Virgin Olive Oil Crackers"
+  },
+  "AC-FHOO": {
+    "sku": "AC-FHOO",
+    "mfg_name": "Firehook Crackers",
+    "shopify_name": "Firehook Crackers"
+  },
+  "AC-FIGA": {
+    "sku": "AC-FIGA",
+    "mfg_name": "Fig & Almond Cake",
+    "shopify_name": "Fig & Almond Cake *"
+  },
+  "AC-FLH": {
+    "sku": "AC-FLH",
+    "mfg_name": "Fig Lemon Honey & Honey Preserves",
+    "shopify_name": "Fig, Meyer Lemon & Honey Jam"
+  },
+  "AC-FOJ": {
+    "sku": "AC-FOJ",
+    "mfg_name": "French Onion Rosemary Jam Mini",
+    "shopify_name": "French Onion Rosemary Jam Mini *"
+  },
+  "AC-FRESC": {
+    "sku": "AC-FRESC",
+    "mfg_name": "Frescatrano Olives",
+    "shopify_name": "Pitted Frescatrano Olives"
+  },
+  "AC-GAL": {
+    "sku": "AC-GAL",
+    "mfg_name": "Garlic Almonds",
+    "shopify_name": "Garlic Almonds"
+  },
+  "AC-GBEF": {
+    "sku": "AC-GBEF",
+    "mfg_name": "Gooseberry Elderflower Mini Jam",
+    "shopify_name": "Gooseberry Elderflower Mini Jam"
+  },
+  "AC-GLAW": {
+    "sku": "AC-GLAW",
+    "mfg_name": "Glazed Walnuts",
+    "shopify_name": "Candied Glazed Walnuts"
+  },
+  "AC-HAZ": {
+    "sku": "AC-HAZ",
+    "mfg_name": null,
+    "shopify_name": "IGP Piedmonte Hazelnuts *"
+  },
+  "AC-HON": {
+    "sku": "AC-HON",
+    "mfg_name": "Raw Honey with Comb",
+    "shopify_name": "Raw Honey with Comb  *"
+  },
+  "AC-KETT": {
+    "sku": "AC-KETT",
+    "mfg_name": "Red White & Blue Kettle Corn",
+    "shopify_name": "America's 250th Anniversary Kettle Corn"
+  },
+  "AC-LFOLIVE": {
+    "sku": "AC-LFOLIVE",
+    "mfg_name": "Lemon Feta & Olive Mix",
+    "shopify_name": "Lemon, Feta & Olive Mix*"
+  },
+  "AC-MAME": {
+    "sku": "AC-MAME",
+    "mfg_name": "Roasted Edamame",
+    "shopify_name": "Edamame, Roasted & Salted"
+  },
+  "AC-MANG": {
+    "sku": "AC-MANG",
+    "mfg_name": "Dried Mangoes",
+    "shopify_name": "Dried Mango"
+  },
+  "AC-MARC": {
+    "sku": "AC-MARC",
+    "mfg_name": "Spanish Salted Marcona Almonds",
+    "shopify_name": "Spanish Salted Marcona Almonds*"
+  },
+  "AC-MARC2": {
+    "sku": "AC-MARC2",
+    "mfg_name": null,
+    "shopify_name": "Spanish Salted Marcona Almonds - Halves*"
+  },
+  "AC-MARC3": {
+    "sku": "AC-MARC3",
+    "mfg_name": "Raw Marcona Almonds",
+    "shopify_name": "Raw Marcona Almonds"
+  },
+  "AC-MCP": {
+    "sku": "AC-MCP",
+    "mfg_name": "Milk Chocolate Covered Pretzels",
+    "shopify_name": "Milk Chocolate Covered Pretzels*"
+  },
+  "AC-MCW": {
+    "sku": "AC-MCW",
+    "mfg_name": "Organic Roasted Maple Cinnamon Walnuts",
+    "shopify_name": "Organic Roasted Maple Cinnamon Walnuts"
+  },
+  "AC-MEDO": {
+    "sku": "AC-MEDO",
+    "mfg_name": "Mediterranean Olives & Herb Medley",
+    "shopify_name": "Mediterranean Olives & Herb Medley  *"
+  },
+  "AC-MEMB": {
+    "sku": "AC-MEMB",
+    "mfg_name": "Membrillo Quince Paste",
+    "shopify_name": "Membrillo Quince Paste *"
+  },
+  "AC-MFJ": {
+    "sku": "AC-MFJ",
+    "mfg_name": "Mini Fig Jam",
+    "shopify_name": "Mini Fig Jam"
+  },
+  "AC-MISS": {
+    "sku": "AC-MISS",
+    "mfg_name": "Black Mission Figs",
+    "shopify_name": "Black Mission Figs"
+  },
+  "AC-MPTZ8": {
+    "sku": "AC-MPTZ8",
+    "mfg_name": "Martins Handmade Pretzels 8oz",
+    "shopify_name": "Martin's Handmade Pretzels 8oz"
+  },
+  "AC-MUSTCH": {
+    "sku": "AC-MUSTCH",
+    "mfg_name": "Stone Ground Mustard for Cheese",
+    "shopify_name": "Stone Ground Mustard*"
+  },
+  "AC-NECT": {
+    "sku": "AC-NECT",
+    "mfg_name": null,
+    "shopify_name": "Dried Nectarines"
+  },
+  "AC-PBLINI": {
+    "sku": "AC-PBLINI",
+    "mfg_name": "Peach Bellini Preserves",
+    "shopify_name": "Peach Bellini Preserves*"
+  },
+  "AC-PCRISP": {
+    "sku": "AC-PCRISP",
+    "mfg_name": "Artisan Spiced Pumpkin Crisps",
+    "shopify_name": "Artisan Crisps - Pumpkin Spice"
+  },
+  "AC-PCSC": {
+    "sku": "AC-PCSC",
+    "mfg_name": null,
+    "shopify_name": "Pistachio Cherry Shortbread Cookies"
+  },
+  "AC-PFLAT": {
+    "sku": "AC-PFLAT",
+    "mfg_name": "Sesame Pretzel Flatbreads",
+    "shopify_name": "Sesame Pretzel Flatbreads"
+  },
+  "AC-PINA": {
+    "sku": "AC-PINA",
+    "mfg_name": "Dried Pineapple Rings",
+    "shopify_name": "Pineapple Rings"
+  },
+  "AC-PIST": {
+    "sku": "AC-PIST",
+    "mfg_name": null,
+    "shopify_name": "Whole Colossal Pistachios, Roasted & Salted"
+  },
+  "AC-PMULB": {
+    "sku": "AC-PMULB",
+    "mfg_name": "Dried Purple Mulberries",
+    "shopify_name": "Purple Mulberries"
+  },
+  "AC-PPCM": {
+    "sku": "AC-PPCM",
+    "mfg_name": "Piri Piri Cocktail Mix",
+    "shopify_name": "Piri Piri Cocktail Mix*"
+  },
+  "AC-PRPE": {
+    "sku": "AC-PRPE",
+    "mfg_name": "Praline Pecans",
+    "shopify_name": "Praline Pecans *"
+  },
+  "AC-QUIC": {
+    "sku": "AC-QUIC",
+    "mfg_name": "Quicos",
+    "shopify_name": "Quicos (Giant Crunchy Corn_"
+  },
+  "AC-RBBS": {
+    "sku": "AC-RBBS",
+    "mfg_name": "Rustic Bakery Organic Sesame Flatbread Bites",
+    "shopify_name": "Rustic Bakery Organic Sesame Flatbread Bites"
+  },
+  "AC-RBOL": {
+    "sku": "AC-RBOL",
+    "mfg_name": "Rustic Bakery Organic Olive Oil & Sel Gris Flatbread Bites",
+    "shopify_name": "Organic Sourdough Flatbread Bites - Olive Oil & Sel Gris*"
+  },
+  "AC-RBOL-BULK": {
+    "sku": "AC-RBOL-BULK",
+    "mfg_name": null,
+    "shopify_name": "AC-RBOL_BULK_TRAYS"
+  },
+  "AC-RCEVY": {
+    "sku": "AC-RCEVY",
+    "mfg_name": null,
+    "shopify_name": "Rustic Crackers - Everything Bites"
+  },
+  "AC-RHAZ": {
+    "sku": "AC-RHAZ",
+    "mfg_name": "Hazelnuts",
+    "shopify_name": "Raw Hazelnuts*"
+  },
+  "AC-RHB": {
+    "sku": "AC-RHB",
+    "mfg_name": "Raspberry Hibiscus Jam",
+    "shopify_name": "Raspberry Hibiscus Jam"
+  },
+  "AC-RMC": {
+    "sku": "AC-RMC",
+    "mfg_name": "Organic Roasted Maple Glazed Cashews",
+    "shopify_name": "Organic Roasted Maple Glazed Cashews"
+  },
+  "AC-RPJ": {
+    "sku": "AC-RPJ",
+    "mfg_name": "Red Pepper Jelly Mini",
+    "shopify_name": "Red Pepper Jelly Mini *"
+  },
+  "AC-RSPM": {
+    "sku": "AC-RSPM",
+    "mfg_name": "Raspberry Mostarda Mini Jam",
+    "shopify_name": "Raspberry Mostarda Mini Jam 1.5oz"
+  },
+  "AC-SBPBJ": {
+    "sku": "AC-SBPBJ",
+    "mfg_name": "Spiced Peach Bourbon Jam",
+    "shopify_name": "Spiced Peach Bourbon Jam*"
+  },
+  "AC-SCJ": {
+    "sku": "AC-SCJ",
+    "mfg_name": "Sour Cherry Mini Jam",
+    "shopify_name": "Sour Cherry Mini Jam"
+  },
+  "AC-SCNM": {
+    "sku": "AC-SCNM",
+    "mfg_name": "Spanish Cocktail Nut Mix",
+    "shopify_name": "Spanish Cocktail Nut Mix"
+  },
+  "AC-SCP": {
+    "sku": "AC-SCP",
+    "mfg_name": "Spiced Caramel Pear Preserve",
+    "shopify_name": "Spiced Caramel Pear Jam"
+  },
+  "AC-SDF": {
+    "sku": "AC-SDF",
+    "mfg_name": "Sun-Dried Turkish Figs",
+    "shopify_name": "Dried Sierra Figs"
+  },
+  "AC-SLL": {
+    "sku": "AC-SLL",
+    "mfg_name": "Strawberry Lemon Lavendar Jam",
+    "shopify_name": "Strawberry Lemon Lavender Preserves*"
+  },
+  "AC-SMAL": {
+    "sku": "AC-SMAL",
+    "mfg_name": "Sweet & Smoky Almonds",
+    "shopify_name": "Sweet & Smoky Almonds*"
+  },
+  "AC-SRHUB": {
+    "sku": "AC-SRHUB",
+    "mfg_name": "Strawberry Rhubarb Mini Jam",
+    "shopify_name": "Strawberry Rhubarb Mini Jam*"
+  },
+  "AC-STRAW": {
+    "sku": "AC-STRAW",
+    "mfg_name": "Dried Chocolate Covered Strawberries",
+    "shopify_name": "Dried Chocolate Covered Strawberries"
+  },
+  "AC-TCP": {
+    "sku": "AC-TCP",
+    "mfg_name": "Tart Cherry with Cardamom & Port Mini Jam",
+    "shopify_name": "Tart Cherry with Cardamom & Port Mini Jam"
+  },
+  "AC-TCRISP": {
+    "sku": "AC-TCRISP",
+    "mfg_name": "Artisan Crisps - Tart Cherry Cranberry & Cacao Nib",
+    "shopify_name": "Artisan Crisps - Tart Cherry, Cacao Nib, & Almond*"
+  },
+  "AC-TOK": {
+    "sku": "AC-TOK",
+    "mfg_name": "Mitica Toketti Onion",
+    "shopify_name": "Toketti"
+  },
+  "AC-VMOJ": {
+    "sku": "AC-VMOJ",
+    "mfg_name": "Valencian Mandarin Orange",
+    "shopify_name": "Valencian Mandarin Orange Jam"
+  },
+  "AC-WAL": {
+    "sku": "AC-WAL",
+    "mfg_name": null,
+    "shopify_name": "Glazed Walnuts"
+  },
+  "AC-WASP": {
+    "sku": "AC-WASP",
+    "mfg_name": "Wasabi Peas",
+    "shopify_name": "Wasabi Peas"
+  },
+  "AC-WASP2": {
+    "sku": "AC-WASP2",
+    "mfg_name": "All Natural Wasabi Peas",
+    "shopify_name": "Wasabi Peas, All-Natural"
+  },
+  "AC-WBLUE": {
+    "sku": "AC-WBLUE",
+    "mfg_name": null,
+    "shopify_name": "Wild Blueberry with Thyme Jam"
+  },
+  "AC-WMULB": {
+    "sku": "AC-WMULB",
+    "mfg_name": null,
+    "shopify_name": "White Mulberries"
+  },
+  "AHB-BLGE": {
+    "sku": "AHB-BLGE",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + Free Brie for a Year"
+  },
+  "AHB-BMED": {
+    "sku": "AHB-BMED",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + Free Brie for a Year"
+  },
+  "AHB-BVAL": {
+    "sku": "AHB-BVAL",
+    "mfg_name": null,
+    "shopify_name": "Ultimate Add-on Package: The Sweet & Savory Upgrade"
+  },
+  "AHB-CBMED": {
+    "sku": "AHB-CBMED",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Cheese Box + Free Brie for a Year"
+  },
+  "AHB-CMED": {
+    "sku": "AHB-CMED",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Cheese Box"
+  },
+  "AHB-CPMED": {
+    "sku": "AHB-CPMED",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-CUR-MS": {
+    "sku": "AHB-CUR-MS",
+    "mfg_name": null,
+    "shopify_name": "Monthly Curation"
+  },
+  "AHB-CUR-NMS": {
+    "sku": "AHB-CUR-NMS",
+    "mfg_name": null,
+    "shopify_name": "Monthly Curation"
+  },
+  "AHB-FATH": {
+    "sku": "AHB-FATH",
+    "mfg_name": null,
+    "shopify_name": "Limited-Release: Father's Day Feast Box"
+  },
+  "AHB-GAME": {
+    "sku": "AHB-GAME",
+    "mfg_name": null,
+    "shopify_name": "Limited-Release: Game Day Bites Cheese & Charcuterie Box"
+  },
+  "AHB-GLGE": {
+    "sku": "AHB-GLGE",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Gift Box"
+  },
+  "AHB-GMED": {
+    "sku": "AHB-GMED",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Gift Box"
+  },
+  "AHB-INDP": {
+    "sku": "AHB-INDP",
+    "mfg_name": null,
+    "shopify_name": "Limited-Release: Independence Day Box"
+  },
+  "AHB-LCUST-ALPN": {
+    "sku": "AHB-LCUST-ALPN",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *"
+  },
+  "AHB-LCUST-BYO": {
+    "sku": "AHB-LCUST-BYO",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *"
+  },
+  "AHB-LCUST-CO-MDT": {
+    "sku": "AHB-LCUST-CO-MDT",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life [No Nuts] *"
+  },
+  "AHB-LCUST-CO-MONG": {
+    "sku": "AHB-LCUST-CO-MONG",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life [No Nuts] *"
+  },
+  "AHB-LCUST-CO-OWC": {
+    "sku": "AHB-LCUST-CO-OWC",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life [No Nuts] *"
+  },
+  "AHB-LCUST-CO-SPN": {
+    "sku": "AHB-LCUST-CO-SPN",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life [No Nuts] *"
+  },
+  "AHB-LCUST-COFS-HHIGH": {
+    "sku": "AHB-LCUST-COFS-HHIGH",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-COFS-MDT": {
+    "sku": "AHB-LCUST-COFS-MDT",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-COFS-MONG": {
+    "sku": "AHB-LCUST-COFS-MONG",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-COFS-MS": {
+    "sku": "AHB-LCUST-COFS-MS",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-COFS-OWC": {
+    "sku": "AHB-LCUST-COFS-OWC",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-COFS-SPN": {
+    "sku": "AHB-LCUST-COFS-SPN",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-COFS-SS": {
+    "sku": "AHB-LCUST-COFS-SS",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-CORS-BYO": {
+    "sku": "AHB-LCUST-CORS-BYO",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-CORS-HHIGH": {
+    "sku": "AHB-LCUST-CORS-HHIGH",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-CORS-MDT": {
+    "sku": "AHB-LCUST-CORS-MDT",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-CORS-MONG": {
+    "sku": "AHB-LCUST-CORS-MONG",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-CORS-MS": {
+    "sku": "AHB-LCUST-CORS-MS",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-CORS-NMS": {
+    "sku": "AHB-LCUST-CORS-NMS",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-CORS-OWC": {
+    "sku": "AHB-LCUST-CORS-OWC",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-CORS-SPN": {
+    "sku": "AHB-LCUST-CORS-SPN",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-CORS-SS": {
+    "sku": "AHB-LCUST-CORS-SS",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-HHIGH": {
+    "sku": "AHB-LCUST-HHIGH",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *"
+  },
+  "AHB-LCUST-ISUN": {
+    "sku": "AHB-LCUST-ISUN",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *"
+  },
+  "AHB-LCUST-MDT": {
+    "sku": "AHB-LCUST-MDT",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *"
+  },
+  "AHB-LCUST-MONG": {
+    "sku": "AHB-LCUST-MONG",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *"
+  },
+  "AHB-LCUST-MS": {
+    "sku": "AHB-LCUST-MS",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *"
+  },
+  "AHB-LCUST-NCFS-BYO": {
+    "sku": "AHB-LCUST-NCFS-BYO",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NCFS-HHIGH": {
+    "sku": "AHB-LCUST-NCFS-HHIGH",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NCFS-MDT": {
+    "sku": "AHB-LCUST-NCFS-MDT",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NCFS-MONG": {
+    "sku": "AHB-LCUST-NCFS-MONG",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NCFS-NMS": {
+    "sku": "AHB-LCUST-NCFS-NMS",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NCFS-OWC": {
+    "sku": "AHB-LCUST-NCFS-OWC",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NCFS-SPN": {
+    "sku": "AHB-LCUST-NCFS-SPN",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NCFS-SS": {
+    "sku": "AHB-LCUST-NCFS-SS",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NCRS-BYO": {
+    "sku": "AHB-LCUST-NCRS-BYO",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NCRS-HHIGH": {
+    "sku": "AHB-LCUST-NCRS-HHIGH",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NCRS-MDT": {
+    "sku": "AHB-LCUST-NCRS-MDT",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NCRS-MONG": {
+    "sku": "AHB-LCUST-NCRS-MONG",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NCRS-MS": {
+    "sku": "AHB-LCUST-NCRS-MS",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NCRS-NMS": {
+    "sku": "AHB-LCUST-NCRS-NMS",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NCRS-OWC": {
+    "sku": "AHB-LCUST-NCRS-OWC",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NCRS-SPN": {
+    "sku": "AHB-LCUST-NCRS-SPN",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NCRS-SS": {
+    "sku": "AHB-LCUST-NCRS-SS",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NMS": {
+    "sku": "AHB-LCUST-NMS",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *"
+  },
+  "AHB-LCUST-NNFS-BYO": {
+    "sku": "AHB-LCUST-NNFS-BYO",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NNFS-HHIGH": {
+    "sku": "AHB-LCUST-NNFS-HHIGH",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NNFS-MDT": {
+    "sku": "AHB-LCUST-NNFS-MDT",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NNFS-MONG": {
+    "sku": "AHB-LCUST-NNFS-MONG",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NNFS-MS": {
+    "sku": "AHB-LCUST-NNFS-MS",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NNFS-NMS": {
+    "sku": "AHB-LCUST-NNFS-NMS",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NNFS-OWC": {
+    "sku": "AHB-LCUST-NNFS-OWC",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NNFS-SPN": {
+    "sku": "AHB-LCUST-NNFS-SPN",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NNFS-SS": {
+    "sku": "AHB-LCUST-NNFS-SS",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NNRS-BYO": {
+    "sku": "AHB-LCUST-NNRS-BYO",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NNRS-HHIGH": {
+    "sku": "AHB-LCUST-NNRS-HHIGH",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NNRS-MDT": {
+    "sku": "AHB-LCUST-NNRS-MDT",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NNRS-MONG": {
+    "sku": "AHB-LCUST-NNRS-MONG",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NNRS-MS": {
+    "sku": "AHB-LCUST-NNRS-MS",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NNRS-NMS": {
+    "sku": "AHB-LCUST-NNRS-NMS",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NNRS-OWC": {
+    "sku": "AHB-LCUST-NNRS-OWC",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NNRS-SPN": {
+    "sku": "AHB-LCUST-NNRS-SPN",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-NNRS-SS": {
+    "sku": "AHB-LCUST-NNRS-SS",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-LCUST-OWC": {
+    "sku": "AHB-LCUST-OWC",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *"
+  },
+  "AHB-LCUST-SPN": {
+    "sku": "AHB-LCUST-SPN",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *"
+  },
+  "AHB-LCUST-SS": {
+    "sku": "AHB-LCUST-SS",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *"
+  },
+  "AHB-LGE": {
+    "sku": "AHB-LGE",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box"
+  },
+  "AHB-MCUR-TRAY": {
+    "sku": "AHB-MCUR-TRAY",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Gourmet Bites Snack Trays"
+  },
+  "AHB-MCUR-TRAY2": {
+    "sku": "AHB-MCUR-TRAY2",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Gourmet Bites"
+  },
+  "AHB-MCUR-TRAY3": {
+    "sku": "AHB-MCUR-TRAY3",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Gourmet Bites*"
+  },
+  "AHB-MCUST-ALPN": {
+    "sku": "AHB-MCUST-ALPN",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *"
+  },
+  "AHB-MCUST-BYO": {
+    "sku": "AHB-MCUST-BYO",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *"
+  },
+  "AHB-MCUST-CO-MDT": {
+    "sku": "AHB-MCUST-CO-MDT",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life [No Nuts] *"
+  },
+  "AHB-MCUST-CO-MONG": {
+    "sku": "AHB-MCUST-CO-MONG",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life [No Nuts] *"
+  },
+  "AHB-MCUST-CO-OWC": {
+    "sku": "AHB-MCUST-CO-OWC",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life [No Nuts] *"
+  },
+  "AHB-MCUST-CO-SPN": {
+    "sku": "AHB-MCUST-CO-SPN",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life [No Nuts] *"
+  },
+  "AHB-MCUST-COFS-BYO": {
+    "sku": "AHB-MCUST-COFS-BYO",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-COFS-HHIGH": {
+    "sku": "AHB-MCUST-COFS-HHIGH",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-COFS-MDT": {
+    "sku": "AHB-MCUST-COFS-MDT",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-COFS-MONG": {
+    "sku": "AHB-MCUST-COFS-MONG",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-COFS-MS": {
+    "sku": "AHB-MCUST-COFS-MS",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-COFS-OWC": {
+    "sku": "AHB-MCUST-COFS-OWC",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-COFS-SPN": {
+    "sku": "AHB-MCUST-COFS-SPN",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-COFS-SS": {
+    "sku": "AHB-MCUST-COFS-SS",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-CORS-BYO": {
+    "sku": "AHB-MCUST-CORS-BYO",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-CORS-HHIGH": {
+    "sku": "AHB-MCUST-CORS-HHIGH",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-CORS-MDT": {
+    "sku": "AHB-MCUST-CORS-MDT",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-CORS-MONG": {
+    "sku": "AHB-MCUST-CORS-MONG",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-CORS-MS": {
+    "sku": "AHB-MCUST-CORS-MS",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-CORS-NMS": {
+    "sku": "AHB-MCUST-CORS-NMS",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-CORS-OWC": {
+    "sku": "AHB-MCUST-CORS-OWC",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-CORS-SPN": {
+    "sku": "AHB-MCUST-CORS-SPN",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-CORS-SS": {
+    "sku": "AHB-MCUST-CORS-SS",
+    "mfg_name": null,
+    "shopify_name": "[No Meat] AppyHour Cheese Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-HHIGH": {
+    "sku": "AHB-MCUST-HHIGH",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *"
+  },
+  "AHB-MCUST-ISUN": {
+    "sku": "AHB-MCUST-ISUN",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *"
+  },
+  "AHB-MCUST-MDT": {
+    "sku": "AHB-MCUST-MDT",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *"
+  },
+  "AHB-MCUST-MONG": {
+    "sku": "AHB-MCUST-MONG",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *"
+  },
+  "AHB-MCUST-MS": {
+    "sku": "AHB-MCUST-MS",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *"
+  },
+  "AHB-MCUST-NCFS-BYO": {
+    "sku": "AHB-MCUST-NCFS-BYO",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NCFS-HHIGH": {
+    "sku": "AHB-MCUST-NCFS-HHIGH",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NCFS-MDT": {
+    "sku": "AHB-MCUST-NCFS-MDT",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NCFS-MONG": {
+    "sku": "AHB-MCUST-NCFS-MONG",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NCFS-NMS": {
+    "sku": "AHB-MCUST-NCFS-NMS",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NCFS-OWC": {
+    "sku": "AHB-MCUST-NCFS-OWC",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NCFS-SPN": {
+    "sku": "AHB-MCUST-NCFS-SPN",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NCFS-SS": {
+    "sku": "AHB-MCUST-NCFS-SS",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NCRS-BYO": {
+    "sku": "AHB-MCUST-NCRS-BYO",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NCRS-HHIGH": {
+    "sku": "AHB-MCUST-NCRS-HHIGH",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NCRS-MDT": {
+    "sku": "AHB-MCUST-NCRS-MDT",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NCRS-MONG": {
+    "sku": "AHB-MCUST-NCRS-MONG",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NCRS-MS": {
+    "sku": "AHB-MCUST-NCRS-MS",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NCRS-NMS": {
+    "sku": "AHB-MCUST-NCRS-NMS",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NCRS-OWC": {
+    "sku": "AHB-MCUST-NCRS-OWC",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NCRS-SPN": {
+    "sku": "AHB-MCUST-NCRS-SPN",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NCRS-SS": {
+    "sku": "AHB-MCUST-NCRS-SS",
+    "mfg_name": null,
+    "shopify_name": "[No Crackers] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NMS": {
+    "sku": "AHB-MCUST-NMS",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *"
+  },
+  "AHB-MCUST-NN-MONG": {
+    "sku": "AHB-MCUST-NN-MONG",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life [No Nuts] *"
+  },
+  "AHB-MCUST-NNFS-BYO": {
+    "sku": "AHB-MCUST-NNFS-BYO",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NNFS-HHIGH": {
+    "sku": "AHB-MCUST-NNFS-HHIGH",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NNFS-MDT": {
+    "sku": "AHB-MCUST-NNFS-MDT",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NNFS-MONG": {
+    "sku": "AHB-MCUST-NNFS-MONG",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NNFS-MS": {
+    "sku": "AHB-MCUST-NNFS-MS",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NNFS-NMS": {
+    "sku": "AHB-MCUST-NNFS-NMS",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NNFS-OWC": {
+    "sku": "AHB-MCUST-NNFS-OWC",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NNFS-SPN": {
+    "sku": "AHB-MCUST-NNFS-SPN",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NNFS-SS": {
+    "sku": "AHB-MCUST-NNFS-SS",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NNRS-BYO": {
+    "sku": "AHB-MCUST-NNRS-BYO",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NNRS-HHIGH": {
+    "sku": "AHB-MCUST-NNRS-HHIGH",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NNRS-MDT": {
+    "sku": "AHB-MCUST-NNRS-MDT",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NNRS-MONG": {
+    "sku": "AHB-MCUST-NNRS-MONG",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NNRS-MS": {
+    "sku": "AHB-MCUST-NNRS-MS",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NNRS-NMS": {
+    "sku": "AHB-MCUST-NNRS-NMS",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NNRS-OWC": {
+    "sku": "AHB-MCUST-NNRS-OWC",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NNRS-SPN": {
+    "sku": "AHB-MCUST-NNRS-SPN",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-NNRS-SS": {
+    "sku": "AHB-MCUST-NNRS-SS",
+    "mfg_name": null,
+    "shopify_name": "[No Nuts] AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life"
+  },
+  "AHB-MCUST-OWC": {
+    "sku": "AHB-MCUST-OWC",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *"
+  },
+  "AHB-MCUST-SPN": {
+    "sku": "AHB-MCUST-SPN",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *"
+  },
+  "AHB-MCUST-SS": {
+    "sku": "AHB-MCUST-SS",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box + FREE Artisan Cheese & Jam Pairings for Life *"
+  },
+  "AHB-MCUST-TRAY": {
+    "sku": "AHB-MCUST-TRAY",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Gourmet Bites"
+  },
+  "AHB-MED": {
+    "sku": "AHB-MED",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Box"
+  },
+  "AHB-MEMD": {
+    "sku": "AHB-MEMD",
+    "mfg_name": null,
+    "shopify_name": "Limited-Release: Picnic in Paradise Box"
+  },
+  "AHB-MOTH": {
+    "sku": "AHB-MOTH",
+    "mfg_name": null,
+    "shopify_name": "Limited-Release: Mother's Day Indulgence Box"
+  },
+  "AHB-PLGE": {
+    "sku": "AHB-PLGE",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Gift Box"
+  },
+  "AHB-PMED": {
+    "sku": "AHB-PMED",
+    "mfg_name": null,
+    "shopify_name": "AppyHour Gift Box"
+  },
+  "AHB-SMED": {
+    "sku": "AHB-SMED",
+    "mfg_name": null,
+    "shopify_name": "AppyHour 6-Month Gift Subscription"
+  },
+  "AHB-SOIR": {
+    "sku": "AHB-SOIR",
+    "mfg_name": null,
+    "shopify_name": "Limited-Release: Summer Soirée Box"
+  },
+  "AHB-SPB": {
+    "sku": "AHB-SPB",
+    "mfg_name": null,
+    "shopify_name": "Limited-Release: Summer Picnic Box"
+  },
+  "AHB-XBRCH": {
+    "sku": "AHB-XBRCH",
+    "mfg_name": null,
+    "shopify_name": "Limited-Release: Brunch Cheese & Charcuterie Box"
+  },
+  "AHB-XCUR": {
+    "sku": "AHB-XCUR",
+    "mfg_name": null,
+    "shopify_name": "Limited-Release: Curator's Choice Artisan Cheese Box"
+  },
+  "AHB-XFALL": {
+    "sku": "AHB-XFALL",
+    "mfg_name": null,
+    "shopify_name": "Limited-Release: Fall Harvest Cheese & Charcuterie Box"
+  },
+  "AHB-XGDAY": {
+    "sku": "AHB-XGDAY",
+    "mfg_name": null,
+    "shopify_name": "Limited-Release: Game Day Bites Cheese & Charcuterie Box"
+  },
+  "AHB-XHWN": {
+    "sku": "AHB-XHWN",
+    "mfg_name": null,
+    "shopify_name": "Limited-Release: Haunted Harvest Halloween Cheese & Charcuterie Box"
+  },
+  "AHB-XMAS": {
+    "sku": "AHB-XMAS",
+    "mfg_name": null,
+    "shopify_name": "Limited-Release: Holiday Feast Cheese & Charcuterie Box"
+  },
+  "AHB-XMDT": {
+    "sku": "AHB-XMDT",
+    "mfg_name": null,
+    "shopify_name": "Mediterranean Escape - AppyHour Cheese & Charcuterie Gift Box"
+  },
+  "AHB-XMONG": {
+    "sku": "AHB-XMONG",
+    "mfg_name": null,
+    "shopify_name": "The Monger's Table - AppyHour Cheese & Charcuterie Gift Box"
+  },
+  "AHB-XSPN": {
+    "sku": "AHB-XSPN",
+    "mfg_name": null,
+    "shopify_name": "Taste of Spain - AppyHour Cheese & Charcuterie Gift Box"
+  },
+  "AHB-XSPR": {
+    "sku": "AHB-XSPR",
+    "mfg_name": null,
+    "shopify_name": "Limited-Release: Springtime Easter Box"
+  },
+  "AHB-XTG": {
+    "sku": "AHB-XTG",
+    "mfg_name": null,
+    "shopify_name": "Limited-Release: Thanksgiving Table Cheese & Charcuterie Box"
+  },
+  "AHB-XVAL": {
+    "sku": "AHB-XVAL",
+    "mfg_name": null,
+    "shopify_name": "Limited-Release: Valentine's Sweetheart Box"
+  },
+  "BL-APRL": {
+    "sku": "BL-APRL",
+    "mfg_name": null,
+    "shopify_name": "Ultimate Add-on Package: April Showers"
+  },
+  "BL-BLR4": {
+    "sku": "BL-BLR4",
+    "mfg_name": null,
+    "shopify_name": "Baked Lemon Ricotta 4-pack with Blackberry Balsamic Jam"
+  },
+  "BL-FFJ": {
+    "sku": "BL-FFJ",
+    "mfg_name": null,
+    "shopify_name": "2 Small-Batch Jams - Fruit Flavors"
+  },
+  "BL-FSJ": {
+    "sku": "BL-FSJ",
+    "mfg_name": null,
+    "shopify_name": "2 Small-Batch Jams - Fruit & Savory Flavors"
+  },
+  "BL-IRE": {
+    "sku": "BL-IRE",
+    "mfg_name": null,
+    "shopify_name": "Ultimate Add-on Package: Taste of Ireland"
+  },
+  "BL-RACL": {
+    "sku": "BL-RACL",
+    "mfg_name": null,
+    "shopify_name": "Ultimate Add-on Package: Raclette Bundle"
+  },
+  "BL-SDB": {
+    "sku": "BL-SDB",
+    "mfg_name": null,
+    "shopify_name": "Limited-time: Spring Soirée Bundle"
+  },
+  "BL-SPAT": {
+    "sku": "BL-SPAT",
+    "mfg_name": null,
+    "shopify_name": "Ultimate Add-on Package: The Brewmaster"
+  },
+  "BL-SSJ": {
+    "sku": "BL-SSJ",
+    "mfg_name": null,
+    "shopify_name": "2 Small-Batch Jams - Savory Flavors"
+  },
+  "BL-STPD": {
+    "sku": "BL-STPD",
+    "mfg_name": null,
+    "shopify_name": "St. Patrick's Day Pairing"
+  },
+  "CEX-EC": {
+    "sku": "CEX-EC",
+    "mfg_name": null,
+    "shopify_name": "Seasonal Cheese"
+  },
+  "CEX-EC-ALPN": {
+    "sku": "CEX-EC-ALPN",
+    "mfg_name": null,
+    "shopify_name": "CEX-EC-ALPN"
+  },
+  "CEX-EC-BYO": {
+    "sku": "CEX-EC-BYO",
+    "mfg_name": null,
+    "shopify_name": "CEX-EC-BYO"
+  },
+  "CEX-EC-HHIGH": {
+    "sku": "CEX-EC-HHIGH",
+    "mfg_name": null,
+    "shopify_name": "CEX-EC-HHIGH"
+  },
+  "CEX-EC-ISUN": {
+    "sku": "CEX-EC-ISUN",
+    "mfg_name": null,
+    "shopify_name": "CEX-EC-ISUN"
+  },
+  "CEX-EC-MDT": {
+    "sku": "CEX-EC-MDT",
+    "mfg_name": null,
+    "shopify_name": "CEX-EC-MDT"
+  },
+  "CEX-EC-MONG": {
+    "sku": "CEX-EC-MONG",
+    "mfg_name": null,
+    "shopify_name": "CEX-EC-MONG"
+  },
+  "CEX-EC-MS": {
+    "sku": "CEX-EC-MS",
+    "mfg_name": null,
+    "shopify_name": "CEX-EC-MS"
+  },
+  "CEX-EC-NMS": {
+    "sku": "CEX-EC-NMS",
+    "mfg_name": null,
+    "shopify_name": "CEX-EC-NMS"
+  },
+  "CEX-EC-OWC": {
+    "sku": "CEX-EC-OWC",
+    "mfg_name": null,
+    "shopify_name": "CEX-EC-OWC"
+  },
+  "CEX-EC-SPN": {
+    "sku": "CEX-EC-SPN",
+    "mfg_name": null,
+    "shopify_name": "CEX-EC-SPN"
+  },
+  "CEX-EC-SS": {
+    "sku": "CEX-EC-SS",
+    "mfg_name": null,
+    "shopify_name": "CEX-EC-SS"
+  },
+  "CEX-EM": {
+    "sku": "CEX-EM",
+    "mfg_name": null,
+    "shopify_name": "Curator's Choice - Premium Charcuterie"
+  },
+  "CH-6COM": {
+    "sku": "CH-6COM",
+    "mfg_name": "Comte 6 Months",
+    "shopify_name": "Comte - 6 Months*"
+  },
+  "CH-ACAC": {
+    "sku": "CH-ACAC",
+    "mfg_name": "Artisan Cave Aged Sharp Cheddar",
+    "shopify_name": "Vault 5 Cave Aged Cheddar"
+  },
+  "CH-AGOU": {
+    "sku": "CH-AGOU",
+    "mfg_name": "Dutch Aged Gouda",
+    "shopify_name": "Dutch Aged Gouda *"
+  },
+  "CH-AGUR": {
+    "sku": "CH-AGUR",
+    "mfg_name": null,
+    "shopify_name": "St. Agur"
+  },
+  "CH-AJACK": {
+    "sku": "CH-AJACK",
+    "mfg_name": "Adironjack",
+    "shopify_name": "Adironjack"
+  },
+  "CH-ALISOS": {
+    "sku": "CH-ALISOS",
+    "mfg_name": null,
+    "shopify_name": "Alisos"
+  },
+  "CH-ALLV": {
+    "sku": "CH-ALLV",
+    "mfg_name": "Asiago Allevo",
+    "shopify_name": "Asiago Allevo"
+  },
+  "CH-ALMA": {
+    "sku": "CH-ALMA",
+    "mfg_name": "Alma Vorarlberge",
+    "shopify_name": "Alma Vrollbergerbergkase"
+  },
+  "CH-ALP": {
+    "sku": "CH-ALP",
+    "mfg_name": "Alp Blossom Floral Cheese",
+    "shopify_name": "Alp Blossom*"
+  },
+  "CH-ALPHA": {
+    "sku": "CH-ALPHA",
+    "mfg_name": "Alpha Tolman",
+    "shopify_name": "Alpha Tolman (Alpine)"
+  },
+  "CH-ARTEQ": {
+    "sku": "CH-ARTEQ",
+    "mfg_name": "Artequeso Manchego",
+    "shopify_name": "Artequeso Manchego"
+  },
+  "CH-ASHB": {
+    "sku": "CH-ASHB",
+    "mfg_name": null,
+    "shopify_name": "Asher Blue"
+  },
+  "CH-ASIAGO": {
+    "sku": "CH-ASIAGO",
+    "mfg_name": "Asiago",
+    "shopify_name": "Asiago*"
+  },
+  "CH-ASST": {
+    "sku": "CH-ASST",
+    "mfg_name": "Asiago Stravecchio",
+    "shopify_name": "Asiago Stravecchio DOP 12 mo. Mitica® (Raw) (TriVeneto) 1/18#"
+  },
+  "CH-BAP": {
+    "sku": "CH-BAP",
+    "mfg_name": "Barricato Al Pepe",
+    "shopify_name": "Barricato Al Pepe*"
+  },
+  "CH-BARI": {
+    "sku": "CH-BARI",
+    "mfg_name": "Barista",
+    "shopify_name": "Barista*"
+  },
+  "CH-BBCOF": {
+    "sku": "CH-BBCOF",
+    "mfg_name": "Barely Buzzed - Coffee Cheese",
+    "shopify_name": "Barely Buzzed Coffee Cheese"
+  },
+  "CH-BBLUE": {
+    "sku": "CH-BBLUE",
+    "mfg_name": "California Bay Blue",
+    "shopify_name": "California Bay Blue*"
+  },
+  "CH-BCR": {
+    "sku": "CH-BCR",
+    "mfg_name": "Baked Chocolate Ricotta",
+    "shopify_name": "Baked Chocolate Ricotta"
+  },
+  "CH-BIX": {
+    "sku": "CH-BIX",
+    "mfg_name": "Bixby",
+    "shopify_name": "Bixby"
+  },
+  "CH-BLR": {
+    "sku": "CH-BLR",
+    "mfg_name": "Baked Lemon Ricotta",
+    "shopify_name": "Baked Lemon Ricotta *"
+  },
+  "CH-BLUELEM": {
+    "sku": "CH-BLUELEM",
+    "mfg_name": "Blueberry Lemon Thyme Goat Cheese",
+    "shopify_name": "Blueberry Lemon Thyme Goat Cheese*"
+  },
+  "CH-BLUV": {
+    "sku": "CH-BLUV",
+    "mfg_name": "Blueberry Vanilla Goat Cheese",
+    "shopify_name": "Blueberry Vanilla Goat Cheese"
+  },
+  "CH-BOSI": {
+    "sku": "CH-BOSI",
+    "mfg_name": "Robiola due Latte",
+    "shopify_name": "Robiola Bosina due Latte (Soft, Cow & Sheep's Milk)"
+  },
+  "CH-BPC": {
+    "sku": "CH-BPC",
+    "mfg_name": "Black Pepper Cheddar",
+    "shopify_name": "Black Pepper Cheddar"
+  },
+  "CH-BREK": {
+    "sku": "CH-BREK",
+    "mfg_name": "Petite Breakfast",
+    "shopify_name": "Petite Breakfast"
+  },
+  "CH-BRIE": {
+    "sku": "CH-BRIE",
+    "mfg_name": "Triple Creme Brie",
+    "shopify_name": "Triple Crème Brie *"
+  },
+  "CH-BRZ": {
+    "sku": "CH-BRZ",
+    "mfg_name": "Prairie Breeze",
+    "shopify_name": "Prairie Breeze Cheddar *"
+  },
+  "CH-CABR": {
+    "sku": "CH-CABR",
+    "mfg_name": "Cabra al Gofio",
+    "shopify_name": "Cabra al Gofio"
+  },
+  "CH-CAFE": {
+    "sku": "CH-CAFE",
+    "mfg_name": null,
+    "shopify_name": "Campi Fennel"
+  },
+  "CH-CAM": {
+    "sku": "CH-CAM",
+    "mfg_name": "Petit Camambert",
+    "shopify_name": "Petit Camambert"
+  },
+  "CH-CAMPO": {
+    "sku": "CH-CAMPO",
+    "mfg_name": "Campo de Montalban",
+    "shopify_name": "Campo de Montalban*"
+  },
+  "CH-CARO": {
+    "sku": "CH-CARO",
+    "mfg_name": "Cacio di Roma",
+    "shopify_name": "Cacio di Roma"
+  },
+  "CH-CCB": {
+    "sku": "CH-CCB",
+    "mfg_name": "Cabot Clothbound",
+    "shopify_name": "Cabot Clothbound"
+  },
+  "CH-CCC": {
+    "sku": "CH-CCC",
+    "mfg_name": "Cabot Clothbound Cheddar",
+    "shopify_name": "Cabot Clothbound Cheddar (Hard, Creamy, Nutty)"
+  },
+  "CH-CFBC": {
+    "sku": "CH-CFBC",
+    "mfg_name": null,
+    "shopify_name": "Cashel Farmhouse Blue Cheese"
+  },
+  "CH-CHALLER": {
+    "sku": "CH-CHALLER",
+    "mfg_name": "Challerhocker",
+    "shopify_name": "Challerhocker*"
+  },
+  "CH-CHAMO": {
+    "sku": "CH-CHAMO",
+    "mfg_name": null,
+    "shopify_name": "Pecorino Camomila"
+  },
+  "CH-CONI": {
+    "sku": "CH-CONI",
+    "mfg_name": "Caramelized Onion Cheddar",
+    "shopify_name": "Caramelized Onion Cheddar"
+  },
+  "CH-COOL": {
+    "sku": "CH-COOL",
+    "mfg_name": null,
+    "shopify_name": "Coolea"
+  },
+  "CH-COSS": {
+    "sku": "CH-COSS",
+    "mfg_name": null,
+    "shopify_name": "Cossanella"
+  },
+  "CH-COWBOY": {
+    "sku": "CH-COWBOY",
+    "mfg_name": "Cowboy Coffee",
+    "shopify_name": "Cowboy Coffee"
+  },
+  "CH-CRFF": {
+    "sku": "CH-CRFF",
+    "mfg_name": null,
+    "shopify_name": "Cranberry Fromage Frais"
+  },
+  "CH-CSGOD": {
+    "sku": "CH-CSGOD",
+    "mfg_name": "Beauty Vintage Sharp Cheddar",
+    "shopify_name": "Beauty Vintage Sharp Cheddar"
+  },
+  "CH-CTGOD": {
+    "sku": "CH-CTGOD",
+    "mfg_name": "Black Truffle Howling Hound Vintage Cheddar",
+    "shopify_name": "Black Truffle Howling Hound Vintage Cheddar*"
+  },
+  "CH-CTUF": {
+    "sku": "CH-CTUF",
+    "mfg_name": "Caciotta Al Tartufo",
+    "shopify_name": "Caciotta Al Tartufo (Truffle)*"
+  },
+  "CH-EBCC": {
+    "sku": "CH-EBCC",
+    "mfg_name": "Everything Bagel Cheese Curds",
+    "shopify_name": "Everything Bagel Cheese Curds*"
+  },
+  "CH-EBRIE": {
+    "sku": "CH-EBRIE",
+    "mfg_name": "Triple Cream Brie",
+    "shopify_name": "Triple Cream Excellence*"
+  },
+  "CH-EMSW": {
+    "sku": "CH-EMSW",
+    "mfg_name": "Imported Emmentaler Swiss",
+    "shopify_name": "Imported Emmentaler Swiss*"
+  },
+  "CH-ETX": {
+    "sku": "CH-ETX",
+    "mfg_name": "Etxegarai",
+    "shopify_name": "Etxegarai Smoked (Raw) (Navarra) 2/6#"
+  },
+  "CH-FAG": {
+    "sku": "CH-FAG",
+    "mfg_name": "Farmstead Aged Gouda",
+    "shopify_name": "Farmstead Aged Gouda*"
+  },
+  "CH-FDCB": {
+    "sku": "CH-FDCB",
+    "mfg_name": "French Double Cream Brie",
+    "shopify_name": "French Double Cream Brie"
+  },
+  "CH-FEMM": {
+    "sku": "CH-FEMM",
+    "mfg_name": "Entremont Emmentaler",
+    "shopify_name": "Entrémont Emmentaler"
+  },
+  "CH-FENG": {
+    "sku": "CH-FENG",
+    "mfg_name": "Farmstead Fenugreek Gouda",
+    "shopify_name": "Farmstead Fenugreek Gouda*"
+  },
+  "CH-FONT": {
+    "sku": "CH-FONT",
+    "mfg_name": "Fontina Val DAosta",
+    "shopify_name": "Fontina Val D'Aosta DOP (Raw) (Val d'Aosta) 1/18#"
+  },
+  "CH-FONTAL": {
+    "sku": "CH-FONTAL",
+    "mfg_name": "Fontal",
+    "shopify_name": "Fontal (Buttery, Melting)"
+  },
+  "CH-FOWC": {
+    "sku": "CH-FOWC",
+    "mfg_name": "California Clothbound Cheddar",
+    "shopify_name": "Clothbound Cheddar *"
+  },
+  "CH-FRMO": {
+    "sku": "CH-FRMO",
+    "mfg_name": null,
+    "shopify_name": "Fresh Mozzarella"
+  },
+  "CH-FSRB": {
+    "sku": "CH-FSRB",
+    "mfg_name": "French Soft-Ripened Brie",
+    "shopify_name": "French Soft-Ripened Brie"
+  },
+  "CH-GAOP": {
+    "sku": "CH-GAOP",
+    "mfg_name": "Gruyere AOP",
+    "shopify_name": "Gruyère *"
+  },
+  "CH-GEVE": {
+    "sku": "CH-GEVE",
+    "mfg_name": "Everything Bagel Goat Log",
+    "shopify_name": "Everything Bagel Chevre Log"
+  },
+  "CH-GFLEECE": {
+    "sku": "CH-GFLEECE",
+    "mfg_name": "Golden Fleece",
+    "shopify_name": "Golden Fleece"
+  },
+  "CH-GHCC": {
+    "sku": "CH-GHCC",
+    "mfg_name": "Garlic Habanero Cheese Curds",
+    "shopify_name": "Garlic Habanero Cheese Curds"
+  },
+  "CH-GPBRIE": {
+    "sku": "CH-GPBRIE",
+    "mfg_name": "Petit Garlic & Pepper Triple Cream Brie",
+    "shopify_name": "Petit Garlic & Pepper Triple Cream Brie"
+  },
+  "CH-GUUB": {
+    "sku": "CH-GUUB",
+    "mfg_name": "Gubbeen",
+    "shopify_name": "Gubbeen"
+  },
+  "CH-HARBM": {
+    "sku": "CH-HARBM",
+    "mfg_name": "Mini Harbison",
+    "shopify_name": "Mini Harbison"
+  },
+  "CH-HBGG": {
+    "sku": "CH-HBGG",
+    "mfg_name": "Honey Bee Goat Gouda",
+    "shopify_name": "Honey Bee Goat Gouda"
+  },
+  "CH-HCGU": {
+    "sku": "CH-HCGU",
+    "mfg_name": "Honey Clover Gouda Packaged Slice",
+    "shopify_name": "Honey Clover Gouda"
+  },
+  "CH-HORN": {
+    "sku": "CH-HORN",
+    "mfg_name": "Hornbacher Alpine Cheese",
+    "shopify_name": "Hornbacher"
+  },
+  "CH-HTG": {
+    "sku": "CH-HTG",
+    "mfg_name": null,
+    "shopify_name": "Holy Trinity Farmstead Gouda"
+  },
+  "CH-IPAC": {
+    "sku": "CH-IPAC",
+    "mfg_name": "Fiddlehead IPA Cheddar",
+    "shopify_name": "Fiddlehead IPA Cheddar*"
+  },
+  "CH-IPRW": {
+    "sku": "CH-IPRW",
+    "mfg_name": "Imported Parmigiano Reggiano",
+    "shopify_name": "Imported Parmigiano Reggiano *"
+  },
+  "CH-JRES": {
+    "sku": "CH-JRES",
+    "mfg_name": null,
+    "shopify_name": "January Box Cheese Replacement"
+  },
+  "CH-KM39": {
+    "sku": "CH-KM39",
+    "mfg_name": "KM39",
+    "shopify_name": "KM39 (Nutty, Hard Cheese)"
+  },
+  "CH-KUNIK": {
+    "sku": "CH-KUNIK",
+    "mfg_name": "Nettle Meadow Kunik",
+    "shopify_name": "Nettle Meadow Kunik"
+  },
+  "CH-LEON": {
+    "sku": "CH-LEON",
+    "mfg_name": "Leonora",
+    "shopify_name": "Leonora*"
+  },
+  "CH-LOSC": {
+    "sku": "CH-LOSC",
+    "mfg_name": "Los Cameros de Romero",
+    "shopify_name": "Los Cameros Romero (Rosemary, Semi Soft)"
+  },
+  "CH-LOU": {
+    "sku": "CH-LOU",
+    "mfg_name": "Lou Bergier",
+    "shopify_name": "Lou Bergier Pichin Tomme*"
+  },
+  "CH-LRB": {
+    "sku": "CH-LRB",
+    "mfg_name": "Regal de Bourgogne with Cranberries",
+    "shopify_name": "Le Regal de Bourgogne aux Cranberries*"
+  },
+  "CH-MAFT": {
+    "sku": "CH-MAFT",
+    "mfg_name": "Marinated Australian Farmstead Cheese",
+    "shopify_name": "Marinated Australian Farmstead Cheese *"
+  },
+  "CH-MAHO": {
+    "sku": "CH-MAHO",
+    "mfg_name": "Mahon Menorca",
+    "shopify_name": "Mahon Menorca *"
+  },
+  "CH-MANC": {
+    "sku": "CH-MANC",
+    "mfg_name": "Manchego Curado",
+    "shopify_name": "Manchego Curado *"
+  },
+  "CH-MARGOT": {
+    "sku": "CH-MARGOT",
+    "mfg_name": "Margot",
+    "shopify_name": "Margot (Washed in Craft Beer)*"
+  },
+  "CH-MAU3": {
+    "sku": "CH-MAU3",
+    "mfg_name": "Manchego Aurora",
+    "shopify_name": "Manchego Aurora *"
+  },
+  "CH-MBRIE": {
+    "sku": "CH-MBRIE",
+    "mfg_name": null,
+    "shopify_name": "Marin Petit Crème Brie"
+  },
+  "CH-MCPC": {
+    "sku": "CH-MCPC",
+    "mfg_name": "McCalls Grassfed Irish Porter Cheddar",
+    "shopify_name": "McCalls Grassfed Irish Porter Cheddar"
+  },
+  "CH-MDAC": {
+    "sku": "CH-MDAC",
+    "mfg_name": null,
+    "shopify_name": "Mini Cranberry Delice D'Argental"
+  },
+  "CH-MONET": {
+    "sku": "CH-MONET",
+    "mfg_name": "Woodside Monet Chevre",
+    "shopify_name": "Woodside Monet Chevre"
+  },
+  "CH-MONT": {
+    "sku": "CH-MONT",
+    "mfg_name": "Montasio",
+    "shopify_name": "Montasio DOP Mezzano Mitica® (Raw) (Friuli) 1/11#"
+  },
+  "CH-MOSES": {
+    "sku": "CH-MOSES",
+    "mfg_name": "Moses Reaper",
+    "shopify_name": "Moses Reaper*"
+  },
+  "CH-MPOLO": {
+    "sku": "CH-MPOLO",
+    "mfg_name": "Marco Polo Packaged Slice",
+    "shopify_name": "Marco Polo"
+  },
+  "CH-MSF": {
+    "sku": "CH-MSF",
+    "mfg_name": "Mediterranean Style Feta",
+    "shopify_name": "Mediterranean Style Feta"
+  },
+  "CH-MSMG": {
+    "sku": "CH-MSMG",
+    "mfg_name": "Farmstead Smoked Gouda",
+    "shopify_name": "Farmstead Smoked Gouda *"
+  },
+  "CH-MSWISS": {
+    "sku": "CH-MSWISS",
+    "mfg_name": "Mustard Seed Swisserella",
+    "shopify_name": "Mustard Seed Swisserella *"
+  },
+  "CH-MTASGO": {
+    "sku": "CH-MTASGO",
+    "mfg_name": null,
+    "shopify_name": "Mountain Asiago Fresco"
+  },
+  "CH-NMACF": {
+    "sku": "CH-NMACF",
+    "mfg_name": "Apple Cider Fromage",
+    "shopify_name": "Apple Cider Fromage Frais*"
+  },
+  "CH-NMMAP": {
+    "sku": "CH-NMMAP",
+    "mfg_name": "Maple Frais Fromage",
+    "shopify_name": "Maple Fromage Frais"
+  },
+  "CH-NMPSC": {
+    "sku": "CH-NMPSC",
+    "mfg_name": "Pumpkin Cider Fromage",
+    "shopify_name": "Pumpkin Spice Fromage Frais"
+  },
+  "CH-OFARM": {
+    "sku": "CH-OFARM",
+    "mfg_name": "Old Farmdal",
+    "shopify_name": "Old Farmdal"
+  },
+  "CH-OGFM": {
+    "sku": "CH-OGFM",
+    "mfg_name": "Organic Grass-Fed Mozzarella",
+    "shopify_name": "Organic Grass-Fed Mozzarella *"
+  },
+  "CH-OGK": {
+    "sku": "CH-OGK",
+    "mfg_name": "OG Kristal",
+    "shopify_name": "OG Kristal"
+  },
+  "CH-OTTA": {
+    "sku": "CH-OTTA",
+    "mfg_name": "Frumage LOttavio",
+    "shopify_name": "Frumage L'Ottavio (Beer Cheese)"
+  },
+  "CH-PARM": {
+    "sku": "CH-PARM",
+    "mfg_name": "24-Month Aged Parmigiano Reggiano",
+    "shopify_name": "24-Month Aged Raw Milk Parmigiano Reggiano, DOP"
+  },
+  "CH-PBGO": {
+    "sku": "CH-PBGO",
+    "mfg_name": "Basil Pesto Gouda",
+    "shopify_name": "Basil Pesto Gouda*"
+  },
+  "CH-PBOO": {
+    "sku": "CH-PBOO",
+    "mfg_name": "Petit Boo",
+    "shopify_name": "Petit Boo Ash-Coated Triple Crème Brie"
+  },
+  "CH-PBRIE": {
+    "sku": "CH-PBRIE",
+    "mfg_name": "Petit Triple Cream Brie",
+    "shopify_name": "Petit Triple Cream Brie"
+  },
+  "CH-PCROT": {
+    "sku": "CH-PCROT",
+    "mfg_name": "Pecorino Crotonese",
+    "shopify_name": "Pecorino Crotonese Sfizio Aged (Lazio) 2/5#"
+  },
+  "CH-PIAV": {
+    "sku": "CH-PIAV",
+    "mfg_name": null,
+    "shopify_name": "Piave Red Label"
+  },
+  "CH-PIMO": {
+    "sku": "CH-PIMO",
+    "mfg_name": "Pimento Cheese Cups",
+    "shopify_name": "Pimento Cheese"
+  },
+  "CH-PLU": {
+    "sku": "CH-PLU",
+    "mfg_name": null,
+    "shopify_name": "Angelino Plums"
+  },
+  "CH-PRAD": {
+    "sku": "CH-PRAD",
+    "mfg_name": "Pradera - Dutch Aged Gouda",
+    "shopify_name": "Pradera - Dutch Aged Gouda*"
+  },
+  "CH-PRBZ": {
+    "sku": "CH-PRBZ",
+    "mfg_name": "Prairie Breeze.",
+    "shopify_name": "Prairie Breeze."
+  },
+  "CH-PUMC": {
+    "sku": "CH-PUMC",
+    "mfg_name": null,
+    "shopify_name": "Pumpkin Spice Chevre"
+  },
+  "CH-PVEC": {
+    "sku": "CH-PVEC",
+    "mfg_name": "Piave Vecchio",
+    "shopify_name": "Piave Vecchio *"
+  },
+  "CH-QCAV": {
+    "sku": "CH-QCAV",
+    "mfg_name": "Queso de Murcia al Vino DOP",
+    "shopify_name": "Queso de Murcia al Vino DOP"
+  },
+  "CH-QOTA": {
+    "sku": "CH-QOTA",
+    "mfg_name": "Queen of the Alps",
+    "shopify_name": "Queen of the Alps"
+  },
+  "CH-QUEEN": {
+    "sku": "CH-QUEEN",
+    "mfg_name": null,
+    "shopify_name": "Queen of the Alps"
+  },
+  "CH-RACL": {
+    "sku": "CH-RACL",
+    "mfg_name": "Raclette Livradios",
+    "shopify_name": "Raclette Livradois*"
+  },
+  "CH-RACO": {
+    "sku": "CH-RACO",
+    "mfg_name": "Raclette Obwalden",
+    "shopify_name": "Raclette Obwalden"
+  },
+  "CH-RAG": {
+    "sku": "CH-RAG",
+    "mfg_name": null,
+    "shopify_name": "CH-BIX"
+  },
+  "CH-RAMP": {
+    "sku": "CH-RAMP",
+    "mfg_name": "Ramp Cheese",
+    "shopify_name": "Entlebucher Barlauchkase - Ramp Cheese (Raw) (1/9#)"
+  },
+  "CH-RASHI": {
+    "sku": "CH-RASHI",
+    "mfg_name": "TomaRashi",
+    "shopify_name": "TomaRashi"
+  },
+  "CH-ROBI": {
+    "sku": "CH-ROBI",
+    "mfg_name": null,
+    "shopify_name": "Robiola Bosina"
+  },
+  "CH-ROMQ": {
+    "sku": "CH-ROMQ",
+    "mfg_name": "Romao Queso al Romero",
+    "shopify_name": "Romao Queso al Romero (Rosemary)"
+  },
+  "CH-RP": {
+    "sku": "CH-RP",
+    "mfg_name": "Ragged Point",
+    "shopify_name": "Ragged Point (Soft-Ripened, Bloomy Rind)"
+  },
+  "CH-RQCAV": {
+    "sku": "CH-RQCAV",
+    "mfg_name": "The Drunken Goat Reserva",
+    "shopify_name": "The Drunken Goat - Reserve"
+  },
+  "CH-RRC": {
+    "sku": "CH-RRC",
+    "mfg_name": null,
+    "shopify_name": "Red Rock Cheddar"
+  },
+  "CH-SCMT": {
+    "sku": "CH-SCMT",
+    "mfg_name": null,
+    "shopify_name": "Aged Comté 15-18 Month"
+  },
+  "CH-SFG": {
+    "sku": "CH-SFG",
+    "mfg_name": "Summer Fields Gouda",
+    "shopify_name": "Summer Fields Gouda"
+  },
+  "CH-SHADOW": {
+    "sku": "CH-SHADOW",
+    "mfg_name": "Shadow Blossom",
+    "shopify_name": "Shadow Blossom"
+  },
+  "CH-SJGO": {
+    "sku": "CH-SJGO",
+    "mfg_name": "San Joaquin Gold",
+    "shopify_name": "San Joaquin Gold"
+  },
+  "CH-SMCHD": {
+    "sku": "CH-SMCHD",
+    "mfg_name": null,
+    "shopify_name": "Smoky Cheddar"
+  },
+  "CH-SMG": {
+    "sku": "CH-SMG",
+    "mfg_name": "Spanish Smoking Goat",
+    "shopify_name": "Smoking Goat"
+  },
+  "CH-SOT": {
+    "sku": "CH-SOT",
+    "mfg_name": "Sottocenere with Truffles",
+    "shopify_name": "Sottocenere Al Tartufo (Truffle, Semi Soft)"
+  },
+  "CH-SPORT": {
+    "sku": "CH-SPORT",
+    "mfg_name": "Port Salut",
+    "shopify_name": "Port Salut Semi Soft Cheese"
+  },
+  "CH-SSIM": {
+    "sku": "CH-SSIM",
+    "mfg_name": "San Simon DOP",
+    "shopify_name": "San Simon DOP Mitica® (Smoked Cow) (Galicia)"
+  },
+  "CH-STIL": {
+    "sku": "CH-STIL",
+    "mfg_name": "Farmstead English Stilton Blue Cheese",
+    "shopify_name": "Farmstead English Stilton Blue Cheese"
+  },
+  "CH-TETI": {
+    "sku": "CH-TETI",
+    "mfg_name": "Tetilla DOP",
+    "shopify_name": "Tetilla DOP Mitica® (Cow) (Galicia) 4/2#"
+  },
+  "CH-TIP": {
+    "sku": "CH-TIP",
+    "mfg_name": "Tipperary Brie",
+    "shopify_name": "Tipperary Brie"
+  },
+  "CH-TOMT": {
+    "sku": "CH-TOMT",
+    "mfg_name": "Georgia Tomme Packaged Slice",
+    "shopify_name": "Georgia Tomme *"
+  },
+  "CH-TOPR": {
+    "sku": "CH-TOPR",
+    "mfg_name": "Toma Provence",
+    "shopify_name": "Toma Provence *"
+  },
+  "CH-TRUSEK": {
+    "sku": "CH-TRUSEK",
+    "mfg_name": "Truffle Seeker",
+    "shopify_name": "Truffle Seeker"
+  },
+  "CH-TTBRIE": {
+    "sku": "CH-TTBRIE",
+    "mfg_name": "Petit Truffle Triple Cream Brie",
+    "shopify_name": "Petit Truffle Triple Cream Brie"
+  },
+  "CH-UBRI": {
+    "sku": "CH-UBRI",
+    "mfg_name": "Ubriaco al Prosecco",
+    "shopify_name": "Ubraico al Prosecco"
+  },
+  "CH-UCONE": {
+    "sku": "CH-UCONE",
+    "mfg_name": "Ubriacone",
+    "shopify_name": "Ubriacone*"
+  },
+  "CH-UMIN": {
+    "sku": "CH-UMIN",
+    "mfg_name": "Farmstead Cumin Gouda",
+    "shopify_name": "Farmstead Smoked Cumin Gouda"
+  },
+  "CH-UROSE": {
+    "sku": "CH-UROSE",
+    "mfg_name": "Ubriaco Pinot Rose",
+    "shopify_name": "Ubriaco al Pinot Rosé"
+  },
+  "CH-V5CH": {
+    "sku": "CH-V5CH",
+    "mfg_name": "Artisan Cave Aged Sharp Cheddar.",
+    "shopify_name": "Artisan Cave Aged Sharp Cheddar."
+  },
+  "CH-VAT": {
+    "sku": "CH-VAT",
+    "mfg_name": "VAT 17 Cheddar Packaged Slice",
+    "shopify_name": "Vat 17 Cheddar"
+  },
+  "CH-VBLUE": {
+    "sku": "CH-VBLUE",
+    "mfg_name": "Valdeon Blue",
+    "shopify_name": "Valdeón Blue*"
+  },
+  "CH-WMANG": {
+    "sku": "CH-WMANG",
+    "mfg_name": "Wensleydale with Mango & Ginger",
+    "shopify_name": "Wensleydale with Mango & Ginger"
+  },
+  "CH-WRANG": {
+    "sku": "CH-WRANG",
+    "mfg_name": null,
+    "shopify_name": "Wrangeback"
+  },
+  "CH-WWBC": {
+    "sku": "CH-WWBC",
+    "mfg_name": "Wooly Wooly Black Garlic",
+    "shopify_name": "Wooly Wooly Black Garlic*"
+  },
+  "CH-WWBG": {
+    "sku": "CH-WWBG",
+    "mfg_name": null,
+    "shopify_name": "Wooly Wooly Black Garlic"
+  },
+  "CH-WWDI": {
+    "sku": "CH-WWDI",
+    "mfg_name": "Wooly Wooly Diablo",
+    "shopify_name": "Wooly Wooly Diablo*"
+  },
+  "CH-WWHO": {
+    "sku": "CH-WWHO",
+    "mfg_name": "Wooly Wooly Honey & Oregano",
+    "shopify_name": "Wooly Wooly® Honey Oregano Semi-Firm Wheel (Castilla-La Mancha)"
+  },
+  "CH-YFARM": {
+    "sku": "CH-YFARM",
+    "mfg_name": "Young Farmdal",
+    "shopify_name": "Young Farmdal"
+  },
+  "CHW-DRAG": {
+    "sku": "CHW-DRAG",
+    "mfg_name": "Dragon Slayer Ale & Mustard Cheddar",
+    "shopify_name": "Dragon Slayer Ale & Mustard Cheddar"
+  },
+  "EX-CC": {
+    "sku": "EX-CC",
+    "mfg_name": null,
+    "shopify_name": "Curator's Choice"
+  },
+  "EX-EA": {
+    "sku": "EX-EA",
+    "mfg_name": null,
+    "shopify_name": "Member Bonus: Extra Accompaniment"
+  },
+  "EX-EC": {
+    "sku": "EX-EC",
+    "mfg_name": null,
+    "shopify_name": "Curator's Choice - Artisan Cheese Archived"
+  },
+  "EX-EM": {
+    "sku": "EX-EM",
+    "mfg_name": null,
+    "shopify_name": "Curator's Choice - Premium Charcuterie Archived"
+  },
+  "EX-ICE": {
+    "sku": "EX-ICE",
+    "mfg_name": "Extra 24oz Gel Pack",
+    "shopify_name": "Extra Gel Pack"
+  },
+  "EX-PS": {
+    "sku": "EX-PS",
+    "mfg_name": null,
+    "shopify_name": "Party Size Upgrade - Curator's Choice"
+  },
+  "MR-JRNL": {
+    "sku": "MR-JRNL",
+    "mfg_name": "Cheese Journal",
+    "shopify_name": "Cheese Journal"
+  },
+  "MT-4JABPC": {
+    "sku": "MT-4JABPC",
+    "mfg_name": "Black Pepper & Cherry Prosciutto 4oz",
+    "shopify_name": "Black Pepper & Cherry Prosciutto"
+  },
+  "MT-4JAHH": {
+    "sku": "MT-4JAHH",
+    "mfg_name": "Honey & Herb Prosciutto 4oz",
+    "shopify_name": "Honey & Herb Prosciutto - 4 oz"
+  },
+  "MT-4PP": {
+    "sku": "MT-4PP",
+    "mfg_name": "Prosciutto Picante 4oz",
+    "shopify_name": "Prosciutto Piccante *"
+  },
+  "MT-4PSS": {
+    "sku": "MT-4PSS",
+    "mfg_name": "Sweet & Spicy Prosciutto 4oz",
+    "shopify_name": "Sweet & Spicy Prosciutto"
+  },
+  "MT-ASPK": {
+    "sku": "MT-ASPK",
+    "mfg_name": "Applewood Smoked Speck",
+    "shopify_name": "Applewood Smoked Speck *"
+  },
+  "MT-BCSC": {
+    "sku": "MT-BCSC",
+    "mfg_name": "Beef Caraway Salami Chub",
+    "shopify_name": "Beef Caraway Salami Chub"
+  },
+  "MT-BKCO": {
+    "sku": "MT-BKCO",
+    "mfg_name": "Berkshire Coppa",
+    "shopify_name": "Berkshire Coppa"
+  },
+  "MT-BKCOP": {
+    "sku": "MT-BKCOP",
+    "mfg_name": null,
+    "shopify_name": "Berkshire Coppa"
+  },
+  "MT-BPSS": {
+    "sku": "MT-BPSS",
+    "mfg_name": "Black Pepper Summer Salami",
+    "shopify_name": "Black Pepper Summer Salami"
+  },
+  "MT-BRAS": {
+    "sku": "MT-BRAS",
+    "mfg_name": "Uncured Wagyu Braseola",
+    "shopify_name": "Uncured Wagyu Bresaola"
+  },
+  "MT-BSS": {
+    "sku": "MT-BSS",
+    "mfg_name": "Beefsteak and Goathorn Pepper Salami",
+    "shopify_name": "Beefsteak and Goathorn Pepper Salami"
+  },
+  "MT-CAPO": {
+    "sku": "MT-CAPO",
+    "mfg_name": "Capocollo",
+    "shopify_name": "Capocollo*"
+  },
+  "MT-CBCO": {
+    "sku": "MT-CBCO",
+    "mfg_name": "Cider Brined Coppa",
+    "shopify_name": "Cider Brined Coppa"
+  },
+  "MT-CCBS": {
+    "sku": "MT-CCBS",
+    "mfg_name": "Belgian Style Quad Ale Salami",
+    "shopify_name": "Belgian Style Quad Ale Salami"
+  },
+  "MT-CCCS": {
+    "sku": "MT-CCCS",
+    "mfg_name": "Chorizo Seco",
+    "shopify_name": "Chorizo Seco"
+  },
+  "MT-CCSP": {
+    "sku": "MT-CCSP",
+    "mfg_name": "Salami Piccante with Cognac",
+    "shopify_name": "Salami Piccante with Cognac"
+  },
+  "MT-COPPA": {
+    "sku": "MT-COPPA",
+    "mfg_name": "Coppa Italiana",
+    "shopify_name": "Coppa Italiana"
+  },
+  "MT-EXEM": {
+    "sku": "MT-EXEM",
+    "mfg_name": null,
+    "shopify_name": "MT-EXEM"
+  },
+  "MT-FS-4JABPC": {
+    "sku": "MT-FS-4JABPC",
+    "mfg_name": null,
+    "shopify_name": "Black Pepper & Cherry Prosciutto F/S"
+  },
+  "MT-FS-BRAS": {
+    "sku": "MT-FS-BRAS",
+    "mfg_name": null,
+    "shopify_name": "Bresaola"
+  },
+  "MT-FS-COPPA": {
+    "sku": "MT-FS-COPPA",
+    "mfg_name": null,
+    "shopify_name": "Coppa Italiana"
+  },
+  "MT-FS-HCOPPA": {
+    "sku": "MT-FS-HCOPPA",
+    "mfg_name": null,
+    "shopify_name": "Hot Coppa"
+  },
+  "MT-FS-HERF": {
+    "sku": "MT-FS-HERF",
+    "mfg_name": null,
+    "shopify_name": "Heritage Finocchiona"
+  },
+  "MT-FS-HERS": {
+    "sku": "MT-FS-HERS",
+    "mfg_name": null,
+    "shopify_name": "Heritage Sopressata"
+  },
+  "MT-FS-ITSPK": {
+    "sku": "MT-FS-ITSPK",
+    "mfg_name": null,
+    "shopify_name": "Speck Italiano"
+  },
+  "MT-FS-JAHH": {
+    "sku": "MT-FS-JAHH",
+    "mfg_name": null,
+    "shopify_name": "Honey & Herb Prosciutto F/S"
+  },
+  "MT-FS-JAMS": {
+    "sku": "MT-FS-JAMS",
+    "mfg_name": null,
+    "shopify_name": "Jamon Serrano"
+  },
+  "MT-FS-PRO": {
+    "sku": "MT-FS-PRO",
+    "mfg_name": null,
+    "shopify_name": "Prosciutto Bulk"
+  },
+  "MT-FS-RUST": {
+    "sku": "MT-FS-RUST",
+    "mfg_name": null,
+    "shopify_name": "Salame Rustico"
+  },
+  "MT-FS-SPAN": {
+    "sku": "MT-FS-SPAN",
+    "mfg_name": null,
+    "shopify_name": "Chorizo Español"
+  },
+  "MT-FS-TRPR": {
+    "sku": "MT-FS-TRPR",
+    "mfg_name": null,
+    "shopify_name": "Black Truffle Prosciutto F/S"
+  },
+  "MT-GEN": {
+    "sku": "MT-GEN",
+    "mfg_name": "Black Pepper Uncured Genoa Salami",
+    "shopify_name": "Black Pepper Uncured Genoa Salami"
+  },
+  "MT-HOTP": {
+    "sku": "MT-HOTP",
+    "mfg_name": "Hot Honey Prosciutto",
+    "shopify_name": "Hot Honey Prosciutto"
+  },
+  "MT-IBHP": {
+    "sku": "MT-IBHP",
+    "mfg_name": "Jamon Iberico",
+    "shopify_name": "Jamón Ibérico"
+  },
+  "MT-IBRES": {
+    "sku": "MT-IBRES",
+    "mfg_name": "Bresaola Italiana",
+    "shopify_name": "Bresaola Italiana"
+  },
+  "MT-JABPC": {
+    "sku": "MT-JABPC",
+    "mfg_name": "Black Pepper Cherry Prosciutto",
+    "shopify_name": "Black Pepper Cherry Prosciutto"
+  },
+  "MT-JAHH": {
+    "sku": "MT-JAHH",
+    "mfg_name": "Jambon Honey & Herb",
+    "shopify_name": "Honey & Herb Prosciutto*"
+  },
+  "MT-JAMS": {
+    "sku": "MT-JAMS",
+    "mfg_name": "Jamon Serrano",
+    "shopify_name": "Jamón Serrano *"
+  },
+  "MT-JUNI": {
+    "sku": "MT-JUNI",
+    "mfg_name": "Juniper Salami Chub",
+    "shopify_name": "Juniper Salami"
+  },
+  "MT-LOMO": {
+    "sku": "MT-LOMO",
+    "mfg_name": null,
+    "shopify_name": "Lomo"
+  },
+  "MT-LONZ": {
+    "sku": "MT-LONZ",
+    "mfg_name": "Lonza",
+    "shopify_name": "Lonza *"
+  },
+  "MT-PARM": {
+    "sku": "MT-PARM",
+    "mfg_name": "Parmesan & Pepper Salami",
+    "shopify_name": "Parm Salami"
+  },
+  "MT-PP": {
+    "sku": "MT-PP",
+    "mfg_name": "Prosciutto Piccante",
+    "shopify_name": "Prosciutto Piccante *"
+  },
+  "MT-PRO": {
+    "sku": "MT-PRO",
+    "mfg_name": "Prosciutto",
+    "shopify_name": "Prosciutto Italiano"
+  },
+  "MT-PSS": {
+    "sku": "MT-PSS",
+    "mfg_name": "Sweet & Spicy Prosciutto",
+    "shopify_name": "Sweet & Spicy Prosciutto"
+  },
+  "MT-PTUF": {
+    "sku": "MT-PTUF",
+    "mfg_name": "Black Truffle Prosciutto",
+    "shopify_name": "Black Truffle Prosciutto"
+  },
+  "MT-RAMP": {
+    "sku": "MT-RAMP",
+    "mfg_name": "Ramp Salami",
+    "shopify_name": "Ramp Salami"
+  },
+  "MT-REDW": {
+    "sku": "MT-REDW",
+    "mfg_name": "Red Wine & Garlic Salami Chub",
+    "shopify_name": "Red Wine & Garlic Salami Chub"
+  },
+  "MT-SBRES": {
+    "sku": "MT-SBRES",
+    "mfg_name": "Beef Bresaola",
+    "shopify_name": "Beef Bresaola"
+  },
+  "MT-SCHI": {
+    "sku": "MT-SCHI",
+    "mfg_name": "Salami Chianti",
+    "shopify_name": "Salami Chianti"
+  },
+  "MT-SCHO": {
+    "sku": "MT-SCHO",
+    "mfg_name": null,
+    "shopify_name": "Sliced Chorizo"
+  },
+  "MT-SFEN": {
+    "sku": "MT-SFEN",
+    "mfg_name": "Finocchiona",
+    "shopify_name": "Finocchiona *"
+  },
+  "MT-SFNL": {
+    "sku": "MT-SFNL",
+    "mfg_name": "Salted Fennel Salami Chub",
+    "shopify_name": "Salted Fennel Salami Chub - 5oz"
+  },
+  "MT-SLRWG": {
+    "sku": "MT-SLRWG",
+    "mfg_name": "Red Wine & Garlic Sliced Salami",
+    "shopify_name": "Red Wine & Garlic Salami*"
+  },
+  "MT-SMASH": {
+    "sku": "MT-SMASH",
+    "mfg_name": "Southern Smash",
+    "shopify_name": "Southern Smash"
+  },
+  "MT-SOP": {
+    "sku": "MT-SOP",
+    "mfg_name": "Sopressata",
+    "shopify_name": "Uncured Black Pepper Sopressata*"
+  },
+  "MT-SPAP": {
+    "sku": "MT-SPAP",
+    "mfg_name": "Smoked Paprika Chorizo",
+    "shopify_name": "Smoked Paprika Chorizo*"
+  },
+  "MT-SPCE": {
+    "sku": "MT-SPCE",
+    "mfg_name": null,
+    "shopify_name": "Spicebush Salami"
+  },
+  "MT-STBC": {
+    "sku": "MT-STBC",
+    "mfg_name": null,
+    "shopify_name": "Salt & Twine Uncured Bacon& Bourbon Chub"
+  },
+  "MT-STCOP": {
+    "sku": "MT-STCOP",
+    "mfg_name": "Southern Coppa",
+    "shopify_name": "Southern Coppa"
+  },
+  "MT-STCZ": {
+    "sku": "MT-STCZ",
+    "mfg_name": "Southern Chorizo",
+    "shopify_name": "Southern Chorizo"
+  },
+  "MT-STSB": {
+    "sku": "MT-STSB",
+    "mfg_name": "Classic Bistro Salami",
+    "shopify_name": "Classic Bistro Salami Chub - 5oz"
+  },
+  "MT-STUF": {
+    "sku": "MT-STUF",
+    "mfg_name": "Salami Truffle",
+    "shopify_name": "Salami Truffle"
+  },
+  "MT-TICH": {
+    "sku": "MT-TICH",
+    "mfg_name": "Spicy Pecan Smoked Chorizo Iberico",
+    "shopify_name": "Spicy Pecan Smoked Chorizo Iberico"
+  },
+  "MT-TRPR": {
+    "sku": "MT-TRPR",
+    "mfg_name": null,
+    "shopify_name": "Black Truffle Prosciutto"
+  },
+  "MT-TUSC": {
+    "sku": "MT-TUSC",
+    "mfg_name": "Toscano Salame",
+    "shopify_name": "Toscano Salame*"
+  },
+  "MT-WBEEF": {
+    "sku": "MT-WBEEF",
+    "mfg_name": null,
+    "shopify_name": "Wagyu Beef Salami"
+  },
+  "PK-BG2416": {
+    "sku": "PK-BG2416",
+    "mfg_name": null,
+    "shopify_name": "Protective Plastic Bag"
+  },
+  "PK-BITESGUIDE": {
+    "sku": "PK-BITESGUIDE",
+    "mfg_name": "Tasting Guide - Gourmet Bites",
+    "shopify_name": "Gourmet Bites - Tasting Guide"
+  },
+  "PK-FCUST": {
+    "sku": "PK-FCUST",
+    "mfg_name": "Tasting Guide - The First AppyHour",
+    "shopify_name": "Box 1 Tasting Guide"
+  },
+  "PK-TCUST": {
+    "sku": "PK-TCUST",
+    "mfg_name": "Tasting Guide - Custom Box",
+    "shopify_name": "Custom Box Tasting Guide"
+  },
+  "PK-TMDT": {
+    "sku": "PK-TMDT",
+    "mfg_name": "Tasting Guide - Mediterranean Escape",
+    "shopify_name": "Mediterranean Escape - Scan QR Code to Get Started"
+  },
+  "PK-TSTBL": {
+    "sku": "PK-TSTBL",
+    "mfg_name": "Tasting Guide - Blue",
+    "shopify_name": "AppyHour Box Tasting Guide_BLUE"
+  },
+  "PK-TSTBX0": {
+    "sku": "PK-TSTBX0",
+    "mfg_name": "Tasting Guide - BOX0",
+    "shopify_name": "AppyHour Box Tasting Guide_BOX0"
+  },
+  "PK-TSTG": {
+    "sku": "PK-TSTG",
+    "mfg_name": "Tasting Guide - Curated Box",
+    "shopify_name": "Food Safety Insert"
+  },
+  "PK-TSTOR": {
+    "sku": "PK-TSTOR",
+    "mfg_name": "Tasting Guide - Orange",
+    "shopify_name": "AppyHour Box Tasting Guide_OR"
+  },
+  "PR-5CHUB": {
+    "sku": "PR-5CHUB",
+    "mfg_name": null,
+    "shopify_name": "Special: Extra 5oz Premium Charcuterie"
+  },
+  "PR-ACACBL": {
+    "sku": "PR-ACACBL",
+    "mfg_name": "Artisan Cave Aged Cheddar & Blueberry Thyme Jam",
+    "shopify_name": "Artisan Cave Aged Cheddar & Blueberry Thyme Jam"
+  },
+  "PR-BRIBL": {
+    "sku": "PR-BRIBL",
+    "mfg_name": "Triple Creme Brie & Blueberry Thyme Jam",
+    "shopify_name": "Triple Creme Brie & Blueberry Thyme Jam"
+  },
+  "PR-CJAM-ALPN": {
+    "sku": "PR-CJAM-ALPN",
+    "mfg_name": null,
+    "shopify_name": "Bonus Artisan Cheese & Jam Pairing"
+  },
+  "PR-CJAM-BYO": {
+    "sku": "PR-CJAM-BYO",
+    "mfg_name": null,
+    "shopify_name": "Bonus Artisan Cheese & Jam Pairing"
+  },
+  "PR-CJAM-GEN": {
+    "sku": "PR-CJAM-GEN",
+    "mfg_name": null,
+    "shopify_name": "Bonus Artisan Cheese & Jam Pairing"
+  },
+  "PR-CJAM-HHIGH": {
+    "sku": "PR-CJAM-HHIGH",
+    "mfg_name": null,
+    "shopify_name": "Bonus Artisan Cheese & Jam Pairing"
+  },
+  "PR-CJAM-ISUN": {
+    "sku": "PR-CJAM-ISUN",
+    "mfg_name": null,
+    "shopify_name": "Bonus Artisan Cheese & Jam Pairing"
+  },
+  "PR-CJAM-MDT": {
+    "sku": "PR-CJAM-MDT",
+    "mfg_name": null,
+    "shopify_name": "Bonus Artisan Cheese & Jam Pairing"
+  },
+  "PR-CJAM-MONG": {
+    "sku": "PR-CJAM-MONG",
+    "mfg_name": null,
+    "shopify_name": "Bonus Artisan Cheese & Jam Pairing"
+  },
+  "PR-CJAM-MS": {
+    "sku": "PR-CJAM-MS",
+    "mfg_name": null,
+    "shopify_name": "Bonus Artisan Cheese & Jam Pairing"
+  },
+  "PR-CJAM-NMS": {
+    "sku": "PR-CJAM-NMS",
+    "mfg_name": null,
+    "shopify_name": "Bonus Artisan Cheese & Jam Pairing"
+  },
+  "PR-CJAM-OWC": {
+    "sku": "PR-CJAM-OWC",
+    "mfg_name": null,
+    "shopify_name": "Bonus Artisan Cheese & Jam Pairing"
+  },
+  "PR-CJAM-SPN": {
+    "sku": "PR-CJAM-SPN",
+    "mfg_name": null,
+    "shopify_name": "Bonus Artisan Cheese & Jam Pairing"
+  },
+  "PR-CJAM-SS": {
+    "sku": "PR-CJAM-SS",
+    "mfg_name": null,
+    "shopify_name": "Bonus Artisan Cheese & Jam Pairing"
+  },
+  "PR-CJAM-STAPLES": {
+    "sku": "PR-CJAM-STAPLES",
+    "mfg_name": null,
+    "shopify_name": "BonusArtisanCheese&Jam"
+  },
+  "PR-FCHE": {
+    "sku": "PR-FCHE",
+    "mfg_name": null,
+    "shopify_name": "FREE Cheddar"
+  },
+  "PR-GEVEBL": {
+    "sku": "PR-GEVEBL",
+    "mfg_name": "Everything Bagel Goat Log & Blueberry Thyme Jam",
+    "shopify_name": "Everything Bagel Goat Log & Blueberry Thyme Jam"
+  },
+  "PR-GRUBLK": {
+    "sku": "PR-GRUBLK",
+    "mfg_name": "Gruyere AOP & Blackberry Jam",
+    "shopify_name": "Gruyere AOP & Blackberry Jam"
+  },
+  "PR-JAHH": {
+    "sku": "PR-JAHH",
+    "mfg_name": null,
+    "shopify_name": "Special: Honey & Herb Prosciutto"
+  },
+  "PR-MAHOCFP": {
+    "sku": "PR-MAHOCFP",
+    "mfg_name": "Mahon Menorca & Caramelized Fig Jam",
+    "shopify_name": "Mahon Menorca & Carmelized Fig Jam"
+  },
+  "PR-MANCOG": {
+    "sku": "PR-MANCOG",
+    "mfg_name": "Manchego Curado & Valencia Orange Jam",
+    "shopify_name": "Manchego Curado & Valencia Orange Jam"
+  },
+  "PR-MPOLOVMOJ": {
+    "sku": "PR-MPOLOVMOJ",
+    "mfg_name": "Marco Polo & Valencia Orange Jam",
+    "shopify_name": "Marco Polo & Valencia Orange Jam"
+  },
+  "PR-STIBL": {
+    "sku": "PR-STIBL",
+    "mfg_name": "Stilton Blue Cheese & Blueberry Thyme Jam",
+    "shopify_name": "Stilton Blue Cheese & Blueberry Thyme Jam"
+  },
+  "PR-VATBLUTH": {
+    "sku": "PR-VATBLUTH",
+    "mfg_name": "VAT 17 Cheddar & Blueberry Thyme Jam",
+    "shopify_name": "Vat 17 Cheddar & Blueberry Thyme Jam"
+  },
+  "TR-AAB": {
+    "sku": "TR-AAB",
+    "mfg_name": "American Artisan Board (Tray)",
+    "shopify_name": "American Artisan Board"
+  },
+  "TR-ALPAP": {
+    "sku": "TR-ALPAP",
+    "mfg_name": "Alpine Apertivo (Tray)",
+    "shopify_name": "Alpine Apertivo"
+  },
+  "TR-APRES": {
+    "sku": "TR-APRES",
+    "mfg_name": "Apres Ski (Tray)",
+    "shopify_name": "Aprés Ski"
+  },
+  "TR-DGG": {
+    "sku": "TR-DGG",
+    "mfg_name": "Dutch Golden Age (Tray)",
+    "shopify_name": "Dutch Golden Age"
+  },
+  "TR-FTC": {
+    "sku": "TR-FTC",
+    "mfg_name": "From the Cave (Tray)",
+    "shopify_name": "From the Cave"
+  },
+  "TR-ICTRY": {
+    "sku": "TR-ICTRY",
+    "mfg_name": "Italian Countryside (Tray)",
+    "shopify_name": "Italian Countryside"
+  },
+  "TR-NM-AMCL": {
+    "sku": "TR-NM-AMCL",
+    "mfg_name": "American Classic (Tray)",
+    "shopify_name": "American Classic (Tray)"
+  },
+  "TR-NM-BTAPAS": {
+    "sku": "TR-NM-BTAPAS",
+    "mfg_name": "Bold Tapas (Tray)",
+    "shopify_name": "Bold Tapas (Tray)"
+  },
+  "TR-NM-SWSV": {
+    "sku": "TR-NM-SWSV",
+    "mfg_name": "Sweet & Savory (Tray)",
+    "shopify_name": "Sweet & Savory (Tray)"
+  },
+  "TR-NMNN-HHARV": {
+    "sku": "TR-NMNN-HHARV",
+    "mfg_name": "Honey Harvest (Tray)",
+    "shopify_name": "Honey Harvest (Tray)"
+  },
+  "TR-NMNN-LDV": {
+    "sku": "TR-NMNN-LDV",
+    "mfg_name": "La Dolce Vita (Tray)",
+    "shopify_name": "La Dolce Vita (Tray)"
+  },
+  "TR-NMNN-SHOUSE": {
+    "sku": "TR-NMNN-SHOUSE",
+    "mfg_name": "Smokehouse (Tray)",
+    "shopify_name": "Smokehouse (Tray)"
+  },
+  "TR-PICVE": {
+    "sku": "TR-PICVE",
+    "mfg_name": "Picnic in Venice (Tray)",
+    "shopify_name": "Picnic in Venice (Tray)"
+  },
+  "TR-ROME": {
+    "sku": "TR-ROME",
+    "mfg_name": "When in Rome",
+    "shopify_name": "When in Rome"
+  },
+  "TR-ROSE": {
+    "sku": "TR-ROSE",
+    "mfg_name": "Rose All Day (Tray)",
+    "shopify_name": "Rosé All Day"
+  },
+  "TR-SFH": {
+    "sku": "TR-SFH",
+    "mfg_name": "Salt Fat Heat",
+    "shopify_name": "Salt Fat Heat"
+  },
+  "TR-TAPAS": {
+    "sku": "TR-TAPAS",
+    "mfg_name": "Traditional Tapas (Tray)",
+    "shopify_name": "Traditional Tapas"
+  },
+  "TR-TRUFF": {
+    "sku": "TR-TRUFF",
+    "mfg_name": "Truffle Hunter (Tray)",
+    "shopify_name": "Truffle Hunter"
+  },
+  "TR-UMAMI": {
+    "sku": "TR-UMAMI",
+    "mfg_name": "Umami Bomb (Tray)",
+    "shopify_name": "Umami Bomb (Tray)"
+  }
 }

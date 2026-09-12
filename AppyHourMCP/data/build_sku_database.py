@@ -117,8 +117,24 @@ def main() -> None:
 
     # Write JSON file
     output_path = Path(__file__).resolve().parent / "sku_database.json"
-    with open(output_path, "w") as f:
-        json.dump(sku_map, f, indent=2)
+    # MERGE, never overwrite: mfg_name is the RMFG authority (meal-type export)
+    # and is NOT derivable from Shopify - a blind dump would erase it.
+    existing: dict = {}
+    if output_path.exists():
+        with open(output_path, encoding="utf-8") as f:
+            existing = json.load(f)
+    merged: dict[str, dict] = {}
+    for sku in sorted(set(sku_map) | set(existing)):
+        prev = existing.get(sku)
+        prev = {"mfg_name": None, "shopify_name": prev} if isinstance(prev, str) else (prev or {})
+        merged[sku] = {
+            "sku": sku,
+            "mfg_name": prev.get("mfg_name"),
+            "shopify_name": sku_map.get(sku, prev.get("shopify_name")),
+        }
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(merged, f, indent=2, ensure_ascii=False)
+    sku_map = merged
     print(f"\nWrote {len(sku_map)} SKUs to {output_path}", file=sys.stderr)
 
     # Summary by prefix
