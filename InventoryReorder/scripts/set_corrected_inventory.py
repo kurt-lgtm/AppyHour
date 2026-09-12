@@ -37,11 +37,18 @@ REPO = os.path.dirname(HERE)  # InventoryReorder/
 
 
 def _settings_paths() -> list[str]:
-    paths = [os.path.join(REPO, "dist", "inventory_reorder_settings.json")]
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        paths.append(os.path.join(appdata, "AppyHour", "inventory_reorder_settings.json"))
-    return [p for p in paths if os.path.exists(p)]
+    """The canonical settings file, as a single-element list.
+
+    🔴 This used to return the repo `dist/` copy AND `%APPDATA%\\AppyHour\\...`, and the
+    caller wrote BOTH. %APPDATA%\\AppyHour is MSIX-virtualized, so that second write went to
+    a package-private overlay or the real profile depending on how the process was launched —
+    three files, one notion of "the settings". Canonical is C:\\AppyHourData; write it once.
+    """
+    appyhour_root = os.path.dirname(REPO)  # InventoryReorder/ -> AppyHour/
+    if appyhour_root not in sys.path:
+        sys.path.insert(0, appyhour_root)
+    from appyhour_lib.paths import inventory_settings_path
+    return [str(inventory_settings_path(for_write=True))]
 
 
 def _read_have(path: str, sku_col: int, qty_col: int) -> list[tuple[str, int]]:
@@ -53,7 +60,9 @@ def _read_have(path: str, sku_col: int, qty_col: int) -> list[tuple[str, int]]:
 
     def _emit(sku_raw, qty_raw):
         sku = str(sku_raw or "").strip()
-        qraw = str(qty_raw if qty_raw is not None else "").strip()
+        # Thousands separators are common in the RMFG export ("2,096") - strip them,
+        # else the SKU lands in `skipped` and silently reads as Avail 0 (Kurt 2026-09-08).
+        qraw = str(qty_raw if qty_raw is not None else "").strip().replace(",", "")
         if not sku:
             return
         if qraw == "":

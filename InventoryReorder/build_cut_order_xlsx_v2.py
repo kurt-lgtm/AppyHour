@@ -2124,7 +2124,12 @@ def _ingest_tommy_inputs(path: str) -> None:
                 cos[sku] = {**_keep, **(rec or {})}
             else:
                 cos.pop(sku, None)
-        st["bundle_add_boxes"] = bundle_adds
+        # Sheet wins for boxes it lists, but KEEP entries it does not mention: a brand-new
+        # limited release is force-seeded here so it gets a row at all, and a wholesale
+        # replace deleted that seed before it ever rendered. (Kurt 2026-09-01, XFALL26)
+        _prev = st.get("bundle_add_boxes") or {}
+        st["bundle_add_boxes"] = {**{k: v for k, v in _prev.items() if k not in bundle_adds},
+                                  **bundle_adds}
         st["cut_order_cut_week"] = cut_week
         pr = st.setdefault("pr_cjam", {})
         for cur, chz in prcjam_cheese.items():

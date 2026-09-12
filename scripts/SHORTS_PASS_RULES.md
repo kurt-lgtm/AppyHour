@@ -110,3 +110,26 @@ Eligibility reuses `InventoryReorder/fulfillment_web/shopify_swap.py::find_swap_
 
 Non-goals: single ad-hoc swaps (use `/swap`), paid-item swaps, Recharge-side charge edits,
 tray cohorts (TR- never in Tuesday cohorts).
+
+13. **UNTAGGED mode (`__UNTAGGED__` as the ship_tag positional) — Kurt 2026-09-09.**
+    Selects open unfulfilled orders that carry NO `_SHIP_\d{4}-\d{2}-\d{2}` tag, i.e. orders
+    not yet assigned to a cohort. Motivating case: on 2026-09-09 only **3** units of
+    AC-WASP/MT-IBRES/AC-RBOL sat on `_SHIP_2026-09-14` while **64 units across 58 orders**
+    were untagged and therefore unreachable — and Kurt's constraint was explicit: *"untagged
+    58 - DO NOT TAG. just swap them"*, so tagging-then-sweeping is NOT the fix.
+    🔴 There is no server-side "absent tag" filter, so this mode drops the `tag` pre-filter and
+    paginates EVERY open unfulfilled order — slower, and it will touch orders from any week.
+    Every other guard is unchanged (login-OR-customize, `_rc_bundle`/paid, per-order cap,
+    PR-box, balance invariant, verify). The absent-SKU refusal (#12) still applies against the
+    untagged population, not a cohort.
+
+14. **UNTAGGED mode verifies PER PLANNED ORDER, never by population re-count (2026-09-09 burn).**
+    The population re-count (#2) assumes a STABLE set — true for `_SHIP_<date>`, false for
+    `__UNTAGGED__`: an order that gains a ship tag or gets fulfilled between the pre-count and
+    the post-fetch silently leaves the set, carrying its SKU counts out with it. First untagged
+    run reported 3 MISMATCHes (MT-SBRES 3→1, AC-RBOL 0→1, AC-FCEVOO 90→89) while every one of
+    the 64 orders had in fact swapped correctly — checked live on #166151, #135622, #125552.
+    🔴 A false MISMATCH is as costly as a missed one: it trains the operator to ignore the
+    verify gate, which is the only success authority in this tool. So untagged mode re-fetches
+    and asserts, per planned ORDER, that `old_sku` is no longer fulfillable on it; an order that
+    left the set is reported by name as unverified rather than silently changing a total.
