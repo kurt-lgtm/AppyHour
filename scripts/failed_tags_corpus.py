@@ -116,9 +116,15 @@ def parse(path: Path) -> list[dict]:
 
 def classify(rows: list[dict]) -> tuple[list[dict], list[dict]]:
     """Replay each rejected row through the coverage authority. -> (reproduced, missed)."""
+    # HUB_CODE is canon -> the pinned package (ShipRouting plan R-35, CANON_PACKAGE_RULES.md §4).
+    from shiprouting_canon.hubs import HUB_CODE
+
+    # 🔴 REMAINING SIBLING REACH (R-35 report, CANON_PACKAGE_RULES.md §5): CARRIER_HUBS is the
+    # config-overlaid legality table and load_ontrac reads the coverage file — neither is canon, so
+    # the package cannot carry them. They need the DO coverage table / a console serviceability
+    # endpoint; until that seam exists this insert stays and R-34's guard names this line.
     sys.path.insert(0, str(SHIPROUTING))
     from lib.features import CARRIER_HUBS
-    from lib.hubs import HUB_CODE
     from lib.zip_loaders import load_ontrac
 
     ontrac = load_ontrac()

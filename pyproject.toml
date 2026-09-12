@@ -13,6 +13,13 @@ dependencies = [
     "pyyaml>=6.0.3",
     "pydantic>=2.12.4",
     "tenacity>=9.0",
+    # ShipRouting's shared routing canon (hub roster, tag grammar, origin CITY_HUB, data-root
+    # resolvers) — a PINNED git sha, never a sys.path reach into the ShipRouting checkout
+    # (ShipRouting plan R-35, ShipRouting/CANON_PACKAGE_RULES.md §4). Bump the sha in its own
+    # commit after ShipRouting's commit is pushed; a sha that was never pushed is a broken install.
+    # 🔴 4bde92c is the sha in the R-35 worktree BEFORE rebase — it will change when the Routing
+    # coordinator lands the ShipRouting side; re-pin then.
+    "shiprouting-canon @ git+https://github.com/kurt-lgtm/ShipRouting@09a522b76acb786b4e189338d9c8b73a40569207#subdirectory=packages/shiprouting_canon",
 ]
 
 [project.optional-dependencies]
