@@ -357,6 +357,8 @@ def fetch_all_orders(base: str, hdr: dict, tag: str, live: bool = False) -> list
     Rule: a caller ASKING WHAT IS TRUE RIGHT NOW passes live=True. Only "orders-live" (any
     resource absent from CACHE_TTL) bypasses; there is no shorter way to say it.
     """
+    from appyhour_lib.routing_scope import is_gift_redemption_twin, report_dropped_gifts
+    dropped = []
     q = cohort_query(tag)
     res = "orders-live" if live else "default"
     cursor = None
@@ -366,6 +368,11 @@ def fetch_all_orders(base: str, hdr: dict, tag: str, live: bool = False) -> list
         edges = data["orders"]["edges"]
         for e in edges:
             n = e["node"]
+            # The matrix, build and prewarm share this exclusion. Do not spend deep-fetch
+            # calls or routing/quote work on a gift twin that never ships separately.
+            if is_gift_redemption_twin(n.get("name")):
+                dropped.append(n.get("name"))
+                continue
             if n["lineItems"]["pageInfo"]["hasNextPage"]:
                 # Deep paginate line items
                 extra = []
@@ -383,6 +390,7 @@ def fetch_all_orders(base: str, hdr: dict, tag: str, live: bool = False) -> list
         if not data["orders"]["pageInfo"]["hasNextPage"]:
             break
         cursor = data["orders"]["pageInfo"]["endCursor"]
+    report_dropped_gifts(dropped)
     return orders
 
 

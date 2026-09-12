@@ -48,6 +48,26 @@ _TRANSLATIONS = {
 }
 
 
+def test_a_suffix_is_dropped_before_numeric_gate_and_other_orders_continue(tmp_path, capsys):
+    orders = [_order("182723", {"CH-BLR": 1}), _order("182723A", {"CH-BLR": 9})]
+    with (
+        patch.object(mc, "_get_shopify_auth", return_value=("https://shop", {})),
+        patch.object(mc, "_fetch_orders_graphql", return_value=orders),
+        patch.object(mc, "load_mfg_translations", return_value=_TRANSLATIONS),
+        patch.object(mc, "validate_mfg_names"),
+    ):
+        out = mc.generate_matrix_xlsx("TEST", ship_date="2026-09-14", output_dir=str(tmp_path))
+    parsed, _, _ = mc.parse_matrix(out)
+    assert [str(order.order_id) for order in parsed] == ["182723"]
+    assert mc.check_numeric_order_ids(parsed).passed
+    wb = openpyxl.load_workbook(out, data_only=True)
+    ws = wb.active
+    headers = [c.value for c in ws[1]]
+    assert ws.cell(2, headers.index(_TRANSLATIONS["CH-BLR"]) + 1).value == 1
+    wb.close()
+    assert "Dropped gift redemption: 182723A" in capsys.readouterr().out
+
+
 def _generate(tmp_path, orders):
     with (
         patch.object(mc, "_get_shopify_auth", return_value=("https://shop", {})),
