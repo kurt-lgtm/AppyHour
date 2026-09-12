@@ -64,11 +64,6 @@ KNOWN_IO_HELPERS = {
 # Each entry needs a reason and must still trip the scanner (hygiene test). The two 09-03 offenders
 # are NOT here — they are fixed (R-25) and guarded by the two named tests below.
 ALLOWED: dict[str, str] = {
-    "InventoryReorder/fulfillment_web/_check_demand.py":
-        "leading-underscore run-once probe (module-level requests.post at :9), never imported; "
-        "fulfillment_web is the Fulfillment and Order Tool session's surface (spec: leave alone) — "
-        "found by R-13 2026-09-11, reported, not fixed here; that session moves it into main() or "
-        "out of the app tree, then drops this row",
 }
 # Files whose offence is a strict xfail below (excluded from the repo-wide assertion so the xfail is
 # the ONE place that names them; drop the row when the xfail comes off). Empty since R-25.
