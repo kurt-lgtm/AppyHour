@@ -86,6 +86,44 @@ to bypass moves AWAY from this even if every test still passes.
     trigger-driven and can fire at any logon. It is covered by the PROCESS scan, not the
     schedule scan. Do not conclude a blank next-run means the task is dead.
 
+14. **🔴 NEVER decode the process enumeration with `text=True` — and an EMPTY result is a
+    FAILURE, not "no colliders" (2026-09-12).** `_live_bypassing_writers` shelled out to
+    PowerShell with `capture_output=True, text=True`. Python then decodes with the ANSI
+    codepage (cp1252 here), and **one** process whose command line carries a byte cp1252 cannot
+    map — measured live: `0x8f` at position 139,321 — raises `UnicodeDecodeError` and destroys
+    the **entire** enumeration. Not that one process: all of them. `.stdout` came back `None`,
+    and the next line called `.splitlines()` on it, so the guard died with
+    `AttributeError: 'NoneType' object has no attribute 'splitlines'`.
+
+    Three separate defects, each worth naming:
+    - **A guard that CRASHES is worse than one that refuses.** A traceback reads as "the tool is
+      broken", and the obvious next move is to bypass it. A refusal reads as "the answer is
+      unknown", which is the truth and stops the write.
+    - **This is a SILENT-DEGRADE instance in the guard itself.** The axis that covers the
+      **25 of 33 writers on raw `sqlite3.connect`** — the ones the advisory lock structurally
+      cannot see — had been returning nothing on this machine. It surfaced only because a
+      `shipments.acct` repair happened to call it; no test caught it, because the tests stub the
+      subprocess.
+    - **An empty process list can never mean "quiet".** This machine always has running
+      processes, so empty output means the enumeration FAILED (PowerShell absent, a sandbox
+      blocking `Win32_Process`, a nonzero exit). It now fails CLOSED with the return code and
+      first stderr line, same doctrine as the exception branch.
+
+    Fix: ask PowerShell for UTF-8 (`[Console]::OutputEncoding`), capture BYTES, and decode
+    `utf-8` with `errors="replace"` ourselves. A mangled character in one command line must
+    never cost the other 400 rows. Workspace rule this violated: *"Write files with explicit
+    UTF-8. cp1252 default breaks on Unicode."*
+
+15. **🔴 The 12 live `AppyHourMCP\server.py` hits are TRUE POSITIVES, not noise.** They write via
+    raw `sqlite3.connect` **per batch**, so they hold the advisory lock for a fraction of their
+    run and `check_lockfile` waves them through — which is exactly why the process axis exists
+    and why an entry is never removed just because a writer "migrated to `db.connect()`".
+    A free write lock and a 0-byte `-wal` prove only that nothing is writing *this instant*, not
+    that nothing will write a second from now. 🔴 Do not pattern-match this refusal as a false
+    positive and reach for `--force-writer`: the sanctioned path is to stop the MCP servers, or
+    to name every collider deliberately. Standing rule it enforces: *agents stay READ-ONLY;
+    manual writers run only when the MCP servers aren't mid-sync.*
+
 ## What it is
 
 `appyhour_lib/write_preflight.py`. Five axes, ALL required — each covers writers the others

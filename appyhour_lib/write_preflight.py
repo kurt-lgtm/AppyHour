@@ -461,14 +461,41 @@ def _pending_edits(files) -> tuple:
 
 def _live_bypassing_writers() -> list:
     """The check that actually covers the raw-connect writers the advisory lock cannot see."""
+    # 🔴 2026-09-12: this read `.stdout` straight off `subprocess.run(...)` and then called
+    # `.splitlines()` on it. When the child produces no captured stdout the attribute is None, so
+    # the guard died with `AttributeError: 'NoneType' object has no attribute 'splitlines'` INSTEAD
+    # of refusing — a probe that crashes is strictly worse than one that says it could not run,
+    # because the traceback reads as "the tool is broken" rather than "the answer is unknown", and
+    # the obvious next move is to bypass it. Hit live while repairing `shipments.acct`.
+    #
+    # 🔴 AN EMPTY PROCESS LIST IS NOT "NO COLLIDERS". This machine always has running processes, so
+    # empty output means the enumeration FAILED (no PowerShell on PATH, a sandbox that blocks
+    # Win32_Process, a nonzero exit). Treating it as quiet would silently disable the one axis that
+    # covers the 25-of-33 writers on raw `sqlite3.connect` — the axis the advisory lock cannot see.
+    # Fail CLOSED, same doctrine as the exception branch.
+    # 🔴 NEVER `text=True` HERE. Python decodes with the ANSI codepage (cp1252 on this machine) and
+    # ONE process whose command line carries a byte cp1252 has no mapping for — 0x8f, measured live
+    # 2026-09-12 at position 139,321 — raises UnicodeDecodeError and destroys the ENTIRE
+    # enumeration. Not that process: all of them. So the axis that covers the raw-connect writers
+    # has been silently returning nothing on this machine, and the failure surfaced only as a
+    # `None.splitlines()` crash three layers up. Decode bytes ourselves, replacing what we cannot
+    # map: a mangled character in one command line must never cost us the other 400 rows.
+    # (Workspace rule: "Write files with explicit UTF-8. cp1252 default breaks on Unicode.")
     try:
-        out = subprocess.run(
+        proc = subprocess.run(
             ["powershell.exe", "-NoProfile", "-Command",
+             "[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
              "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine } | "
              "ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }"],
-            capture_output=True, text=True, timeout=60).stdout
-    except Exception:  # noqa: BLE001
-        return ["(could not enumerate processes — refusing rather than assuming quiet)"]
+            capture_output=True, timeout=60)
+    except Exception as e:  # noqa: BLE001
+        return [f"(could not enumerate processes — refusing rather than assuming quiet: "
+                f"{type(e).__name__})"]
+    out = (proc.stdout or b"").decode("utf-8", errors="replace")
+    if proc.returncode != 0 or not out.strip():
+        err = (proc.stderr or b"").decode("utf-8", errors="replace").strip().splitlines()
+        return [f"(process enumeration returned nothing — rc={proc.returncode}; refusing rather "
+                f"than assuming quiet{': ' + err[0][:120] if err else ''})"]
     me, found = str(os.getpid()), []
     for line in out.splitlines():
         if "\t" not in line:
