@@ -55,9 +55,12 @@ def test_a_suffix_is_dropped_before_numeric_gate_and_other_orders_continue(tmp_p
         patch.object(mc, "_fetch_orders_graphql", return_value=orders),
         patch.object(mc, "load_mfg_translations", return_value=_TRANSLATIONS),
         patch.object(mc, "validate_mfg_names"),
+        # parse_matrix resolves names through the DB authority (rule 21); creds-free tests bind
+        # the local mirror as the explicit override, the same seam `--authority` uses.
+        patch.object(mc, "MFG_AUTHORITY_OVERRIDE", mc.MFG_AUTHORITATIVE_PATH),
     ):
         out = mc.generate_matrix_xlsx("TEST", ship_date="2026-09-14", output_dir=str(tmp_path))
-    parsed, _, _ = mc.parse_matrix(out)
+        parsed, _, _ = mc.parse_matrix(out)
     assert [str(order.order_id) for order in parsed] == ["182723"]
     assert mc.check_numeric_order_ids(parsed).passed
     wb = openpyxl.load_workbook(out, data_only=True)
