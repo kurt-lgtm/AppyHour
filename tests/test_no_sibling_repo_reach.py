@@ -97,8 +97,8 @@ KNOWN_REACHES = [
     ("GelPackCalculator/seventeentrack_tracking.py", 28, "R-35 ROUTING: from lib.origin import ... (enabled by :26)"),
     # found by the AST scan, not in the gate report (same class)
     ("scripts/automation_health.py", 1367, "R-35 (unassigned — Forge to seat): WORKSPACE_ROOT / 'ShipRouting' rglob of the sibling's scripts"),
-    ("scripts/failed_tags_corpus.py", 48, "R-35 ROUTING: WS / 'ShipRouting' -> lib.features/hubs/zip_loaders"),
-    ("scripts/failed_tags_corpus.py", 120, "R-35 ROUTING: from lib.features import ... (enabled by :48)"),
+    ("scripts/failed_tags_corpus.py", 48, "R-35 ROUTING: WS / 'ShipRouting' -> lib.features/zip_loaders (HUB_CODE now from shiprouting_canon)"),
+    ("scripts/failed_tags_corpus.py", 127, "R-35 ROUTING: from lib.features import ... (enabled by :48)"),
     ("scripts/repair_cloud_fulfillments.py", 255, "R-35 DATA CLOUD: WORKSPACE / 'ShipRouting' (etl_history subprocess)"),
     ("scripts/restore_check.py", 58, "R-35 (unassigned — Forge to seat): asserts ShipRouting/ sits BESIDE AppyHour/ — the layout the reorg retires"),
 ]
