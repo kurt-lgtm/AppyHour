@@ -29,6 +29,13 @@ runs, received/production counts, Product Inventory batch sheets, expiry triage,
 That stays with **Inventory Coordinator** (`AppyHour/INVENTORY_COORDINATOR.md`). This role
 CONSUMES HAVE; it never produces it. Routing / vF / ice → Routing Coordinator.
 
+**ONE TEAM — "Inventory team" (Kurt 2026-09-12 addendum):** Generate Cut Order + Fulfillment and
+Order Tool + Inventory Coordinator are one team. Shared plan rows in the reorg plan, shared AppyHour
+push windows (rebase over each other, never force), and the seams **HAVE ↔ cuts ↔ assignments** are
+coordinated DIRECTLY between the three (coord row by title, then message) — not routed through the
+Routing Coordinator. A HAVE change (Inventory) that moves a cut (this role) that moves an assignment
+cap (planner) is one conversation, not three.
+
 **Merge shape** is being coordinated with Fulfillment and Order Tool (their doc keeps the AdminApp
 side: vendor repo boundary, local-only unified tool, `main` = production gate). Until the two docs
 are folded into one, each session keeps its own doc and neither edits the other's.
