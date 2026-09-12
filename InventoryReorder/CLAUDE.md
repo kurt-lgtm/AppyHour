@@ -20,6 +20,38 @@ Demand forecasting + cut order generation + fulfillment web dashboard. Single-fi
 | LTF / weeks-of-cover viz | `feedback_ltf_weeks_of_cover_viz.md` AAAK | rest | Want per-week cell coloring on BY-INGREDIENT table (not just bottom ALERTS) |
 | XLSX recalc | `feedback_xlsx_recalc_pattern.md` AAAK | rest | win32com Excel COM (Windows); NEVER recalc.py (Linux-only); no emoji prints |
 
+## Ship-week timing and inventory closeout (Kurt confirmed 2026-09-10)
+
+- `_SHIP_YYYY-MM-DD` names the Monday BETWEEN the two fulfillment waves, not the first fulfillment date.
+  For `_SHIP_2026-09-14`: first fulfillment is Friday 2026-09-11; drift-in intake closes Monday
+  2026-09-14 at 11:59 p.m.; final fulfillment is Tuesday 2026-09-15 at 7 a.m.
+- Recharge's charge-week window is Sunday through Saturday. Kurt confirms everything is billed
+  around **2 a.m. Saturday**. This is an approximate operational billing time, not a replacement for
+  the Saturday date boundary or proof that every charge succeeded. Use actual charge/order state.
+- After the Saturday billing run, normal weekend/Monday drift-in for Tuesday is **subscription first
+  orders only**. Customer-service-requested exceptions can also enter; do not project another normal
+  recurring Recharge intake after Saturday. First-order intake ends Monday at 11:59 p.m.
+- Tuesday is the LAST ship day of that tagged week. After Friday's VF, the seasonal inventory sheet
+  may label the remaining wave `TUESDAY <ship week>` (for example `TUESDAY 09/14`). After Tuesday's final
+  VF, reconcile any remaining orders as moved, cancelled, or unresolved; do not invent another wave.
+- Shopify ship-week membership follows the actual ship tags, including rescheduled orders and CS
+  exceptions. Recharge's Sunday-Saturday billing dates map to their served ship week using the
+  existing cut-order logic. Do not apply Shopify's Monday intake cutoff to Recharge's charge window.
+- For the seasonal inventory automation, a VF emailed to RMFG is authoritative for depletion
+  immediately. Remove the same orders from outstanding demand when decrementing inventory, so they
+  are not deducted twice. A corrected VF replaces the earlier depletion; keep reconciliation state
+  internally, without a visible adjustment-history tab. A supplied post-depletion HAVE must not be
+  reduced by that VF again. Subcohorts are internal reconciliation context, not separate sheet columns.
+- First-order SS/MONG default demand needs a separate projection based on historical weekly volume,
+  medium/large mix, and the share retaining defaults. Actual orders replace their forecast allowance.
+  `BOX_CUSTOMIZED_POST_CHECKOUT` means customized; `CUSTOMIZE_REMINDER_SENT` alone does not.
+  MCUST/LCUST denote assortment size, NOT shipping-box dimensions: large adds one cheese and one meat.
+
+These are user-confirmed operating rules. This documentation update does not change the generator
+or deploy the seasonal inventory automation. Clock timezone was not explicitly confirmed in this
+discussion; verify the operational timezone before configuring timed jobs rather than inferring it
+from the local computer.
+
 ## Critical
 
 - **CH-MAFT never assigned** (ASSIGNMENT_EXCLUDE)
