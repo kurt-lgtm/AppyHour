@@ -23,7 +23,7 @@ from .check7 import (
     MINI_JAMS,
     NO_SUBSTITUTE,
     REPEAT_EXEMPT,
-    RESERVE_FLOOR,
+    reserve_floor,
     build_cracker_set,
     load_have,
     sheet_demand,
@@ -54,7 +54,7 @@ def candidate_pool(demand, have, crackers, first_seen, want_type, exclude=()):
 
 
 def build(orders, sheet, targets, con=None, respect_customized=True, verbose=True,
-          have_path=None):
+          have_path=None, reserve=None):
     """targets: {sku_out: (why, units_to_remove)} -> list of swap rows.
 
     have_path: this week's declared HAVE export -- REQUIRED (load_have fails loud
@@ -65,6 +65,9 @@ def build(orders, sheet, targets, con=None, respect_customized=True, verbose=Tru
     """
     close = con is None
     con = con or sqlite3.connect(DB)
+    floor, floor_src = reserve_floor(reserve)          # Plan: R-28 -- one operator setting
+    if verbose:
+        print(f"  reserve floor: {floor} units left per SKU (source: {floor_src})")
     have, demand = load_have(have_path), sheet_demand(sheet)
     crackers = build_cracker_set(orders)
     first_seen = sku_first_seen(con)
@@ -99,7 +102,7 @@ def build(orders, sheet, targets, con=None, respect_customized=True, verbose=Tru
             gid = (o.get("customer") or {}).get("id")
             ever = ever_received(con, gid, pool) if gid else set()
             cand = next((s for s in pool if s not in box and s not in ever
-                         and remaining.get(s, 0) > RESERVE_FLOOR), None)
+                         and remaining.get(s, 0) > floor), None)
             if not cand:
                 notes[f"{sku_out}: no eligible substitute"] += 1
                 continue

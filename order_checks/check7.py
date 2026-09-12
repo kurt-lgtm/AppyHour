@@ -78,12 +78,35 @@ REPEAT_EXEMPT = MINI_JAMS | CURATION_FIXED
 #     DRAW_DOWN; emptying DRAW_DOWN on 2026-09-01 would have silently made it eligible as
 #     a substitute again. Kurt removed it as a swap TARGET (stop swapping OUT of it), which
 #     is not the same as clearing it to be swapped IN -- availability is not permission.
-#     31 on hand against a RESERVE_FLOOR of 20 leaves 11 usable anyway.
+#     31 on hand against the then-floor of 20 left 11 usable anyway.
 NO_SUBSTITUTE = {"AC-RMC", "MT-IBRES", "MT-BSS", "CH-MAFT", "AC-RBOL", "AC-BLUCAR"}
 # Never allocate a substitute below this many units remaining. Kurt 2026-08-28:
 # "don't zero out blucar ... get it to 20 have left" -- a swap plan that drains a SKU
 # to nothing leaves nothing for next week's cut or a short.
-RESERVE_FLOOR = 20
+# 🔴 NOT a code constant (Kurt 2026-09-12, Plan: R-28: "30 but I should set it"). ONE
+# operator setting shared by this checker and the AdminApp planner: key `reserve_floor`
+# in the cut order's own settings JSON (inventory_settings_path), default 30 when the
+# key is absent, per-run override via --reserve-floor. Every output states the value
+# in effect AND where it came from, so a 20-vs-30 disagreement is never silent.
+RESERVE_FLOOR_KEY = "reserve_floor"
+RESERVE_FLOOR_DEFAULT = 30
+
+
+def reserve_floor(override=None):
+    """-> (floor, source). source is 'cli' | 'settings' | 'default'."""
+    if override is not None:
+        return int(override), "cli"
+    from appyhour_lib.paths import inventory_settings_path
+    try:
+        with open(inventory_settings_path(), encoding="utf-8") as fh:
+            v = json.load(fh).get(RESERVE_FLOOR_KEY)
+    except FileNotFoundError:
+        v = None
+    if v is None:
+        return RESERVE_FLOOR_DEFAULT, "default"
+    return int(v), "settings"
+
+
 # SKUs that must be DRAWN DOWN to the floor rather than merely capped -- the run
 # already commits more than HAVE, so units have to come OUT of boxes. Kurt 2026-08-28:
 # "KEEP BLUCAR TO 20 HAVE" -- AC-BLUCAR is 67 have against 68 committed, so 21 units
@@ -325,8 +348,13 @@ def sheet_demand(sheet):
     return tot
 
 
-def run(orders, con, verbose=True, sheet=None, have_path=None, tag=None, have_is_available=False):
-    """-> (repeats, saturation, per_sku, swaps)."""
+def run(orders, con, verbose=True, sheet=None, have_path=None, tag=None, have_is_available=False,
+        reserve=None):
+    """-> (repeats, saturation, per_sku, swaps).
+
+    reserve: per-run reserve-floor override (Plan: R-28); None = settings JSON / default 30.
+    """
+    floor, floor_src = reserve_floor(reserve)
     first_seen = sku_first_seen(con)
     # candidate pool = free child SKUs circulating in this run
     in_run = collections.Counter()
@@ -425,8 +453,10 @@ def run(orders, con, verbose=True, sheet=None, have_path=None, tag=None, have_is
 
     swaps = build_swaps(repeats, orders, con, in_run, first_seen,
                         *swapped_today(), have=load_have(have_path, tag),
-                        crackers=build_cracker_set(orders), committed=committed)
+                        crackers=build_cracker_set(orders), committed=committed,
+                        floor=floor)
     if verbose:
+        print(f"  reserve floor: {floor} units left per SKU (source: {floor_src})")
         print(f"  eligible orders: {n_scope}   flagged: {len(repeats)}")
         for k, v in skipped.most_common():
             print(f"    excluded {v:>5}  {k}")
@@ -435,7 +465,7 @@ def run(orders, con, verbose=True, sheet=None, have_path=None, tag=None, have_is
 
 def build_swaps(repeats, orders, con, in_run, first_seen,
                 done_orders=frozenset(), done_skus=None, have=None,
-                crackers=frozenset(), committed=None):
+                crackers=frozenset(), committed=None, floor=RESERVE_FLOOR_DEFAULT):
     """One row per repeated SKU: Order ID, SKU to Swap, Proposed Swap."""
     have = have or {}
     done_skus = done_skus or {}
@@ -486,8 +516,8 @@ def build_swaps(repeats, orders, con, in_run, first_seen,
                     tried.append(f"{cd}:customer had it")
                 elif cd in used:
                     tried.append(f"{cd}:already in this box")
-                elif remaining.get(cd, 0) <= RESERVE_FLOOR:
-                    tried.append(f"{cd}:at the {RESERVE_FLOOR}-unit floor"
+                elif remaining.get(cd, 0) <= floor:
+                    tried.append(f"{cd}:at the {floor}-unit floor"
                                  f" ({have.get(cd, 0)} have,"
                                  f" {committed.get(cd, 0)} committed)")
                 else:
@@ -513,6 +543,7 @@ def main(argv=None):
                     help="this week's declared HAVE export (.csv/.xlsx) -- no fallback")
     ap.add_argument("--cache")
     ap.add_argument("--out", default=".")
+    ap.add_argument("--reserve-floor", type=int, metavar="N", help="per-run reserve floor override (default: settings 'reserve_floor', else 30)")
     a = ap.parse_args(argv)
 
     sheet = sheetmod.load_sheet(a.sheet)
@@ -520,7 +551,7 @@ def main(argv=None):
     sheetmod.resolve_columns(sheet, orders)
     con = sqlite3.connect(DB)
     repeats, sat, per_sku, clears, swaps, _ = run(orders, con, sheet=sheet,
-                                                  have_path=a.have)
+                                                  have_path=a.have, reserve=a.reserve_floor)
 
     tier3 = [r for r in repeats if r["n_repeats"] >= 3]
     tierh = [r for r in repeats if r["box_size"] and r["n_repeats"] / r["box_size"] >= 0.5]

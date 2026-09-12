@@ -280,8 +280,14 @@ guard alone held back 1,129 orders. Do not "fix" ours toward his.
   customer's history, so a high-volume SKU is a fine substitute (Daniel 2026-08-18).
 - **Rank by HEADROOM, then recency.** Newest-first buried `AC-BRJA` (2,284 on hand, 60
   committed) behind newer SKUs and poured one new item across the whole run.
-- **`RESERVE_FLOOR = 20`** — never allocate a SKU below 20 left. *"don't zero out blucar …
-  get it to 20 have left."*
+- **Reserve floor is ONE operator SETTING, never a code constant** (Kurt 2026-09-12, Plan:
+  R-28: *"30 but I should set it"*). `check7.reserve_floor()` reads key `reserve_floor` from
+  the cut order's own `inventory_reorder_settings.json` (`inventory_settings_path()`), default
+  **30** when the key is absent; `--reserve-floor N` on `check7` / `run_all` overrides it for
+  one run. 🔴 Every run PRINTS the value in effect and its source (`cli` / `settings` /
+  `default`) — the AdminApp planner (R-27) reads the same key, so a 20-vs-30 disagreement
+  between the two must be visible, never silent. Origin: *"don't zero out blucar … get it to
+  20 have left"* (2026-08-28, when it was a hardcoded 20).
 - **Mini jams are barred as substitutes** — *"its not enough."* `AC-MFJ` is one by name and
   was missing from Dan's set, which is why the first bar still let 107 rows through.
 - **Barred outright**, availability is not permission: `AC-RMC` (*"I have 600, but don't use

@@ -151,6 +151,7 @@ def main(argv=None):
     ap.add_argument("--ruleset", default=DEFAULT_RULESET)
     ap.add_argument("--cache")
     ap.add_argument("--out", default=".")
+    ap.add_argument("--reserve-floor", type=int, metavar="N", help="per-run reserve floor override (default: settings 'reserve_floor', else 30)")
     ap.add_argument("--max-per-order", type=int, default=2,
                     help="cap across the COMBINED list; passes stack (#176908 hit 3)")
     a = ap.parse_args(argv)
@@ -261,7 +262,8 @@ def main(argv=None):
     print("\n-- check 7 repeats --")
     repeats, sat, per_sku, clears, swap_rows, _ = check7_run(orders, con, sheet=sheet,
                                                              have_path=a.have, tag=a.tag,
-                                                             have_is_available=a.have_is_available)
+                                                             have_is_available=a.have_is_available,
+                                                             reserve=a.reserve_floor)
     print(f"    flagged {len(repeats)}   swap candidates {len(swap_rows)}")
 
     kept, per = [], collections.Counter()
