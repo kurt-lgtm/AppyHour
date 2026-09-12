@@ -8,7 +8,9 @@ import os
 import sys
 
 # Use the project's google_integration module
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "GelPackCalculator"))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from appyhour_lib.paths import gelpack_root  # noqa: E402
+sys.path.insert(0, str(gelpack_root()))  # sibling repo since 2026-09-12 (R-35)
 
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor

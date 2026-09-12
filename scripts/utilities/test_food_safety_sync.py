@@ -4,7 +4,9 @@ import json
 import re
 
 sys.path.insert(0, "AppyHourMCP/tools")
-sys.path.insert(0, "../GelPackCalculator")
+sys.path.insert(0, ".")
+from appyhour_lib.paths import gelpack_root  # noqa: E402
+sys.path.insert(0, str(gelpack_root()))  # sibling repo since 2026-09-12 (R-35)
 
 from gorgias_sheets_sync import sync_food_safety_to_sheet
 

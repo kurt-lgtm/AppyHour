@@ -2,11 +2,15 @@
 
 Reads force_2day zips from GelPack settings, checks for conflicts, applies tags.
 """
-import json, os, time, re, requests
+import json, os, sys, time, re, requests
 from datetime import datetime, timedelta
+from pathlib import Path as _Path
+
+sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+from appyhour_lib.paths import gelpack_root  # noqa: E402
 
 SETTINGS = r"C:\Users\Work\Claude Projects\AppyHour\InventoryReorder\dist\inventory_reorder_settings.json"
-GELCALC_SETTINGS = r"C:\Users\Work\Claude Projects\AppyHour\GelPackCalculator\gel_calc_shopify_settings.json"
+GELCALC_SETTINGS = str(gelpack_root() / "gel_calc_shopify_settings.json")   # sibling repo since 2026-09-12 (R-35)
 
 with open(SETTINGS) as f:
     settings = json.load(f)

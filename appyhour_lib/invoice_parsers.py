@@ -3,7 +3,9 @@
 🔴 Constraints SSOT: `ShipRouting/INVOICE_INGEST_RULES.md` §5.2 / §5.3 — read it before changing
 anything here. Every consumer imports THIS module:
 
-  - local Kori/sync path   → `GelPackCalculator/shipping_invoice_db.py` (re-exports these names)
+  - local Kori/sync path   → `GelPackCalculator/shipping_invoice_db.py` (re-exports these names;
+                             sibling repo at `Claude Projects/GelPackCalculator` since 2026-09-12 —
+                             `appyhour_lib.paths.gelpack_root()`)
   - local ingest scanner   → `GelPackCalculator/auto_import.py` (via shipping_invoice_db)
   - cloud ingest-worker    → `ShipRouting/server/sync_invoices.py` (via the vendored
                              `server/shipping_invoice_db.py`, which also re-exports these names)

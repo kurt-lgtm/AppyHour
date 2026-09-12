@@ -126,6 +126,25 @@ fixture set. If you change one resolver, that test must be the thing that tells 
 
 ---
 
+### N9. 🔴 Never map GelPackCalculator through this tool (2026-09-12, plan R-35 phase 1)
+
+`GelPackCalculator/` is its own git repo (kurt-lgtm/GelPackCalculator). Until 2026-09-12 it sat
+NESTED inside the dev tree (gitignored, `.gitignore:46`) and `--only "GelPackCalculator/*"` copied it
+into `C:\AppyHourProd\AppyHour\GelPackCalculator`, where 7 scheduled tasks run it (`run_carrier_sync.bat`,
+`daily_shipping_sync.py` ×4, `sync_logon.py` ×2). The dev checkout now lives at
+`Claude Projects/GelPackCalculator/` (resolved everywhere via `appyhour_lib.paths.gelpack_root()`), so
+`classify()` — which walks the DEV tree — simply no longer sees it. Silence is the failure: a scoped
+deploy that matches nothing would print "clean" and the operator would believe GelPackCalculator shipped.
+
+- Any `--only` pattern naming `GelPackCalculator` is **REFUSED, exit 2**, with the Phase-2 pointer.
+  No override — same shape as N6.
+- **Phase 2 (Kurt-gated):** re-home prod to `C:\AppyHourProd\GelPackCalculator` + retarget the 7 tasks
+  (admin, real profile). After that, GelPackCalculator deploys from its OWN repo (its own deploy step,
+  not this file); until then the prod copy is frozen at whatever the last nested deploy shipped, and
+  `gelpack_root()` in prod resolves the LEGACY nested dir with a DeprecationWarning on stderr.
+- `check_prod_parity` (automation_health rule 9b) still walks the prod tree, so a stale nested prod
+  copy keeps showing up there as drift — that is the intended signal, not something to silence.
+
 ## What it checks, precisely
 
 | Kind | Blocking | Meaning |

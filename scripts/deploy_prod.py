@@ -46,7 +46,11 @@ Guardrails (NEGATIVES first):
 
 Run:  python scripts/deploy_prod.py            # dry-run (exit 1 if drift, 0 if clean)
       python scripts/deploy_prod.py --apply    # Kurt's call — live tree for schtasks
-      python scripts/deploy_prod.py --only "GelPackCalculator/*" --apply   # scoped
+      python scripts/deploy_prod.py --only "scripts/automation_health.py" --apply   # scoped
+  🔴 `--only "GelPackCalculator/*"` is REFUSED (exit 2) since 2026-09-12: GelPackCalculator moved out of
+  this tree (Claude Projects/GelPackCalculator, plan R-35 phase 1). Prod still runs the nested copy
+  under C:/AppyHourProd/AppyHour/GelPackCalculator until Phase 2 (Kurt-gated) — see
+  DEPLOY_PROD_RULES.md "GelPackCalculator".
 """
 from __future__ import annotations
 
@@ -700,7 +704,7 @@ def main(argv: list[str]) -> int:
                     help="with --apply, also copy dev-only files missing from prod")
     ap.add_argument("--only", action="append", default=[], metavar="GLOB",
                     help="restrict report AND copy set to paths matching this glob "
-                         "(repeatable, e.g. --only 'GelPackCalculator/*'). Skipped drift is "
+                         "(repeatable, e.g. --only 'scripts/*'). Skipped drift is "
                          "still listed — scoping is never silent.")
     ap.add_argument("--no-preflight", action="store_true",
                     help="dry-run only: skip the import preflight report. 🔴 Has NO effect on "
@@ -712,8 +716,16 @@ def main(argv: list[str]) -> int:
     if not args.dev_root.exists() or not args.prod_root.exists():
         print(f"root missing: dev={args.dev_root} prod={args.prod_root}")
         return 2
-    c = classify(args.dev_root, args.prod_root)
     patterns = tuple(args.only)
+    if any("gelpackcalculator" in p.lower() for p in patterns):
+        print("REFUSED: GelPackCalculator is no longer inside the AppyHour dev tree (moved to "
+              "Claude Projects/GelPackCalculator on 2026-09-12, plan R-35 phase 1), so this deploy "
+              "cannot map it. Prod still runs the NESTED copy under "
+              r"C:\AppyHourProd\AppyHour\GelPackCalculator (7 scheduled tasks) until Phase 2 "
+              "(Kurt-gated: re-home prod + retarget the tasks). GelPackCalculator deploys from its own "
+              "repo after Phase 2. See DEPLOY_PROD_RULES.md 'GelPackCalculator'.")
+        return 2
+    c = classify(args.dev_root, args.prod_root)
     c, skipped = scope(c, patterns)
     if patterns:
         print(f"SCOPED to {list(patterns)}")

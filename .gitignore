@@ -42,8 +42,9 @@ backups/
 image 1.svg
 stock-vector-*
 
-# Nested git repos
-GelPackCalculator/
+# GelPackCalculator/ was a nested (gitignored) checkout here until 2026-09-12 — it is now a top-level
+# sibling, Claude Projects/GelPackCalculator/ (plan R-35 phase 1; appyhour_lib.paths.gelpack_root()).
+# The prod copy stays nested under C:\AppyHourProd\AppyHour\ until Phase 2 (Kurt-gated).
 
 # OS
 .DS_Store

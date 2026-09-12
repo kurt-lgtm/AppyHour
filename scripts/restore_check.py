@@ -53,8 +53,9 @@ def check_repos() -> list[tuple[str, str]]:
     projects = REPO_ROOT.parent
     rows = []
     rows.append((OK if (REPO_ROOT / "pyproject.toml").exists() else MISS, "AppyHour repo (this dir)"))
-    rows.append((OK if (REPO_ROOT / "GelPackCalculator").exists() else MISS,
-                 "GelPackCalculator/ INSIDE AppyHour/ (path-coupled)"))
+    rows.append((OK if (projects / "GelPackCalculator").exists() else MISS,
+                 "GelPackCalculator/ BESIDE AppyHour/ (own repo; sibling since 2026-09-12, R-35 — "
+                 "appyhour_lib.paths.gelpack_root())"))
     rows.append((OK if (projects / "ShipRouting").exists() else MISS,
                  "ShipRouting/ side-by-side with AppyHour/"))
     return rows

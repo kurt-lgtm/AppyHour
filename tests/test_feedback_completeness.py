@@ -294,7 +294,8 @@ def test_normalizer_writes_iso_and_never_guesses():
 
 def _store_feedback_value(col_value):
     """Run a Kori-shaped entry dict through the GelPackCalculator writer's value extractor."""
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "GelPackCalculator"))
+    from appyhour_lib.paths import gelpack_root
+    sys.path.insert(0, str(gelpack_root()))
     import shipping_invoice_db as sidb
     return sidb._feedback_value({"date": col_value}, "date_reported")
 

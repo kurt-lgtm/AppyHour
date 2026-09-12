@@ -40,7 +40,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-__all__ = ["db_path", "db_dir", "appyhour_appdata", "data_root", "invoices_dir",
+__all__ = ["db_path", "db_dir", "appyhour_appdata", "data_root", "invoices_dir", "gelpack_root",
            "inventory_settings_path", "gel_calc_settings_path", "settings_path",
            "assert_canonical_db", "NonCanonicalDBPath",
            "GEL_CALC_SETTINGS_NAME", "INVENTORY_SETTINGS_NAME"]
@@ -382,20 +382,65 @@ def db_path() -> Path:
     return appyhour_appdata() / "shipping.db"
 
 
+# ── GelPackCalculator (Kori) repo root ───────────────────────────────────────────
+#
+# GelPackCalculator is its OWN git repo (kurt-lgtm/GelPackCalculator). Until 2026-09-12 it
+# was NESTED inside AppyHour/ (gitignored at .gitignore:46) and every consumer resolved it
+# as `<AppyHour>/GelPackCalculator`. Plan R-35 phase 1 moved the DEV checkout to a top-level
+# sibling, `Claude Projects/GelPackCalculator/`. The PROD copy (C:\AppyHourProd\AppyHour\
+# GelPackCalculator, 7 scheduled tasks) is still nested until Phase 2 (Kurt-gated), so the
+# legacy nested shape must keep resolving — LOUDLY, so nobody mistakes it for the end state.
+#
+# Resolution order (first that EXISTS wins):
+#   1. $GELPACK_ROOT                       — env override (tests, cloud, Phase-2 prod re-home)
+#   2. <this checkout's parent>/GelPackCalculator — the sibling shape (dev main checkout)
+#   3. <this checkout>/GelPackCalculator   — LEGACY nested shape (prod until Phase 2) + DeprecationWarning
+#   4. _WIN_GELPACK                        — the canonical dev path (worktrees, which have no sibling)
+# FACTS.yml `gelpack_root` reads _WIN_GELPACK; never rebuild this path elsewhere.
+_WIN_GELPACK = Path(r"C:\Users\Work\Claude Projects\GelPackCalculator")
+_GELPACK_DIRNAME = "GelPackCalculator"
+_legacy_gelpack_warned = False
+
+
+def gelpack_root() -> Path:
+    """Root of the GelPackCalculator (Kori) checkout — see the resolution order above.
+
+    Never raises: a missing checkout returns the canonical default so callers can
+    ``.is_dir()`` it and decide (invoices_dir falls back to %APPDATA%; test modules skip).
+    """
+    global _legacy_gelpack_warned
+    override = os.environ.get("GELPACK_ROOT", "").strip()
+    if override:
+        return Path(override)
+    repo = Path(__file__).resolve().parents[1]          # <checkout>/appyhour_lib/paths.py -> <checkout>
+    sibling = repo.parent / _GELPACK_DIRNAME
+    if sibling.is_dir():
+        return sibling
+    nested = repo / _GELPACK_DIRNAME
+    if nested.is_dir():
+        if not _legacy_gelpack_warned:
+            _legacy_gelpack_warned = True
+            msg = (f"gelpack_root(): resolved the LEGACY nested checkout {nested} — GelPackCalculator "
+                   f"moved to a top-level sibling on 2026-09-12 (plan R-35). This shape is only "
+                   f"expected in PROD until Phase 2 re-homes C:\\AppyHourProd\\GelPackCalculator; "
+                   f"set GELPACK_ROOT to silence.")
+            import warnings
+            warnings.warn(msg, DeprecationWarning, stacklevel=2)
+            print(f"WARNING: {msg}", file=sys.stderr)
+        return nested
+    return _WIN_GELPACK
+
+
 def invoices_dir() -> Path:
     """Carrier-invoice landing directory (where IMAP pullers + manual drops save).
 
-    Currently still at `GelPackCalculator/Invoices` for backwards-compat with
+    Currently still at `<gelpack_root()>/Invoices` for backwards-compat with
     OnTrac/Veho IMAP scripts. Migrate to %APPDATA%/AppyHour/Invoices in a
     later pass once all sources are agnostic.
     """
-    # PROJECT_DIR isn't stable across repos — anchor on a marker file instead.
-    # Walk up from this module looking for the AppyHour repo root.
-    here = Path(__file__).resolve()
-    for parent in [here, *here.parents]:
-        candidate = parent / "GelPackCalculator" / "Invoices"
-        if candidate.is_dir():
-            return candidate
+    candidate = gelpack_root() / "Invoices"
+    if candidate.is_dir():
+        return candidate
     # Fallback: APPDATA-relative
     p = appyhour_appdata() / "Invoices"
     p.mkdir(parents=True, exist_ok=True)

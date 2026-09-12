@@ -5530,8 +5530,7 @@ def shipping_sync_invoices():
         from email.header import decode_header
 
         try:
-            app_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            invoice_dir = os.path.join(app_root, "GelPackCalculator", "Invoices")
+            invoice_dir = _invoice_landing_dir()
             os.makedirs(invoice_dir, exist_ok=True)
             existing_files = set(os.listdir(invoice_dir))
 
@@ -5655,11 +5654,23 @@ def shipping_sync_progress():
     return jsonify(_ship_invoice_state)
 
 
+def _invoice_landing_dir() -> str:
+    """Carrier-invoice landing dir = appyhour_lib.paths.invoices_dir() (<gelpack_root()>/Invoices).
+
+    GelPackCalculator is a SIBLING repo since 2026-09-12 (R-35 phase 1) — the old
+    `<AppyHour>/GelPackCalculator/Invoices` join resolved to nothing after the move.
+    """
+    appyhour_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if appyhour_root not in sys.path:
+        sys.path.insert(0, appyhour_root)
+    from appyhour_lib.paths import invoices_dir
+    return str(invoices_dir())
+
+
 @app.route("/api/shipping/invoice-files")
 def shipping_invoice_files():
     """List downloaded shipping invoice files."""
-    app_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    invoice_dir = os.path.join(app_root, "GelPackCalculator", "Invoices")
+    invoice_dir = _invoice_landing_dir()
     if not os.path.isdir(invoice_dir):
         return jsonify({"files": [], "dir": invoice_dir})
 

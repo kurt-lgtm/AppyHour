@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,10 @@ import requests
 
 APPYHOUR_ROOT = Path(__file__).resolve().parent.parent
 SHIPPING_DIR = APPYHOUR_ROOT / "ShippingReports"
-GELCALC_DIR = APPYHOUR_ROOT / "GelPackCalculator"
+if str(APPYHOUR_ROOT) not in sys.path:
+    sys.path.insert(0, str(APPYHOUR_ROOT))
+from appyhour_lib.paths import gelpack_root as _gelpack_root  # noqa: E402
+GELCALC_DIR = _gelpack_root()   # sibling repo since 2026-09-12 (R-35) — env GELPACK_ROOT overrides
 SHOPIFY_API_VERSION = "2024-10"
 
 

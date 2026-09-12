@@ -2,7 +2,8 @@
 
 Per-run state for the logon/daily ingest legs (`carriers`, `fulfillments`, `auto_import`,
 `shopify_orders`, `post_ingest_backup`). Written by `GelPackCalculator/sync_logon.py` and
-`GelPackCalculator/pipeline_run.py`; read by `scripts/automation_health.check_sync_heartbeat`,
+`GelPackCalculator/pipeline_run.py` (sibling repo `Claude Projects/GelPackCalculator` since
+2026-09-12 — `appyhour_lib.paths.gelpack_root()`); read by `scripts/automation_health.check_sync_heartbeat`,
 which alarms when the newest leg is older than 48h.
 
 🔴 WHY NOT %APPDATA% (2026-09-01) — the same split that took `heartbeats.json` off that path on

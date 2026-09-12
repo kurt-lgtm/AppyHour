@@ -9,7 +9,9 @@ from pathlib import Path
 
 import pytest
 
-GELPACK_DIR = str(Path(__file__).resolve().parents[1] / "GelPackCalculator")
+from appyhour_lib.paths import gelpack_root
+
+GELPACK_DIR = str(gelpack_root())
 if GELPACK_DIR not in sys.path:
     sys.path.insert(0, GELPACK_DIR)
 

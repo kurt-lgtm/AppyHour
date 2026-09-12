@@ -22,7 +22,7 @@ Desktop analytics for Elevate Foods (subscription cheese/charcuterie). Python + 
 
 | Area | Purpose | CLAUDE.md |
 |------|---------|-----------|
-| `GelPackCalculator/` | Thermal analysis, gel-pack sizing, Shopify forecast (tkinter) | `GelPackCalculator/CLAUDE.md` |
+| `../GelPackCalculator/` | Kori: thermal analysis, gel-pack sizing, carrier-invoice ingest, PP sync. 🔴 **Own repo, SIBLING of this one since 2026-09-12 (R-35 phase 1)** — was nested + gitignored here. Resolve via `appyhour_lib.paths.gelpack_root()` (env `GELPACK_ROOT` → sibling → legacy nested w/ warning). Prod copy still nested under `C:\AppyHourProd\AppyHour\` until Phase 2 (Kurt-gated). | `../GelPackCalculator/CLAUDE.md` |
 | `InventoryReorder/` | Demand forecasting, cut order, fulfillment web (tkinter + Flask) | `InventoryReorder/CLAUDE.md` |
 | `ShippingReports/` | Shipping analytics + cost analysis (canonical DB = **`C:\AppyHourData\shipping.db`** — `appyhour_lib/paths.py` `SHARED_DB_NAME`; 🔴 NOT `shipments.db`, which is only a legacy `output/` name, and NOT `%APPDATA%`) | `ShippingReports/CLAUDE.md` |
 | `AppyHourMCP/` | Main MCP server — tools for shipping/inventory/gelcalc/orders | `AppyHourMCP/CLAUDE.md` |
@@ -65,7 +65,7 @@ Original 386-line CLAUDE.md preserved as `_CLAUDE-original-2026-05-10.md` (ledge
 
 ```bash
 PY=/c/Users/Work/anaconda3/python.exe
-$PY GelPackCalculator/gel_pack_shopify.py
+$PY ../GelPackCalculator/gel_pack_shopify.py   # sibling repo since 2026-09-12 (R-35)
 $PY InventoryReorder/inventory_reorder.py
 pip install -e ".[dev]" && pytest
 ```
@@ -118,7 +118,7 @@ DM Sans (table data), Space Mono (UI chrome 11-13px w600), Rajdhani (numbers 12p
 ## Layered Architecture
 
 1. **Pure logic** — `appyhour_lib/` (no API/UI deps, stdlib only)
-2. **Domain** — GelPackCalculator, InventoryReorder, ShippingReports
+2. **Domain** — GelPackCalculator (sibling repo), InventoryReorder, ShippingReports
 3. **MCP integration** — `AppyHourMCP/tools/` (Pydantic-validated, FastMCP `register(mcp)`)
 4. **UI/CLI adapters** — tkinter desktop, pywebview/Flask web
 

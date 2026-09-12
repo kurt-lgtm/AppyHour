@@ -4,7 +4,7 @@
 (`AHB_WeeklyProductionQuery_*_vF.xlsx`, tab `Access_LIVE`). **Every rule here is extracted from
 the authority that already enforces it — do NOT invent or "close-enough" any value:**
 
-- **Sheet QC / syntax authority:** Kori — `AppyHour/GelPackCalculator/kori/gel_pack_webview.py`
+- **Sheet QC / syntax authority:** Kori — `GelPackCalculator/kori/gel_pack_webview.py` (own repo, top-level sibling since 2026-09-12)
   QC pass (`qc_check_sheet`, ~lines 2240-2646). This doc is a readable extract of that code; the
   code wins on any conflict.
 - **MFG / product names authority:** DO MySQL `mfg_names_authoritative` + `mfg_translations` (the

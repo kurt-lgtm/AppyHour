@@ -1,7 +1,7 @@
 """UPS headed-CSV parser: one row per TRACKING, cost = SUM of its invoice lines.
 
 Every value pinned here is VERBATIM from a real carrier invoice under
-`AppyHour/GelPackCalculator/Invoices` (2026-09-07 parity audit,
+`<gelpack_root()>/Invoices` (2026-09-07 parity audit,
 `_outputs/reports/2026-09-07-invoice-cost-parser-parity.md`). No synthetic dollars —
 the defect was a real $490.76 understatement across 20 trackings and the regression
 guard is only worth what its inputs are.
@@ -12,7 +12,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-GELPACK_DIR = str(Path(__file__).resolve().parents[1] / "GelPackCalculator")
+from appyhour_lib.paths import gelpack_root
+
+GELPACK_DIR = str(gelpack_root())
 if GELPACK_DIR not in sys.path:
     sys.path.insert(0, GELPACK_DIR)
 

@@ -33,7 +33,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "AppyHourMCP"))
 sys.path.insert(0, str(ROOT / "AppyHourMCP" / "tools"))
-sys.path.insert(0, str(ROOT / "GelPackCalculator"))
+from appyhour_lib.paths import gelpack_root  # noqa: E402
+sys.path.insert(0, str(gelpack_root()))  # sibling repo since 2026-09-12 (R-35)
 
 from ingest.slack_reship.parse import classify  # canonical taxonomy  # noqa: E402
 from tools.gorgias_sheets_sync import (  # noqa: E402

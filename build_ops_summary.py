@@ -12,7 +12,9 @@ import json
 import re
 from datetime import datetime, date
 
-sys.path.insert(0, 'GelPackCalculator')
+sys.path.insert(0, '.')
+from appyhour_lib.paths import gelpack_root  # noqa: E402
+sys.path.insert(0, str(gelpack_root()))  # sibling repo since 2026-09-12 (R-35)
 sys.path.insert(0, 'AppyHourMCP/tools')
 
 from google_sheets import _get_client

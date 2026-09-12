@@ -28,7 +28,9 @@ from pathlib import Path
 
 import pytest
 
-_GELPACK = Path(__file__).resolve().parents[1] / "GelPackCalculator"
+from appyhour_lib.paths import gelpack_root
+
+_GELPACK = gelpack_root()
 if str(_GELPACK) not in sys.path:
     sys.path.insert(0, str(_GELPACK))
 

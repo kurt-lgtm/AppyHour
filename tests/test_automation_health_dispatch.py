@@ -789,7 +789,8 @@ class StampPartialSinceTest(unittest.TestCase):
 
     def setUp(self):
         import importlib
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "GelPackCalculator"))
+        from appyhour_lib.paths import gelpack_root
+        sys.path.insert(0, str(gelpack_root()))
         self.sl = importlib.import_module("sync_logon")
         self.state: dict = {}
         self._saved = (self.sl._read_heartbeat, self.sl.sync_heartbeat.write)

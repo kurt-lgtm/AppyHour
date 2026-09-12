@@ -27,8 +27,9 @@ import pytest
 from appyhour_lib import sync_watermark
 
 REPO = Path(__file__).resolve().parent.parent
-if str(REPO / "GelPackCalculator") not in sys.path:
-    sys.path.insert(0, str(REPO / "GelPackCalculator"))
+from appyhour_lib.paths import gelpack_root  # noqa: E402
+if str(gelpack_root()) not in sys.path:
+    sys.path.insert(0, str(gelpack_root()))
 
 backfill_sync = pytest.importorskip("backfill_sync")
 

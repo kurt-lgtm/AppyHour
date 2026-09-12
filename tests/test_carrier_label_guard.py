@@ -10,8 +10,9 @@ import sys
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                "GelPackCalculator"))
+from appyhour_lib.paths import gelpack_root
+
+sys.path.insert(0, str(gelpack_root()))
 import shipping_invoice_db as sidb  # noqa: E402
 
 

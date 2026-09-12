@@ -282,7 +282,8 @@ _PP_DRIVER = textwrap.dedent('''
     import sqlite3, sys
     APPYHOUR, TMP = sys.argv[1], sys.argv[2]
     sys.path.insert(0, APPYHOUR)
-    sys.path.insert(0, APPYHOUR + r"\\GelPackCalculator")
+    from appyhour_lib.paths import gelpack_root
+    sys.path.insert(0, str(gelpack_root()))
     from appyhour_lib import db as dbmod
     from appyhour_lib.cancel import CancelToken, StageCancelled
     import backfill_sync, shipping_invoice_db as sidb

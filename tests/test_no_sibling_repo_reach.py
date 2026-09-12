@@ -26,9 +26,10 @@ There is NO sanctioned seam in this direction and NO allowlist: a reach is never
 tagged with the R-35 seat that removes it. Strict = the moment a seat lands its fix the xfail
 XPASSes and FAILS, so the row must come off in the same commit.
 
-🔴 `GelPackCalculator/` is GITIGNORED in this repo (.gitignore:46) — it exists only on the
-workstation. Its four sites are scanned whenever the directory is present (the workstation) and
-SKIPPED, not silently passed, wherever it is absent (CI, worktrees, the image).
+🔴 `GelPackCalculator/` is NOT part of this tree any more: it is its own repo and, since 2026-09-12
+(plan R-35 phase 1), a top-level SIBLING at `Claude Projects/GelPackCalculator/` (resolved via
+`appyhour_lib.paths.gelpack_root()`). Its reaches into ShipRouting are that repo's R-35 rows —
+listed in `GelPackCalculator/CLAUDE.md`, not here.
 """
 import ast
 import re
@@ -42,11 +43,10 @@ ROOT = Path(__file__).resolve().parents[1]
 SIBLING = "ShipRouting"
 # ShipRouting's top-level packages. `scripts` is NOT listed: this repo has its own `scripts/`.
 SIBLING_MODULES: frozenset = frozenset({"lib", "server", "milp"})
-# Root *.py (non-recursive) + every live tree. GelPackCalculator is gitignored — scanned if present.
+# Root *.py (non-recursive) + every live tree.
 SCAN_TREES = ("appyhour_lib", "AppyHourMCP", "AppyHourShippingMCP", "InventoryReorder",
               "ShippingReports", "scripts", "order_checks", "cut_order_server",
-              "matrix_commander_web", "ingest", "dlt_ingest", "pipeline", "agents", "scenario",
-              "GelPackCalculator")
+              "matrix_commander_web", "ingest", "dlt_ingest", "pipeline", "agents", "scenario")
 SKIP_TREES = {".git", ".claude", ".Codex", ".planning", ".serena", ".pipeline", ".codegraph",
               "__pycache__", "tests", "dist", "build", "node_modules", ".venv", "venv",
               "_archive", "_retired", "archive", "scratchpad", "_outputs", "research", "docs",
@@ -54,11 +54,6 @@ SKIP_TREES = {".git", ".claude", ".Codex", ".planning", ".serena", ".pipeline", 
               "Errors", "incident-fixes"}
 # A join onto "ShipRouting" whose base mentions one of these is a data dir, not the repo.
 DATA_DIR_MARKERS = ("APPDATA", "LOCALAPPDATA", "AppData", "FLOW_CACHE_DIR", "/tmp")
-
-GELPACK_PRESENT = (ROOT / "GelPackCalculator").is_dir()
-GELPACK_ABSENT = pytest.mark.skipif(
-    not GELPACK_PRESENT,
-    reason="GelPackCalculator/ is gitignored (.gitignore:46) — present only on the workstation")
 
 # ------------------------------------------------------------------ known reaches (R-35 seats)
 # file:line of every reach in this repo, measured by THIS scanner 2026-09-12 (R-34). The twelve
@@ -85,22 +80,14 @@ KNOWN_REACHES = [
     ("scripts/invoice_loaders/acct_backfill.py", 51, "R-35 TRACKING: from server.durable_store import _conn (enabled by :50)"),
     ("scripts/invoice_loaders/acct_backfill_fast.py", 32, "R-35 TRACKING: sys.path literal -> server.durable_store"),
     ("scripts/invoice_loaders/acct_backfill_fast.py", 40, "R-35 TRACKING: from server.durable_store import _conn (enabled by :32)"),
-    # ROUTING (GelPackCalculator incl. kori/) — gitignored tree, see GELPACK_ABSENT
-    ("GelPackCalculator/kori/routing_v2.py", 19, "R-35 ROUTING: _SHIPROUTING literal -> lib.engine et al"),
-    ("GelPackCalculator/kori/routing_v2.py", 53, "R-35 ROUTING: from lib.flags import ... (+ lib.engine/optimizer/... enabled by :19)"),
-    ("GelPackCalculator/kori/gel_pack_webview.py", 1243, "R-35 ROUTING: from lib.postmortem / lib.optimizer (enabled by routing_v2's insert)"),
-    ("GelPackCalculator/parcel_panel.py", 39, "R-35 ROUTING: SHIPROUTING_ROOT-or-literal -> server.pp_ratelimit"),
-    ("GelPackCalculator/parcel_panel.py", 43, "R-35 ROUTING: from server.pp_ratelimit import ... (enabled by :39)"),
-    ("GelPackCalculator/easypost_tracking.py", 27, "R-35 ROUTING: sys.path literal -> lib.origin"),
-    ("GelPackCalculator/easypost_tracking.py", 29, "R-35 ROUTING: from lib.origin import ... (enabled by :27)"),
-    ("GelPackCalculator/seventeentrack_tracking.py", 26, "R-35 ROUTING: sys.path literal -> lib.origin"),
-    ("GelPackCalculator/seventeentrack_tracking.py", 28, "R-35 ROUTING: from lib.origin import ... (enabled by :26)"),
+    # ROUTING: the GelPackCalculator (Kori) rows moved with the repo on 2026-09-12 (R-35 phase 1) —
+    # its 9 ShipRouting reaches are tracked in GelPackCalculator/CLAUDE.md.
     # found by the AST scan, not in the gate report (same class)
     ("scripts/automation_health.py", 1367, "R-35 (unassigned — Forge to seat): WORKSPACE_ROOT / 'ShipRouting' rglob of the sibling's scripts"),
     ("scripts/failed_tags_corpus.py", 48, "R-35 ROUTING: WS / 'ShipRouting' -> lib.features/zip_loaders (HUB_CODE now from shiprouting_canon)"),
     ("scripts/failed_tags_corpus.py", 127, "R-35 ROUTING: from lib.features import ... (enabled by :48)"),
     ("scripts/repair_cloud_fulfillments.py", 255, "R-35 DATA CLOUD: WORKSPACE / 'ShipRouting' (etl_history subprocess)"),
-    ("scripts/restore_check.py", 58, "R-35 (unassigned — Forge to seat): asserts ShipRouting/ sits BESIDE AppyHour/ — the layout the reorg retires"),
+    ("scripts/restore_check.py", 59, "R-35 (unassigned — Forge to seat): asserts ShipRouting/ sits BESIDE AppyHour/ — the layout the reorg retires"),
 ]
 
 # Absolute roots only: `C:\...\Claude Projects\ShipRouting`, `/app/ShipRouting`, `X:\...\ShipRouting\...`.
@@ -228,8 +215,7 @@ def test_no_live_module_reaches_into_the_sibling_repo():
 
 @pytest.mark.parametrize("rel, line", [
     pytest.param(rel, line, id=f"{rel}:{line}",
-                 marks=[pytest.mark.xfail(strict=True, reason=reason)]
-                 + ([GELPACK_ABSENT] if rel.startswith("GelPackCalculator/") else []))
+                 marks=[pytest.mark.xfail(strict=True, reason=reason)])
     for rel, line, reason in KNOWN_REACHES
 ])
 def test_known_reach_is_fixed(rel, line):
@@ -302,5 +288,5 @@ def test_scope_covers_the_live_trees_and_skips_one_shots():
         assert must in rels, must
     assert not any(r.startswith(("InventoryReorder/Errors/", "scripts/archive/", "scripts/incident-fixes/",
                                  "tests/", "_archive/", "scratchpad/")) for r in rels)
-    if GELPACK_PRESENT:
-        assert "GelPackCalculator/kori/routing_v2.py" in rels
+    # GelPackCalculator is a sibling repo since 2026-09-12 (R-35 phase 1) — never scanned here.
+    assert not any(r.startswith("GelPackCalculator/") for r in rels)

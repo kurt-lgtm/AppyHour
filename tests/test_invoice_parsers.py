@@ -186,7 +186,8 @@ def test_rmfg_fedex_breakdown_without_a_bill_to_column_falls_back_to_the_umbrell
 
 def test_every_local_consumer_reaches_the_SAME_function_objects():
     """The re-exports are the same objects — a second implementation anywhere is the bug."""
-    gp = Path(__file__).resolve().parents[1] / "GelPackCalculator"
+    from appyhour_lib.paths import gelpack_root
+    gp = gelpack_root()
     if not (gp / "shipping_invoice_db.py").exists():
         pytest.skip("GelPackCalculator (separate repo) not checked out beside appyhour_lib")
     sys.path.insert(0, str(gp))

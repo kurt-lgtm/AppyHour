@@ -35,7 +35,9 @@ from pathlib import Path
 
 import pytest
 
-_GPC = Path(__file__).resolve().parents[1] / "GelPackCalculator"
+from appyhour_lib.paths import gelpack_root
+
+_GPC = gelpack_root()
 for _p in (str(_GPC), str(_GPC / "kori"), str(Path(__file__).resolve().parents[1])):
     if _p not in sys.path:
         sys.path.insert(0, _p)

@@ -41,8 +41,10 @@ class SkipError(Exception):
 # Resolve actual repo paths (config snippet points to outdated C:/Users/Work/AppyHour/)
 REPO = Path(r"C:\Users\Work\Claude Projects\AppyHour")
 SERVER = REPO / "AppyHourMCP" / "server.py"
+sys.path.insert(0, str(REPO))
+from appyhour_lib.paths import gelpack_root  # noqa: E402
 PYTHONPATH_DIRS = [
-    REPO / "GelPackCalculator",
+    gelpack_root(),   # sibling repo since 2026-09-12 (R-35)
     REPO / "InventoryReorder",
     REPO / "ShippingReports",
     REPO / "AppyHourMCP",

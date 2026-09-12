@@ -26,7 +26,9 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-for p in (REPO, REPO / "AppyHourMCP", REPO / "GelPackCalculator"):
+sys.path.insert(0, str(REPO))
+from appyhour_lib.paths import gelpack_root  # noqa: E402
+for p in (REPO / "AppyHourMCP", gelpack_root()):
     sys.path.insert(0, str(p))
 
 gss = pytest.importorskip(

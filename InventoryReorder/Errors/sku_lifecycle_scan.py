@@ -12,8 +12,12 @@ Usage: python sku_lifecycle_scan.py [months]   (default 6)
 import sys, json, csv, time
 from datetime import date, timedelta
 import requests
+from pathlib import Path as _Path
 
-REG = r"C:\Users\Work\Claude Projects\AppyHour\GelPackCalculator\sku_attributes.json"
+sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+from appyhour_lib.paths import gelpack_root  # noqa: E402
+
+REG = str(gelpack_root() / "sku_attributes.json")   # sibling repo since 2026-09-12 (R-35)
 SETTINGS = r"C:\Users\Work\Claude Projects\AppyHour\InventoryReorder\dist\inventory_reorder_settings.json"
 MONTHS = int(sys.argv[1]) if len(sys.argv) > 1 else 6
 
