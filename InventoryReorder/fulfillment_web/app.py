@@ -6899,23 +6899,21 @@ def shopify_sync():
                 cached["cache_age_seconds"] = int(age_seconds)
             return jsonify(cached)
 
-    from appyhour_lib.credentials import get_shopify_credentials
+    from appyhour_lib.credentials import DEFAULT_API_VERSION, get_shopify_auth, get_shopify_credentials
     try:
         store, token = get_shopify_credentials()
+        _, headers = get_shopify_auth()
     except RuntimeError:
         return jsonify({"error": "Shopify store URL or access token not configured"}), 400
 
     if not store.startswith("http"):
         store = f"https://{store}.myshopify.com"
 
-    api_version = "2026-04"
+    # This endpoint builds its own URLs from the normalised store above, so it takes the
+    # version from the same constant the helper uses rather than repeating the literal.
+    api_version = os.environ.get("SHOPIFY_API_VERSION", DEFAULT_API_VERSION).strip() or DEFAULT_API_VERSION
     session = req.Session()
-    session.headers.update(
-        {
-            "X-Shopify-Access-Token": token,
-            "Content-Type": "application/json",
-        }
-    )
+    session.headers.update(headers)
 
     # Pull fulfilled orders for weekly demand calculation
     try:
