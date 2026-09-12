@@ -7,6 +7,10 @@ Demand forecasting + cut order generation + fulfillment web dashboard. Single-fi
 > `corrected_inventory_path` silently clobbered HAVE on 6/23). Demand = RC-queued + SH-orders, counted
 > from what customers actually bought — never from proxies.
 
+**🔴 Role doc — read first if this session is Generate Cut Order:** [`GENERATE_CUT_ORDER.md`](GENERATE_CUT_ORDER.md)
+(scope per Kurt 2026-09-12: assignments + cuts + slight forecasting; merging with Fulfillment and Order
+Tool; on-hand / inventory management is Inventory Coordinator's).
+
 ## Task Routing
 
 | Task | Read | Skip | Notes |
