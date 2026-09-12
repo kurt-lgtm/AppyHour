@@ -43,7 +43,9 @@ Excel re-save), and re-read the layout after any lock/save.
 
 ## 2. Names (columns)
 
-- Every `AHB (S_REG): <name>` header MUST match a name in `mfg_names_authoritative.csv` exactly.
+- Every `AHB (S_REG): <name>` header MUST match a name in the DO table `mfg_names_authoritative`
+  exactly (read it via `matrix_commander.load_mfg_names()`; the csv beside the code is the local
+  read-mirror of that table, never a fallback — MATRIX_RULES rule 21).
   **Never derive a name from a Shopify product title** (that fabrication reached a sent vF on 234
   rows once, and again 2026-08-04 as "Farmstead Smoked Cumin Gouda" vs the real "Farmstead Cumin
   Gouda"). SKU not in the authority → STOP and ask; onboard via the RMFG Translator, re-export.
@@ -170,7 +172,7 @@ directions are test-pinned.
   JSON per cohort under `_outputs/cache/vf_ledger_<ship-date>.json`; re-apply OVERWRITES with a
   diff line (rule-17 style — one file per cohort, never forked parallels).
 - 🔴 **Ledger ≠ authority for names/lanes** — headers still validate against
-  `mfg_names_authoritative.csv` (rule 21) and tags against the routing authority; the ledger only
+  the DO table `mfg_names_authoritative` (rule 21) and tags against the routing authority; the ledger only
   answers "what did apply write", never "what is a valid name/lane".
 - 🔴 **Mid-window mutations (CS address edits, cancels, swaps) do NOT invalidate the sheet
   silently.** The verifier's diff classes: address changed → patch row + re-check lane
@@ -309,7 +311,8 @@ for the same reason.
 
 ## 6. Editing discipline
 
-Hand-editing the vF is allowed, but: pull names from `mfg_names_authoritative.csv`, lanes/tags from
+Hand-editing the vF is allowed, but: pull names from the MFG authority (the DO table, or its local
+read-mirror csv when a tool reads that), lanes/tags from
 the ROUTING authority, keep PO-box/zip/sort/tag syntax above, and **run Kori's QC (or an equivalent
 header/name validator) on the file after any edit** — the QC is the guard; a raw openpyxl edit that
 skips it is how an invented name or bad lane reaches a sent sheet.
@@ -426,7 +429,7 @@ skipped — a silent skip is how an operator believes 668 rows moved when 405 di
 🔴 **Never identify a tray by a `(Tray)` substring in the column header.** `TR-ROME` ships as
 `AHB (S_REG): When in Rome` — no `(Tray)` token — so the substring test misses **1 of 12** tray
 columns on the real 08-10 vF. Tray columns are resolved by mapping the header name to its SKU in
-`AppyHour/mfg_names_authoritative.csv` and testing the `TR-` prefix (the same authority that governs
+the DO table `mfg_names_authoritative` and testing the `TR-` prefix (the same authority that governs
 MFG names, [[never-fabricate]] / [[sku-mfg-name-validation-gate]]). A row is a tray if any tray
 column is non-empty/non-zero.
 🔴 **A guard that cannot fire is worse than none:** if ZERO tray columns resolve against the
