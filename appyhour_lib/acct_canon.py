@@ -27,6 +27,9 @@ from __future__ import annotations
 import re
 
 UNKNOWN = "unknown"
+# Owner label for an account Kurt has DECLARED but not ADOPTED — exact spelling only, no aliases,
+# no fuzzy resolution, outside every cost-basis union. See ACCOUNTS.
+ONE_OFF = "one-off"
 
 
 class Account:
@@ -48,6 +51,13 @@ class Account:
 ACCOUNTS = (
     Account("FedEx", "203738113", "ours", ("113", "-113", "acct113", "203738113")),
     Account("FedEx", "206137911", "rmfg", ("911", "-911", "acct911", "206137911")),
+    # 🔴 ONE-OFF, declared not adopted (Kurt 2026-09-12, decision row
+    # `fedex-203180011-one-off-declare-2026-09-12`; INVOICE_INGEST_RULES.md §1, ShipRouting b2c958f).
+    # Exactly 38 real shipments rows, not ours going forward. NO aliases on purpose: a suffix or
+    # float spelling of this account ever appearing is NEW evidence about a recurring account and
+    # goes back to Kurt, not into this tuple. It is OUTSIDE the 2026-08-20 cost-basis union of
+    # 203738113 + 206137911 — that union is written where it is used, never derived from ACCOUNTS.
+    Account("FedEx", "203180011", ONE_OFF, ("203180011",)),
     Account("UPS", "0000C411H4", "ours", ("C411H4", "0000C411H4", "000000C411H4")),
 )
 
@@ -128,16 +138,19 @@ def canon(carrier: str, raw, *, filename: str = "") -> str:
             if a.carrier == "UPS" and a.canonical.lstrip("0") and a.canonical.lstrip("0") in s:
                 return a.canonical
         # A digit-suffix match ('-113' style) against a canonical's tail, when unambiguous.
+        # 🔴 One-off accounts are NEVER adopted by inference: only their exact spelling resolves.
+        # A '-011' / 'acct011' ever appearing is new evidence about a RECURRING account (Kurt's
+        # call), and a fuzzy match here would quietly make the decision for him.
         tail = s.lstrip("-")
         if tail.isdigit():
-            hits = [a for a in cands if a.canonical.endswith(tail)]
+            hits = [a for a in cands if a.owner != ONE_OFF and a.canonical.endswith(tail)]
             if len(hits) == 1:
                 return hits[0].canonical
 
     if filename:
         m = re.search(r"acct(\d+)", filename, re.IGNORECASE)
         if m:
-            hits = [a for a in cands if a.canonical.endswith(m.group(1))]
+            hits = [a for a in cands if a.owner != ONE_OFF and a.canonical.endswith(m.group(1))]
             if len(hits) == 1:
                 return hits[0].canonical
 

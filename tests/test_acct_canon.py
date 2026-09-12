@@ -105,6 +105,18 @@ def test_no_two_accounts_share_an_alias():
             seen[key] = a.canonical
 
 
+def test_203180011_is_a_declared_one_off_with_no_aliases():
+    """Kurt 2026-09-12: 'ONE-OFF declare ... not a recurring account'. Exact spelling resolves so
+    check G stops reporting the 38 real rows; nothing else may resolve to it, and the tail-match
+    fallback must not adopt '-011'-style spellings on its behalf."""
+    assert ac.canon("FedEx", "203180011") == "203180011"
+    assert ac.owner("FedEx", "203180011") == "one-off"
+    assert ac.canon("FedEx", "-011") == ac.UNKNOWN
+    assert ac.canon("FedEx", "acct011") == ac.UNKNOWN
+    one_off = next(a for a in ac.ACCOUNTS if a.canonical == "203180011")
+    assert one_off.aliases == ("203180011",)
+
+
 def test_sole_account_is_ups_only_and_explicit():
     """Kurt 2026-08-20: "yes its only our account" — a declared fact, kept OUT of canon()."""
     assert ac.sole_account("UPS") == "0000C411H4"
